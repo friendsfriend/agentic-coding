@@ -3,6 +3,12 @@ import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
 import { loadProjects, type Plan, projectView } from "./catalog.ts";
+import {
+	type ClusterInspection,
+	inspectCluster,
+	loadClusters,
+	prepareCluster,
+} from "./cluster.ts";
 import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
@@ -36,6 +42,7 @@ function recentRuns(runs: EnvironmentRun[], history: number) {
  * Unknown effects after restart stay quarantined until authenticated inspection. */
 export class Environments {
 	readonly projects;
+	readonly clusters;
 	private engine: Harness | null = null;
 	private live = new Map<string, EnvironmentProcess>();
 	private revoked = new Set<number>();
@@ -50,6 +57,36 @@ export class Environments {
 	private stopped = new Set<string>();
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
+		this.clusters = loadClusters(config);
+	}
+	prepareCluster(owner: TaskInfo, id: string) {
+		const cluster = this.clusters.find((item) => item.id === id);
+		if (!cluster)
+			throw new Error("Choose an explicitly configured local cluster");
+		return prepareCluster(this.config, owner, cluster);
+	}
+	async inspectCluster(
+		owner: TaskInfo,
+		inspection: ClusterInspection,
+		signal?: AbortSignal,
+	) {
+		const batch = "cluster-status";
+		const operation = (async () => {
+			await this.store.commit(async (tx) => {
+				this.check(owner.id, signal, batch);
+				const task = await tx.task(owner.id as TaskId);
+				if (!task || task.abortRequested || task.state.status === "terminal")
+					throw new Error("Cluster inspection task has ended");
+			}, background);
+			this.check(owner.id, signal, batch);
+			return inspectCluster(this.config, inspection, signal);
+		})();
+		this.pending.set(operation, { owner: owner.id, batch });
+		try {
+			return await operation;
+		} finally {
+			this.pending.delete(operation);
+		}
 	}
 	private get store() {
 		if (!this.engine) throw new Error("Environment manager not initialized");
@@ -147,6 +184,12 @@ export class Environments {
 		const all = await this.records();
 		return {
 			runtime: "task-owned",
+			clusters: this.clusters.map(({ id, repository, context }) => ({
+				id,
+				repository,
+				context,
+				probe: "not-performed",
+			})),
 			projects: this.projects
 				.filter((project) => !app || project.id === app)
 				.map(projectView),

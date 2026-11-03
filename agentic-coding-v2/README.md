@@ -69,7 +69,7 @@ Restart the host to discover changed user skills. Both kinds appear in the catal
 
 ## Environment management
 
-Environment management is native-task-owned, not workflow-owned. **POSIX shell and explicitly configured local Docker/Podman container targets** are implemented. Container behavior has executable-fixture coverage, not live-engine integration verification. Compose, Kubernetes, infrastructure dependencies, endpoint discovery and database/telemetry tools are **not migrated yet**. The [environment parity ledger](docs/environment-parity.md) tracks remaining capabilities without claiming full parity. Definitions, leases, containers and processes from the previous host are never automatically imported or adopted.
+Environment management is native-task-owned, not workflow-owned. **POSIX shell and explicitly configured local Docker/Podman container targets** are implemented. Container behavior has executable-fixture coverage, not live-engine integration verification. A strict Compose subset and explicitly approved local Kubernetes API identity inspection are also implemented. Kubernetes app/Helm execution, infrastructure dependencies, endpoint discovery and database/telemetry tools are **not migrated yet**. The [environment parity ledger](docs/environment-parity.md) tracks remaining capabilities without claiming full parity. Definitions, leases, containers and processes from the previous host are never automatically imported or adopted.
 
 Create `CONFIG_DIR/environments.json` (restart to discover definition changes):
 
@@ -188,6 +188,28 @@ Logs retain at most 64,000 characters per execution; complete known secret value
 Research tasks are read-only. File tools validate workspace containment and reject escaped symlinks and Git internals. Workspace-write tasks may edit their own workspace. Automatic Git operations disable hooks, fsmonitor programs, recursive submodule updates, auto-maintenance and configured clean/smudge/process filters. This prevents a read-only inspection or automatic checkout from silently executing repository-configured programs. Filtered content (including Git LFS pointers) stays unhydrated; running a filter or fetching content requires a separately approved shell command. These defenses are not an OS sandbox against concurrent hostile host/filesystem mutation. Arbitrary shell commands are **not sandboxed**: each requires operator approval of the exact command, working directory and timeout. A persisted start marker prevents automatic command re-execution after an ambiguous interruption; the operator must inspect effects before retrying. Approval is not a guarantee of harmlessness, and path validation is not OS-level isolation against concurrent filesystem mutation.
 
 State has one exclusive host lock. A stale lock is not automatically stolen: inspect the recorded owner before removing it. Do not share the state directory with another host, manually edit native storage, or reuse legacy storage. Shutdown closes native resources and releases this host's lock; cancellation is not a rollback of filesystem or external effects.
+
+## Explicit local Kubernetes status
+
+`env_cluster_status({"cluster":"local"})` asks for human approval before querying the API identity of an explicitly configured local context. It reports `api-reachable` and the `kube-system` namespace UID, **not** workload health or permission to adopt/delete anything. `env_list` lists configured cluster IDs with `probe: "not-performed"`; listing does not invoke kubectl.
+
+Optional `$CONFIG_DIR/clusters.json`:
+
+```json
+{
+  "version": 1,
+  "clusters": [{
+    "id": "local",
+    "repository": "/absolute/authorized/repository",
+    "kubeconfig": "clusters/local.yaml",
+    "context": "explicit-local-context"
+  }]
+}
+```
+
+This first Kubernetes increment is deliberately read-only. The kubeconfig must be config-contained and name the explicit context. Its selected server must use HTTPS on numeric loopback (`127.0.0.1` or `::1`). Only certificate/key or `tokenFile` references to files within the config directory are supported; inline credentials, exec/auth plugins, insecure TLS, proxies and remote/default contexts are not. Existing ordinary kind configs with inline credentials are therefore not supported yet. No real credentials or clusters were used to verify this increment.
+
+The approved source digest is checked again before the CLI runs. Kubectl receives an isolated minimal client file containing only the selected connection and public credential **file references**, never copied credential values. Machine stdout/stderr stay private; only the validated API identity summary reaches the model. The client file is removed after confirmed local process cleanup. Conventional client environment variables are allowlisted; optional explicit `environment` mappings are shown in the approval, with kubeconfig/proxy overrides forbidden. The client is not an OS sandbox. This command never creates a cluster, installs an app, adopts resources or grants cleanup authority. Kubernetes app execution, Helm, port forwards and mutating cluster operations remain pending.
 
 ## Verification
 

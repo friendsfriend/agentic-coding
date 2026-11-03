@@ -122,6 +122,50 @@ export function createEnvironmentTools(
 		name: "v2.environments",
 		tools: [
 			defineTool({
+				name: "env_cluster_status",
+				description:
+					"Request human approval to inspect the API identity of one explicitly configured local Kubernetes context. No default context, cluster creation, app start, secret inspection or cleanup/adoption authority. Credential plugins and inline credentials are unsupported.",
+				parameters: Type.Object({ cluster: Type.String({ maxLength: 64 }) }),
+				replay: "safe",
+				executionMode: "sequential",
+				execute: async (args, api, context) => {
+					const owner = await ownerOf(api.conversationId);
+					if (!owner)
+						throw new Error("Cluster inspection requires a native skill task");
+					const inspection = manager.prepareCluster(owner, args.cluster),
+						snapshot = JSON.stringify(
+							{
+								inspection,
+								authority:
+									"Read-only Kubernetes API identity inspection using kubectl get namespace kube-system (including read-only API discovery). Only the displayed HTTPS numeric loopback server and explicit context are used. Credential file references may be read by kubectl; inline credentials, exec/auth plugins, insecure TLS and proxy settings are rejected. No cluster/resource creation, modification, deletion or adoption. This is API reachability, not workload readiness. CLI observations stay private. Not an OS sandbox.",
+							},
+							null,
+							2,
+						);
+					const review = await requestReview(
+						owner,
+						{
+							title: `Cluster status: ${args.cluster}`,
+							path: owner.workspace,
+							snapshot,
+						},
+						api,
+						context,
+					);
+					if (review.state !== "approved" || review.snapshot !== snapshot)
+						throw new Error(
+							"Exact current cluster inspection was not approved",
+						);
+					return environmentResult(
+						await manager.inspectCluster(
+							owner,
+							inspection,
+							context.abortSignal,
+						),
+					);
+				},
+			}),
+			defineTool({
 				name: "env_list",
 				description:
 					"List configured environment projects, profiles, declared/default target choices, current task-owned slots and acquisition queues. No live legacy environments are imported.",
