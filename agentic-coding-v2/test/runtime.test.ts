@@ -57,6 +57,7 @@ async function fixture(persistent = false) {
 		skills: [
 			{
 				id: "code",
+				origin: "system",
 				content: "Implement the task",
 				description: "test skill",
 				digest: digest("Implement the task"),
@@ -64,6 +65,7 @@ async function fixture(persistent = false) {
 			},
 		],
 		stateDir,
+		configDir: path.join(root, "config"),
 	};
 	const open = async () => {
 		const app = await Runtime.open(
@@ -103,7 +105,59 @@ async function eventually<T>(
 }
 test("native skill task completes in a separate worktree; admission is idempotent and content-bound", async () => {
 	const { app, fake, invocation, config } = await fixture();
-	fake.setResponses([fauxAssistantMessage("Implemented and verified.")]);
+	const sentinel = path.join(config.stateDir, "git-program-executed");
+	const hooks = path.join(config.stateDir, "hooks");
+	fs.mkdirSync(hooks);
+	const hook = path.join(hooks, "post-checkout");
+	fs.writeFileSync(
+		hook,
+		`#!/bin/sh\nprintf executed > ${JSON.stringify(sentinel)}\n`,
+		{ mode: 0o700 },
+	);
+	const filter = path.join(config.stateDir, "filter");
+	fs.writeFileSync(
+		filter,
+		`#!/bin/sh\nprintf executed > ${JSON.stringify(sentinel)}\ncat\n`,
+		{ mode: 0o700 },
+	);
+	await git(invocation.repository, ["config", "core.hooksPath", hooks]);
+	await git(invocation.repository, ["config", "core.fsmonitor", hook]);
+	await git(invocation.repository, ["config", "filter.unsafe.clean", filter]);
+	await git(invocation.repository, ["config", "filter.unsafe.smudge", filter]);
+	await git(invocation.repository, [
+		"config",
+		"filter.unsafe.required",
+		"true",
+	]);
+	fs.writeFileSync(
+		path.join(invocation.repository, ".gitattributes"),
+		"*.fixture filter=unsafe\n",
+	);
+	fs.writeFileSync(
+		path.join(invocation.repository, "sample.fixture"),
+		"Raw source\n",
+	);
+	await git(invocation.repository, ["add", "."]);
+	await git(invocation.repository, ["commit", "-m", "filter fixture"]);
+	fake.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("write", {
+				path: "implementation.txt",
+				content: "Predecessor implementation",
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("Implemented and verified."),
+		fauxAssistantMessage(fauxToolCall("read", { path: "implementation.txt" }), {
+			stopReason: "toolUse",
+		}),
+		(transcript) => {
+			expect(JSON.stringify(transcript.messages)).toContain(
+				"Predecessor implementation",
+			);
+			return fauxAssistantMessage("Reviewed the predecessor implementation.");
+		},
+	]);
 	const id = await app.startTask(invocation);
 	expect(
 		await app.startTask(
@@ -122,6 +176,33 @@ test("native skill task completes in a separate worktree; admission is idempoten
 	expect(view.tasks[0].activity).toBe("idle");
 	expect(view.tasks[0].workspace).not.toBe(invocation.repository);
 	expect(view.tasks[0].detail).toBe("completed");
+	const workspace = view.tasks[0].workspace;
+	await git(workspace, ["add", "implementation.txt"]);
+	await git(workspace, ["commit", "-m", "predecessor implementation"]);
+	const baseCommit = (await git(workspace, ["rev-parse", "HEAD"])).trim();
+	const baseRef = "continuation-base";
+	await git(workspace, ["tag", baseRef]);
+	const successor = await app.startTask({
+		...invocation,
+		requestId: "successor",
+		relatedTo: id,
+		baseRef,
+		policy: "read-only",
+	});
+	await git(workspace, ["tag", "-f", baseRef, "HEAD~1"]);
+	expect(
+		(await app.harness.waitForTask(successor as TaskId, context)).state.outcome
+			.status,
+	).toBe("completed");
+	const following = (await app.snapshot()).tasks.find(
+		(task) => task.id === successor,
+	);
+	expect(following?.baseCommit).toBe(baseCommit);
+	expect(following?.workspace).not.toBe(workspace);
+	expect(
+		fs.existsSync(path.join(invocation.repository, "implementation.txt")),
+	).toBe(false);
+	expect(fs.existsSync(sentinel)).toBe(false);
 	config.profiles = [];
 	config.repositories = [];
 	expect(await app.startTask(invocation)).toBe(id);
@@ -137,6 +218,9 @@ test("unknown profiles, foreign repositories and related topics cannot be admitt
 	await expect(
 		app.startTask({ ...invocation, relatedTo: 999 }),
 	).rejects.toThrow("Related task");
+	await expect(
+		app.startTask({ ...invocation, baseRef: "--not-a-ref" }),
+	).rejects.toThrow();
 	expect((await app.snapshot()).tasks).toHaveLength(0);
 });
 test("shell execution waits for human approval of its exact command", async () => {
@@ -241,6 +325,33 @@ test("cancellation reaches owned review and cannot be revived by a late approval
 	await expect(
 		app.decide(view.reviews[0].id, 1, "approved", ""),
 	).rejects.toThrow("stale");
+	fake.setResponses([
+		fauxAssistantMessage("", {
+			stopReason: "error",
+			errorMessage: "429 Too Many Requests",
+		}),
+	]);
+	const retrying = await app.startTask({
+		...invocation,
+		requestId: "retrying",
+	});
+	const sleeping = await eventually(
+		() => app.snapshot(),
+		(state) =>
+			state.tasks.some(
+				(task) =>
+					task.id === retrying &&
+					(task.detail.startsWith("sleeping") || task.result !== null),
+			),
+	);
+	const backoff = sleeping.tasks.find((task) => task.id === retrying);
+	expect(backoff?.detail).toStartWith("sleeping until");
+	expect(backoff?.activity).toBe("idle");
+	await app.cancel(retrying);
+	expect(
+		(await app.harness.waitForTask(retrying as TaskId, context)).state.outcome
+			.status,
+	).toBe("aborted");
 });
 test("completion is admitted to orchestrator chat once, even after repeated reconciliation", async () => {
 	const { app, fake, invocation } = await fixture();
@@ -318,6 +429,26 @@ test("scheduled skills use the same task path, persist slots, avoid overlap and 
 	expect((await reopened.snapshot()).tasks.map((task) => task.id)).toEqual(
 		before.tasks.map((task) => task.id),
 	);
+	config.profiles = [];
+	const replay = await reopened.scheduler.create(
+		Object.fromEntries(
+			Object.entries(invocation).reverse(),
+		) as typeof invocation,
+		{ at: due, kind: "once" },
+		100,
+		"expires",
+	);
+	expect(replay.nextDue).toBeNull();
+	expect(replay.history).toEqual([{ due, task: null, result: "expired" }]);
+	await expect(
+		reopened.scheduler.create(
+			{ ...invocation, inputs: "Different work" },
+			{ kind: "once", at: due },
+			100,
+			"expires",
+		),
+	).rejects.toThrow("different request");
+	expect((await reopened.snapshot()).schedules).toHaveLength(3);
 });
 
 test("screenshots reach chat and the authenticated HTTP surface renders images without enabling HTML", async () => {

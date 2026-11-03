@@ -1,19 +1,67 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { digest } from "./config.ts";
 
-export async function git(cwd: string, args: string[]): Promise<string> {
-	const child = Bun.spawn(["git", "--no-optional-locks", ...args], {
-		cwd,
-		stdout: "pipe",
-		stderr: "pipe",
-		env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-	});
+async function runGit(cwd: string, args: string[], overrides: string[] = []) {
+	// These helpers are automatic, not shell-authorized: never run repository hooks,
+	// filesystem monitor programs, recursive submodule updates or auto-maintenance.
+	const settings = [
+		`core.hooksPath=${os.devNull}`,
+		"core.fsmonitor=false",
+		"submodule.recurse=false",
+		"maintenance.auto=false",
+		"gc.auto=0",
+		...overrides,
+	];
+	const child = Bun.spawn(
+		[
+			"git",
+			"--no-optional-locks",
+			...settings.flatMap((setting) => ["-c", setting]),
+			...args,
+		],
+		{
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+			env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+		},
+	);
 	const [output, error, code] = await Promise.all([
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
+	return { output, error, code };
+}
+export async function git(cwd: string, args: string[]): Promise<string> {
+	// Read names, not values; git config itself does not execute filter programs.
+	// Discover on every call so a newly configured driver is not silently trusted.
+	const drivers = await runGit(cwd, [
+		"config",
+		"--null",
+		"--name-only",
+		"--get-regexp",
+		"^filter\\..*\\.(clean|smudge|process)$",
+	]);
+	if (drivers.code !== 0 && drivers.code !== 1)
+		throw new Error(
+			`Cannot inspect Git filter configuration: ${drivers.error.trim()}`,
+		);
+	const prefixes = new Set(
+		drivers.output
+			.split("\0")
+			.filter(Boolean)
+			.map((key) => key.slice(0, key.lastIndexOf("."))),
+	);
+	const overrides = [...prefixes].flatMap((prefix) => [
+		`${prefix}.clean=`,
+		`${prefix}.smudge=`,
+		`${prefix}.process=`,
+		`${prefix}.required=false`,
+	]);
+	const { output, error, code } = await runGit(cwd, args, overrides);
 	if (code !== 0) throw new Error(`git ${args[0]} failed: ${error.trim()}`);
 	return output;
 }

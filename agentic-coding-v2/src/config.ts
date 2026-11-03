@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
+import {
+	loadSkillsFromDir,
+	parseFrontmatter,
+} from "@earendil-works/pi-coding-agent";
+import codeSkill from "../skills/code/SKILL.md" with { type: "text" };
+import researchSkill from "../skills/research/SKILL.md" with { type: "text" };
 
 export type Profile = {
 	id: string;
@@ -13,6 +18,7 @@ export type Profile = {
 	description: string;
 };
 export type Skill = {
+	origin: "system" | "user";
 	id: string;
 	description: string;
 	content: string;
@@ -25,6 +31,7 @@ export type Config = {
 	repositories: string[];
 	skills: Skill[];
 	stateDir: string;
+	configDir: string;
 };
 export const digest = (value: string | Buffer) =>
 	createHash("sha256").update(value).digest("hex");
@@ -72,8 +79,22 @@ function readConfigFile(file: string): Record<string, unknown> {
 		);
 	}
 }
-export function loadConfig(stateDir: string, cwd: string): Config {
-	const file = path.join(stateDir, "config.json");
+export function defaultConfigDir(): string {
+	return path.resolve(
+		process.env.AGENTIC_CODING_V2_CONFIG_DIR ??
+			path.join(
+				process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"),
+				"agentic-coding-v2",
+			),
+	);
+}
+export function loadConfig(
+	stateDir: string,
+	cwd: string,
+	configDir = defaultConfigDir(),
+): Config {
+	configDir = path.resolve(configDir);
+	const file = path.join(configDir, "config.json");
 	const data = readConfigFile(file);
 	// Read profiles only. Never load legacy presets, routes, runtime data, or credentials into our state.
 	const source =
@@ -89,11 +110,10 @@ export function loadConfig(stateDir: string, cwd: string): Config {
 	const agents = legacy.agents ? object(legacy.agents) : {};
 	if (data.repositories !== undefined && !Array.isArray(data.repositories))
 		throw new Error("repositories must be an array");
-	if (
-		data.skillDirectories !== undefined &&
-		!Array.isArray(data.skillDirectories)
-	)
-		throw new Error("skillDirectories must be an array");
+	if (data.skillDirectories !== undefined)
+		throw new Error(
+			"skillDirectories is not supported; put user skills in CONFIG_DIR/skills",
+		);
 	const profiles = readProfiles(data.profiles ?? agents.profiles ?? {});
 	const orchestratorProfile = String(
 		data.orchestratorProfile ?? agents.default_profile ?? profiles[0]?.id ?? "",
@@ -101,15 +121,23 @@ export function loadConfig(stateDir: string, cwd: string): Config {
 	const repositories = (
 		Array.isArray(data.repositories) ? data.repositories : [cwd]
 	).map((item) => fs.realpathSync(text(item, "repository", 4096)));
-	const directories = [
-		path.resolve(import.meta.dir, "../skills"),
-		...(Array.isArray(data.skillDirectories)
-			? data.skillDirectories.map((v) => text(v, "skill directory", 4096))
-			: []),
-	];
-	const skills: Skill[] = [];
-	for (const dir of directories) {
-		const loaded = loadSkillsFromDir({ dir, source: "v2" });
+	const skills: Skill[] = [
+		{ content: codeSkill, readOnly: false },
+		{ content: researchSkill, readOnly: true },
+	].map(({ content, readOnly }) => {
+		const { frontmatter } = parseFrontmatter(content);
+		return {
+			id: text(frontmatter.name, "system skill name"),
+			description: text(frontmatter.description, "system skill description"),
+			content,
+			readOnly,
+			origin: "system",
+			digest: digest(content),
+		};
+	});
+	const dir = path.join(configDir, "skills");
+	if (fs.existsSync(dir)) {
+		const loaded = loadSkillsFromDir({ dir, source: "user" });
 		if (loaded.diagnostics.some((d) => d.type === "error"))
 			throw new Error(`Invalid skills in ${dir}`);
 		for (const skill of loaded.skills) {
@@ -119,11 +147,19 @@ export function loadConfig(stateDir: string, cwd: string): Config {
 			skills.push({
 				id: skill.name,
 				description: skill.description,
+				origin: "user",
 				content,
 				digest: digest(content),
-				readOnly: skill.name === "research",
+				readOnly: false,
 			});
 		}
 	}
-	return { profiles, orchestratorProfile, repositories, skills, stateDir };
+	return {
+		profiles,
+		orchestratorProfile,
+		repositories,
+		skills,
+		stateDir,
+		configDir,
+	};
 }

@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Harness, TaskId, Tx } from "@earendil-works/pi-durable";
 import { text } from "./config.ts";
+import { scheduleFingerprint } from "./identity.ts";
 import { nextDue } from "./recurrence.ts";
 import {
 	Catalog,
@@ -44,6 +45,25 @@ export async function finishSlot(
 	doc.schedules[current.id] = JSON.stringify(current);
 }
 
+function matchingSchedule(
+	raw: string | undefined,
+	invocation: Invocation,
+	timing: Timing,
+	lateGraceMs: number | null,
+): Schedule | null {
+	if (!raw) return null;
+	const existing = decode<Schedule>(raw);
+	if (
+		scheduleFingerprint(
+			existing.invocation,
+			existing.timing,
+			existing.lateGraceMs,
+		) !== scheduleFingerprint(invocation, timing, lateGraceMs)
+	)
+		throw new Error("Schedule ID already used for a different request");
+	return existing;
+}
+
 /** Timing/admission accounting, never an execution engine. The native task is the only worker. */
 export class Scheduler {
 	constructor(
@@ -51,13 +71,28 @@ export class Scheduler {
 		private readonly admit: Admission,
 		private readonly validate: (invocation: Invocation) => Promise<unknown>,
 	) {}
+	async find(
+		invocation: Invocation,
+		timing: Timing,
+		lateGraceMs: number | null,
+		id: string,
+	): Promise<Schedule | null> {
+		text(id, "schedule ID", 128);
+		return matchingSchedule(
+			(await this.harness.snapshot(Catalog, context))?.schedules[id],
+			invocation,
+			timing,
+			lateGraceMs,
+		);
+	}
 	async create(
 		invocation: Invocation,
 		timing: Timing,
 		lateGraceMs: number | null,
 		id: string,
 	) {
-		text(id, "schedule ID", 128);
+		const previous = await this.find(invocation, timing, lateGraceMs, id);
+		if (previous) return previous;
 		await this.validate(invocation);
 		if (
 			lateGraceMs !== null &&
@@ -81,18 +116,13 @@ export class Scheduler {
 		};
 		return this.harness.commit(async (tx) => {
 			const doc = await tx.doc(Catalog);
-			if (doc.schedules[id]) {
-				const existing = decode<Schedule>(doc.schedules[id]);
-				if (
-					JSON.stringify([
-						existing.invocation,
-						existing.timing,
-						existing.lateGraceMs,
-					]) !== JSON.stringify([invocation, timing, lateGraceMs])
-				)
-					throw new Error("Schedule ID already used for a different request");
-				return existing;
-			}
+			const existing = matchingSchedule(
+				doc.schedules[id],
+				invocation,
+				timing,
+				lateGraceMs,
+			);
+			if (existing) return existing;
 			doc.schedules[id] = JSON.stringify(schedule);
 			return schedule;
 		}, context);

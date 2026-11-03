@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import type { Conversation, Harness } from "@earendil-works/pi-durable";
-import { type Config, digest, text } from "./config.ts";
+import { type Config, text } from "./config.ts";
 import { git } from "./git.ts";
+import { invocationFingerprint } from "./identity.ts";
 import { finishSlot, type ScheduleSlot } from "./scheduler.ts";
 import type { createSkillTask } from "./skill-task.ts";
 import {
@@ -26,25 +26,6 @@ function previousAdmission(
 	if (saved.fingerprint !== fingerprint)
 		throw new Error("Request ID was already used for a different invocation");
 	return saved.id;
-}
-function invocationFingerprint(
-	invocation: Invocation,
-	occurrence: string | null,
-): string {
-	// Explicit fields make JSON property ordering irrelevant. Do not resolve the filesystem
-	// or current profile here: a retry must still find its admitted task after config changes.
-	return digest(
-		JSON.stringify({
-			topicId: invocation.topicId,
-			skill: invocation.skill,
-			profile: invocation.profile,
-			repository: path.resolve(invocation.repository),
-			inputs: invocation.inputs,
-			relatedTo: invocation.relatedTo ?? null,
-			policy: invocation.policy,
-			occurrence,
-		}),
-	);
 }
 export class TaskAdmission {
 	constructor(
@@ -82,7 +63,14 @@ export class TaskAdmission {
 			inputs: invocation.inputs,
 			relatedTo: invocation.relatedTo ?? null,
 			occurrence: null,
-			baseCommit: (await git(repository, ["rev-parse", "HEAD"])).trim(),
+			baseCommit: (
+				await git(repository, [
+					"rev-parse",
+					"--verify",
+					"--end-of-options",
+					`${text(invocation.baseRef ?? "HEAD", "Git base ref", 512)}^{commit}`,
+				])
+			).trim(),
 			policy: skill.readOnly ? "read-only" : invocation.policy,
 		};
 	}
@@ -132,6 +120,7 @@ export class TaskAdmission {
 			});
 			const info: TaskInfo = {
 				id: Number(created),
+				baseCommit: input.baseCommit,
 				policy: input.policy,
 				topicId: invocation.topicId,
 				skill: input.skill.id,

@@ -29,6 +29,7 @@ export type Topic = { id: string; title: string; createdAt: number };
 export type ExecutionPolicy = "read-only" | "workspace-write";
 export type TaskInfo = {
 	id: number;
+	baseCommit?: string;
 	policy: ExecutionPolicy;
 	topicId: string;
 	skill: string;
@@ -40,6 +41,7 @@ export type TaskInfo = {
 	reported: boolean;
 };
 export type Invocation = {
+	baseRef?: string;
 	policy: ExecutionPolicy;
 	topicId: string;
 	skill: string;

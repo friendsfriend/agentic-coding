@@ -82,6 +82,15 @@ async function refresh() {
 				),
 			),
 		);
+		for (const origin of ["system", "user"]) {
+			$(`${origin}-skills`).replaceChildren(
+				...state.skills
+					.filter((skill) => skill.origin === origin)
+					.map((skill) =>
+						element("p", `${skill.id} · ${skill.description}`, "meta"),
+					),
+			);
+		}
 		$("title").textContent = topic ?? "Orchestrator";
 		$("dashboard").hidden = !topic;
 		const tasks = state.tasks.filter((task) => task.topicId === topic);
@@ -95,7 +104,7 @@ async function refresh() {
 					),
 					element(
 						"div",
-						`Task ${task.id} · ${task.profile}${task.relatedTo ? ` · follows ${task.relatedTo}` : ""}`,
+						`Task ${task.id} · ${task.profile}${task.baseCommit ? ` · base ${task.baseCommit.slice(0, 12)}` : ""}${task.relatedTo ? ` · follows ${task.relatedTo}` : ""}`,
 						"meta",
 					),
 				);

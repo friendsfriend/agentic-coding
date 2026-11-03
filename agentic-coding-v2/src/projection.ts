@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import type { Conversation, Harness, TaskId } from "@earendil-works/pi-durable";
+import { taskActivities } from "./activity.ts";
 import type { Config } from "./config.ts";
 import { gitOverview } from "./git.ts";
 import {
@@ -20,25 +21,33 @@ export async function projectState(
 	models: Models,
 ) {
 	const doc = await harness.snapshot(Catalog, context);
+	const infos = values<TaskInfo>(doc?.tasks);
+	const activities = await taskActivities(
+		harness,
+		infos.map((info) => info.id),
+	);
 	const tasks = await Promise.all(
-		values<TaskInfo>(doc?.tasks).map(async (info) => {
+		infos.map(async (info) => {
 			const task = await harness.getTask(nativeTaskId(info.id), context);
 			const waiting =
 				task?.state.status !== "terminal" &&
 				values<Review>(doc?.reviews).some(
 					(review) => review.taskId === info.id && review.state === "pending",
 				);
+			const activity = activities.get(info.id);
 			return {
 				...info,
 				activity:
-					task && task.state.status !== "terminal" && !waiting
-						? "running"
-						: "idle",
+					waiting || !task || task.state.status === "terminal"
+						? "idle"
+						: (activity?.activity ?? "idle"),
 				detail: waiting
 					? "awaiting review"
 					: task?.state.status === "terminal"
 						? task.state.outcome.status
-						: (task?.state.status ?? "missing"),
+						: task
+							? (activity?.detail ?? task.state.status)
+							: "missing",
 				result: task?.state.status === "terminal" ? task.state.outcome : null,
 			};
 		}),
@@ -85,11 +94,14 @@ export async function projectState(
 	);
 	return {
 		profiles,
-		skills: config.skills.map(({ id, description, digest: revision }) => ({
-			id,
-			description,
-			revision,
-		})),
+		skills: config.skills.map(
+			({ id, description, origin, digest: revision }) => ({
+				id,
+				origin,
+				description,
+				revision,
+			}),
+		),
 		repositories: config.repositories,
 		topics: values<Topic>(doc?.topics),
 		tasks,
