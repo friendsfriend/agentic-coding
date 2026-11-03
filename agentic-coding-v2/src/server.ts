@@ -12,6 +12,7 @@ import dom from "./web/dom.js" with { type: "text" };
 import diagnostics from "./web/environment-diagnostics.js" with {
 	type: "text",
 };
+import lifecycle from "./web/environment-lifecycle.js" with { type: "text" };
 import html from "./web/index.html" with { type: "text" };
 import css from "./web/style.css" with { type: "text" };
 
@@ -115,6 +116,10 @@ export function serve(app: Runtime, port = 0) {
 		["/", { content: String(html), type: "text/html" }],
 		["/app.js", { content: script, type: "text/javascript" }],
 		["/dom.js", { content: dom, type: "text/javascript" }],
+		[
+			"/environment-lifecycle.js",
+			{ content: lifecycle, type: "text/javascript" },
+		],
 		[
 			"/environment-diagnostics.js",
 			{ content: diagnostics, type: "text/javascript" },

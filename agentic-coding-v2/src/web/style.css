@@ -176,3 +176,25 @@ details {
 		padding: 12px;
 	}
 }
+
+.environment-notice,
+.environment-wait {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+.environment-notice {
+	border-left: 3px solid #799eff;
+	background: #192332;
+	padding: 8px;
+	margin: 6px 0;
+}
+.environment-wait .meta {
+	flex-basis: 100%;
+	margin: 0;
+}
+.task:focus {
+	outline: 2px solid #799eff;
+	outline-offset: 3px;
+}

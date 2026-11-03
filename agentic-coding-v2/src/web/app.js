@@ -1,8 +1,18 @@
 import { button, element } from "/dom.js";
 import { environmentDiagnostics } from "/environment-diagnostics.js";
+import {
+	idleDescription,
+	lifecycleNotices,
+	lifecycleRevision,
+	updateLifecycleClocks,
+	waiterCard,
+} from "/environment-lifecycle.js";
 
 const $ = (id) => document.getElementById(id);
 let topic = null;
+let focusedTask = null;
+let knownTasks = [];
+const notice = lifecycleNotices($("environment-notices"), openOwner);
 let revision = "";
 const token = new URLSearchParams(location.hash.slice(1)).get("token");
 if (token) history.replaceState(null, "", location.pathname);
@@ -225,7 +235,57 @@ function environmentProject(project, existing) {
 	return card;
 }
 
+async function openOwner(owner) {
+	const task = knownTasks.find((task) => task.id === owner);
+	if (!task)
+		throw new Error(
+			`Task ${owner} is not in this task snapshot; no owner or topic is inferred.`,
+		);
+	topic = task.topicId;
+	focusedTask = owner;
+	revision = "";
+	await refresh();
+	const card = document.getElementById(`task-${owner}`);
+	if (card) {
+		card.scrollIntoView({ block: "center" });
+		card.focus({ preventScroll: true });
+	}
+}
+function taskCard(task, existing) {
+	const el = existing ?? element("div", null, "task");
+	const version = JSON.stringify([
+		task.skill,
+		task.activity,
+		task.detail,
+		task.profile,
+		task.baseCommit,
+		task.relatedTo,
+	]);
+	if (el.dataset.taskRevision === version) return el;
+	el.dataset.task = String(task.id);
+	el.dataset.taskRevision = version;
+	el.id = `task-${task.id}`;
+	el.tabIndex = -1;
+	el.replaceChildren(
+		element("strong", `${task.skill} · ${task.activity} · ${task.detail}`),
+		element(
+			"div",
+			`Task ${task.id} · ${task.profile}${task.baseCommit ? ` · base ${task.baseCommit.slice(0, 12)}` : ""}${task.relatedTo ? ` · follows ${task.relatedTo}` : ""}`,
+			"meta",
+		),
+	);
+	if (
+		!["completed", "failed", "aborted", "faulted", "orphaned"].includes(
+			task.detail,
+		)
+	)
+		el.append(
+			button("Cancel task", () => api(`/api/tasks/${task.id}/cancel`, {})),
+		);
+	return el;
+}
 function selectTopic(value) {
+	focusedTask = null;
 	topic = value;
 	revision = "";
 	void refresh();
@@ -235,7 +295,10 @@ async function refresh() {
 	try {
 		const state = await api("/api/state");
 		$("connection").textContent = "Connected";
-		const next = JSON.stringify([state, topic]);
+		knownTasks = state.tasks;
+		notice(state.environments);
+		updateLifecycleClocks($("environments"), state.environments.runs);
+		const next = lifecycleRevision(state, topic, focusedTask);
 		if (revision === next) return;
 		revision = next;
 		$("topics").replaceChildren(
@@ -274,34 +337,16 @@ async function refresh() {
 			);
 		}
 		$("title").textContent = topic ?? "Orchestrator";
-		$("dashboard").hidden = !topic;
+		$("dashboard").hidden = !topic && focusedTask === null;
 		const tasks = state.tasks.filter((task) => task.topicId === topic);
-		$("tasks").replaceChildren(
-			...tasks.map((task) => {
-				const el = element("div", null, "task");
-				el.append(
-					element(
-						"strong",
-						`${task.skill} · ${task.activity} · ${task.detail}`,
-					),
-					element(
-						"div",
-						`Task ${task.id} · ${task.profile}${task.baseCommit ? ` · base ${task.baseCommit.slice(0, 12)}` : ""}${task.relatedTo ? ` · follows ${task.relatedTo}` : ""}`,
-						"meta",
-					),
-				);
-				if (
-					!["completed", "failed", "aborted", "faulted", "orphaned"].includes(
-						task.detail,
-					)
-				)
-					el.append(
-						button("Cancel task", () =>
-							api(`/api/tasks/${task.id}/cancel`, {}),
-						),
-					);
-				return el;
-			}),
+		const existingTasks = new Map(
+			Array.from($("tasks").children, (card) => [card.dataset.task, card]),
+		);
+		reuseChildren(
+			$("tasks"),
+			...tasks.map((task) =>
+				taskCard(task, existingTasks.get(String(task.id))),
+			),
 		);
 		const workspaces = new Set(tasks.map((task) => task.workspace));
 		$("git").replaceChildren(
@@ -343,12 +388,10 @@ async function refresh() {
 						),
 					]),
 			...environments.waiters
-				.filter((waiter) => !topic || ownerIds.has(waiter.owner))
-				.map((waiter) =>
-					element(
-						"p",
-						`Task ${waiter.owner} waiting for ${waiter.apps.join(", ")} · FIFO acquisition`,
-					),
+				.map((waiter, index) => ({ waiter, index }))
+				.filter(({ waiter }) => !topic || ownerIds.has(waiter.owner))
+				.map(({ waiter, index }) =>
+					waiterCard(waiter, environments, index, openOwner),
 				),
 			...(environments.revocations ?? [])
 				.filter((receipt) => !topic || ownerIds.has(receipt.owner))
@@ -372,6 +415,8 @@ async function refresh() {
 					const renderRevision = JSON.stringify([
 						run.revision,
 						run.canRevoke,
+						run.idle ? { ...run.idle, remainingMs: null } : null,
+						run.idleReap,
 						resource?.id,
 						resource?.state,
 						resource?.health,
@@ -405,6 +450,9 @@ async function refresh() {
 							"meta",
 						),
 					);
+					content.append(
+						button(`Open owner task ${run.owner}`, () => openOwner(run.owner)),
+					);
 					for (const service of run.runtimeStatuses ?? [])
 						content.append(
 							element(
@@ -434,23 +482,9 @@ async function refresh() {
 								await refresh();
 							}),
 						);
-					if (run.idleReap)
+					if (run.idleReap || run.idle)
 						content.append(
-							element(
-								"p",
-								`Idle expiry requested at ${new Date(run.idleReap.at).toISOString()}; cleanup state: ${run.state}. Coding task authority is not permanently revoked.`,
-								"meta",
-							),
-						);
-					else if (run.idle)
-						content.append(
-							element(
-								"p",
-								run.idle.protection
-									? `Idle expiry protected: ${run.idle.protection}`
-									: `Agent batch idle TTL: ${Math.ceil(run.idle.remainingMs / 1000)} seconds remaining; owner-scoped environment use renews the batch.`,
-								"meta",
-							),
+							element("p", idleDescription(run), "meta environment-idle"),
 						);
 					const diagnostics = environmentDiagnostics(
 						run,
@@ -501,6 +535,7 @@ async function refresh() {
 					return card;
 				}),
 		);
+		updateLifecycleClocks($("environments"), environments.runs);
 		const existingReviews = new Map(
 			Array.from($("reviews").children, (card) => [
 				card.dataset.reviewId,

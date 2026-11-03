@@ -399,6 +399,10 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 			"Content-Type": "application/json",
 		};
 		expect((await fetch(`${origin}/api/state`)).status).toBe(401);
+		const lifecycle = await fetch(`${origin}/environment-lifecycle.js`);
+		expect(lifecycle.status).toBe(200);
+		expect(lifecycle.headers.get("content-type")).toContain("text/javascript");
+		expect(lifecycle.headers.get("x-content-type-options")).toBe("nosniff");
 		const review = waiting.reviews[0];
 		const body = JSON.stringify({
 			revision: review.revision,
