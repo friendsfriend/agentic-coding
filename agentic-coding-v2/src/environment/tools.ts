@@ -95,7 +95,13 @@ export function createEnvironmentTools(
 				...(plans.some((plan) => plan.projectKind === "infrastructure")
 					? {
 							infrastructureScope:
-								"Exclusive task-owned run resources only, explicitly listed in this atomic batch. Same repository/workspace and live-receipt cleanup fences as apps. No automatic dependencies, shared/external infrastructure, imported leases, or saved-ID adoption. No implicit image builds or database query authority.",
+								"Exclusive task-owned run resources only, all listed in this approved atomic plan. Declared same-repository owned dependencies may expand the request. Same workspace and live-receipt cleanup fences as apps. No shared/external infrastructure, imported leases, saved-ID adoption, implicit image builds or database query authority.",
+						}
+					: {}),
+				...(plans.some((plan) => plan.dependencyBatch)
+					? {
+							dependencyScope:
+								"Declared owned infrastructure is acquired atomically with every requested app, at most 16 projects (Compose services and Pod replicas retain their own bounds), and started dependency-first through each configured readiness observation. This is one coupled-lifetime batch: stopping ANY member, ANY member exiting, startup failure, task cleanup or host shutdown stops ALL members, dependents before dependencies. No partial release, cross-task sharing, automatic restart or saved-ID adoption. Root target/profile/runtime options do not override automatic dependency defaults. Kubernetes dependencies must be explicitly requested with an eligible target/runtime, never implicitly started.",
 						}
 					: {}),
 				authority:
@@ -286,7 +292,7 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external; dependencies are not automatically started. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout releases queue position; no app starts on timeout.",
+					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout releases queue position; no app starts on timeout.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
 					...selectionFields,
@@ -313,7 +319,7 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_stop",
 				description:
-					"Stop only apps started by this task, with confirmed live process-group or receipt-fenced runtime cleanup before release. Kubernetes deletion requires live creation UIDs and API UID preconditions. Never stops another task's apps or adopts persisted PIDs/IDs. Also cancels matching pending acquisitions.",
+					"Stop only apps started by this task, with confirmed live process-group or receipt-fenced runtime cleanup before release. Kubernetes deletion requires live creation UIDs and API UID preconditions. Never stops another task's apps or adopts persisted PIDs/IDs. Also cancels matching pending acquisitions. For a coupled dependency batch, selecting any member stops every member, dependents before dependencies, as disclosed by its immutable startup approval.",
 				parameters: Type.Object({
 					apps: Type.Optional(
 						Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),

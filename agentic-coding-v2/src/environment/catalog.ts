@@ -12,6 +12,7 @@ import {
 	readCompose,
 } from "./compose-config.ts";
 import { type ContainerTarget, readContainer } from "./container-config.ts";
+import { expandDependencies, validateDependencies } from "./dependencies.ts";
 import { readEndpoints } from "./endpoint.ts";
 import { readEndpointCaRefs } from "./endpoint-ca.ts";
 import { type KubernetesTarget, readKubernetes } from "./kubernetes-config.ts";
@@ -47,11 +48,14 @@ export type Project = {
 	kind: "app" | "library" | "infrastructure";
 	repository: string;
 	targets: Target[];
+	requires?: string[];
 	defaults?: Partial<Record<Action, string>>;
 };
 export type Plan = Target & {
 	app: string;
 	projectKind?: Project["kind"];
+	requires?: string[];
+	dependencyBatch?: boolean;
 	workspace: string;
 	cwd: string;
 	composePlan?: ComposePlan;
@@ -266,7 +270,27 @@ export function loadProjects(config: Config): Project[] {
 		);
 	const projects = data.projects.map((raw): Project => {
 		const entry = object(raw);
-		keysOnly(entry, ["id", "kind", "repository", "targets", "defaults"]);
+		keysOnly(entry, [
+			"id",
+			"kind",
+			"repository",
+			"targets",
+			"defaults",
+			"requires",
+		]);
+		const requires = entry.requires === undefined ? [] : entry.requires;
+		if (!Array.isArray(requires) || requires.length > 16)
+			throw new Error(
+				"Requires must be an array of at most 16 infrastructure IDs",
+			);
+		const dependencies = requires.map(identifier);
+		if (
+			new Set(dependencies).size !== dependencies.length ||
+			(entry.kind === "library" && dependencies.length)
+		)
+			throw new Error(
+				"Dependencies must be distinct and belong to runnable projects",
+			);
 		if (
 			!["app", "library", "infrastructure"].includes(String(entry.kind)) ||
 			!Array.isArray(entry.targets)
@@ -299,6 +323,7 @@ export function loadProjects(config: Config): Project[] {
 		return {
 			id: identifier(entry.id),
 			kind: entry.kind as Project["kind"],
+			...(dependencies.length ? { requires: dependencies } : {}),
 			repository,
 			targets,
 			...(entry.defaults === undefined
@@ -308,6 +333,7 @@ export function loadProjects(config: Config): Project[] {
 	});
 	if (new Set(projects.map((project) => project.id)).size !== projects.length)
 		throw new Error("Duplicate environment project ID");
+	validateDependencies(projects);
 	return projects;
 }
 export function resolvePlans(
@@ -323,14 +349,12 @@ export function resolvePlans(
 		);
 	if (!apps.length || apps.length > 16 || new Set(apps).size !== apps.length)
 		throw new Error("Choose 1–16 distinct environment apps");
-	return apps.map((app) => {
+	const resolve = (app: string, selection: Selection): Plan => {
 		const project = projects.find((project) => project.id === app);
 		if (!project || project.repository !== owner.repository)
 			throw new Error(
 				"Environment project must belong to this task's repository",
 			);
-		const selection: Selection =
-			typeof target === "string" ? { target } : (target ?? {});
 		const chosen = selectTarget(
 			availableTargets(project),
 			action,
@@ -363,6 +387,9 @@ export function resolvePlans(
 			...chosen,
 			app,
 			projectKind: project.kind,
+			...(action === "run" && project.requires?.length
+				? { requires: project.requires }
+				: {}),
 			workspace: owner.workspace,
 			cwd,
 			...(composePlan ? { composePlan } : {}),
@@ -375,5 +402,10 @@ export function resolvePlans(
 					}
 				: {}),
 		};
-	});
+	};
+	const selection = typeof target === "string" ? { target } : (target ?? {});
+	const roots = apps.map((app) => resolve(app, selection));
+	return action === "run"
+		? expandDependencies(roots, (id) => resolve(id, {}))
+		: roots;
 }

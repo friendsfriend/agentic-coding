@@ -56,6 +56,7 @@ export class Environments {
 		{ owner: number; batch: string }
 	>();
 	private stopped = new Set<string>();
+	private dependencyCleanup = new Map<number, Promise<void>>();
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
 		this.clusters = loadClusters(config);
@@ -617,7 +618,8 @@ export class Environments {
 			return result;
 		} catch (error) {
 			if (reserved) {
-				for (const plan of plans) {
+				this.stopped.add(batch);
+				for (const plan of [...plans].reverse()) {
 					const id = `${batch}:${plan.app}`,
 						process = this.live.get(id);
 					if (process) await this.stopLive(id, process);
@@ -650,14 +652,22 @@ export class Environments {
 			this.notify();
 		}
 	}
-	private async finish(id: string, process: EnvironmentProcess) {
+	private async finish(
+		id: string,
+		process: EnvironmentProcess,
+		cleanup = false,
+	) {
 		const exit = await process.done;
-		await this.store.commit(async (tx) => {
+		const cascade = await this.store.commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState),
 				run = decode<EnvironmentRun>(doc.runs[id]);
 			// An interrupted receipt is a quarantine latch; even a late exit cannot
 			// release it or overwrite a subsequent authenticated inspection decision.
-			if (run.state === "interrupted" || run.state === "exited") return;
+			if (run.state === "interrupted" || run.state === "exited") return null;
+			// Callback exits must not release infrastructure ahead of dependents. Only
+			// ordered live cleanup may finalize members of a coupled dependency batch.
+			if (run.plan.dependencyBatch && !cleanup)
+				return { batch: run.batch, owner: run.owner };
 			doc.runs[id] = JSON.stringify({
 				...run,
 				state: process.cleanupFailed ? "interrupted" : "exited",
@@ -676,7 +686,33 @@ export class Environments {
 					? "Environment resource cleanup could not be confirmed; inspect leftovers before releasing this resource."
 					: run.error,
 			});
+			return null;
 		}, background);
+		if (cascade) {
+			if (!this.closed && !this.stopped.has(cascade.batch)) {
+				this.stopped.add(cascade.batch);
+				this.notify();
+				const operation = (async () =>
+					this.stopTargets(
+						(await this.records()).filter(
+							(run) =>
+								run.batch === cascade.batch &&
+								run.owner === cascade.owner &&
+								holdsResource(run),
+						),
+						[cascade.batch],
+						true,
+					))();
+				this.dependencyCleanup.set(cascade.owner, operation);
+				try {
+					await operation;
+				} finally {
+					if (this.dependencyCleanup.get(cascade.owner) === operation)
+						this.dependencyCleanup.delete(cascade.owner);
+				}
+			}
+			return;
+		}
 		this.live.delete(id);
 		this.notify();
 	}
@@ -700,7 +736,7 @@ export class Environments {
 			this.live.delete(id);
 			return false;
 		}
-		await this.finish(id, process);
+		await this.finish(id, process, true);
 		return !process.cleanupFailed;
 	}
 	async stopOnce(id: string, owner: number, apps?: string[]) {
@@ -716,11 +752,20 @@ export class Environments {
 					throw new Error("Stop request identity mismatch");
 				return saved;
 			}
-			const selected = values<EnvironmentRun>(doc.runs).filter(
-				(run) =>
-					run.owner === owner &&
-					holdsResource(run) &&
-					(!apps || apps.includes(run.plan.app)),
+			const active = values<EnvironmentRun>(doc.runs).filter(
+				(run) => run.owner === owner && holdsResource(run),
+			);
+			const coupled = new Set(
+				active
+					.filter(
+						(run) =>
+							run.plan.dependencyBatch &&
+							(!apps || apps.includes(run.plan.app)),
+					)
+					.map((run) => run.batch),
+			);
+			const selected = active.filter(
+				(run) => !apps || apps.includes(run.plan.app) || coupled.has(run.batch),
 			);
 			const waiting = this.waiters.filter(
 				(waiter) =>
@@ -767,15 +812,13 @@ export class Environments {
 			);
 		for (const batch of batches) this.stopped.add(batch);
 		this.notify();
-		for (const run of selected) {
+		let uncertain = false;
+		for (const run of [...selected].reverse()) {
 			if (run.state === "interrupted" || run.state === "exited") continue;
 			const process = this.live.get(run.id);
 			if (process) {
 				await this.update(run.id, { state: "stopping" });
-				if (!(await this.stopLive(run.id, process)) && !preserveUnknown)
-					throw new Error(
-						"Cleanup remains uncertain; operator inspection required",
-					);
+				if (!(await this.stopLive(run.id, process))) uncertain = true;
 			} else await this.update(run.id, { state: "exited" });
 		}
 		await Promise.allSettled(
@@ -783,6 +826,10 @@ export class Environments {
 				.filter(([, entry]) => batches.includes(entry.batch))
 				.map(([operation]) => operation),
 		);
+		if (uncertain && !preserveUnknown)
+			throw new Error(
+				"Cleanup remains uncertain; operator inspection required",
+			);
 	}
 	async releaseOwner(owner: number) {
 		this.revoked.add(owner);
@@ -800,6 +847,7 @@ export class Environments {
 				.filter(([, entry]) => entry.owner === owner)
 				.map(([operation]) => operation),
 		);
+		await this.dependencyCleanup.get(owner);
 		const held = (await this.records()).filter(
 			(run) => run.owner === owner && holdsResource(run),
 		);
@@ -829,7 +877,9 @@ export class Environments {
 	async close() {
 		this.closed = true;
 		this.notify();
-		for (const [id, process] of this.live) await this.stopLive(id, process);
+		for (const [id, process] of [...this.live].reverse())
+			await this.stopLive(id, process);
 		await Promise.allSettled([...this.pending.keys()]);
+		await Promise.allSettled([...this.dependencyCleanup.values()]);
 	}
 }
