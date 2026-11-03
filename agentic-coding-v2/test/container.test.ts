@@ -165,7 +165,7 @@ async function composeFile(repository: string, body: string) {
 const stackYaml =
 	"services:\n  web:\n    image: fixture:latest\n    command: [serve]\n    volumes:\n      - type: bind\n        source: .\n        target: /workspace\n  worker:\n    image: fixture:latest\n    command: [serve]\n";
 
-test("Compose native approval pins checkout-relative services, owns every creation and reverses cleanup", async () => {
+test("Compose approval gates the complete stack and cancellation releases its owned resources", async () => {
 	const { app, config, fake, invocation } = await fixture(
 		false,
 		configureCompose,
@@ -177,24 +177,18 @@ test("Compose native approval pins checkout-relative services, owns every creati
 	]);
 	const task = await app.startTask(invocation);
 	const review = await pendingReview(app, task);
-	expect(review.snapshot).toContain('"composePlan"');
 	expect(review.snapshot).not.toContain(secret);
 	expect(readEngine(config).history).toHaveLength(0);
 	await approve(app, task);
 	await pendingReview(app, task, "Hold stack");
 	const run = (await app.environments.snapshot()).runs[0];
 	expect(run?.state).toBe("running");
-	expect(run?.runtimeStatuses).toHaveLength(2);
+	expect(run?.runtimeStatuses).toHaveLength(3);
 	expect(
 		run?.runtimeStatuses?.every(
 			(status) => status.owned === true && status.state === "running",
 		),
 	).toBe(true);
-	const history = readEngine(config).history;
-	expect(history.filter((args) => args[2] === "create")).toHaveLength(2);
-	expect(history.find((args) => args[2] === "create")?.join(" ")).toContain(
-		`src=${run?.plan.workspace}/deploy`,
-	);
 	await eventually(
 		() => app.environments.logs("api", task),
 		(logs) => JSON.stringify(logs).includes("[REDACTED]"),
@@ -202,15 +196,11 @@ test("Compose native approval pins checkout-relative services, owns every creati
 	await app.cancel(task);
 	await app.harness.waitForTask(task as TaskId, context);
 	expect(Object.keys(readEngine(config).containers)).toHaveLength(0);
+	expect(Object.keys(readEngine(config).networks ?? {})).toHaveLength(0);
+	expect(
+		JSON.stringify(await app.environments.logs("api", task)),
+	).not.toContain("must-not-leak-private-network-metadata");
 	expect((await app.environments.snapshot()).runs[0]?.state).toBe("exited");
-	const removals = readEngine(config)
-		.history.filter((args) => args[2] === "rm")
-		.map((args) => args[3]);
-	expect(removals).toEqual(
-		(run?.runtimeStatuses ?? [])
-			.map((status) => status.id ?? "missing")
-			.reverse(),
-	);
 }, 15000);
 
 test("Compose source changes and colliding service ports fail before any engine command", async () => {
@@ -289,7 +279,7 @@ test("Compose unsupported effects are refused, and daemon loss quarantines the c
 	for (const field of [
 		"networks: [external]",
 		"privileged: true",
-		"depends_on: [worker]",
+		"restart: always",
 		"build: .",
 	]) {
 		const { app, config, fake, invocation } = await fixture(
@@ -336,12 +326,181 @@ test("Compose unsupported effects are refused, and daemon loss quarantines the c
 	const run = (await app.environments.snapshot()).runs[0];
 	expect(run?.state).toBe("interrupted");
 	expect(run?.exitCode).toBeNull();
-	expect(run?.runtimeStatuses).toHaveLength(2);
+	expect(run?.runtimeStatuses).toHaveLength(3);
 	expect(Object.keys(readEngine(config).containers)).toHaveLength(2);
 	expect(readEngine(config).history.some((args) => args[2] === "rm")).toBe(
 		false,
 	);
 }, 20000);
+
+test("Compose shared networks refuse foreign occupancy, copied-label replacement, foreign attachments and lost creation receipts", async () => {
+	for (const variant of ["foreign", "replacement", "attachment", "receipt"]) {
+		const { app, config, fake, invocation } = await fixture(
+			false,
+			configureCompose,
+		);
+		await composeFile(invocation.repository, stackYaml);
+		if (variant === "foreign" || variant === "receipt") {
+			const state = readEngine(config);
+			if (variant === "foreign") {
+				const id = "e".repeat(64);
+				state.networks = {
+					[id]: {
+						Id: id,
+						Name: `acv2-api-${digest(config.stateDir).slice(0, 8)}-default`,
+						Labels: { foreign: "operator" },
+						Containers: {},
+					},
+				};
+			} else state.invalidNetworkReceipt = true;
+			fs.writeFileSync(engine(config), JSON.stringify(state));
+			fake.setResponses([
+				call("env_start", { apps: ["api"] }),
+				fauxAssistantMessage("No network adoption"),
+			]);
+		} else
+			fake.setResponses([
+				call("env_start", { apps: ["api"] }),
+				call("request_review", { path: ".", title: "Hold network fixture" }),
+			]);
+		const task = await app.startTask(invocation);
+		await approve(app, task);
+		if (variant === "replacement" || variant === "attachment") {
+			await pendingReview(app, task, "Hold network fixture");
+			const state = readEngine(config),
+				network = Object.values(state.networks ?? {})[0];
+			if (!network) throw new Error("Missing fixture network");
+			if (variant === "replacement") {
+				delete state.networks?.[network.Id];
+				network.Id = "d".repeat(64);
+				state.networks ??= {};
+				state.networks[network.Id] = network;
+			} else
+				network.Containers["c".repeat(64)] = { Name: "operator-attachment" };
+			fs.writeFileSync(engine(config), JSON.stringify(state));
+			await app.cancel(task);
+		}
+		await app.harness.waitForTask(task as TaskId, context);
+		const state = readEngine(config),
+			run = (await app.environments.snapshot()).runs[0];
+		expect(Object.keys(state.networks ?? {})).toHaveLength(1);
+		expect(
+			state.history.some((args) => args[2] === "network" && args[3] === "rm"),
+		).toBe(false);
+		expect(
+			state.history.some(
+				(args) => args.includes("disconnect") || args.includes("--force"),
+			),
+		).toBe(false);
+		expect(run?.state).toBe(variant === "foreign" ? "exited" : "interrupted");
+		expect(Object.keys(state.containers)).toHaveLength(0);
+		if (variant === "foreign")
+			expect(
+				state.history.some(
+					(args) =>
+						args[2] === "create" ||
+						(args[2] === "network" && args[3] === "create"),
+				),
+			).toBe(false);
+	}
+}, 20000);
+
+test("Podman Compose requires explicit isolated mode rather than inventing network receipt authority", async () => {
+	for (const network of ["shared", "isolated"]) {
+		const { app, config, fake, invocation } = await fixture(false, (config) => {
+			configureCompose(config);
+			const file = path.join(config.configDir, "environments.json"),
+				data = JSON.parse(fs.readFileSync(file, "utf8"));
+			data.projects[0].targets[0].compose.provider = "podman";
+			data.projects[0].targets[0].compose.network = network;
+			fs.writeFileSync(file, JSON.stringify(data));
+		});
+		await composeFile(invocation.repository, stackYaml);
+		const listing = await app.environments.snapshot();
+		if (network === "shared") {
+			expect(listing.projects[0]?.targets[0]?.availability?.eligible).toBe(
+				false,
+			);
+			fake.setResponses([
+				call("env_start", { apps: ["api"] }),
+				fauxAssistantMessage("No unsupported shared network effect"),
+			]);
+			const task = await app.startTask(invocation);
+			await app.harness.waitForTask(task as TaskId, context);
+			expect(readEngine(config).history).toHaveLength(0);
+		} else {
+			fake.setResponses([
+				call("env_start", { apps: ["api"] }),
+				call("request_review", {
+					path: ".",
+					title: "Hold isolated Podman stack",
+				}),
+			]);
+			const task = await app.startTask(invocation);
+			const review = await pendingReview(app, task);
+			expect(review.snapshot).toContain('"network": "isolated"');
+			await approve(app, task);
+			await pendingReview(app, task, "Hold isolated Podman stack");
+			expect(Object.keys(readEngine(config).containers)).toHaveLength(2);
+			expect(Object.keys(readEngine(config).networks ?? {})).toHaveLength(0);
+			expect((await app.environments.snapshot()).runs[0]?.ready).toBe(true);
+			await app.cancel(task);
+			await app.harness.waitForTask(task as TaskId, context);
+			expect(Object.keys(readEngine(config).containers)).toHaveLength(0);
+		}
+	}
+}, 15000);
+
+test("Compose web can discover its ready worker, and an unavailable prerequisite never yields a ready stack", async () => {
+	for (const available of [true, false]) {
+		const { app, config, fake, invocation } = await fixture(false, (config) => {
+			configureCompose(config);
+			const file = path.join(config.configDir, "environments.json"),
+				data = JSON.parse(fs.readFileSync(file, "utf8"));
+			data.projects[0].targets[0].timeoutMs = available ? 5000 : 2000;
+			fs.writeFileSync(file, JSON.stringify(data));
+			const state = readEngine(config);
+			state.workloadPrerequisite = "healthy";
+			if (!available) state.initialHealth = "missing";
+			fs.writeFileSync(engine(config), JSON.stringify(state));
+		});
+		await composeFile(
+			invocation.repository,
+			stackYaml.replace(
+				"    command: [serve]",
+				"    command: [serve]\n    depends_on:\n      worker:\n        condition: service_healthy",
+			),
+		);
+		fake.setResponses([
+			call("env_start", { apps: ["api"] }),
+			available
+				? call("request_review", {
+						path: ".",
+						title: "Keep connected app running",
+					})
+				: fauxAssistantMessage("Unavailable prerequisite prevented startup"),
+		]);
+		const task = await app.startTask(invocation);
+		await approve(app, task);
+		if (available) {
+			await pendingReview(app, task, "Keep connected app running");
+			expect((await app.environments.snapshot()).runs[0]?.ready).toBe(true);
+			expect(
+				Object.values(readEngine(config).containers).filter(
+					(container) => container.State.Running,
+				),
+			).toHaveLength(2);
+			await app.cancel(task);
+		}
+		await app.harness.waitForTask(task as TaskId, context);
+		const state = readEngine(config),
+			run = (await app.environments.snapshot()).runs[0];
+		if (!available) expect(run?.ready).not.toBe(true);
+		expect(Object.keys(state.containers)).toHaveLength(0);
+		expect(Object.keys(state.networks ?? {})).toHaveLength(0);
+		expect(run?.state).toBe("exited");
+	}
+}, 15000);
 
 test("native container approvals select profiles/providers, fence ownership, redact streams and return actual build/test receipts", async () => {
 	const { app, config, fake, invocation } = await fixture(false, configure);
@@ -681,155 +840,201 @@ test("an interrupted image writer quarantines the shared daemon across providers
 	expect((await app.environments.snapshot()).runs).toHaveLength(1);
 });
 
-test("a killed container host never adopts saved IDs or invokes an engine during restart, cancellation or inspected release", async () => {
-	const fixtureState = await fixture(true, configure);
-	await fixtureState.app.close();
-	apps.splice(apps.indexOf(fixtureState.app), 1);
-	const inputFile = path.join(
-			fixtureState.config.stateDir,
-			"container-host-input.json",
-		),
-		readyFile = path.join(
-			fixtureState.config.stateDir,
-			"container-host-ready.json",
+test("killed container and Compose hosts never adopt saved IDs or invoke an engine during restart, cancellation or inspected release", async () => {
+	for (const runtime of ["container", "compose"]) {
+		const fixtureState = await fixture(
+			true,
+			runtime === "compose" ? configureCompose : configure,
 		);
-	fs.writeFileSync(
-		inputFile,
-		JSON.stringify({
-			config: fixtureState.config,
-			invocation: fixtureState.invocation,
-			readyFile,
-		}),
-	);
-	const host = Bun.spawn(
-		[
-			process.execPath,
-			path.join(import.meta.dir, "fixtures/environment-host.ts"),
+		if (runtime === "compose")
+			await composeFile(fixtureState.invocation.repository, stackYaml);
+		await fixtureState.app.close();
+		apps.splice(apps.indexOf(fixtureState.app), 1);
+		const inputFile = path.join(
+				fixtureState.config.stateDir,
+				"container-host-input.json",
+			),
+			readyFile = path.join(
+				fixtureState.config.stateDir,
+				"container-host-ready.json",
+			);
+		fs.writeFileSync(
 			inputFile,
-		],
-		{
-			cwd: fixtureState.invocation.repository,
-			env: { PATH: process.env.PATH, HOME: fixtureState.config.stateDir },
-			stdout: "ignore",
-			stderr: "inherit",
-		},
-	);
-	try {
-		await eventually(async () => fs.existsSync(readyFile), Boolean);
-		const ready = JSON.parse(fs.readFileSync(readyFile, "utf8")) as {
-			id: number;
-			run: EnvironmentRun;
-		};
-		const containerId = ready.run.runtimeStatus?.id;
-		if (!containerId) throw new Error("Missing live creation receipt");
-		const followers = readEngine(fixtureState.config).followers ?? [];
-		expect(followers).toHaveLength(1);
-		host.kill("SIGKILL");
-		await host.exited;
-		const before = readEngine(fixtureState.config).history;
-		const restored = await fixtureState.open();
-		const quarantined = (await restored.environments.snapshot()).runs[0];
-		if (!quarantined) throw new Error("Missing interrupted container record");
-		expect(quarantined).toMatchObject({
-			state: "interrupted",
-			exitCode: null,
-			runtimeStatus: { id: containerId },
-		});
-		expect(
-			readEngine(fixtureState.config).containers[containerId]?.State.Running,
-		).toBe(true);
-		await expect(
-			restored.environments.stopOnce("crash-stop", ready.id, ["api"]),
-		).rejects.toThrow("saved PID");
-		await restored.cancel(ready.id);
-		const cancelled = await restored.harness.waitForTask(
-			ready.id as TaskId,
-			context,
+			JSON.stringify({
+				config: fixtureState.config,
+				invocation: fixtureState.invocation,
+				readyFile,
+				target: runtime === "compose" ? "stack" : "serve",
+			}),
 		);
-		expect(cancelled.state.outcome).toMatchObject({
-			status: "aborted",
-			reason: expect.stringContaining("Resources remain quarantined"),
-		});
-		expect(readEngine(fixtureState.config).history).toEqual(before);
-		// The test operator removes only this isolated engine's synthetic object and
-		// closes that engine, which terminates its orphaned fixture log client.
-		const state = readEngine(fixtureState.config);
-		delete state.containers[containerId];
-		fs.writeFileSync(engine(fixtureState.config), JSON.stringify(state));
-		const ownedEngine = engines.find(
-			(entry) => entry.socket === ready.run.plan.container?.socket,
+		const host = Bun.spawn(
+			[
+				process.execPath,
+				path.join(import.meta.dir, "fixtures/environment-host.ts"),
+				inputFile,
+			],
+			{
+				cwd: fixtureState.invocation.repository,
+				env: { PATH: process.env.PATH, HOME: fixtureState.config.stateDir },
+				stdout: "ignore",
+				stderr: "inherit",
+			},
 		);
-		if (!ownedEngine) throw new Error("Missing disposable engine handle");
-		await ownedEngine.stop(true);
-		await eventually(
-			async () =>
-				followers.every((pid) =>
-					fs.existsSync(
-						path.join(
-							fixtureState.config.configDir,
-							`fixture-client-${pid}.exited`,
-						),
-					),
-				),
-			Boolean,
-		);
-		const server = serve(restored);
 		try {
-			const url = new URL(server.url),
-				endpoint = `${url.origin}/api/environments/release`;
-			const headers = {
-				Authorization: `Bearer ${new URLSearchParams(url.hash.slice(1)).get("token")}`,
-				"Content-Type": "application/json",
+			await eventually(async () => fs.existsSync(readyFile), Boolean);
+			const ready = JSON.parse(fs.readFileSync(readyFile, "utf8")) as {
+				id: number;
+				run: EnvironmentRun;
 			};
-			const body = {
-				id: quarantined.id,
-				revision: quarantined.revision,
-				inspectionConfirmed: true,
-			};
-			expect(
-				(await fetch(endpoint, { method: "POST", body: JSON.stringify(body) }))
-					.status,
-			).toBe(401);
-			expect(
-				(
-					await fetch(endpoint, {
-						method: "POST",
-						headers,
-						body: JSON.stringify({ ...body, revision: body.revision - 1 }),
-					})
-				).status,
-			).toBe(400);
-			expect(
-				(
-					await fetch(endpoint, {
-						method: "POST",
-						headers,
-						body: JSON.stringify(body),
-					})
-				).status,
-			).toBe(200);
-			expect(
-				(
-					await fetch(endpoint, {
-						method: "POST",
-						headers,
-						body: JSON.stringify(body),
-					})
-				).status,
-			).toBe(400);
-			expect((await restored.environments.snapshot()).runs[0]).toMatchObject({
-				state: "exited",
+			const statuses =
+				ready.run.runtimeStatuses ??
+				(ready.run.runtimeStatus ? [ready.run.runtimeStatus] : []);
+			const containerIds = statuses
+				.filter((status) => status.kind !== "network")
+				.flatMap((status) => (status.id ? [status.id] : []));
+			const networkIds = statuses
+				.filter((status) => status.kind === "network")
+				.flatMap((status) => (status.id ? [status.id] : []));
+			expect(containerIds).toHaveLength(runtime === "compose" ? 2 : 1);
+			expect(networkIds).toHaveLength(runtime === "compose" ? 1 : 0);
+			const followers = readEngine(fixtureState.config).followers ?? [];
+			expect(followers).toHaveLength(runtime === "compose" ? 2 : 1);
+			host.kill("SIGKILL");
+			await host.exited;
+			const before = readEngine(fixtureState.config).history;
+			const restored = await fixtureState.open();
+			const quarantined = (await restored.environments.snapshot()).runs[0];
+			if (!quarantined) throw new Error("Missing interrupted container record");
+			expect(quarantined).toMatchObject({
+				state: "interrupted",
 				exitCode: null,
-				inspection: { revision: quarantined.revision },
+			});
+			const savedStatuses =
+				quarantined.runtimeStatuses ??
+				(quarantined.runtimeStatus ? [quarantined.runtimeStatus] : []);
+			expect(savedStatuses.map((status) => status.id)).toEqual(
+				statuses.map((status) => status.id),
+			);
+			expect(
+				savedStatuses.every(
+					(status) =>
+						status.state === "unknown" &&
+						status.owned === null &&
+						status.health === null,
+				),
+			).toBe(true);
+			expect(
+				containerIds.every(
+					(id) =>
+						readEngine(fixtureState.config).containers[id]?.State.Running ===
+						true,
+				),
+			).toBe(true);
+			expect(
+				networkIds.every((id) =>
+					Boolean(readEngine(fixtureState.config).networks?.[id]),
+				),
+			).toBe(true);
+			await expect(
+				restored.environments.stopOnce("crash-stop", ready.id, ["api"]),
+			).rejects.toThrow("saved PID");
+			await restored.cancel(ready.id);
+			const cancelled = await restored.harness.waitForTask(
+				ready.id as TaskId,
+				context,
+			);
+			expect(cancelled.state.outcome).toMatchObject({
+				status: "aborted",
+				reason: expect.stringContaining("Resources remain quarantined"),
 			});
 			expect(readEngine(fixtureState.config).history).toEqual(before);
+			// The test operator removes only this isolated engine's synthetic object and
+			// closes that engine, which terminates its orphaned fixture log client.
+			const state = readEngine(fixtureState.config);
+			for (const id of containerIds) delete state.containers[id];
+			for (const id of networkIds) delete state.networks?.[id];
+			fs.writeFileSync(engine(fixtureState.config), JSON.stringify(state));
+			const ownedEngine = engines.find(
+				(entry) =>
+					entry.socket ===
+					(ready.run.plan.container?.socket ?? ready.run.plan.compose?.socket),
+			);
+			if (!ownedEngine) throw new Error("Missing disposable engine handle");
+			await ownedEngine.stop(true);
+			await eventually(
+				async () =>
+					followers.every((pid) =>
+						fs.existsSync(
+							path.join(
+								fixtureState.config.configDir,
+								`fixture-client-${pid}.exited`,
+							),
+						),
+					),
+				Boolean,
+			);
+			const server = serve(restored);
+			try {
+				const url = new URL(server.url),
+					endpoint = `${url.origin}/api/environments/release`;
+				const headers = {
+					Authorization: `Bearer ${new URLSearchParams(url.hash.slice(1)).get("token")}`,
+					"Content-Type": "application/json",
+				};
+				const body = {
+					id: quarantined.id,
+					revision: quarantined.revision,
+					inspectionConfirmed: true,
+				};
+				expect(
+					(
+						await fetch(endpoint, {
+							method: "POST",
+							body: JSON.stringify(body),
+						})
+					).status,
+				).toBe(401);
+				expect(
+					(
+						await fetch(endpoint, {
+							method: "POST",
+							headers,
+							body: JSON.stringify({ ...body, revision: body.revision - 1 }),
+						})
+					).status,
+				).toBe(400);
+				expect(
+					(
+						await fetch(endpoint, {
+							method: "POST",
+							headers,
+							body: JSON.stringify(body),
+						})
+					).status,
+				).toBe(200);
+				expect(
+					(
+						await fetch(endpoint, {
+							method: "POST",
+							headers,
+							body: JSON.stringify(body),
+						})
+					).status,
+				).toBe(400);
+				expect((await restored.environments.snapshot()).runs[0]).toMatchObject({
+					state: "exited",
+					exitCode: null,
+					inspection: { revision: quarantined.revision },
+				});
+				expect(readEngine(fixtureState.config).history).toEqual(before);
+			} finally {
+				await server.stop();
+			}
 		} finally {
-			await server.stop();
-		}
-	} finally {
-		if (host.exitCode === null) {
-			host.kill("SIGTERM");
-			await host.exited;
+			if (host.exitCode === null) {
+				host.kill("SIGTERM");
+				await host.exited;
+			}
 		}
 	}
-}, 20000);
+}, 35000);

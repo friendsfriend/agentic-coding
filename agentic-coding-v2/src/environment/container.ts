@@ -41,7 +41,14 @@ export class ContainerProcess {
 		private configDir: string,
 		stateDir: string,
 		private run: string,
+		private network?: { id: string; aliases: string[] },
 	) {
+		if (
+			network &&
+			(!/^[a-f0-9]{64}$/.test(network.id) ||
+				network.aliases.some((alias) => !/^[a-z][a-z0-9-]{0,62}$/.test(alias)))
+		)
+			throw new Error("Invalid live network attachment");
 		const spec = plan.container;
 		if (!spec || !(plan.runtime === "docker" || plan.runtime === "podman"))
 			throw new Error("Structured container configuration is required");
@@ -227,6 +234,16 @@ export class ContainerProcess {
 			`${hostLabel}=${this.host}`,
 			"--label",
 			`${runLabel}=${this.run}`,
+			...(this.network
+				? [
+						"--network",
+						this.network.id,
+						...this.network.aliases.flatMap((alias) => [
+							"--network-alias",
+							alias,
+						]),
+					]
+				: []),
 			...this.spec.ports.flatMap((port) => [
 				"--publish",
 				`${port.address.includes(":") ? `[${port.address}]` : port.address}:${port.host}:${port.container}/${port.protocol}`,

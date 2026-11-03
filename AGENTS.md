@@ -17,6 +17,17 @@ Rules of thumb:
 - Non-null assertions (`value!`) are banned by `style/noNonNullAssertion`. Replace them with a real guard (`if (!x) throw ...` / early return), a fallback (`??`), or restructure so the compiler narrows the value. If a case is genuinely unavoidable, add `// biome-ignore lint/style/noNonNullAssertion: <reason>` on the line directly above.
 - `src/workflow/embedded.generated.ts` is excluded via config override; never hand-edit it or reformat it — regenerate with `bun run build`.
 
+## Testing scope
+
+Keep tests small and functional. Test observable behavior and user-facing outcomes, not the implementation itself.
+
+- Prefer a few representative scenarios through public boundaries: a feature works, a meaningful failure is handled, and critical safety or ownership guarantees hold.
+- Do not add tests merely to mirror helpers, private state, compiled-plan layout, internal ordering, exact argv, or every validation branch. Assert such details only when they are themselves an externally required contract.
+- Use lightweight disposable fixtures or fakes at external boundaries when needed. Do not build an elaborate simulation of the implementation just to test it.
+- Avoid redundant cases, exhaustive permutations and coverage-padding tests. Extend an existing functional scenario when that is enough.
+- Keep verification claims honest: passing fake-backed tests does not establish compatibility with a live runtime. Do not use real credentials, model calls, running apps or live infrastructure without explicit authorization.
+- This scope does not replace the required lint and whole-project type-check gates above.
+
 ## Workflow architecture
 
 See [`agentic-coding/docs/workflow-architecture.md`](agentic-coding/docs/workflow-architecture.md) for the workflow layer map and step checklist. Role knowledge belongs in `agentic-coding/src/workflow/steps/`; the engine, CLI, and dashboard must read registered step behavior rather than duplicate role tables.

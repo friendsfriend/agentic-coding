@@ -8,6 +8,8 @@ export type EngineState = {
 			Id: string;
 			Name: string;
 			Config: { Labels: Record<string, string>; Env: string[] };
+			NetworkId?: string;
+			Aliases?: string[];
 			State: {
 				Running: boolean;
 				ExitCode: number;
@@ -15,6 +17,17 @@ export type EngineState = {
 			};
 		}
 	>;
+	networks?: Record<
+		string,
+		{
+			Id: string;
+			Name: string;
+			Labels: Record<string, string>;
+			Containers: Record<string, { Name: string }>;
+		}
+	>;
+	invalidNetworkReceipt?: boolean;
+	workloadPrerequisite?: "healthy" | "running";
 	history: string[][];
 	followers?: number[];
 	offline?: boolean;
@@ -71,6 +84,57 @@ export function serveContainerFixture(file: string) {
 						exit = 1;
 					} else
 						switch (args[0]) {
+							case "network": {
+								state.networks ??= {};
+								const findNetwork = (id: string | undefined) =>
+									Object.values(state.networks ?? {}).find(
+										(item) => item.Id === id || item.Name === id,
+									);
+								if (args[1] === "ls") {
+									const filter = value("--filter")?.replace(/^name=/, "") ?? "";
+									for (const item of Object.values(state.networks))
+										if (item.Name.includes(filter)) print(item.Id);
+								} else if (args[1] === "inspect") {
+									const found = findNetwork(args[2]);
+									if (!found) {
+										exit = 1;
+										break;
+									}
+									print(JSON.stringify([found]));
+									stderr = "must-not-leak-private-network-metadata";
+								} else if (args[1] === "create") {
+									const name = args.at(-1);
+									if (!name || findNetwork(name)) {
+										exit = 1;
+										break;
+									}
+									const labels: Record<string, string> = {};
+									for (let i = 0; i < args.length; i++)
+										if (args[i] === "--label") {
+											const label = args[i + 1] ?? "",
+												position = label.indexOf("=");
+											labels[label.slice(0, position)] = label.slice(
+												position + 1,
+											);
+										}
+									const id = (state.next++).toString(16).padStart(64, "0");
+									state.networks[id] = {
+										Id: id,
+										Name: name,
+										Labels: labels,
+										Containers: {},
+									};
+									print(state.invalidNetworkReceipt ? "lost-receipt" : id);
+								} else if (args[1] === "rm") {
+									const found = findNetwork(args[2]);
+									if (!found || Object.keys(found.Containers).length) {
+										exit = 1;
+										break;
+									}
+									delete state.networks[found.Id];
+								} else throw new Error("Unexpected network command");
+								break;
+							}
 							case "container": {
 								const filter = value("--filter")?.replace(/^name=/, "") ?? "";
 								for (const item of Object.values(state.containers))
@@ -93,6 +157,16 @@ export function serveContainerFixture(file: string) {
 									exit = 1;
 									break;
 								}
+								const networkId = args.includes("--network")
+									? value("--network")
+									: undefined;
+								if (networkId && !state.networks?.[networkId]) {
+									exit = 1;
+									break;
+								}
+								const aliases = args.flatMap((arg, index) =>
+									arg === "--network-alias" ? [args[index + 1] ?? ""] : [],
+								);
 								const labels: Record<string, string> = {};
 								for (let i = 0; i < args.length; i++)
 									if (args[i] === "--label") {
@@ -106,6 +180,9 @@ export function serveContainerFixture(file: string) {
 								state.containers[id] = {
 									Id: id,
 									Name: `/${name}`,
+									...(networkId
+										? { NetworkId: networkId, Aliases: aliases }
+										: {}),
 									Config: {
 										Labels: labels,
 										Env: ["FOREIGN_PRIVATE=must-not-leak-machine-metadata"],
@@ -120,6 +197,8 @@ export function serveContainerFixture(file: string) {
 												}),
 									},
 								};
+								if (networkId && state.networks?.[networkId])
+									state.networks[networkId].Containers[id] = { Name: name };
 								print(id);
 								break;
 							}
@@ -130,6 +209,28 @@ export function serveContainerFixture(file: string) {
 									break;
 								}
 								found.State.Running = true;
+								// A tiny app-level fixture: web cannot serve until it can discover its ready worker.
+								if (
+									state.workloadPrerequisite &&
+									found.Name.includes("-web-")
+								) {
+									const worker = Object.values(state.containers).find((item) =>
+										item.Name.includes("-worker-"),
+									);
+									const reachable =
+										worker?.State.Running &&
+										worker.NetworkId === found.NetworkId &&
+										Boolean(found.NetworkId) &&
+										worker.Aliases?.includes("worker");
+									if (
+										!reachable ||
+										(state.workloadPrerequisite === "healthy" &&
+											worker?.State.Health?.Status !== "healthy")
+									) {
+										found.State.Running = false;
+										found.State.ExitCode = 12;
+									}
+								}
 								break;
 							}
 							case "logs":
@@ -175,6 +276,8 @@ export function serveContainerFixture(file: string) {
 									exit = 1;
 									break;
 								}
+								if (found.NetworkId && state.networks?.[found.NetworkId])
+									delete state.networks[found.NetworkId].Containers[found.Id];
 								delete state.containers[found.Id];
 								break;
 							}

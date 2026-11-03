@@ -1,6 +1,7 @@
 export type Exit = { code: number | null; signal: string | null };
 export type RuntimeStatus = {
 	runtime: "docker" | "podman";
+	kind?: "container" | "network";
 	name: string;
 	id: string | null;
 	state: "running" | "stopped" | "absent" | "unknown";

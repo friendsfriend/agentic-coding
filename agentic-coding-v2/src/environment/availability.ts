@@ -38,6 +38,14 @@ export function targetAvailability(target: Target): Availability {
 					"/bin/sh",
 				)
 			: result(false, "POSIX shell is not executable");
+	if (
+		target.compose?.provider === "podman" &&
+		target.compose.network !== "isolated"
+	)
+		return result(
+			false,
+			"Shared Podman Compose networking has no supported immutable creation receipt; select an explicitly isolated target or Docker provider",
+		);
 	const runtime = target.compose?.provider ?? target.runtime;
 	const socket = target.compose?.socket ?? target.container?.socket;
 	if (!socket) return result(false, "An explicit local API socket is required");

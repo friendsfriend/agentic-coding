@@ -1,5 +1,6 @@
 import type { Plan } from "./catalog.ts";
 import { containerPlans, verifyCompose } from "./compose-config.ts";
+import { ComposeNetwork } from "./compose-network.ts";
 import { ContainerProcess } from "./container.ts";
 import type { EnvironmentProcess, Exit } from "./process.ts";
 
@@ -15,12 +16,20 @@ export class ComposeProcess implements EnvironmentProcess {
 	private controller = new AbortController();
 	private result: Exit | null = null;
 	private failedCleanup = false;
+	private network: ComposeNetwork | null = null;
 	constructor(
 		private plan: Plan,
 		private configDir: string,
 		private stateDir: string,
 		private run: string,
 	) {
+		if (plan.compose?.network !== "isolated")
+			this.network = new ComposeNetwork(
+				plan,
+				configDir,
+				stateDir,
+				`${run}:network`,
+			);
 		this.done = new Promise((resolve) => {
 			this.complete = resolve;
 		});
@@ -30,35 +39,53 @@ export class ComposeProcess implements EnvironmentProcess {
 	}
 	get cleanupFailed() {
 		return (
-			this.failedCleanup || this.children.some((child) => child.cleanupFailed)
+			this.failedCleanup ||
+			this.network?.cleanupFailed === true ||
+			this.children.some((child) => child.cleanupFailed)
 		);
 	}
 	get runtimeStatuses() {
-		return this.children.flatMap((child) =>
-			child.runtimeStatus ? [child.runtimeStatus] : [],
-		);
+		return [
+			...(this.network ? [this.network.runtimeStatus] : []),
+			...this.children.flatMap((child) =>
+				child.runtimeStatus ? [child.runtimeStatus] : [],
+			),
+		];
 	}
 	get logs() {
-		return this.children
-			.map(
+		return [
+			this.network ? `[network]\n${this.network.logs}` : "",
+			...this.children.map(
 				(child, index) =>
 					`[${this.plan.composePlan?.services[index]?.id ?? "service"}]\n${child.logs}`,
-			)
+			),
+		]
 			.join("\n")
 			.slice(-64000);
 	}
 	private async start() {
 		verifyCompose(this.plan);
 		const deadline = Date.now() + this.plan.timeoutMs;
+		await this.network?.start(deadline - Date.now(), this.controller.signal);
 		for (const [index, plan] of containerPlans(this.plan).entries()) {
 			this.controller.signal.throwIfAborted();
 			const left = deadline - Date.now();
 			if (left <= 0) throw new Error("Compose startup timed out");
+			const attachment = await this.network?.attachment(
+				deadline - Date.now(),
+				this.controller.signal,
+			);
+			const alias = this.plan.composePlan?.services[index]?.id;
+			if (attachment && !alias)
+				throw new Error("Compose service alias is missing");
 			const child = new ContainerProcess(
-				{ ...plan, timeoutMs: left },
+				{ ...plan, timeoutMs: deadline - Date.now() },
 				this.configDir,
 				this.stateDir,
 				`${this.run}:${index}`,
+				attachment && alias
+					? { id: attachment.id, aliases: [alias] }
+					: undefined,
 			);
 			this.children.push(child);
 			void child.done
@@ -99,6 +126,11 @@ export class ComposeProcess implements EnvironmentProcess {
 				} catch {
 					this.failedCleanup = true;
 				}
+			try {
+				await this.network?.stop();
+			} catch {
+				this.failedCleanup = true;
+			}
 			const exits = this.children.map((child) => child.outcome);
 			const code =
 				this.cleanupFailed ||

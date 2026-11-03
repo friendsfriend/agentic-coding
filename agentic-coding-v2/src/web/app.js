@@ -215,7 +215,7 @@ async function refresh() {
 						card.append(
 							element(
 								"p",
-								`${service.name} · ${service.runtime} · ${service.state} · health ${service.health ?? "not checked"} · ownership ${service.owned === null ? "unknown" : service.owned ? "confirmed" : "foreign"} · ID ${service.id ?? "unknown"} (diagnostic only)`,
+								`${service.name} · ${service.runtime}/${service.kind ?? "container"} · ${service.state} · health ${service.health ?? "not checked"} · ownership ${service.owned === null ? "unknown" : service.owned ? "confirmed" : "foreign"} · ID ${service.id ?? "unknown"} (diagnostic only)`,
 								"meta",
 							),
 						);
@@ -237,7 +237,7 @@ async function refresh() {
 							button("Release after inspection", async () => {
 								if (
 									!confirm(
-										"Confirm: I inspected this interrupted execution and stopped/removed its leftover processes or container resources. Release its resource lock without executing or killing anything? A saved PID alone does not establish process identity.",
+										"Confirm: I inspected this interrupted execution and stopped/removed its leftover processes, containers and stack networks. Release its resource lock without executing or killing anything? A saved PID alone does not establish process identity.",
 									)
 								)
 									return;
