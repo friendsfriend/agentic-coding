@@ -36,6 +36,79 @@ const event: DigestEvidence = {
 	at: due - 1000,
 	kind: "created",
 };
+test("production classifications stay conservative and verified Renovate creations are explicit even with ordinary titles", () => {
+	for (const source of ["azure-monitor", "new-relic"] as const) {
+		for (const severity of ["low", "informational", undefined] as const) {
+			const classified = classifyDigestEvidence({ ...event, source, severity });
+			expect(classified.importance).toBe("Minor");
+			if (!severity) expect(classified.reason).toContain("unavailable");
+		}
+		expect(
+			classifyDigestEvidence({ ...event, source, severity: "medium" })
+				.importance,
+		).toBe("Relevant");
+	}
+	for (const updateType of ["patch", "minor", "major", undefined] as const) {
+		const mr = {
+			...event,
+			source: "gitlab" as const,
+			verifiedRenovate: true,
+			updateType,
+			title: "Update library",
+		};
+		const text = renderDailyDigest({
+			occurrenceId: "fixture",
+			nominalDue: due,
+			executedAt: due + 3600000,
+			events: [mr],
+			coverage: [],
+		});
+		expect(text).toContain("Verified Renovate creation");
+	}
+	expect(
+		digestEvents(
+			[
+				{ ...event, scope: "search" },
+				{ ...event, scope: "detail:A-1" },
+			],
+			dailyDigestWindow(due),
+		),
+	).toHaveLength(1);
+});
+test("search/detail dedup retains positively verified enrichment in either completion order", () => {
+	const search = {
+		...event,
+		source: "gitlab" as const,
+		verifiedRenovate: false,
+	};
+	const detail = {
+		...search,
+		verifiedRenovate: true,
+		updateType: "minor" as const,
+	};
+	for (const events of [
+		[search, detail],
+		[detail, search],
+	]) {
+		const deduplicated = digestEvents(events, dailyDigestWindow(due));
+		expect(deduplicated).toHaveLength(1);
+		expect(deduplicated[0]?.verifiedRenovate).toBe(true);
+	}
+});
+test("Wiz issue page-size policy enforces inspected method-specific maximum", () => {
+	expect(
+		collectionCallAllowed("mcp__wiz__execute", {
+			tool_name: "list_issues",
+			parameters: { first: 20 },
+		}),
+	).toBe(true);
+	expect(
+		collectionCallAllowed("mcp__wiz__execute", {
+			tool_name: "list_issues",
+			parameters: { first: 21 },
+		}),
+	).toBe(false);
+});
 test("GitLab source binding rejects absent and wrong hosts even when the project path matches", () => {
 	const projects = [
 		{ host: "gitlab-a.example.invalid", project: "team/repo" },
@@ -90,7 +163,7 @@ test("Monday/DST window is exactly 24h with half-open bounds", () => {
 		),
 	).toHaveLength(1);
 });
-test("timestamps never invent movement, updated Wiz findings and arbitrary MRs are excluded", () => {
+test("timestamps never invent movement; updated Wiz findings excluded and ordinary MRs retained", () => {
 	expect(
 		classifyDigestEvidence({ ...event, kind: "updated-unverified" }).importance,
 	).toBe("Minor");
@@ -118,7 +191,7 @@ test("timestamps never invent movement, updated Wiz findings and arbitrary MRs a
 			],
 			dailyDigestWindow(due),
 		),
-	).toEqual([event]);
+	).toEqual([event, { ...event, source: "gitlab" }]);
 });
 test("pagination retains successful pages through outages and never claims failed access is empty", async () => {
 	let calls = 0;

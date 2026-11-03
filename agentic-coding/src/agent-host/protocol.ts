@@ -7,6 +7,12 @@
 import type { TargetReceipt } from "../contracts/scheduling.ts";
 import type { ScheduledEnvelope } from "./scheduled-admission.ts";
 
+export interface DigestSettingsUpdateRequest {
+	readonly type: "digestSettingsUpdate";
+	readonly sessionId: string;
+	readonly expectedRevision: string;
+	readonly settings: import("../scheduling/digest-settings.ts").DigestCollectionSettings;
+}
 export interface ScheduledAdmissionRequest {
 	readonly type: "scheduledAdmission";
 	readonly operation: "reserve" | "activate" | "query";
@@ -203,6 +209,7 @@ export type HostRequest =
 	| { readonly type: "resolveSession"; readonly runId: string }
 	| { readonly type: "scheduledIdentity" }
 	| ScheduledAdmissionRequest
+	| DigestSettingsUpdateRequest
 	| ClarificationTranscriptRequest
 	| ClarificationDeliveryRequest
 	| ClarificationClaimRequest

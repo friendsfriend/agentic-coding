@@ -5,6 +5,11 @@ import {
 	inDigestWindow,
 } from "./daily-digest.ts";
 
+import {
+	decodeDigestSource,
+	type JiraCandidate,
+} from "./digest-source-decoding.ts";
+
 export const DIGEST_SOURCE_NESTED_BUDGET = 4000;
 export const DIGEST_SOURCE_EVENT_BUDGET = 2000;
 type RecordValue = Record<string, unknown>;
@@ -44,11 +49,17 @@ export function normalizeDigestSourcePage(input: {
 	value: unknown;
 	window: DigestWindow;
 	context?: DigestSourceContext;
-}): DigestPage<DigestEvidence> & { diagnostics: readonly string[] } {
+}): DigestPage<DigestEvidence> & {
+	diagnostics: readonly string[];
+	candidates: readonly JiraCandidate[];
+	inspected: number;
+} {
+	const decoded = decodeDigestSource(input.value, input.source);
 	const events: DigestEvidence[] = [],
 		missing = new Set<string>(),
-		diagnostics: string[] = [];
-	let root = record(input.value),
+		diagnostics: string[] = [...decoded.diagnostics];
+	if (decoded.diagnostics.length) missing.add("source-decoding-or-detail-gap");
+	let root = record(decoded.value),
 		rows: unknown[] | undefined,
 		truncated = false;
 	// Reviewed JSON/MCP envelopes only; never eval provider text.
@@ -76,7 +87,7 @@ export function normalizeDigestSourcePage(input: {
 			break;
 		}
 	}
-	if (Array.isArray(input.value)) rows = input.value;
+	if (Array.isArray(decoded.value)) rows = decoded.value;
 	if (
 		input.source === "jira" &&
 		input.context &&
@@ -147,6 +158,34 @@ export function normalizeDigestSourcePage(input: {
 			}
 		}
 		if (!url) missing.add("source-link");
+		if (
+			input.source === "gitlab" &&
+			input.context &&
+			(Array.isArray(item.notes) || typeof item.body === "string")
+		) {
+			const notes = Array.isArray(item.notes) ? item.notes : [item];
+			for (const rawNote of notes) {
+				if (!budget(true)) break rowLoop;
+				const note = record(rawNote),
+					noteId = identity(note.id),
+					at = time(note.created_at);
+				if (!noteId || at === undefined) {
+					missing.add("discussion-note-identity-or-timestamp");
+					continue;
+				}
+				const review = Object.keys(record(note.position)).length > 0;
+				emit({
+					id: input.context.id,
+					eventId: `${input.context.id}:note:${noteId}`,
+					title: `${input.context.title} — ${review ? "review comment" : note.system === true ? "system note" : "discussion comment"}`,
+					url: string(note.url) ?? input.context.url,
+					at,
+					kind: review ? "review-comment" : "comment",
+				});
+			}
+			missing.add("review-approval-change-activity-capability-unavailable");
+			continue;
+		}
 		if (input.source === "jira") {
 			const priority = string(record(fields.priority).name)
 				?.trim()
@@ -179,7 +218,7 @@ export function normalizeDigestSourcePage(input: {
 					kind: "created",
 					eventId: `${id}:created`,
 				});
-			else if (item.key) missing.add("created");
+			else if (item.key && item.commentPage !== true) missing.add("created");
 			const histories =
 				input.context && Array.isArray(item.items) && item.created
 					? [item]
@@ -296,11 +335,9 @@ export function normalizeDigestSourcePage(input: {
 				item.createdAt ??
 				item.created_at,
 		);
-		if (created === undefined) {
-			missing.add("created-or-first-seen");
-			continue;
-		}
+		if (created === undefined) missing.add("created-or-first-seen");
 		if (input.source === "wiz") {
+			if (created === undefined) continue;
 			const candidate = string(item.severity)?.toLowerCase();
 			const severity =
 				candidate === "critical" ||
@@ -311,6 +348,9 @@ export function normalizeDigestSourcePage(input: {
 					? candidate
 					: undefined;
 			if (!severity) missing.add("severity");
+			const resourceScope =
+				string(item.scope) ?? string(record(item.project).name);
+			if (!resourceScope) missing.add("resource-scope");
 			emit({
 				id,
 				title,
@@ -321,21 +361,18 @@ export function normalizeDigestSourcePage(input: {
 				severity,
 				status: string(item.status)?.slice(0, 100),
 				exposure: string(item.exposure)?.slice(0, 100),
+				resourceScope: resourceScope?.slice(0, 100),
 			});
 			continue;
 		}
 		const author = record(item.author),
 			username = string(author.username)?.toLowerCase();
 		// Both authenticated bot metadata AND the specific Renovate identity are required.
-		if (
-			author.bot !== true ||
-			(username !== "renovate" && username !== "renovate[bot]")
-		) {
-			diagnostics.push("renovate-author-not-verified-excluded");
-			if (!username || username.startsWith("renovate"))
-				missing.add("authenticated-renovate-bot-identity");
-			continue;
-		}
+		const verifiedRenovate =
+			author.bot === true &&
+			(username === "renovate" || username === "renovate[bot]");
+		if (!verifiedRenovate && (!username || username.startsWith("renovate")))
+			missing.add("authenticated-renovate-bot-identity");
 		const labels = array(item.labels).filter(
 			(label): label is string => typeof label === "string",
 		);
@@ -344,25 +381,74 @@ export function normalizeDigestSourcePage(input: {
 				labels.includes(`renovate:${type}`) ||
 				labels.includes(`renovate/${type}`),
 		);
-		if (!updateType) missing.add("dependency-update-type");
+		if (verifiedRenovate && !updateType) missing.add("dependency-update-type");
 		const securityEvidence =
 			labels.includes("security") &&
 			/https:\/\/(?:github\.com\/advisories\/GHSA-[a-z0-9-]+|www\.cve\.org\/CVERecord\?id=CVE-\d{4}-\d+)/i.test(
 				string(item.description) ?? "",
 			);
-		emit({
-			id,
-			title,
-			url,
-			at: created,
-			eventId: `${id}:created`,
-			kind: "created",
-			verifiedRenovate: true,
-			status: string(item.state)?.slice(0, 100),
-			updateType,
-			securityEvidence,
-		});
+		if (created !== undefined)
+			emit({
+				id,
+				title,
+				url,
+				at: created,
+				eventId: `${id}:created`,
+				kind: "created",
+				verifiedRenovate,
+				status: string(item.state)?.slice(0, 100),
+				updateType,
+				securityEvidence: verifiedRenovate && securityEvidence,
+			});
+		const merged = time(item.merged_at);
+		if (merged !== undefined)
+			emit({
+				id,
+				title,
+				url,
+				at: merged,
+				eventId: `${id}:merged`,
+				kind: "merged",
+			});
+		const pipeline = record(item.head_pipeline),
+			failedAt = time(pipeline.finished_at),
+			pipelineId = identity(pipeline.id);
+		if (pipeline.status === "failed") {
+			if (failedAt !== undefined && pipelineId)
+				emit({
+					id,
+					title: `${title} — pipeline failed`,
+					url: string(pipeline.web_url) ?? url,
+					at: failedAt,
+					eventId: `${id}:pipeline:${pipelineId}:failed`,
+					kind: "pipeline-failed",
+					status: "failed",
+				});
+			else missing.add("pipeline-failure-timestamp-or-identity");
+		}
+		const updated = time(item.updated_at);
+		if (updated !== undefined && updated !== created)
+			emit({
+				id,
+				title,
+				url,
+				at: updated,
+				eventId: `${id}:updated:${updated}`,
+				kind: "updated-unverified",
+			});
+		missing.add(
+			Object.keys(pipeline).length
+				? "review-change-activity-capability-unavailable"
+				: "review-change-failure-activity-capability-unavailable",
+		);
 	}
+	if (
+		input.source === "gitlab" &&
+		root.total === undefined &&
+		root.next === undefined &&
+		root.pageInfo === undefined
+	)
+		missing.add("gitlab-search-pagination-unavailable");
 	const pageInfo = record(root.pageInfo);
 	let next = string(root.nextPageToken ?? root.next ?? pageInfo.endCursor);
 	const total = typeof root.total === "number" ? root.total : undefined;
@@ -386,6 +472,8 @@ export function normalizeDigestSourcePage(input: {
 	}
 	return {
 		items: events,
+		candidates: decoded.candidates,
+		inspected: rows.length + decoded.candidates.length + inspectedNested,
 		...(next ? { next } : {}),
 		truncated,
 		missingFields: [...missing],

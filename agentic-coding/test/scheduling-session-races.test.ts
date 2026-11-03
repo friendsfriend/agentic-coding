@@ -290,15 +290,19 @@ for (const race of ["abort", "shutdown", "delete"] as const)
 				await native.shutdown();
 				const restarted = await DurableHost.open(nativeOptions);
 				host = restarted;
-				await restarted.ensureRun({
-					runId: record.runId,
-					name: record.runId,
-					cwd: root,
-					model: record.model,
-					toolPolicy: "collection",
-					runEnvPath: env,
-					expectedConversationId: opened.conversationId,
-				});
+				// A deleted collection session must not recover stale run.env settings.
+				// Durable revocation remains independently inspectable without loading it.
+				await expect(
+					restarted.ensureRun({
+						runId: record.runId,
+						name: record.runId,
+						cwd: root,
+						model: record.model,
+						toolPolicy: "collection",
+						runEnvPath: env,
+						expectedConversationId: opened.conversationId,
+					}),
+				).rejects.toThrow("stale recovery settings refused");
 				await expect(
 					restarted.scheduledAdmission("activate", envelope, 1),
 				).rejects.toThrow("revoked");

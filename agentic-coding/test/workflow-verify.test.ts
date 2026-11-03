@@ -456,13 +456,25 @@ test.each<{
 		const reopened = new WorkflowEngine(registerBuiltins());
 		const before = reopened.getSnapshot(root, snapshot.workflowId);
 		expect(before.step.selectedRoles).toEqual(selection);
-		const repaired = reopened.dispatch(root, {
-			type: "operator.repair",
+		const repair = {
+			type: "operator.repair" as const,
 			workflowId: snapshot.workflowId,
 			revision: before.revision,
 			targetStep: "core.triage",
 			reason: "Retry persisted triage selection",
-		}).view;
+		};
+		if (!accepted && selection.length === 1 && selection[0] === "triage") {
+			// The legacy sentinel can recover only from a valid retained subset.
+			// Invalid arrival context is rejected at repair, before a new launch,
+			// not later when an accidentally admitted triage agent hands off.
+			expect(() => reopened.dispatch(root, repair)).toThrow(
+				"cannot restore verifier selection from retained arrival context",
+			);
+			expect(reopened.getSnapshot(root, snapshot.workflowId)).toEqual(before);
+			expect(reopened.claimEffects(root, 100)).toEqual([]);
+			return;
+		}
+		const repaired = reopened.dispatch(root, repair).view;
 		const persisted = new WorkflowEngine(registerBuiltins()).getSnapshot(
 			root,
 			snapshot.workflowId,

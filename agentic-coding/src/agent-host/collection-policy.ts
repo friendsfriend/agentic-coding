@@ -11,6 +11,8 @@ const directReads = new Set([
 	"mcp__wiz__discover",
 	"pi__index__gitlab_search_merge_requests",
 	"mcp__index__gitlab_search_merge_requests",
+	"pi__index__gitlab_list_mr_discussions",
+	"mcp__index__gitlab_list_mr_discussions",
 ]);
 // Metadata inspected via Wiz MCP discovery, never inferred from arbitrary
 // `list_*` naming. Unsupported domains remain explicit coverage gaps.
@@ -69,7 +71,26 @@ export function collectionCallAllowed(
 		!wizReads.has(args.tool_name)
 	)
 		return false;
-	return Object.keys(args).every(
-		(property) => property === "tool_name" || property === "parameters",
+	if (
+		!Object.keys(args).every(
+			(property) => property === "tool_name" || property === "parameters",
+		)
+	)
+		return false;
+	const parameters = args.parameters;
+	if (
+		!parameters ||
+		typeof parameters !== "object" ||
+		Array.isArray(parameters)
+	)
+		return false;
+	const values = parameters as Record<string, unknown>;
+	const size = values[args.tool_name === "list_issues" ? "first" : "limit"];
+	// Reviewed methods have different page-size arguments; no unbounded sample.
+	return (
+		size === undefined ||
+		(Number.isInteger(size) &&
+			Number(size) >= 1 &&
+			Number(size) <= (args.tool_name === "list_issues" ? 20 : 100))
 	);
 }

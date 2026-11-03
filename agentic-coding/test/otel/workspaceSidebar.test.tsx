@@ -1287,7 +1287,39 @@ test("background native reports: real scheduler-to-sidebar delivery collects pag
 		await focusSidebar(t);
 		await selectFirstWorkflow(t);
 		t.mockInput.pressEnter();
-		expect(await renderUntil(t, "Synthetic retained daily report")).toBe(true);
+		// Chat opens at its tail. Detailed coverage now puts the first finding
+		// above the viewport; prove it is reachable with the public scroll key.
+		const revealDailyReport = async () => {
+			if (!t) throw new Error("fixture renderer missing");
+			expect(
+				await renderUntil(
+					t,
+					`Session ${dailyId.slice(0, 8)} · Daily task digest`,
+				),
+			).toBe(true);
+			if (t.captureCharFrame().includes("Synthetic retained daily report"))
+				return;
+			const observed: string[] = [];
+			// Search both directions: the first open follows the tail, whereas a
+			// reopened tab may restore its earlier scroll position.
+			for (let page = 0; page < 24; page++) {
+				observed.push(
+					t
+						.captureCharFrame()
+						.split("\n")
+						.filter((line) => /Synthetic|Important|Relevant|daily/i.test(line))
+						.join("\n"),
+				);
+				if (t.captureCharFrame().includes("Synthetic retained daily report"))
+					return;
+				await t.mockInput.pressKey(page < 12 ? "\u001b[6~" : "\u001b[5~"); // PageDown / PageUp
+				await advance(t, 2, 30);
+			}
+			throw new Error(
+				`Daily report not reachable by scrolling: ${observed.join("\n---page---\n")}\nFinal: ${t.captureCharFrame()}`,
+			);
+		};
+		await revealDailyReport();
 		await deliver(scratchId, "Synthetic scratch report");
 		await advance(t);
 		expect(t.captureCharFrame()).toContain("Synthetic retained daily report");
@@ -1299,7 +1331,7 @@ test("background native reports: real scheduler-to-sidebar delivery collects pag
 		await focusSidebar(t);
 		t.mockInput.pressKey("k");
 		t.mockInput.pressEnter();
-		expect(await renderUntil(t, "Synthetic retained daily report")).toBe(true);
+		await revealDailyReport();
 		expect(t.captureCharFrame()).toContain(
 			`${dailyId.slice(0, 8)} · Daily task digest`,
 		);

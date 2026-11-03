@@ -84,48 +84,64 @@ describe("per-run execution environment isolation", () => {
 		});
 		const model = `${faux.getModel().provider}/${faux.getModel().id}`;
 
-		const envA = writeRunEnv(dir, "run-a.env", { HERDR_RUN_ID: "run-a" });
-		await host.ensureRun({
-			runId: "run-a-id",
-			name: "worker-a",
-			cwd: dir,
-			runEnvPath: envA,
-			toolPolicy: "default",
-			model,
-		});
-		faux.setResponses([
-			fauxAssistantMessage(
-				[fauxToolCall("bash", { command: "echo $HERDR_RUN_ID" })],
-				{ stopReason: "toolUse" },
-			),
-		]);
-		faux.appendResponses([fauxAssistantMessage([fauxText("done-a")])]);
-		await host.submit("run-a-id", "print your run id", "req-a");
-		const outputA = await waitForToolResult(host, "run-a-id");
+		try {
+			// The environment's run identity must match the admitted host run.
+			// A different identity is correctly rejected by conversation fencing.
+			const runA = "run-a";
+			const runB = "run-b";
+			const envA = writeRunEnv(dir, "run-a.env", { HERDR_RUN_ID: runA });
+			const a = await host.ensureRun({
+				runId: runA,
+				name: "worker-a",
+				cwd: dir,
+				runEnvPath: envA,
+				toolPolicy: "default",
+				model,
+			});
+			faux.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("bash", { command: "echo $HERDR_RUN_ID" })],
+					{ stopReason: "toolUse" },
+				),
+			]);
+			faux.appendResponses([fauxAssistantMessage([fauxText("done-a")])]);
+			await host.submit(runA, "print your run id", "req-a");
+			const outputA = await waitForToolResult(host, runA);
+			// Do not replace the shared faux provider's responses until A has also
+			// consumed its final assistant response after the bash tool result.
+			for (let attempt = 0; attempt < 50; attempt++) {
+				if ((await host.status(runA)).status === "idle") break;
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			expect((await host.status(runA)).status).toBe("idle");
 
-		const envB = writeRunEnv(dir, "run-b.env", { HERDR_RUN_ID: "run-b" });
-		await host.ensureRun({
-			runId: "run-b-id",
-			name: "worker-b",
-			cwd: dir,
-			runEnvPath: envB,
-			toolPolicy: "default",
-			model,
-		});
-		faux.setResponses([
-			fauxAssistantMessage(
-				[fauxToolCall("bash", { command: "echo $HERDR_RUN_ID" })],
-				{ stopReason: "toolUse" },
-			),
-		]);
-		faux.appendResponses([fauxAssistantMessage([fauxText("done-b")])]);
-		await host.submit("run-b-id", "print your run id", "req-b");
-		const outputB = await waitForToolResult(host, "run-b-id");
+			const envB = writeRunEnv(dir, "run-b.env", { HERDR_RUN_ID: runB });
+			const b = await host.ensureRun({
+				runId: runB,
+				name: "worker-b",
+				cwd: dir,
+				runEnvPath: envB,
+				toolPolicy: "default",
+				model,
+			});
+			faux.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("bash", { command: "echo $HERDR_RUN_ID" })],
+					{ stopReason: "toolUse" },
+				),
+			]);
+			faux.appendResponses([fauxAssistantMessage([fauxText("done-b")])]);
+			await host.submit(runB, "print your run id", "req-b");
+			const outputB = await waitForToolResult(host, runB);
 
-		expect(outputA).toContain("run-a");
-		expect(outputA).not.toContain("run-b");
-		expect(outputB).toContain("run-b");
-		expect(outputB).not.toContain("run-a");
-		await host.shutdown();
+			expect(a.conversationId).not.toBe(b.conversationId);
+			expect(outputA).toContain(runA);
+			expect(outputA).not.toContain(runB);
+			expect(outputB).toContain(runB);
+			expect(outputB).not.toContain(runA);
+		} finally {
+			await host.shutdown();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

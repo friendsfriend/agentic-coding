@@ -150,7 +150,7 @@ test("Wiz NEW findings use first-created/seen evidence, retain domain pagination
 	expect(broken.truncated).toBe(true);
 	expect(broken.diagnostics).toContain("pagination-continuation-unavailable");
 });
-test("GitLab MR adapter accepts only authenticated Renovate bot identity and actual creation evidence", () => {
+test("GitLab retains ordinary activity and highlights only authenticated Renovate creation", () => {
 	const mr = {
 		id: 12,
 		title: "Synthetic major",
@@ -176,11 +176,17 @@ test("GitLab MR adapter accepts only authenticated Renovate bot identity and act
 			{ ...mr, id: 15, created_at: "2020-01-01T00:00:00Z", updated_at: at },
 		],
 	});
-	expect(page.items).toHaveLength(1);
+	expect(page.items).toHaveLength(4);
+	expect(page.items.filter((item) => item.verifiedRenovate)).toHaveLength(1);
+	expect(page.items.find((item) => item.id === "15")?.kind).toBe(
+		"updated-unverified",
+	);
 	expect(page.items[0]?.id).toBe("12");
 	expect(page.items[0]?.updateType).toBe("major");
 	expect(page.missingFields).toContain("authenticated-renovate-bot-identity");
-	expect(page.diagnostics).toContain("renovate-author-not-verified-excluded");
+	expect(page.missingFields).toContain(
+		"review-change-failure-activity-capability-unavailable",
+	);
 	const unknown = normalizeDigestSourcePage({
 		source: "gitlab",
 		scope: "fake",

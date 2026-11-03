@@ -13,6 +13,8 @@ import {
 
 export interface ScheduledEnvelope {
 	occurrenceId: string;
+	/** Trusted scheduler field, not parsed from source or model text. */
+	nominalDue?: number;
 	digest: string;
 	text: string;
 	expectedHostId: string;
@@ -55,6 +57,10 @@ export function schedulingDigest(text: string): string {
 function validate(envelope: ScheduledEnvelope): void {
 	if (
 		!envelope.occurrenceId ||
+		(envelope.nominalDue !== undefined &&
+			(!Number.isSafeInteger(envelope.nominalDue) ||
+				envelope.nominalDue < 86400000 ||
+				envelope.nominalDue > 8640000000000000)) ||
 		envelope.occurrenceId.length > 256 ||
 		Buffer.byteLength(envelope.text) > 160_000 ||
 		schedulingDigest(envelope.text) !== envelope.digest
@@ -130,6 +136,24 @@ export async function activateScheduled(
 	);
 	return queryScheduled(conversation, envelope.occurrenceId, envelope.digest);
 }
+/** Authorized-but-not-yet-enqueued admissions also fence operator settings replacement. */
+export async function hasAdmittedScheduled(
+	harness: Pick<Harness, "snapshot">,
+	conversation: Conversation,
+): Promise<boolean> {
+	const pending = await harness.snapshot(pendingScheduled, BACKGROUND_CONTEXT);
+	for (const item of Object.values(pending?.items ?? {})) {
+		if (item.conversationId !== String(conversation.id)) continue;
+		const receipt = await queryScheduled(
+			conversation,
+			item.occurrenceId,
+			item.digest,
+		);
+		if (["admitted", "queued", "processing"].includes(receipt.state))
+			return true;
+	}
+	return false;
+}
 /** Lifecycle stop is not cancellation. Native abort withdraws inbox inputs;
  * leave a queued scheduled input for harness.close/resume instead. Explicit
  * developer abort continues to use the ordinary cancellation path. */
@@ -154,6 +178,41 @@ export async function hasQueuedScheduled(
 			return true;
 	}
 	return false;
+}
+
+/** At most one placed scheduled submission can own the current native turn. */
+export async function activeScheduledDigest(
+	conversation: Conversation,
+): Promise<{ occurrenceId: string; nominalDue: number } | undefined> {
+	return conversation.commit(async (tx) => {
+		const pending = await tx.doc(pendingScheduled);
+		const contexts: { occurrenceId: string; nominalDue: number }[] = [];
+		for (const item of Object.values(pending.items)) {
+			if (item.conversationId !== String(conversation.id)) continue;
+			const submission = await tx.submissionByRequest(
+				conversation.id,
+				`schedule:${item.occurrenceId}`,
+			);
+			if (submission?.status !== "placed") continue;
+			const reservation = await tx.doc(
+				token(item.occurrenceId),
+				conversation.id,
+			);
+			if (!reservation.authorized || reservation.digest !== item.digest)
+				continue;
+			const envelope = JSON.parse(reservation.envelope) as ScheduledEnvelope;
+			validate(envelope);
+			if (
+				envelope.expectedConversationId === String(conversation.id) &&
+				envelope.nominalDue !== undefined
+			)
+				contexts.push({
+					occurrenceId: envelope.occurrenceId,
+					nominalDue: envelope.nominalDue,
+				});
+		}
+		return contexts.length === 1 ? contexts[0] : undefined;
+	}, BACKGROUND_CONTEXT);
 }
 
 export async function queryScheduled(
