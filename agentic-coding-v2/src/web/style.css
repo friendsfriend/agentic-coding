@@ -1,0 +1,152 @@
+:root {
+	color-scheme: dark;
+	font: 15px / 1.5 system-ui;
+	background: #11151b;
+	color: #dde3ed;
+}
+* {
+	box-sizing: border-box;
+}
+body {
+	margin: 0;
+	display: grid;
+	grid-template-columns: 260px 1fr;
+	height: 100dvh;
+}
+aside {
+	padding: 20px;
+	border-right: 1px solid #303846;
+	overflow: auto;
+}
+main {
+	overflow: auto;
+	padding: 24px;
+	max-width: 1250px;
+	width: 100%;
+}
+h1 {
+	font-size: 18px;
+}
+h2 {
+	font-size: 18px;
+}
+h3 {
+	font-size: 15px;
+}
+button {
+	background: #263449;
+	color: inherit;
+	border: 1px solid #43536b;
+	border-radius: 6px;
+	padding: 8px 12px;
+	cursor: pointer;
+}
+button:disabled {
+	opacity: 0.5;
+}
+nav button {
+	display: block;
+	width: 100%;
+	text-align: left;
+	margin: 8px 0;
+}
+nav button[aria-current="true"] {
+	border-color: #82b5ff;
+	background: #263f61;
+}
+header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+article,
+.task,
+.git,
+.review {
+	padding: 16px;
+	background: #1a222e;
+	border: 1px solid #303846;
+	border-radius: 8px;
+	margin: 12px 0;
+}
+article.user {
+	background: #202d40;
+}
+.meta {
+	color: #9baac0;
+	font-size: 12px;
+}
+.error {
+	color: #ffabab;
+}
+.review {
+	border-color: #c49b4f;
+}
+.review button {
+	margin: 8px 8px 0 0;
+}
+textarea {
+	width: 100%;
+	background: #151c27;
+	color: inherit;
+	border: 1px solid #43536b;
+	border-radius: 6px;
+	padding: 10px;
+	font: inherit;
+	resize: vertical;
+}
+pre {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 500px;
+	overflow: auto;
+}
+code {
+	font-family: ui-monospace, monospace;
+}
+img {
+	display: block;
+	max-width: 100%;
+	max-height: 650px;
+	object-fit: contain;
+	margin: 12px 0;
+}
+a {
+	color: #9bc6ff;
+}
+table {
+	border-collapse: collapse;
+}
+td,
+th {
+	border: 1px solid #43536b;
+	padding: 6px;
+}
+#compose {
+	position: sticky;
+	bottom: 0;
+	background: #11151b;
+	padding: 12px 0;
+}
+#compose label {
+	display: block;
+}
+#connection {
+	font-size: 12px;
+	margin-top: 24px;
+}
+details {
+	margin-top: 24px;
+}
+[hidden] {
+	display: none;
+}
+@media (max-width: 700px) {
+	body {
+		grid-template-columns: 180px 1fr;
+	}
+	aside,
+	main {
+		padding: 12px;
+	}
+}

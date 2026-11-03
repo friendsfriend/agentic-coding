@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+.desloppify/
+.agents/skills/desloppify/
+scorecard.png

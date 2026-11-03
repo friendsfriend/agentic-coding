@@ -1,0 +1,21 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+	"files": {
+		"includes": [
+			"src/**",
+			"test/**",
+			"biome.json",
+			"package.json",
+			"tsconfig.json"
+		]
+	},
+	"formatter": { "indentStyle": "tab" },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"style": { "noNonNullAssertion": "error" }
+		}
+	},
+	"assist": { "actions": { "source": { "organizeImports": "on" } } }
+}
