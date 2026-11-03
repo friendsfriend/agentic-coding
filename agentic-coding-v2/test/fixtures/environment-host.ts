@@ -17,6 +17,7 @@ const input = JSON.parse(fs.readFileSync(process.argv[2] ?? "", "utf8")) as {
 	invocation: Invocation;
 	readyFile: string;
 	target?: string;
+	runtime?: string;
 };
 const fake = fauxProvider({
 	models: [{ id: "original" }, { id: "replacement" }],
@@ -27,6 +28,7 @@ fake.setResponses([
 	fauxAssistantMessage(
 		fauxToolCall("env_start", {
 			apps: ["api"],
+			...(input.runtime ? { runtime: input.runtime } : {}),
 			target: input.target ?? "serve",
 		}),
 		{

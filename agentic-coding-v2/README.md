@@ -132,6 +132,10 @@ Available tools:
 - `env_http_get`: separately approved GET to one named local endpoint of this task's live ready shell app. No other owner's app or saved receipt grants network authority. See the limited endpoint contract below.
 - `env_stop`: live process-group or ownership-fenced container cleanup for this task's own selected apps and pending acquisitions. It cannot stop another owner. Durable stop receipts bind retries to the original selection, not newly started apps.
 
+### Kubernetes crash/reopen verification
+
+A disposable native-host SIGKILL/reopen scenario verifies that saved Pod UIDs remain diagnostic-only with unknown ownership/health. Reopen, refused saved-receipt stop, cancellation and inspected release issue no fixture-client commands; occupancy remains quarantined until authenticated revision-bound operator confirmation. The fixture operator removes only the owned synthetic UID and preserves an unrelated Pod. This tests the native no-adoption boundary, not live Kubernetes crash/recovery compatibility or actual cluster absence verification. No runtime behavior or cleanup authority was added by this verification increment.
+
 ### Initial local endpoint diagnostics
 
 Shell **run** targets may declare up to 16 `endpoints` as name → HTTP/HTTPS numeric-loopback URL (`127.0.0.1` or `[::1]`, no DNS, credentials, configured query or fragment). IDs use the same lowercase kebab-case convention. Set the declared port to the actual application's listening port; this declaration is not discovery, allocation or proof that the process owns a socket. HTTP is unencrypted; an actual HTTPS GET verifies its peer certificate and numeric IP, but does not prove which process owns the socket. Declared TCP ports participate in native app-batch admission conflicts, including container-published ports and wildcard bindings. External processes are not adopted or reserved against.

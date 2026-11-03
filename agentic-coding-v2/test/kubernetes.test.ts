@@ -4,15 +4,18 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
+import type { EnvironmentRun } from "../src/environment/state.ts";
+import { serve } from "../src/server.ts";
 import { configureLocalCluster } from "./fixtures/cluster.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
-const { fixture, cleanup } = createFixtures();
+const { fixture, cleanup, apps } = createFixtures();
 afterEach(cleanup);
 // Minimal Kubernetes HTTP/CLI boundary: bounded PodList, Pod creation and
 // UID-preconditioned deletion. No scheduler, container or cluster simulation.
 const client = `import fs from "node:fs";
+if(process.env.FIXTURE_CALLS)fs.appendFileSync(process.env.FIXTURE_CALLS,"invoked\\n");
 const file=process.env.FIXTURE_STATE,s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{pods:{},serial:0,gate:process.env.FIXTURE_GATE!=="closed"};
 const args=process.argv.slice(2),method=args.find(v=>["get","create","delete"].includes(v)),uri=args[args.indexOf("--raw")+1],url=new URL(uri,"https://127.0.0.1"),name=url.pathname.split("/").at(-1);
 console.error("private-api-output");let result;
@@ -200,3 +203,180 @@ test("explicit bare pods acquire only after approval, reach API readiness, clean
 		).toBe(false);
 	}
 }, 20000);
+
+test("killed Pod hosts retain only diagnostic UIDs and quarantine occupancy without client calls until authenticated inspection", async () => {
+	const state = await fixture(true, (config) => {
+		configureLocalCluster(config, client, {
+			FIXTURE_STATE: path.join(config.configDir, "pods.json"),
+			FIXTURE_CALLS: path.join(config.configDir, "pod-calls.jsonl"),
+		});
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify({
+				version: 1,
+				projects: [
+					{
+						id: "api",
+						kind: "app",
+						repository: config.repositories[0],
+						targets: [
+							{
+								id: "pods",
+								action: "run",
+								runtime: "kubernetes",
+								timeoutMs: 5000,
+								kubernetes: {
+									cluster: "local",
+									namespace: "fixtures",
+									image: "fixture/app:v1",
+									replicas: 1,
+								},
+							},
+						],
+					},
+				],
+			}),
+		);
+	});
+	await state.app.close();
+	apps.splice(apps.indexOf(state.app), 1);
+	const inputFile = path.join(state.config.stateDir, "pod-host-input.json"),
+		readyFile = path.join(state.config.stateDir, "pod-host-ready.json"),
+		podFile = path.join(state.config.configDir, "pods.json"),
+		callsFile = path.join(state.config.configDir, "pod-calls.jsonl");
+	const foreign = {
+		kind: "Pod",
+		metadata: {
+			name: "foreign",
+			namespace: "fixtures",
+			uid: "aaaaaaaa-2222-3333-4444-555555555555",
+		},
+	};
+	fs.writeFileSync(
+		podFile,
+		JSON.stringify({ pods: { foreign }, serial: 0, gate: true }),
+	);
+	fs.writeFileSync(
+		inputFile,
+		JSON.stringify({
+			config: state.config,
+			invocation: state.invocation,
+			readyFile,
+			target: "pods",
+			runtime: "kubernetes",
+		}),
+	);
+	const host = Bun.spawn(
+		[
+			process.execPath,
+			path.join(import.meta.dir, "fixtures/environment-host.ts"),
+			inputFile,
+		],
+		{
+			cwd: state.invocation.repository,
+			env: { PATH: process.env.PATH, HOME: state.config.stateDir },
+			stdout: "ignore",
+			stderr: "inherit",
+		},
+	);
+	try {
+		await eventually(async () => fs.existsSync(readyFile), Boolean);
+		const ready = JSON.parse(fs.readFileSync(readyFile, "utf8")) as {
+				id: number;
+				run: EnvironmentRun;
+			},
+			statuses = ready.run.runtimeStatuses ?? [];
+		expect(statuses).toHaveLength(1);
+		const uid = statuses[0]?.id;
+		if (!uid) throw new Error("Missing live Pod UID observation");
+		expect(statuses[0]).toMatchObject({
+			kind: "pod",
+			state: "running",
+			owned: true,
+		});
+		host.kill("SIGKILL");
+		await host.exited;
+		const before = fs.readFileSync(callsFile, "utf8"),
+			restored = await state.open(),
+			quarantined = (await restored.environments.snapshot()).runs[0];
+		if (!quarantined) throw new Error("Missing interrupted Pod receipt");
+		expect(quarantined).toMatchObject({ state: "interrupted", exitCode: null });
+		expect(quarantined.runtimeStatuses?.map((status) => status.id)).toEqual(
+			statuses.map((status) => status.id),
+		);
+		expect(
+			quarantined.runtimeStatuses?.every(
+				(status) =>
+					status.state === "unknown" &&
+					status.owned === null &&
+					status.health === null,
+			),
+		).toBe(true);
+		await expect(
+			restored.environments.stopOnce("pod-crash-stop", ready.id, ["api"]),
+		).rejects.toThrow();
+		await restored.cancel(ready.id);
+		const cancelled = await restored.harness.waitForTask(
+			ready.id as TaskId,
+			context,
+		);
+		expect(cancelled.state.outcome).toMatchObject({
+			status: "aborted",
+			reason: expect.stringContaining("Resources remain quarantined"),
+		});
+		expect(fs.readFileSync(callsFile, "utf8")).toBe(before);
+		// The fixture operator removes only these synthetic UIDs, not a namespace,
+		// labels or names that could authorize touching an unrelated/replacement Pod.
+		const pods = JSON.parse(fs.readFileSync(podFile, "utf8")),
+			uids = new Set(statuses.map((status) => status.id));
+		expect(
+			Object.values(
+				pods.pods as Record<string, { metadata: { uid: string } }>,
+			).map((pod) => pod.metadata.uid),
+		).toContain(uid);
+		for (const [name, pod] of Object.entries(
+			pods.pods as Record<string, { metadata: { uid: string } }>,
+		))
+			if (uids.has(pod.metadata.uid)) delete pods.pods[name];
+		expect(pods.pods).toEqual({ foreign });
+		fs.writeFileSync(podFile, JSON.stringify(pods));
+		const server = serve(restored);
+		try {
+			const url = new URL(server.url),
+				endpoint = `${url.origin}/api/environments/release`,
+				body = JSON.stringify({
+					id: quarantined.id,
+					revision: quarantined.revision,
+					inspectionConfirmed: true,
+				});
+			expect((await fetch(endpoint, { method: "POST", body })).status).toBe(
+				401,
+			);
+			expect(
+				(
+					await fetch(endpoint, {
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${new URLSearchParams(url.hash.slice(1)).get("token")}`,
+							"Content-Type": "application/json",
+						},
+						body,
+					})
+				).status,
+			).toBe(200);
+			expect((await restored.environments.snapshot()).runs[0]).toMatchObject({
+				state: "exited",
+				exitCode: null,
+				inspection: { revision: quarantined.revision },
+			});
+			expect(fs.readFileSync(callsFile, "utf8")).toBe(before);
+		} finally {
+			await server.stop();
+		}
+	} finally {
+		if (host.exitCode === null) {
+			host.kill("SIGTERM");
+			await host.exited;
+		}
+	}
+}, 15000);
