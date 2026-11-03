@@ -38,6 +38,7 @@ export function createEnvironmentTools(
 		timeoutSec: number,
 		api: ToolExecutionApi,
 		context: Context,
+		retainQueue = false,
 	) {
 		const owner = await ownerOf(api.conversationId);
 		if (!owner)
@@ -57,9 +58,18 @@ export function createEnvironmentTools(
 					? {}
 					: { replicas: selection.replicas }),
 				timeoutSec,
+				...(retainQueue ? { retainQueue: true } : {}),
 			});
 		const previous = await manager.receipt(batch, owner.id, request);
 		if (previous) return environmentResult(previous);
+		const recorded = await manager.recordedWait(
+			batch,
+			owner.id,
+			batch,
+			request,
+			timeoutSec * 1000,
+		);
+		if (recorded) return environmentResult(recorded);
 		const plans = resolvePlans(
 			manager.projects,
 			owner,
@@ -81,6 +91,13 @@ export function createEnvironmentTools(
 			{
 				plans,
 				waitTimeoutMs: timeoutSec * 1000,
+				...(retainQueue
+					? {
+							retainQueue: true,
+							queueScope:
+								"A bounded acquisition timeout retains this exact plan's FIFO place without reserving or starting apps between calls. Only this native owner may explicitly continue it through env_wait; changing apps/selection requires cancelling it and fresh approval. Matching env_stop, task completion/cancellation and host shutdown/restart invalidate the live queue entry. Saved queue and poll receipts are diagnostic only and never restore execution authority. Continuation wait durations may be 1..7200 seconds per call; they do not extend the native task lifetime.",
+						}
+					: {}),
 				...(plans.some((plan) => plan.kubernetes)
 					? {
 							kubernetesScope:
@@ -137,6 +154,7 @@ export function createEnvironmentTools(
 				plans,
 				timeoutSec * 1000,
 				context.abortSignal,
+				retainQueue,
 			),
 		);
 	}
@@ -418,9 +436,10 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Only this task's repository/workspace is allowed. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout releases queue position; no app starts on timeout.",
+					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Only this task's repository/workspace is allowed. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout normally releases queue position. Explicit retainQueue:true adds a disclosed retained wait receipt for env_wait continuation of only this approved plan, with no apps reserved/started between calls. Stops, task cleanup and host shutdown/restart invalidate the live entry; saved queue records never restore authority.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
+					retainQueue: Type.Optional(Type.Boolean()),
 					...selectionFields,
 					timeoutSec: Type.Optional(
 						Type.Integer({ minimum: 1, maximum: 7200 }),
@@ -429,7 +448,44 @@ export function createEnvironmentTools(
 				replay: "safe",
 				executionMode: "sequential",
 				execute: async (args, api, context) =>
-					execute("run", args.apps, args, args.timeoutSec ?? 30, api, context),
+					execute(
+						"run",
+						args.apps,
+						args,
+						args.timeoutSec ?? 30,
+						api,
+						context,
+						args.retainQueue === true,
+					),
+			}),
+			defineTool({
+				name: "env_wait",
+				description:
+					"Continue only this native task's live retained acquisition from an explicitly retainQueue-approved env_start. No app/target/runtime changes or new execution authority: use the original acquisition ID. FIFO place survives bounded calls, not host restart. A completed poll replay returns diagnostics, never re-enqueues or adopts saved resources. Cancelling/stopping/completing the task releases its retained position.",
+				parameters: Type.Object({
+					acquisition: Type.String({ minLength: 1, maxLength: 128 }),
+					timeoutSec: Type.Optional(
+						Type.Integer({ minimum: 1, maximum: 7200 }),
+					),
+				}),
+				replay: "safe",
+				executionMode: "sequential",
+				execute: async (args, api, context) => {
+					const owner = await ownerOf(api.conversationId);
+					if (!owner)
+						throw new Error(
+							"Queue continuation requires the original native skill task",
+						);
+					return environmentResult(
+						await manager.continueWait(
+							`env-wait-${api.taskId}`,
+							owner,
+							args.acquisition,
+							(args.timeoutSec ?? 30) * 1000,
+							context.abortSignal,
+						),
+					);
+				},
 			}),
 			...(["build", "test"] as const).map((action) =>
 				defineTool({

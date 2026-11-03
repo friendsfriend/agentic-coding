@@ -31,12 +31,17 @@ import {
 	type StopReceipt,
 } from "./state.ts";
 
+import { type WaitPoll, type WaitReceipt, waitingResult } from "./wait.ts";
+
 type Waiter = {
 	batch: string;
 	owner: number;
 	apps: string[];
 	since: number;
 	plans: Plan[];
+	active: boolean;
+	retained: boolean;
+	ordinal: number;
 };
 function recentRuns(runs: EnvironmentRun[], history: number) {
 	const recent = new Set(
@@ -59,6 +64,7 @@ export class Environments {
 	private listeners = new Set<() => void>();
 	private generation = 0;
 	private closed = false;
+	private closing: Promise<void> | null = null;
 	private pending = new Map<
 		Promise<unknown>,
 		{ owner: number; batch: string }
@@ -362,6 +368,14 @@ export class Environments {
 		this.engine = engine;
 		await this.store.commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState);
+			doc.waits ??= {};
+			for (const receipt of values<WaitReceipt>(doc.waits))
+				if (receipt.state === "waiting")
+					doc.waits[receipt.batch] = JSON.stringify({
+						...receipt,
+						state: "interrupted",
+						revision: receipt.revision + 1,
+					});
 			for (const receipt of values<StopReceipt>(doc.stops))
 				for (const batch of receipt.batches) this.stopped.add(batch);
 			for (const run of values<EnvironmentRun>(doc.runs))
@@ -549,6 +563,19 @@ export class Environments {
 				.filter(({ receipt }) => !app || receipt.approved.app === app);
 		return {
 			runtime: "task-owned",
+			waitHistoryLimit: 200,
+			waits: values<WaitReceipt>(state?.waits)
+				.filter(
+					(receipt) => !app || receipt.plans.some((plan) => plan.app === app),
+				)
+				.slice(-200)
+				.map(({ plans, request: _request, ...receipt }) => ({
+					...receipt,
+					apps: plans.map((plan) => plan.app),
+					live: this.waiters.some((waiter) => waiter.batch === receipt.batch),
+					authority:
+						"diagnostic only; saved queue records never restore execution authority",
+				})),
 			httpOperationsTotal: operations.length,
 			httpHistoryLimit: 200,
 			httpOperations: operations.slice(-200).map(({ id, receipt }) => ({
@@ -664,6 +691,8 @@ export class Environments {
 		plans: Plan[],
 		waitMs: number,
 		signal?: AbortSignal,
+		retainQueue = false,
+		pollId = batch,
 	) {
 		const operation = this.perform(
 			batch,
@@ -672,6 +701,8 @@ export class Environments {
 			plans,
 			waitMs,
 			signal,
+			retainQueue,
+			pollId,
 		);
 		this.pending.set(operation, { owner: owner.id, batch });
 		try {
@@ -680,15 +711,111 @@ export class Environments {
 			this.pending.delete(operation);
 		}
 	}
+	async recordedWait(
+		pollId: string,
+		owner: number,
+		batch: string,
+		request: string,
+		waitMs: number,
+	) {
+		const state = await this.store.snapshot(EnvironmentState, background),
+			raw = state?.waitPolls?.[pollId];
+		if (!raw) return null;
+		const saved = state?.waits?.[batch];
+		if (!saved)
+			throw new Error("Missing acquisition journal for recorded queue poll");
+		const poll = decode<WaitPoll>(raw),
+			receipt = decode<WaitReceipt>(saved);
+		if (
+			poll.owner !== owner ||
+			poll.batch !== batch ||
+			poll.request !== request ||
+			poll.waitMs !== waitMs ||
+			receipt.owner !== owner ||
+			receipt.request !== request
+		)
+			throw new Error("Queue poll identity mismatch");
+		if (poll.state === "waiting") return waitingResult(poll, receipt, true);
+		if (poll.state === "acquired") return this.receipt(batch, owner, request);
+		if (poll.state === "cancelled")
+			throw new Error(
+				"Queue poll was cancelled; request fresh approval before acquiring again",
+			);
+		return null;
+	}
+	async continueWait(
+		pollId: string,
+		owner: TaskInfo,
+		batch: string,
+		waitMs: number,
+		signal?: AbortSignal,
+	) {
+		this.check(owner.id, signal, batch);
+		if (owner.policy !== "workspace-write")
+			throw new Error(
+				"Queue continuation requires the original workspace-write native owner",
+			);
+		const state = await this.store.snapshot(EnvironmentState, background),
+			raw = state?.waits?.[batch];
+		if (!raw) throw new Error("Unknown acquisition");
+		const receipt = decode<WaitReceipt>(raw);
+		if (
+			receipt.owner !== owner.id ||
+			!receipt.retained ||
+			receipt.plans.some((plan) => plan.workspace !== owner.workspace)
+		)
+			throw new Error(
+				"Only the original native owner may continue its retained approved plan",
+			);
+		const recorded = await this.recordedWait(
+			pollId,
+			owner.id,
+			batch,
+			receipt.request,
+			waitMs,
+		);
+		if (recorded) return recorded;
+		if (receipt.state === "acquired")
+			return this.receipt(batch, owner.id, receipt.request);
+		if (
+			receipt.state !== "waiting" ||
+			!this.waiters.some(
+				(waiter) => waiter.batch === batch && waiter.owner === owner.id,
+			)
+		)
+			throw new Error(
+				"No live retained acquisition; saved receipts cannot restore queue authority. Request fresh approval",
+			);
+		return this.execute(
+			batch,
+			receipt.request,
+			owner,
+			receipt.plans,
+			waitMs,
+			signal,
+			true,
+			pollId,
+		);
+	}
 	private async perform(
 		batch: string,
 		request: string,
 		owner: TaskInfo,
 		plans: Plan[],
 		waitMs: number,
-		signal?: AbortSignal,
+		signal: AbortSignal | undefined,
+		retainQueue: boolean,
+		pollId: string,
 	) {
 		this.check(owner.id, signal, batch);
+		const recorded = await this.recordedWait(
+			pollId,
+			owner.id,
+			batch,
+			request,
+			waitMs,
+		);
+		if (recorded) return recorded;
 		const previous = await this.receipt(batch, owner.id, request);
 		if (previous) return previous;
 		if (!plans.length || plans.some((plan) => plan.action !== plans[0]?.action))
@@ -723,14 +850,90 @@ export class Environments {
 		// Resolve referenced values only after approval, and fail before reserving or starting any app.
 		for (const plan of plans) processEnvironment(this.config.configDir, plan);
 		const running = plans[0]?.action === "run";
-		const waiter: Waiter = {
-			batch,
-			owner: owner.id,
-			apps: plans.map((plan) => plan.app),
-			since: Date.now(),
-			plans,
-		};
-		if (running) this.waiters.push(waiter);
+		let waiter = this.waiters.find((item) => item.batch === batch);
+		if (waiter?.active)
+			throw new Error(
+				"This acquisition already has an active native wait call",
+			);
+		if (running) {
+			if (
+				this.waiters.some(
+					(item) => item.owner === owner.id && item.batch !== batch,
+				)
+			)
+				throw new Error(
+					"Continue the existing retained acquisition with env_wait, or cancel it before acquiring another batch",
+				);
+			const receipt = await this.store.commit(async (tx) => {
+				const task = await tx.task(owner.id as TaskId),
+					doc = await tx.doc(EnvironmentState);
+				this.check(owner.id, signal, batch);
+				if (
+					!task ||
+					task.abortRequested ||
+					task.state.status === "terminal" ||
+					owner.policy !== "workspace-write"
+				)
+					throw new Error(
+						"Environment task has ended or lacks write authority",
+					);
+				doc.waits ??= {};
+				doc.waitPolls ??= {};
+				let receipt = doc.waits[batch]
+					? decode<WaitReceipt>(doc.waits[batch])
+					: undefined;
+				if (
+					receipt &&
+					(receipt.owner !== owner.id ||
+						receipt.request !== request ||
+						receipt.state !== "waiting" ||
+						!waiter)
+				)
+					throw new Error(
+						"No live matching acquisition; saved queue receipts cannot be adopted",
+					);
+				if (!receipt) {
+					doc.waitOrdinal = (doc.waitOrdinal ?? 0) + 1;
+					receipt = {
+						batch,
+						owner: owner.id,
+						request,
+						plans,
+						retained: retainQueue,
+						since: Date.now(),
+						ordinal: doc.waitOrdinal,
+						revision: 1,
+						state: "waiting",
+					};
+					doc.waits[batch] = JSON.stringify(receipt);
+				}
+				doc.waitPolls[pollId] = JSON.stringify({
+					owner: owner.id,
+					batch,
+					request,
+					waitMs,
+					state: "pending",
+					observedAt: Date.now(),
+				} satisfies WaitPoll);
+				return receipt;
+			}, background);
+			if (!waiter) {
+				waiter = {
+					batch,
+					owner: owner.id,
+					apps: plans.map((plan) => plan.app),
+					since: receipt.since,
+					plans,
+					active: true,
+					retained: retainQueue,
+					ordinal: receipt.ordinal,
+				};
+				this.waiters.push(waiter);
+				this.waiters.sort((left, right) => left.ordinal - right.ordinal);
+			} else waiter.active = true;
+		}
+		const currentWaiter = waiter;
+		let retained = false;
 		this.notify();
 		const deadline = Date.now() + waitMs;
 		let reserved = false;
@@ -746,14 +949,27 @@ export class Environments {
 					const doc = await tx.doc(EnvironmentState),
 						active = values<EnvironmentRun>(doc.runs).filter(holdsResource);
 					if (running) {
+						if (!currentWaiter || !doc.waits || !doc.waitPolls)
+							throw new Error("Missing live queue admission");
+						const admission = decode<WaitReceipt>(doc.waits[batch]);
+						if (
+							admission.state !== "waiting" ||
+							admission.owner !== owner.id ||
+							admission.request !== request
+						)
+							throw new Error("Acquisition is no longer waiting");
 						const held = active.filter((run) => run.plan.action === "run");
 						if (held.some((run) => run.owner === owner.id))
 							throw new Error(
 								"Release your existing app batch before acquiring another; interrupted runs need operator inspection",
 							);
 						if (
-							this.waiters
-								.slice(0, this.waiters.indexOf(waiter))
+							values<WaitReceipt>(doc.waits)
+								.filter(
+									(earlier) =>
+										earlier.state === "waiting" &&
+										earlier.ordinal < admission.ordinal,
+								)
 								.some((earlier) =>
 									earlier.plans.some((left) =>
 										plans.some((right) =>
@@ -776,6 +992,22 @@ export class Environments {
 						throw new Error(
 							"An environment action already owns this workspace or daemon image writer; inspect interrupted actions before retrying",
 						);
+					if (running) {
+						if (!doc.waits || !doc.waitPolls)
+							throw new Error("Missing queue admission journal");
+						const receipt = decode<WaitReceipt>(doc.waits[batch]),
+							poll = decode<WaitPoll>(doc.waitPolls[pollId]);
+						doc.waits[batch] = JSON.stringify({
+							...receipt,
+							state: "acquired",
+							revision: receipt.revision + 1,
+						});
+						doc.waitPolls[pollId] = JSON.stringify({
+							...poll,
+							state: "acquired",
+							observedAt: Date.now(),
+						});
+					}
 					for (const plan of plans) {
 						const run: EnvironmentRun = {
 							id: `${batch}:${plan.app}`,
@@ -798,14 +1030,47 @@ export class Environments {
 					return true;
 				}, background);
 				if (!reserved) {
-					if (Date.now() >= deadline)
+					if (Date.now() >= deadline) {
+						if (retainQueue && currentWaiter) {
+							const result = await this.store.commit(async (tx) => {
+								const task = await tx.task(owner.id as TaskId),
+									doc = await tx.doc(EnvironmentState);
+								this.check(owner.id, signal, batch);
+								if (
+									!task ||
+									task.abortRequested ||
+									task.state.status === "terminal" ||
+									!doc.waits ||
+									!doc.waitPolls
+								)
+									throw new Error("Environment task has ended");
+								const receipt = decode<WaitReceipt>(doc.waits[batch]);
+								if (receipt.state !== "waiting")
+									throw new Error("Acquisition is no longer waiting");
+								const poll: WaitPoll = {
+									owner: owner.id,
+									batch,
+									request,
+									waitMs,
+									state: "waiting",
+									observedAt: Date.now(),
+									position: this.waiters.indexOf(currentWaiter) + 1,
+								};
+								doc.waitPolls[pollId] = JSON.stringify(poll);
+								return waitingResult(poll, receipt);
+							}, background);
+							retained = true;
+							currentWaiter.active = false;
+							return result;
+						}
 						throw new Error(
 							"Environment acquisition timed out; no apps started and queue position released",
 						);
+					}
 					await this.changed(generation, signal, deadline);
 				}
 			}
-			this.waiters = this.waiters.filter((item) => item !== waiter);
+			this.waiters = this.waiters.filter((item) => item !== currentWaiter);
 			this.notify();
 			for (const plan of plans) {
 				this.check(owner.id, signal, batch);
@@ -905,7 +1170,28 @@ export class Environments {
 					: "Environment execution did not complete; inspect env_status and env_logs",
 			);
 		} finally {
-			this.waiters = this.waiters.filter((item) => item !== waiter);
+			if (!retained) {
+				this.waiters = this.waiters.filter((item) => item !== currentWaiter);
+				if (running)
+					await this.store.commit(async (tx) => {
+						const doc = await tx.doc(EnvironmentState);
+						if (!doc.waits || !doc.waitPolls) return;
+						const receipt = decode<WaitReceipt>(doc.waits[batch]);
+						if (receipt.state === "waiting") {
+							doc.waits[batch] = JSON.stringify({
+								...receipt,
+								state: "cancelled",
+								revision: receipt.revision + 1,
+							});
+							const poll = decode<WaitPoll>(doc.waitPolls[pollId]);
+							doc.waitPolls[pollId] = JSON.stringify({
+								...poll,
+								state: "cancelled",
+								observedAt: Date.now(),
+							});
+						}
+					}, background);
+			}
 			this.notify();
 		}
 	}
@@ -1024,10 +1310,11 @@ export class Environments {
 			const selected = active.filter(
 				(run) => !apps || apps.includes(run.plan.app) || coupled.has(run.batch),
 			);
-			const waiting = this.waiters.filter(
-				(waiter) =>
-					waiter.owner === owner &&
-					(!apps || waiter.apps.some((app) => apps.includes(app))),
+			const waiting = values<WaitReceipt>(doc.waits).filter(
+				(receipt) =>
+					receipt.owner === owner &&
+					receipt.state === "waiting" &&
+					(!apps || receipt.plans.some((plan) => apps.includes(plan.app))),
 			);
 			const saved: StopReceipt = {
 				owner,
@@ -1068,6 +1355,9 @@ export class Environments {
 				"Cannot stop a saved PID. Operator inspection is required",
 			);
 		for (const batch of batches) this.stopped.add(batch);
+		this.waiters = this.waiters.filter(
+			(waiter) => !batches.includes(waiter.batch),
+		);
 		this.notify();
 		let uncertain = false;
 		for (const run of [...selected].reverse()) {
@@ -1083,6 +1373,21 @@ export class Environments {
 				.filter(([, entry]) => batches.includes(entry.batch))
 				.map(([operation]) => operation),
 		);
+		await this.store.commit(async (tx) => {
+			const doc = await tx.doc(EnvironmentState);
+			if (!doc.waits) return;
+			for (const batch of batches) {
+				const raw = doc.waits[batch];
+				if (!raw) continue;
+				const receipt = decode<WaitReceipt>(raw);
+				if (receipt.state === "waiting")
+					doc.waits[batch] = JSON.stringify({
+						...receipt,
+						state: "cancelled",
+						revision: receipt.revision + 1,
+					});
+			}
+		}, background);
 		if (uncertain && !preserveUnknown)
 			throw new Error(
 				"Cleanup remains uncertain; operator inspection required",
@@ -1094,9 +1399,17 @@ export class Environments {
 		const runs = (await this.records()).filter(
 			(run) => run.owner === owner && holdsResource(run),
 		);
+		const queued = values<WaitReceipt>(
+			(await this.store.snapshot(EnvironmentState, background))?.waits,
+		).filter(
+			(receipt) => receipt.owner === owner && receipt.state === "waiting",
+		);
 		await this.stopTargets(
 			runs,
-			runs.map((run) => run.batch),
+			[
+				...runs.map((run) => run.batch),
+				...queued.map((receipt) => receipt.batch),
+			],
 			true,
 		);
 		await Promise.allSettled(
@@ -1131,12 +1444,28 @@ export class Environments {
 		}, background);
 		this.notify();
 	}
-	async close() {
+	close() {
+		this.closing ??= this.closeOnce();
+		return this.closing;
+	}
+	private async closeOnce() {
 		this.closed = true;
 		this.notify();
 		for (const [id, process] of [...this.live].reverse())
 			await this.stopLive(id, process);
 		await Promise.allSettled([...this.pending.keys()]);
 		await Promise.allSettled([...this.dependencyCleanup.values()]);
+		this.waiters = [];
+		await this.store.commit(async (tx) => {
+			const doc = await tx.doc(EnvironmentState);
+			if (!doc.waits) return;
+			for (const receipt of values<WaitReceipt>(doc.waits))
+				if (receipt.state === "waiting")
+					doc.waits[receipt.batch] = JSON.stringify({
+						...receipt,
+						state: "interrupted",
+						revision: receipt.revision + 1,
+					});
+		}, background);
 	}
 }
