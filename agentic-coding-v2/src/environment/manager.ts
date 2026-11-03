@@ -406,11 +406,13 @@ export class Environments {
 		app: string,
 		owner: number | undefined,
 		options: TelemetryOptions,
+		expectedRun?: string,
 	) {
 		const run = (await this.records()).find(
 			(record) =>
 				record.plan.app === app &&
 				(owner === undefined || record.owner === owner) &&
+				(expectedRun === undefined || record.id === expectedRun) &&
 				record.state === "running" &&
 				record.ready === true &&
 				holdsResource(record),

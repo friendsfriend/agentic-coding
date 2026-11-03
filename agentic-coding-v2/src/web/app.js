@@ -196,7 +196,10 @@ async function refresh() {
 						]),
 					]);
 					if (card.dataset.environmentRevision === renderRevision) return card;
-					const previousLogs = card.querySelector("pre");
+					const previousLogs = card.querySelector("pre.environment-logs");
+					const previousTelemetry = card.querySelector(
+						"pre.environment-telemetry",
+					);
 					card.replaceChildren();
 					card.dataset.environmentRun = run.id;
 					card.dataset.environmentRevision = renderRevision;
@@ -226,7 +229,9 @@ async function refresh() {
 								`/api/environments/logs?app=${encodeURIComponent(run.plan.app)}`,
 							);
 							const log = logs.find((item) => item.id === run.id);
-							const pre = card.querySelector("pre") ?? element("pre");
+							const pre =
+								card.querySelector("pre.environment-logs") ??
+								element("pre", null, "environment-logs");
 							pre.textContent = !log
 								? "This run is outside the retained log response window."
 								: log.output ||
@@ -236,6 +241,34 @@ async function refresh() {
 							card.append(pre);
 						}),
 					);
+					if (
+						run.state === "running" &&
+						run.ready === true &&
+						run.plan.telemetry
+					)
+						for (const mode of ["traces", "logs"])
+							card.append(
+								button(
+									mode === "traces"
+										? "View native trace summaries"
+										: "View native telemetry logs",
+									async () => {
+										const query = new URLSearchParams({
+											app: run.plan.app,
+											run: run.id,
+											mode,
+										});
+										const observation = await api(
+											`/api/environments/telemetry?${query}`,
+										);
+										const pre =
+											card.querySelector("pre.environment-telemetry") ??
+											element("pre", null, "environment-telemetry");
+										pre.textContent = JSON.stringify(observation, null, 2);
+										card.append(pre);
+									},
+								),
+							);
 					if (run.state === "interrupted")
 						card.append(
 							button("Release after inspection", async () => {
@@ -254,6 +287,7 @@ async function refresh() {
 							}),
 						);
 					if (previousLogs) card.append(previousLogs);
+					if (previousTelemetry) card.append(previousTelemetry);
 					return card;
 				}),
 		);

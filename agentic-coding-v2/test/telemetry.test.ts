@@ -9,6 +9,7 @@ import {
 	type Context as ModelContext,
 } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
+import { serve } from "../src/server.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
@@ -112,6 +113,48 @@ console.log('TELEMETRY READY');setInterval(()=>{},1000);
 	expect(await app.environments.logs("api", first)).toMatchObject([
 		{ state: "running" },
 	]);
+	const owned = (await app.environments.snapshot("api")).runs.find(
+		(run) => run.owner === first && run.state === "running",
+	);
+	if (!owned) throw new Error("Disposable live telemetry run missing");
+	const host = serve(app);
+	try {
+		const address = new URL(host.url);
+		const token = new URLSearchParams(address.hash.slice(1)).get("token");
+		if (!token) throw new Error("Disposable host omitted its private token");
+		const headers = { Authorization: `Bearer ${token}` };
+		const query = new URL("/api/environments/telemetry", address);
+		query.search = new URLSearchParams({
+			app: "api",
+			run: owned.id,
+			status: "error",
+			limit: "1",
+		}).toString();
+		expect((await fetch(query)).status).toBe(401);
+		const response = await fetch(query, { headers });
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			scope: { app: "api", owner: first, run: owned.id },
+			records: [{ traceId, spanCount: 1 }],
+		});
+		query.searchParams.set("run", "stale-run-not-owned");
+		expect((await fetch(query, { headers })).status).toBe(400);
+		query.searchParams.set("run", owned.id);
+		query.searchParams.set("mode", "logs");
+		query.searchParams.delete("status");
+		const logResponse = await fetch(query, { headers });
+		expect(logResponse.status).toBe(200);
+		const logObservation = await logResponse.json();
+		expect(logObservation).toMatchObject({
+			scope: { run: owned.id },
+			records: [{ body: "native-message [REDACTED]" }],
+		});
+		expect(JSON.stringify(logObservation)).not.toContain(secret);
+		query.searchParams.append("run", owned.id);
+		expect((await fetch(query, { headers })).status).toBe(400);
+	} finally {
+		await host.stop();
+	}
 	fake.setResponses([call("otel_query", { app: "api" }), observe]);
 	const foreign = await app.startTask({
 		...invocation,
