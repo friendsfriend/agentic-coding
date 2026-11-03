@@ -142,7 +142,7 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_http_get",
 				description:
-					"Request exact human approval for one GET to a named numeric-loopback HTTP endpoint of this task's live ready shell app. No redirects, proxies, cookies, credentials, custom headers or writes. GET can still have server-side effects. Ten-second deadline, 64 KiB source cap, text-only output and frozen app-secret redaction; responses are discarded if app ownership ends. Not a TLS or socket-ownership proof. Other runtimes are not yet supported.",
+					"Request exact human approval for one GET to a named numeric-loopback HTTP/HTTPS endpoint of this task's live ready shell app. HTTPS requires TLS 1.2+ and valid certificate/IP verification, using system trust or one configured public CA file digest-pinned to this approval. No insecure TLS, client credentials, redirects, proxies, cookies, custom headers or writes. GET may have server-side effects. Ten-second deadline, 64 KiB source cap, text-only output and frozen app-secret redaction; discard responses if app ownership ends. No socket-to-process identity proof or other runtimes.",
 				parameters: Type.Object({
 					app: Type.String({ maxLength: 64 }),
 					endpoint: Type.String({ maxLength: 64 }),
@@ -165,7 +165,7 @@ export function createEnvironmentTools(
 							{
 								request,
 								authority:
-									"One direct GET to the displayed configured local origin while this exact ready shell app is held. GET may cause server-side effects; no redirects, proxy, cookies, credentials, custom headers or TLS/socket identity proof. Source response bounded to 64 KiB/10 seconds, known app secrets redacted; non-text/encoded bodies omitted. No other methods or origins are approved.",
+									"One direct GET to the displayed configured local origin while this exact ready shell app is held. HTTPS verifies the certificate and numeric IP with TLS 1.2+, using system trust unless the displayed public CA reference/digest replaces it. That single public CA file must remain inside the configuration directory and match the approved source digest before sending. No insecure TLS, hostname override, client certificate/key or authentication authority. HTTP is unencrypted; neither scheme proves socket-to-process ownership. GET may cause server-side effects; no redirects, proxy, cookies, credentials or custom headers. Source response bounded to 64 KiB/10 seconds, known app secrets redacted; non-text/encoded bodies omitted. No other methods or origins are approved.",
 							},
 							null,
 							2,

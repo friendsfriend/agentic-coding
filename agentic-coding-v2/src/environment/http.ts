@@ -1,10 +1,12 @@
-import { request, STATUS_CODES } from "node:http";
+import { request as httpRequest, STATUS_CODES } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { localEndpoint } from "./endpoint.ts";
-/** Direct numeric-loopback HTTP only: no proxy, cookies, credentials or redirects. */
+/** Direct numeric-loopback HTTP(S): verified TLS, no proxy, cookies, credentials or redirects. */
 export function endpointGet(
 	address: string,
 	redact: (value: string) => string,
 	signal?: AbortSignal,
+	ca?: Buffer,
 ) {
 	return new Promise<{
 		status: number;
@@ -15,6 +17,7 @@ export function endpointGet(
 		bytes: number;
 		truncated: boolean;
 		url: string;
+		transport: "http" | "https-verified";
 	}>((resolve, reject) => {
 		signal?.throwIfAborted();
 		const url = localEndpoint(address),
@@ -30,11 +33,20 @@ export function endpointGet(
 				reject(new Error("Local endpoint request failed or was interrupted"));
 			else resolve(result);
 		};
+		const secure = url.protocol === "https:",
+			request = secure ? httpsRequest : httpRequest;
 		const client = request(
 			{
-				protocol: "http:",
+				protocol: url.protocol,
+				...(secure
+					? {
+							rejectUnauthorized: true,
+							minVersion: "TLSv1.2" as const,
+							...(ca ? { ca } : {}),
+						}
+					: {}),
 				hostname: url.hostname.replace(/^\[|\]$/g, ""),
-				port: url.port || 80,
+				port: url.port || (secure ? 443 : 80),
 				path: `${url.pathname}${url.search}`,
 				method: "GET",
 				agent: false,
@@ -77,6 +89,7 @@ export function endpointGet(
 						bytes,
 						truncated,
 						url: address,
+						transport: secure ? "https-verified" : "http",
 					});
 				};
 				response.on("data", (chunk: Buffer) => {

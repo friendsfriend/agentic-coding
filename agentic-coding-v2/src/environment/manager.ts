@@ -9,6 +9,7 @@ import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
 import { type EndpointRequest, endpointUrl } from "./endpoint.ts";
+import { loadEndpointCa, prepareEndpointCa } from "./endpoint-ca.ts";
 import { endpointGet } from "./http.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import type { EnvironmentProcess } from "./process.ts";
@@ -101,7 +102,16 @@ export class Environments {
 			base = run.plan.endpoints?.[endpoint];
 		if (!base || !Object.hasOwn(run.plan.endpoints ?? {}, endpoint))
 			throw new Error("Choose a declared endpoint of the held app");
-		return { run: run.id, app, endpoint, url: endpointUrl(base, path) };
+		const ref = Object.hasOwn(run.plan.endpointCaRefs ?? {}, endpoint)
+			? run.plan.endpointCaRefs?.[endpoint]
+			: undefined;
+		return {
+			run: run.id,
+			app,
+			endpoint,
+			url: endpointUrl(base, path),
+			...(ref ? { ca: prepareEndpointCa(this.config.configDir, ref) } : {}),
+		};
 	}
 	async getEndpoint(
 		owner: TaskInfo,
@@ -118,14 +128,25 @@ export class Environments {
 			run.id !== approved.run ||
 			!base ||
 			!Object.hasOwn(run.plan.endpoints ?? {}, approved.endpoint) ||
+			(Object.hasOwn(run.plan.endpointCaRefs ?? {}, approved.endpoint)
+				? run.plan.endpointCaRefs?.[approved.endpoint]
+				: undefined) !== approved.ca?.file ||
 			new URL(base).origin !== new URL(approved.url).origin
 		)
 			throw new Error("Approved endpoint no longer belongs to the held run");
+		const ca = approved.ca
+			? loadEndpointCa(this.config.configDir, approved.ca)
+			: undefined;
 		const operation = (async () => {
 			this.check(owner.id, signal, run.batch);
 			if (process.outcome || process.cleanupFailed)
 				throw new Error("Endpoint app is closing; no request sent");
-			const result = await endpointGet(approved.url, process.redact, signal),
+			const result = await endpointGet(
+					approved.url,
+					process.redact,
+					signal,
+					ca,
+				),
 				current = await this.endpointRun(owner, approved.app, signal);
 			this.check(owner.id, signal, run.batch);
 			if (
@@ -141,6 +162,7 @@ export class Environments {
 				app: approved.app,
 				endpoint: approved.endpoint,
 				observedAt: Date.now(),
+				...(approved.ca ? { caDigest: approved.ca.digest } : {}),
 			};
 		})();
 		this.pending.set(operation, { owner: owner.id, batch: run.batch });

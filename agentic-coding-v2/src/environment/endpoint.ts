@@ -1,21 +1,23 @@
 import { object, text } from "../config.ts";
+import type { EndpointCa } from "./endpoint-ca.ts";
 export type EndpointRequest = {
 	run: string;
 	app: string;
 	endpoint: string;
 	url: string;
+	ca?: EndpointCa;
 };
 export function localEndpoint(raw: string) {
 	const url = new URL(raw);
 	if (
-		url.protocol !== "http:" ||
+		!["http:", "https:"].includes(url.protocol) ||
 		!["127.0.0.1", "[::1]"].includes(url.hostname) ||
 		url.username ||
 		url.password ||
-		Number(url.port || 80) < 1
+		Number(url.port || (url.protocol === "https:" ? 443 : 80)) < 1
 	)
 		throw new Error(
-			"Endpoints require an HTTP numeric-loopback origin without credentials",
+			"Endpoints require an HTTP/HTTPS numeric-loopback origin without credentials",
 		);
 	return url;
 }

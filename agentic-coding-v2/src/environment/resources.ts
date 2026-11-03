@@ -22,7 +22,7 @@ function ports(plan: Plan) {
 			Object.values(service.endpoints ?? {}).map((address) => {
 				const url = new URL(address);
 				return {
-					host: Number(url.port || 80),
+					host: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 					protocol: "tcp",
 					address: url.hostname.replace(/^\[|\]$/g, ""),
 				};

@@ -13,6 +13,7 @@ import {
 } from "./compose-config.ts";
 import { type ContainerTarget, readContainer } from "./container-config.ts";
 import { readEndpoints } from "./endpoint.ts";
+import { readEndpointCaRefs } from "./endpoint-ca.ts";
 import { type KubernetesTarget, readKubernetes } from "./kubernetes-config.ts";
 import {
 	type Action,
@@ -39,6 +40,7 @@ export type Target = {
 	environment: Record<string, string>;
 	secretRefs: Record<string, string>;
 	endpoints?: Record<string, string>;
+	endpointCaRefs?: Record<string, string>;
 };
 export type Project = {
 	id: string;
@@ -102,6 +104,7 @@ function readTarget(raw: unknown): Target {
 		"compose",
 		"kubernetes",
 		"endpoints",
+		"endpointCaRefs",
 	]);
 	if (
 		data.runtime !== "shell" &&
@@ -138,7 +141,7 @@ function readTarget(raw: unknown): Target {
 			"Shell commands/readiness and structured container configuration cannot be mixed",
 		);
 	if (
-		data.endpoints !== undefined &&
+		(data.endpoints !== undefined || data.endpointCaRefs !== undefined) &&
 		(data.runtime !== "shell" || data.action !== "run")
 	)
 		throw new Error(
@@ -179,11 +182,12 @@ function readTarget(raw: unknown): Target {
 	const cwd = text(data.cwd ?? ".", "environment cwd", 4096);
 	if (path.isAbsolute(cwd))
 		throw new Error("Environment cwd must be relative to the task workspace");
+	const endpoints = readEndpoints(data.endpoints),
+		endpointCaRefs = readEndpointCaRefs(data.endpointCaRefs, endpoints);
 	return {
 		id: identifier(data.id),
-		...(data.endpoints === undefined
-			? {}
-			: { endpoints: readEndpoints(data.endpoints) }),
+		...(data.endpoints === undefined ? {} : { endpoints }),
+		...(data.endpointCaRefs === undefined ? {} : { endpointCaRefs }),
 		action: data.action as Action,
 		runtime: data.runtime,
 		...(container ? { container } : {}),
