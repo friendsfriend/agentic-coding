@@ -65,11 +65,27 @@ export function createEnvironmentTools(
 			apps,
 			action,
 			selection,
+		).map((plan) =>
+			plan.kubernetes
+				? {
+						...plan,
+						clusterConnection: manager.prepareCluster(
+							owner,
+							plan.kubernetes.cluster,
+						),
+					}
+				: plan,
 		);
 		const snapshot = JSON.stringify(
 			{
 				plans,
 				waitTimeoutMs: timeoutSec * 1000,
+				...(plans.some((plan) => plan.kubernetes)
+					? {
+							kubernetesScope:
+								"Bare pods only in the displayed existing non-system namespace and explicit local cluster. No cluster/namespace creation, Helm, controllers or host mounts; automatic service-account token mounting and privilege escalation are disabled in the requested pod spec. No existing pod adoption, even with matching labels. Only live creation UIDs and host/run labels authorize cleanup; DELETE uses live UID and observed resource-version preconditions, a five-second grace period and orphan propagation, never cascading namespace deletion. Declared environment values and resolved secret references are sent to the Kubernetes API as Pod env values, where authorized cluster readers can see them and the API can persist them. The local client receives them only on private stdin, not argv or manifest files; this is not Kubernetes Secret-object integration. Pod Ready is API readiness, not proof of application health without a readiness probe. Pod logs, services and port forwards are not yet supported. API/identity loss or uncertain writes quarantine the app slot. The configured image and commands can execute code and make network requests; this is not an OS sandbox.",
+						}
+					: {}),
 				...(plans.some((plan) => plan.compose)
 					? {
 							composeScope:
@@ -108,6 +124,7 @@ export function createEnvironmentTools(
 	const target = Type.Optional(Type.String({ maxLength: 200 }));
 	const selectionFields = {
 		target,
+		replicas: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
 		profile: Type.Optional(Type.String({ maxLength: 64 })),
 		runtime: Type.Optional(
 			Type.Union([
@@ -115,6 +132,7 @@ export function createEnvironmentTools(
 				Type.Literal("docker"),
 				Type.Literal("podman"),
 				Type.Literal("compose"),
+				Type.Literal("kubernetes"),
 			]),
 		),
 	};
@@ -199,7 +217,7 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all apps atomically in FIFO order. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Acquisition timeout releases queue position; no app starts on timeout.",
+					"Request human approval for exact configured run commands and acquire all apps atomically in FIFO order. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with API Ready observations (not application health), live UID receipts and UID-preconditioned cleanup. Acquisition timeout releases queue position; no app starts on timeout.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
 					...selectionFields,
@@ -226,7 +244,7 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_stop",
 				description:
-					"Stop only apps started by this task, with live process-group cleanup before release. Never stops another task's apps or acts on a persisted PID. Also cancels matching pending acquisitions.",
+					"Stop only apps started by this task, with confirmed live process-group or receipt-fenced runtime cleanup before release. Kubernetes deletion requires live creation UIDs and API UID preconditions. Never stops another task's apps or adopts persisted PIDs/IDs. Also cancels matching pending acquisitions.",
 				parameters: Type.Object({
 					apps: Type.Optional(
 						Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),

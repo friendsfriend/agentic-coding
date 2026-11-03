@@ -4,6 +4,7 @@ import { type Config, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
 import { type Availability, targetAvailability } from "./availability.ts";
+import type { ClusterInspection } from "./cluster-types.ts";
 import {
 	type ComposeDefinition,
 	type ComposePlan,
@@ -11,6 +12,7 @@ import {
 	readCompose,
 } from "./compose-config.ts";
 import { type ContainerTarget, readContainer } from "./container-config.ts";
+import { type KubernetesTarget, readKubernetes } from "./kubernetes-config.ts";
 import {
 	type Action,
 	defaultTargets,
@@ -22,7 +24,8 @@ export type { Action } from "./selection.ts";
 export type Target = {
 	id: string;
 	action: Action;
-	runtime: "shell" | "docker" | "podman" | "compose";
+	runtime: "shell" | "docker" | "podman" | "compose" | "kubernetes";
+	kubernetes?: KubernetesTarget;
 	container?: ContainerTarget;
 	compose?: ComposeDefinition;
 	availability?: Availability;
@@ -47,6 +50,7 @@ export type Plan = Target & {
 	workspace: string;
 	cwd: string;
 	composePlan?: ComposePlan;
+	clusterConnection?: ClusterInspection;
 };
 const identifier = (value: unknown) => {
 	const id = text(value, "environment identifier", 64);
@@ -94,14 +98,25 @@ function readTarget(raw: unknown): Target {
 		"secretRefs",
 		"container",
 		"compose",
+		"kubernetes",
 	]);
 	if (
 		data.runtime !== "shell" &&
 		data.runtime !== "docker" &&
 		data.runtime !== "podman" &&
-		data.runtime !== "compose"
+		data.runtime !== "compose" &&
+		data.runtime !== "kubernetes"
 	)
 		throw new Error("Unsupported environment runtime");
+	if (data.runtime !== "kubernetes" && data.kubernetes !== undefined)
+		throw new Error("Kubernetes configuration requires the Kubernetes runtime");
+	if (
+		data.runtime === "kubernetes" &&
+		(data.action !== "run" ||
+			data.container !== undefined ||
+			data.compose !== undefined)
+	)
+		throw new Error("Kubernetes currently supports bare pod run targets only");
 	if (data.runtime !== "compose" && data.compose !== undefined)
 		throw new Error("Compose configuration requires the Compose runtime");
 	if (
@@ -120,7 +135,9 @@ function readTarget(raw: unknown): Target {
 			"Shell commands/readiness and structured container configuration cannot be mixed",
 		);
 	const container =
-		data.runtime === "shell" || data.runtime === "compose"
+		data.runtime === "shell" ||
+		data.runtime === "compose" ||
+		data.runtime === "kubernetes"
 			? undefined
 			: readContainer(data.container);
 	if (!["run", "build", "test"].includes(String(data.action)))
@@ -157,6 +174,9 @@ function readTarget(raw: unknown): Target {
 		action: data.action as Action,
 		runtime: data.runtime,
 		...(container ? { container } : {}),
+		...(data.runtime === "kubernetes"
+			? { kubernetes: readKubernetes(data.kubernetes) }
+			: {}),
 		...(data.runtime === "compose"
 			? { compose: readCompose(data.compose) }
 			: {}),
@@ -290,6 +310,10 @@ export function resolvePlans(
 			selection,
 			project.defaults?.[action],
 		);
+		if (chosen.kubernetes && selection.replicas !== undefined) {
+			if (selection.replicas > 16)
+				throw new Error("Bare pod replicas must be at most 16");
+		}
 		const cwd = contained(owner.workspace, chosen.cwd);
 		if (!fs.statSync(cwd).isDirectory())
 			throw new Error(
@@ -314,6 +338,14 @@ export function resolvePlans(
 			workspace: owner.workspace,
 			cwd,
 			...(composePlan ? { composePlan } : {}),
+			...(chosen.kubernetes
+				? {
+						kubernetes: {
+							...chosen.kubernetes,
+							replicas: selection.replicas ?? chosen.kubernetes.replicas,
+						},
+					}
+				: {}),
 		};
 	});
 }

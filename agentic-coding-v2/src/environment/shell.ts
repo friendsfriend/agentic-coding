@@ -70,6 +70,7 @@ export class ShellProcess {
 			args: string[];
 			captureStdout?: (chunk: string) => void;
 			privateOutput?: boolean;
+			input?: string;
 		},
 	) {
 		if (process.platform === "win32")
@@ -89,13 +90,23 @@ export class ShellProcess {
 					cwd,
 					env,
 					detached: true,
-					stdio: ["ignore", "pipe", "pipe"],
+					stdio: [
+						invocation?.input === undefined ? "ignore" : "pipe",
+						"pipe",
+						"pipe",
+					],
 				},
 			);
 		} catch {
 			throw new Error(
 				"Environment process could not start with the configured plan",
 			);
+		}
+		if (invocation?.input !== undefined) {
+			this.child.stdin?.on("error", () => {
+				/* Early client exit is reported by its exit status. */
+			});
+			this.child.stdin?.end(invocation.input);
 		}
 		const append = (line: string) => {
 			this.output = `${this.output}${redact(line)}\n`.slice(-64000);

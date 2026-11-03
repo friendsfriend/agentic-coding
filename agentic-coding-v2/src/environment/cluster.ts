@@ -4,22 +4,9 @@ import { type Config, digest, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
 import type { Plan } from "./catalog.ts";
+import type { Cluster, ClusterInspection } from "./cluster-types.ts";
 import { EnvironmentCommands } from "./command.ts";
 
-export type Cluster = {
-	id: string;
-	repository: string;
-	kubeconfig: string;
-	context: string;
-	environment: Record<string, string>;
-};
-export type ClusterInspection = {
-	cluster: Cluster;
-	sourceDigest: string;
-	connection: Record<string, unknown>;
-	server: string;
-	workspace: string;
-};
 function keys(data: Record<string, unknown>, allowed: string[]) {
 	if (Object.keys(data).some((key) => !allowed.includes(key)))
 		throw new Error("Unsupported cluster configuration field");
@@ -236,12 +223,29 @@ export function prepareCluster(
 		);
 	}
 }
-export async function inspectCluster(
+export function openClusterClient(
 	config: Config,
 	inspection: ClusterInspection,
-	signal?: AbortSignal,
 ) {
-	signal?.throwIfAborted();
+	// Revalidate config containment immediately before invoking the client; approval
+	// of a reference is not permission to follow a newly external symlink.
+	const root = fs.realpathSync(config.configDir),
+		check = (file: unknown) =>
+			contained(
+				root,
+				path.relative(
+					root,
+					text(file, "approved credential file reference", 4096),
+				),
+			);
+	check(inspection.cluster.kubeconfig);
+	for (const entry of inspection.connection.clusters) {
+		const cluster = object(entry.cluster);
+		if (cluster["certificate-authority"] !== undefined)
+			check(cluster["certificate-authority"]);
+	}
+	for (const entry of inspection.connection.users)
+		for (const file of Object.values(object(entry.user))) check(file);
 	if (source(inspection.cluster.kubeconfig).digest !== inspection.sourceDigest)
 		throw new Error(
 			"Kubeconfig changed after approval; obtain a new exact cluster inspection approval",
@@ -251,7 +255,6 @@ export async function inspectCluster(
 		path.join(config.stateDir, "cluster-inspection-"),
 	);
 	fs.chmodSync(scratch, 0o700);
-	let commands: EnvironmentCommands | null = null;
 	try {
 		const file = path.join(scratch, "client.json");
 		fs.writeFileSync(file, JSON.stringify(inspection.connection), {
@@ -270,16 +273,41 @@ export async function inspectCluster(
 			environment: inspection.cluster.environment,
 			secretRefs: {},
 		};
-		commands = new EnvironmentCommands(plan, config.configDir, "kubectl", [
-			"--kubeconfig",
-			file,
-			"--context",
-			inspection.cluster.context,
-			"--server",
-			inspection.server,
-			"--request-timeout=8s",
-		]);
-		const raw = await commands.checked(
+		const commands = new EnvironmentCommands(
+			plan,
+			config.configDir,
+			"kubectl",
+			[
+				"--kubeconfig",
+				file,
+				"--context",
+				inspection.cluster.context,
+				"--server",
+				inspection.server,
+				"--request-timeout=8s",
+			],
+		);
+		return {
+			commands,
+			close: () => {
+				if (!commands.cleanupFailed)
+					fs.rmSync(scratch, { recursive: true, force: true });
+			},
+		};
+	} catch (error) {
+		fs.rmSync(scratch, { recursive: true, force: true });
+		throw error;
+	}
+}
+export async function inspectCluster(
+	config: Config,
+	inspection: ClusterInspection,
+	signal?: AbortSignal,
+) {
+	signal?.throwIfAborted();
+	const client = openClusterClient(config, inspection);
+	try {
+		const raw = await client.commands.checked(
 			["get", "namespace", "kube-system", "-o", "json"],
 			{ timeoutMs: 10000, signal, machine: true },
 		);
@@ -313,7 +341,6 @@ export async function inspectCluster(
 				"Read-only kube-system namespace identity; not workload readiness or cleanup/adoption authority",
 		};
 	} finally {
-		if (!commands?.cleanupFailed)
-			fs.rmSync(scratch, { recursive: true, force: true });
+		client.close();
 	}
 }

@@ -38,6 +38,11 @@ export function targetAvailability(target: Target): Availability {
 					"/bin/sh",
 				)
 			: result(false, "POSIX shell is not executable");
+	if (target.runtime === "kubernetes")
+		return result(
+			null,
+			"Kubernetes requires explicit context approval; client/API readiness is not probed",
+		);
 	if (
 		target.compose?.provider === "podman" &&
 		target.compose.network !== "isolated"

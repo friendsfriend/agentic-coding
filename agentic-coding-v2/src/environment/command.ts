@@ -25,6 +25,7 @@ export class EnvironmentCommands {
 			timeoutMs: number;
 			machine?: boolean;
 			effect?: boolean;
+			input?: string;
 		},
 	): Promise<{ exit: Exit; stdout: string }> {
 		options.signal?.throwIfAborted();
@@ -40,6 +41,7 @@ export class EnvironmentCommands {
 				executable: this.executable,
 				args: [...this.prefix, ...args],
 				privateOutput: options.machine,
+				input: options.input,
 				captureStdout: (chunk) => {
 					if (!options.machine) return;
 					bytes += Buffer.byteLength(chunk);
@@ -84,6 +86,7 @@ export class EnvironmentCommands {
 			timeoutMs: number;
 			machine?: boolean;
 			effect?: boolean;
+			input?: string;
 		},
 	) {
 		const result = await this.run(args, options);

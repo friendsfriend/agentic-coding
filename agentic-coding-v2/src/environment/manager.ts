@@ -3,15 +3,12 @@ import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
 import { loadProjects, type Plan, projectView } from "./catalog.ts";
-import {
-	type ClusterInspection,
-	inspectCluster,
-	loadClusters,
-	prepareCluster,
-} from "./cluster.ts";
+import { inspectCluster, loadClusters, prepareCluster } from "./cluster.ts";
+import type { ClusterInspection } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
+import { KubernetesProcess } from "./kubernetes.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
@@ -411,12 +408,14 @@ export class Environments {
 										this.config.stateDir,
 										id,
 									)
-								: new ContainerProcess(
-										plan,
-										this.config.configDir,
-										this.config.stateDir,
-										id,
-									);
+								: plan.runtime === "kubernetes"
+									? new KubernetesProcess(this.config, plan, id)
+									: new ContainerProcess(
+											plan,
+											this.config.configDir,
+											this.config.stateDir,
+											id,
+										);
 				this.live.set(id, process);
 				// Always attach finalization immediately, including startup/recording failure.
 				void process.done

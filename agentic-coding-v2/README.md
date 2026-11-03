@@ -69,7 +69,7 @@ Restart the host to discover changed user skills. Both kinds appear in the catal
 
 ## Environment management
 
-Environment management is native-task-owned, not workflow-owned. **POSIX shell and explicitly configured local Docker/Podman container targets** are implemented. Container behavior has executable-fixture coverage, not live-engine integration verification. A strict Compose subset and explicitly approved local Kubernetes API identity inspection are also implemented. Kubernetes app/Helm execution, infrastructure dependencies, endpoint discovery and database/telemetry tools are **not migrated yet**. The [environment parity ledger](docs/environment-parity.md) tracks remaining capabilities without claiming full parity. Definitions, leases, containers and processes from the previous host are never automatically imported or adopted.
+Environment management is native-task-owned, not workflow-owned. **POSIX shell and explicitly configured local Docker/Podman container targets** are implemented. Container behavior has executable-fixture coverage, not live-engine integration verification. A strict Compose subset and explicitly approved local Kubernetes API identity inspection are also implemented. An initial Kubernetes bare-pod run adapter is implemented for explicitly selected existing local contexts/namespaces. Helm, infrastructure dependencies, endpoint discovery and database/telemetry tools are **not migrated yet**. The [environment parity ledger](docs/environment-parity.md) tracks remaining capabilities without claiming full parity. Definitions, leases, containers and processes from the previous host are never automatically imported or adopted.
 
 Create `CONFIG_DIR/environments.json` (restart to discover definition changes):
 
@@ -114,7 +114,7 @@ Create `CONFIG_DIR/environments.json` (restart to discover definition changes):
 
 Repositories must already be explicitly authorized in `config.json`. IDs are lowercase kebab-case and unique within their scope. A library uses `"kind": "library"` and cannot have run targets. Only the documented fields are accepted; unsupported runtimes and unknown fields fail visibly instead of being silently ignored.
 
-Optional target `profile` defaults to `default`; `label` is a human-readable explicit selection alias. A project's `defaults` can name target IDs for `run`, `build` and `test`, including a non-default profile. Tools accept `target`, `profile` and `runtime`; explicit profile/provider choices can override a default. One resolver supplies tool selection and dashboard default reasons. Without a declaration, default-profile run selection prefers Docker, then Podman, then the Compose adapter, then shell; multiple same-runtime candidates and ambiguous build/test choices require an explicit selection. Kubernetes will require explicit opt-in rather than becoming an implicit fallback.
+Optional target `profile` defaults to `default`; `label` is a human-readable explicit selection alias. A project's `defaults` can name target IDs for `run`, `build` and `test`, including a non-default profile. Tools accept `target`, `profile` and `runtime`; explicit profile/provider choices can override a default. One resolver supplies tool selection and dashboard default reasons. Without a declaration, default-profile run selection prefers Docker, then Podman, then the Compose adapter, then shell; multiple same-runtime candidates and ambiguous build/test choices require an explicit selection. Kubernetes requires explicit `runtime: "kubernetes"` or a named Kubernetes target; it never becomes an implicit fallback.
 
 Catalogs expose conservative `availability` metadata: POSIX support, executable access and configured Unix-socket file/access checks. They do **not** invoke clients, connect to daemons, resolve secret references or establish startup health. Known-unavailable targets are excluded from implicit fallback; a missing declared default fails instead of silently choosing a replacement. Relative PATHs and secret-backed PATHs remain unverified until approved execution. Tools and dashboard defaults use the same eligibility results.
 
@@ -207,9 +207,40 @@ Optional `$CONFIG_DIR/clusters.json`:
 }
 ```
 
-This first Kubernetes increment is deliberately read-only. The kubeconfig must be config-contained and name the explicit context. Its selected server must use HTTPS on numeric loopback (`127.0.0.1` or `::1`). Only certificate/key or `tokenFile` references to files within the config directory are supported; inline credentials, exec/auth plugins, insecure TLS, proxies and remote/default contexts are not. Existing ordinary kind configs with inline credentials are therefore not supported yet. No real credentials or clusters were used to verify this increment.
+The status operation is deliberately read-only. The kubeconfig must be config-contained and name the explicit context. Its selected server must use HTTPS on numeric loopback (`127.0.0.1` or `::1`). Only certificate/key or `tokenFile` references to files within the config directory are supported; inline credentials, exec/auth plugins, insecure TLS, proxies and remote/default contexts are not. Existing ordinary kind configs with inline credentials are therefore not supported yet. No real credentials or clusters were used to verify this increment.
 
-The approved source digest is checked again before the CLI runs. Kubectl receives an isolated minimal client file containing only the selected connection and public credential **file references**, never copied credential values. Machine stdout/stderr stay private; only the validated API identity summary reaches the model. The client file is removed after confirmed local process cleanup. Conventional client environment variables are allowlisted; optional explicit `environment` mappings are shown in the approval, with kubeconfig/proxy overrides forbidden. The client is not an OS sandbox. This command never creates a cluster, installs an app, adopts resources or grants cleanup authority. Kubernetes app execution, Helm, port forwards and mutating cluster operations remain pending.
+The approved source digest is checked again before the CLI runs. Kubectl receives an isolated minimal client file containing only the selected connection and public credential **file references**, never copied credential values. Machine stdout/stderr stay private; only the validated API identity summary reaches the model. The client file is removed after confirmed local process cleanup. Conventional client environment variables are allowlisted; optional explicit `environment` mappings are shown in the approval, with kubeconfig/proxy overrides forbidden. The client is not an OS sandbox. This command never creates a cluster, installs an app, adopts resources or grants cleanup authority. Helm, port forwards and cluster creation/deletion remain pending. The separate bare-pod run adapter below has its own effect approval.
+
+### Task-owned bare pods
+
+A run target can now select Kubernetes explicitly:
+
+```json
+{
+  "id": "pods",
+  "action": "run",
+  "runtime": "kubernetes",
+  "timeoutMs": 30000,
+  "kubernetes": {
+    "cluster": "local",
+    "namespace": "development",
+    "image": "your-app:version",
+    "command": ["/app/server"],
+    "args": [],
+    "replicas": 1
+  }
+}
+```
+
+The namespace must already exist and cannot be `default` or `kube-*`. No namespaces, clusters, Helm releases, controllers, mounts, services or port forwards are created. Call `env_start` with `runtime: "kubernetes"`; optionally override `replicas` (1–16) for a problem that actually needs multiple replicas. The app slot, atomic batch acquisition, exact native review, cancellation and restart quarantine rules are unchanged. The configured local connection and kubeconfig digest are part of the approval.
+
+Only successful creation responses establish live pod UID receipts. Existing names are never adopted, even with matching labels. Cleanup verifies those UIDs and host/run labels, then sends Kubernetes DELETE requests with **UID and observed resource-version preconditions**, a five-second grace period and orphan propagation. Deletions are requested before waiting for absence so replica grace periods overlap. It never uses an unchecked name-based `kubectl delete` or deletes a namespace. Replacements, unconfirmed cleanup, interrupted writes and lost ownership retain the app reservation for authenticated inspection. Resource-version conflicts also fail closed rather than retrying an ambiguous mutation. Persisted pod IDs are diagnostics, not restart adoption authority.
+
+Readiness requires observed `Running` phase and Kubernetes `Ready=True`; without an application readiness probe this is **not proof of application health**. Probe configuration is not supported in this initial subset. Termination and UID ownership are monitored. Exit codes are reported only when observed; confirmed cleanup does not invent an application success code. Pod logs are deliberately unavailable until a read boundary can avoid name-replacement races. Shell/container logs are unaffected.
+
+Target `environment`/`secretRefs` become only explicitly declared Pod environment values, not the client host environment. **The API can persist these values and authorized cluster readers can read them. This is not Kubernetes Secret-object integration.** Locally they travel over private stdin, not argv or temporary manifest files; raw API output stays private. Requested containers drop capabilities and disable privilege escalation; automatic service-account token mounting is disabled. Cluster admission, configured images and commands remain trusted execution surfaces, not an OS sandbox.
+
+The small native functional scenario uses a disposable kubectl substitute: approval-before-effects, two ready pods receiving the configured image/environment, UID-checked cleanup preserving unrelated and copied-label replacement pods, app-exit-before-readiness rollback, and private output. No live Kubernetes installation, scheduler, image pull, application connectivity or Helm compatibility has been verified.
 
 ## Verification
 
