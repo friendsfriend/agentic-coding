@@ -1,4 +1,4 @@
-import type { Plan } from "./catalog.ts";
+import type { Plan } from "./model.ts";
 import { type Exit, ShellProcess } from "./shell.ts";
 
 /** Internal argv-only adapter. Machine-readable stdout is bounded in memory and

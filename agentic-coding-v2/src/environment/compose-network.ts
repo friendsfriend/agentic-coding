@@ -1,6 +1,6 @@
 import { digest, object } from "../config.ts";
-import type { Plan } from "./catalog.ts";
 import { EnvironmentCommands } from "./command.ts";
+import type { Plan } from "./model.ts";
 import type { RuntimeStatus } from "./process.ts";
 
 const hostLabel = "dev.agentic-coding.v2.host",

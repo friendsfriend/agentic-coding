@@ -3,21 +3,16 @@ import path from "node:path";
 import { type Config, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
-import { type Availability, targetAvailability } from "./availability.ts";
-import type { ClusterInspection } from "./cluster-types.ts";
-import {
-	type ComposeDefinition,
-	type ComposePlan,
-	compileCompose,
-	readCompose,
-} from "./compose-config.ts";
-import { type ContainerTarget, readContainer } from "./container-config.ts";
+import { targetAvailability } from "./availability.ts";
+import { compileCompose, readCompose } from "./compose-config.ts";
+import { readContainer } from "./container-config.ts";
 import { expandDependencies, validateDependencies } from "./dependencies.ts";
 import { readEndpoints } from "./endpoint.ts";
 import { readEndpointCaRefs } from "./endpoint-ca.ts";
-import { type EndpointAuth, readEndpointAuth } from "./http-options.ts";
-import { type KubernetesTarget, readKubernetes } from "./kubernetes-config.ts";
-import { type QueryConnection, readQueryConnection } from "./query-config.ts";
+import { readEndpointAuth } from "./http-options.ts";
+import { readKubernetes } from "./kubernetes-config.ts";
+import type { Plan, Project, Target } from "./model.ts";
+import { readQueryConnection } from "./query-config.ts";
 import {
 	type Action,
 	defaultTargets,
@@ -25,46 +20,6 @@ import {
 	selectTarget,
 } from "./selection.ts";
 
-export type { Action } from "./selection.ts";
-export type Target = {
-	id: string;
-	action: Action;
-	runtime: "shell" | "docker" | "podman" | "compose" | "kubernetes";
-	kubernetes?: KubernetesTarget;
-	container?: ContainerTarget;
-	compose?: ComposeDefinition;
-	availability?: Availability;
-	command: string;
-	profile?: string;
-	label?: string;
-	cwd: string;
-	timeoutMs: number;
-	readyText: string | null;
-	environment: Record<string, string>;
-	secretRefs: Record<string, string>;
-	endpoints?: Record<string, string>;
-	endpointCaRefs?: Record<string, string>;
-	endpointAuthRefs?: Record<string, EndpointAuth>;
-	queryConnection?: QueryConnection;
-};
-export type Project = {
-	id: string;
-	kind: "app" | "library" | "infrastructure";
-	repository: string;
-	targets: Target[];
-	requires?: string[];
-	defaults?: Partial<Record<Action, string>>;
-};
-export type Plan = Target & {
-	app: string;
-	projectKind?: Project["kind"];
-	requires?: string[];
-	dependencyBatch?: boolean;
-	workspace: string;
-	cwd: string;
-	composePlan?: ComposePlan;
-	clusterConnection?: ClusterInspection;
-};
 const identifier = (value: unknown) => {
 	const id = text(value, "environment identifier", 64);
 	if (!/^[a-z][a-z0-9-]*$/.test(id))

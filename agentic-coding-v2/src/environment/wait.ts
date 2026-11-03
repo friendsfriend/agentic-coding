@@ -1,4 +1,4 @@
-import type { Plan } from "./catalog.ts";
+import type { Plan } from "./model.ts";
 export type WaitReceipt = {
 	batch: string;
 	owner: number;

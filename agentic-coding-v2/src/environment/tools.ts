@@ -8,11 +8,11 @@ import {
 import { Type } from "typebox";
 import { requestReview } from "../reviews.ts";
 import type { TaskInfo } from "../state.ts";
-import { type Action, resolvePlans } from "./catalog.ts";
+import { resolvePlans } from "./catalog.ts";
 import { createHttpTools } from "./http-tools.ts";
 import type { Environments } from "./manager.ts";
 import { createQueryTools } from "./query-tools.ts";
-import type { Selection } from "./selection.ts";
+import type { Action, Selection } from "./selection.ts";
 import { environmentResult } from "./tool-result.ts";
 
 export const environmentInspectionTools = new Set([

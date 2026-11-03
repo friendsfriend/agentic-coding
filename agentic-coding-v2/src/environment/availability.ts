@@ -1,12 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Target } from "./catalog.ts";
-export type Availability = {
-	eligible: boolean | null;
-	reason: string;
-	probe: "not-performed";
-	executable?: string;
-};
+import type { Availability, Target } from "./model.ts";
+
 const result = (
 	eligible: boolean | null,
 	reason: string,

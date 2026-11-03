@@ -2,32 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { digest, object, text } from "../config.ts";
 import { contained } from "../git.ts";
-import type { Plan } from "./catalog.ts";
-import {
-	type ContainerTarget,
-	readContainer,
-	readLocalSocket,
-} from "./container-config.ts";
+import { readContainer, readLocalSocket } from "./container-config.ts";
+import type {
+	ComposeDefinition,
+	ComposePlan,
+	ComposeDependency as Dependency,
+	Plan,
+} from "./model.ts";
 
-export type ComposeDefinition = {
-	file: string;
-	provider: "docker" | "podman";
-	socket: string;
-	network: "shared" | "isolated";
-};
-type Dependency = {
-	id: string;
-	condition: "service_started" | "service_healthy";
-};
-export type ComposePlan = {
-	digest: string;
-	services: {
-		id: string;
-		container: ContainerTarget;
-		environment: Record<string, string>;
-		dependsOn: Dependency[];
-	}[];
-};
 function keys(value: Record<string, unknown>, allowed: string[]) {
 	if (Object.keys(value).some((key) => !allowed.includes(key)))
 		throw new Error(

@@ -1,7 +1,7 @@
-import type { Plan } from "./catalog.ts";
 import { containerPlans, verifyCompose } from "./compose-config.ts";
 import { ComposeNetwork } from "./compose-network.ts";
 import { ContainerProcess } from "./container.ts";
+import type { Plan } from "./model.ts";
 import type { EnvironmentProcess, Exit } from "./process.ts";
 
 /** A Compose file is compiled to independent, receipt-fenced creations, never

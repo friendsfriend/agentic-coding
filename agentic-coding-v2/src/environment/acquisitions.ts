@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { decode, type TaskInfo, values } from "../state.ts";
-import type { Plan } from "./catalog.ts";
+import type { Plan } from "./model.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
 import {
 	type EnvironmentRun,

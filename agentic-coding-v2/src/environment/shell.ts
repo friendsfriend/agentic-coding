@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseEnv } from "node:util";
 import { contained } from "../git.ts";
-import type { Plan } from "./catalog.ts";
 import { authentication } from "./http-options.ts";
+import type { Plan } from "./model.ts";
 import type { Exit, LogTiming } from "./process.ts";
 
 export type { Exit } from "./process.ts";

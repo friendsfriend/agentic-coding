@@ -1,6 +1,6 @@
 import { type Config, digest, object } from "../config.ts";
-import type { Plan } from "./catalog.ts";
 import { openClusterClient } from "./cluster.ts";
+import type { Plan } from "./model.ts";
 import type { EnvironmentProcess, Exit, RuntimeStatus } from "./process.ts";
 import { processEnvironment } from "./shell.ts";
 

@@ -3,9 +3,9 @@ import path from "node:path";
 import { type Config, digest, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
-import type { Plan } from "./catalog.ts";
 import type { Cluster, ClusterInspection } from "./cluster-types.ts";
 import { EnvironmentCommands } from "./command.ts";
+import type { Plan } from "./model.ts";
 
 function keys(data: Record<string, unknown>, allowed: string[]) {
 	if (Object.keys(data).some((key) => !allowed.includes(key)))

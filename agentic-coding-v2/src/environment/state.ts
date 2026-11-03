@@ -1,5 +1,5 @@
 import { defineDoc } from "@earendil-works/pi-durable";
-import type { Plan } from "./catalog.ts";
+import type { Plan } from "./model.ts";
 import type { LogTiming, RuntimeStatus, ServiceLog } from "./process.ts";
 
 export const EnvironmentState = defineDoc<{

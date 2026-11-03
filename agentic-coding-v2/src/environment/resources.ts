@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { digest } from "../config.ts";
-import type { Plan } from "./catalog.ts";
 import { containerPlans } from "./compose-config.ts";
+import type { Plan } from "./model.ts";
 
 function localSocket(value: string) {
 	try {

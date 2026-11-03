@@ -3,9 +3,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { digest } from "../config.ts";
 import { contained } from "../git.ts";
-import type { Plan } from "./catalog.ts";
 import { EnvironmentCommands } from "./command.ts";
 import { inspectContainer, type Observation } from "./container-observation.ts";
+import type { Plan } from "./model.ts";
 import type { RuntimeStatus } from "./process.ts";
 import { type Exit, ShellProcess } from "./shell.ts";
 

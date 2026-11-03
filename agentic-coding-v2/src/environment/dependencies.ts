@@ -1,4 +1,4 @@
-import type { Plan, Project } from "./catalog.ts";
+import type { Plan, Project } from "./model.ts";
 /** Definitions are closed, same-repository graphs, not requests to discover/adopt services. */
 export function validateDependencies(projects: Project[]) {
 	const visited = new Set<string>();
