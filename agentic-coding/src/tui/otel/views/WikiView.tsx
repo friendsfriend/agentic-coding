@@ -15,6 +15,8 @@ import {
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import {
+	type Accessor,
+	batch,
 	createEffect,
 	createMemo,
 	createSignal,
@@ -142,6 +144,30 @@ export function WikiView(props: WikiViewProps) {
 			? flattenWikiTree(current.tree, expanded())
 			: [];
 	});
+	const renderTreeRow = (
+		row: Accessor<WikiTreeNode>,
+		selectedRow: Accessor<boolean>,
+		index: Accessor<number>,
+	) => (
+		<Selectable
+			height={1}
+			selected={selectedRow()}
+			onMouseUp={() => setSelected(index())}
+			onActivate={() => dispatch("Enter")}
+		>
+			<box height={1}>
+				<text fg={uiColors.textPrimary}>
+					{"  ".repeat(row().depth)}
+					{row().kind === "directory"
+						? expanded().has(row().id)
+							? "▾ "
+							: "▸ "
+						: "• "}
+					{row().label}
+				</text>
+			</box>
+		</Selectable>
+	);
 	const concepts = createMemo<WikiConcept[]>(() => {
 		const current = state();
 		return current.kind === "ready" ? current.concepts : [];
@@ -193,7 +219,9 @@ export function WikiView(props: WikiViewProps) {
 	);
 
 	const refresh = () => {
-		setState({ kind: "loading" });
+		// Reads are synchronous. Keep an existing ready tree mounted until the
+		// result is known instead of disposing it through a transient loading state.
+		if (state().kind !== "ready") setState({ kind: "loading" });
 		try {
 			const listed = listConcepts();
 			const tree = buildWikiTree(listed);
@@ -207,13 +235,15 @@ export function WikiView(props: WikiViewProps) {
 				}
 			};
 			visit(tree);
-			setExpanded(open);
-			setSelected(0);
-			setState(
-				listed.length
-					? { kind: "ready", concepts: listed, tree }
-					: { kind: "empty" },
-			);
+			batch(() => {
+				setExpanded(open);
+				setSelected(0);
+				setState(
+					listed.length
+						? { kind: "ready", concepts: listed, tree }
+						: { kind: "empty" },
+				);
+			});
 		} catch (error) {
 			showErrorModal(
 				"Wiki unavailable",
@@ -460,32 +490,21 @@ export function WikiView(props: WikiViewProps) {
 					<box style={{ width: "100%", flexDirection: "column" }}>
 						<ScrollableList
 							items={rows()}
+							itemKey={(row) => JSON.stringify([row.kind, row.id])}
 							selectedIndex={selected()}
 							// The wheel moves the tree cursor exactly as `j`/`k` do.
 							onSelect={setSelected}
 							availableLines={hostBodyLines(size().height)}
 							estimatedItemHeight={1}
 							showScrollIndicator={false}
-							renderItem={(row, isSelected, index) => (
-								<Selectable
-									height={1}
-									selected={isSelected()}
-									onMouseUp={() => setSelected(index)}
-									onActivate={() => dispatch("Enter")}
-								>
-									<box height={1}>
-										<text fg={uiColors.textPrimary}>
-											{"  ".repeat(row.depth)}
-											{row.kind === "directory"
-												? expanded().has(row.id)
-													? "▾ "
-													: "▸ "
-												: "• "}
-											{row.label}
-										</text>
-									</box>
-								</Selectable>
-							)}
+							renderItem={(row, selected, index) =>
+								renderTreeRow(
+									() => row,
+									selected,
+									() => index,
+								)
+							}
+							renderReactiveItem={renderTreeRow}
 						/>
 					</box>
 				</box>
