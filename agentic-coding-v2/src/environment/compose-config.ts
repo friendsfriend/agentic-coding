@@ -118,7 +118,20 @@ export function compileCompose(
 	workspace: string,
 	definition: ComposeDefinition,
 ): ComposePlan {
-	const input = source(workspace, definition);
+	return compileComposeSource(
+		workspace,
+		definition,
+		source(workspace, definition),
+	);
+}
+/** Parse already captured source without reopening it. This creates data only,
+ * never an approved plan or authority to contact an engine. */
+export function compileComposeSource(
+	workspace: string,
+	definition: ComposeDefinition,
+	input: { source: string; contentDigest: string },
+): ComposePlan {
+	const file = contained(workspace, definition.file);
 	if (input.source.includes("${"))
 		throw new Error(
 			"Compose interpolation is unsupported; declare literals or target secretRefs explicitly",
@@ -141,7 +154,7 @@ export function compileCompose(
 			workspace,
 			contained(
 				workspace,
-				path.join(path.relative(workspace, path.dirname(input.file)), selected),
+				path.join(path.relative(workspace, path.dirname(file)), selected),
 			),
 		);
 	};

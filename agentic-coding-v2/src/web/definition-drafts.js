@@ -26,9 +26,27 @@ export function definitionDrafts(request) {
 	status.setAttribute("role", "status");
 	const report = element(
 		"pre",
-		"No metadata preflight loaded. Reports are historical; never runtime validation or approval.",
+		"No preflight loaded. Reports are historical; never runtime validation or approval.",
 	);
 	report.setAttribute("aria-label", "Historical definition preflight");
+	const sourceApp = element("input");
+	sourceApp.setAttribute("aria-label", "Compose source app ID");
+	sourceApp.maxLength = 128;
+	const sourceTarget = element("input");
+	sourceTarget.setAttribute("aria-label", "Compose source target ID");
+	sourceTarget.maxLength = 128;
+	const sourcePermission = element("input");
+	sourcePermission.type = "checkbox";
+	sourcePermission.setAttribute(
+		"aria-label",
+		"Allow selected public Compose source read",
+	);
+	const sourceLabel = element(
+		"label",
+		"Allow one bounded public Compose file read (no .env/providers, links, source publication or execution)",
+	);
+	sourceLabel.prepend(sourcePermission);
+	let pendingSource = null;
 	let current = null,
 		savedText = empty,
 		pending = null,
@@ -40,7 +58,7 @@ export function definitionDrafts(request) {
 			"Discard unsaved draft edits? Saved native revisions remain unchanged.",
 		);
 	const busy = async (action) => {
-		const controls = panel.querySelectorAll("button, select, textarea");
+		const controls = panel.querySelectorAll("button, select, textarea, input");
 		controls.forEach((control) => {
 			control.disabled = true;
 		});
@@ -80,6 +98,7 @@ export function definitionDrafts(request) {
 				`/api/environments/drafts?id=${encodeURIComponent(selector.value)}`,
 			);
 			current = draft;
+			sourcePermission.checked = false;
 			pending = null;
 			editor.value = draft.content;
 			savedText = editor.value;
@@ -91,6 +110,7 @@ export function definitionDrafts(request) {
 	const fresh = button("New empty staged draft", () => {
 		if (!discard()) return;
 		current = null;
+		sourcePermission.checked = false;
 		pending = null;
 		editor.value = empty;
 		savedText = empty;
@@ -122,6 +142,7 @@ export function definitionDrafts(request) {
 					"Saved receipt exists, but another editor advanced the draft. Load current explicitly before retrying",
 				);
 			current = draft;
+			sourcePermission.checked = false;
 			savedText = editor.value;
 			pending = null;
 			status.textContent = describe(draft);
@@ -156,7 +177,42 @@ export function definitionDrafts(request) {
 				current.preflightReports = refreshed.preflightReports;
 			}),
 	);
-	const loadReport = button("Load latest saved metadata preflight", () =>
+	const sourceCheck = button(
+		"Check selected Compose source (no execution)",
+		() =>
+			busy(async () => {
+				const permitted = sourcePermission.checked;
+				sourcePermission.checked = false;
+				if (!current || dirty() || !permitted)
+					throw Error(
+						"Save exact edits and explicitly allow the selected public source read first",
+					);
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						digest: current.digest,
+						readComposeSource: true,
+						app: sourceApp.value,
+						target: sourceTarget.value,
+					},
+					fingerprint = JSON.stringify(body);
+				if (!pendingSource || pendingSource.fingerprint !== fingerprint)
+					pendingSource = { fingerprint, requestId: crypto.randomUUID() };
+				try {
+					const observed = await request("/api/environments/drafts/preflight", {
+						...body,
+						requestId: pendingSource.requestId,
+					});
+					pendingSource = null;
+					report.textContent = JSON.stringify(observed, null, 2);
+					status.textContent =
+						"Historical selected-source report saved (accepted or refused). Source text/values withheld; NOT full-source/runtime validation or promotion approval.";
+				} finally {
+					sourcePermission.checked = false;
+				}
+			}),
+	);
+	const loadReport = button("Load latest saved preflight", () =>
 		busy(async () => {
 			if (!current) throw Error("Load a saved draft first");
 			const latest = await request(
@@ -187,6 +243,15 @@ export function definitionDrafts(request) {
 		editor,
 		save,
 		preflight,
+		element(
+			"p",
+			"Optional offline source check: enter the exact saved Compose app/target IDs. Only conventional compose[.profile].yml/yaml or docker-compose[.profile].yml/yaml files in non-private directories are eligible.",
+			"meta",
+		),
+		sourceApp,
+		sourceTarget,
+		sourceLabel,
+		sourceCheck,
 		loadReport,
 		status,
 		report,

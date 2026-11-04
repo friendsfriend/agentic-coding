@@ -5,6 +5,7 @@ import { defineDoc, type Harness } from "@earendil-works/pi-durable";
 import { type Config, digest, text } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
 import { inspectDefinition } from "./definition-preflight.ts";
+import { inspectComposeSource } from "./definition-source-check.ts";
 
 type Base = {
 	destination: string;
@@ -42,7 +43,10 @@ const Preflights = defineDoc<{
 	initial: () => ({ reports: {}, requests: {} }),
 	checkpointWhen: () => true,
 });
-type Preflight = ReturnType<typeof inspectDefinition> & {
+type Preflight = (
+	| ReturnType<typeof inspectDefinition>
+	| ReturnType<typeof inspectComposeSource>
+) & {
 	id: string;
 	draftId: string;
 	revision: number;
@@ -235,7 +239,16 @@ export class DefinitionDrafts {
 		privateState(this.config);
 		if (
 			Object.keys(body).some(
-				(key) => !["requestId", "id", "revision", "digest"].includes(key),
+				(key) =>
+					![
+						"requestId",
+						"id",
+						"revision",
+						"digest",
+						"readComposeSource",
+						"app",
+						"target",
+					].includes(key),
 			)
 		)
 			throw new Error("Unsupported preflight field");
@@ -249,8 +262,25 @@ export class DefinitionDrafts {
 			Number(body.revision) < 1
 		)
 			throw new Error("Preflight requires exact draft revision and digest");
+		const readSource = body.readComposeSource === true;
+		if (
+			(body.readComposeSource !== undefined && !readSource) ||
+			(!readSource && (body.app !== undefined || body.target !== undefined))
+		)
+			throw new Error(
+				"Source reads require explicit readComposeSource: true and exact app/target",
+			);
+		const selection = readSource
+			? {
+					readComposeSource: true,
+					app: text(body.app, "source app", 128),
+					target: text(body.target, "source target", 128),
+				}
+			: null;
+		const binding = { id, revision: body.revision, digest: contentDigest };
+		// Preserve the exact request binding of previously issued metadata receipts.
 		const request = digest(
-				JSON.stringify({ id, revision: body.revision, digest: contentDigest }),
+				JSON.stringify(selection ? { ...binding, ...selection } : binding),
 			),
 			key = digest(requestId);
 		return this.engine().commit(async (tx) => {
@@ -275,7 +305,14 @@ export class DefinitionDrafts {
 			if (draft.revision !== body.revision || draft.digest !== contentDigest)
 				throw new Error("Draft changed; load current before preflight");
 			const report: Preflight = {
-				...inspectDefinition(this.config, draft.content),
+				...(selection
+					? inspectComposeSource(
+							this.config,
+							draft.content,
+							selection.app,
+							selection.target,
+						)
+					: inspectDefinition(this.config, draft.content)),
 				id: `preflight-${key}`,
 				draftId: id,
 				revision: draft.revision,
@@ -284,7 +321,7 @@ export class DefinitionDrafts {
 				ordinal: Object.keys(reports.reports).length + 1,
 				historical: true,
 				authority:
-					"Metadata observations only. No saved report restores source identity, readiness, execution, review approval or promotion authority; sources may already have changed.",
+					"Historical preflight data only. No saved report restores source identity, readiness, execution, review approval or promotion authority; sources may already have changed.",
 			};
 			reports.reports[report.id] = JSON.stringify(report);
 			reports.requests[key] = JSON.stringify({ request, id: report.id });
