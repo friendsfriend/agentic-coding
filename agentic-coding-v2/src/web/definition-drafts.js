@@ -61,6 +61,7 @@ export function definitionDrafts(request) {
 		"Accept CURRENT file/absence as the base now (not its original staging-time state; no promotion approval)",
 	);
 	acceptBaseLabel.prepend(acceptBase);
+	let pendingCandidate = null;
 	let pendingBaseSave = null,
 		pendingBaseCheck = null;
 	let sourceSavedText = "",
@@ -443,6 +444,35 @@ export function definitionDrafts(request) {
 					"Historical live-vs-established-base comparison saved. Does NOT compare staged text with live content, guarantee atomic publication or grant promotion approval.";
 			}),
 	);
+	const candidateCheck = button(
+		"Check saved Compose candidate (offline; no publish)",
+		() =>
+			busy(async () => {
+				sourcePermission.checked = false;
+				acceptBase.checked = false;
+				if (!current || dirty())
+					throw Error(
+						"Save all exact JSON/source edits before candidate check",
+					);
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						digest: current.digest,
+						validateStagedCandidate: true,
+					},
+					fingerprint = JSON.stringify(body);
+				if (!pendingCandidate || pendingCandidate.fingerprint !== fingerprint)
+					pendingCandidate = { fingerprint, requestId: crypto.randomUUID() };
+				const observed = await request("/api/environments/drafts/preflight", {
+					...body,
+					requestId: pendingCandidate.requestId,
+				});
+				pendingCandidate = null;
+				report.textContent = JSON.stringify(observed, null, 2);
+				status.textContent =
+					"Historical saved-input candidate manifest/Compose-subset report. NOT isolated-tree validation, fresh base comparison, runtime readiness, review or promotion approval.";
+			}),
+	);
 	const loadReport = button("Load latest saved preflight", () =>
 		busy(async () => {
 			if (!current) throw Error("Load a saved draft first");
@@ -495,6 +525,7 @@ export function definitionDrafts(request) {
 		acceptBaseLabel,
 		captureBase,
 		compareBase,
+		candidateCheck,
 		loadReport,
 		status,
 		report,

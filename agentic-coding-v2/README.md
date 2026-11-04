@@ -113,6 +113,16 @@ A fresh `compareSourceBase: true` preflight with the exact current draft binding
 
 These are conservative **point-in-time observations, not atomic publication fences**: directory namespace ABA races are not excluded by the path-based checks. Neither parsing nor a matching report permits promotion or establishes an original staging-time base. Complete isolated staging/validation, race-safe exact-content human-reviewed publication and original per-path base handling remain required. No model write tool, runtime task, review, live reload or promotion is added.
 
+### Saved Compose-candidate manifests
+
+**Check saved Compose candidate (offline; no publish)** uses authenticated `POST /api/environments/drafts/preflight` with `{requestId, id, revision, digest, validateStagedCandidate: true}`. This whole-candidate mode cannot combine with selected-source modes or app/target fields. It checks only the saved JSON and staged text, using the existing native Compose-subset parser. Live source bytes and bind contents are never imported/read; containment/bind metadata may be inspected. Save all editor buffers first. This operation consumes any pending UI source-read/base acceptance checkboxes without using them.
+
+The versioned `candidateDigest` binds the exact saved JSON digest, authorized repository-list digest, and sorted unique repository/file bindings with each source-text digest and complete known base-observation descriptor digest (or an explicit unobserved base). Re-saving identical inputs preserves this digest even if the draft revision advances or internal source order changes; changing source text, JSON or an established base changes it. Reports still bind their original draft revision. Source text, service identifiers, commands, environment values and compiled plans are withheld; only hashes/counts and target-level coverage are reported.
+
+Acceptance requires at least one declared target, every declared target to be a supported Compose target with matching saved source bytes successfully parsed, and no orphaned staged source bindings. Multiple targets may share one source. Missing/refused/unsupported targets and orphan bindings prevent acceptance; invalid JSON/source/base integrity produces a data-free refusal. Bounds are 32 projects / 128 targets and the existing 4 files / 128 KiB total (64 KiB each); the same private 64-report history/exact retry protocol applies. Retargeted/orphan sources are retained rather than silently discarded; until source removal is supported, start a separate draft to discard obsolete bindings.
+
+**Candidate acceptance is not isolated-tree or runtime validation.** Bases are bound but not freshly compared. Bind contents, auxiliary/provider/private inputs, complete staged trees, namespace-race-safe publication and independently reviewed exact-content promotion remain pending. Reports explicitly set isolated-tree, base-freshness, bind-content, runtime and publication flags false; no model tool, task, review, live catalog mutation or promotion capability is added.
+
 Create `CONFIG_DIR/environments.json` manually for live use (restart to discover definition changes):
 
 ```json

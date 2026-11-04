@@ -151,7 +151,7 @@ export function inspectComposeSource(
 		const plan = compileComposeSource(project.repository, definition, captured);
 		return {
 			...scope,
-			accepted: true,
+			accepted: true as const,
 			checkedSource,
 			compiledDigest: digest(JSON.stringify(plan)),
 			serviceCount: plan.services.length,
@@ -166,7 +166,7 @@ export function inspectComposeSource(
 	} catch {
 		return {
 			...scope,
-			accepted: false,
+			accepted: false as const,
 			checkedSource,
 			message:
 				"Source check refused: invalid draft/selection, unsupported/private name, link/hard link, escaping/changed/unavailable/oversized/non-UTF8 file, or unsupported native Compose syntax/bind path. Values, source text and parser/filesystem errors withheld. No runtime validation or promotion authority.",

@@ -4,6 +4,7 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import { defineDoc, type Harness } from "@earendil-works/pi-durable";
 import { type Config, digest, text } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
+import { inspectStagedCandidate } from "./definition-candidate.ts";
 import {
 	type Base,
 	captureSourceBase,
@@ -15,6 +16,7 @@ import {
 	stored,
 } from "./definition-draft-data.ts";
 import { inspectDefinition } from "./definition-preflight.ts";
+import { preflightRequest } from "./definition-preflight-request.ts";
 import {
 	inspectSourceBase,
 	observeSourceBase,
@@ -45,6 +47,7 @@ type Preflight = (
 	| ReturnType<typeof inspectDefinition>
 	| ReturnType<typeof inspectComposeSource>
 	| ReturnType<typeof inspectSourceBase>
+	| ReturnType<typeof inspectStagedCandidate>
 ) & {
 	id: string;
 	draftId: string;
@@ -227,78 +230,16 @@ export class DefinitionDrafts {
 	}
 	async preflight(body: Record<string, unknown>) {
 		privateState(this.config);
-		if (
-			Object.keys(body).some(
-				(key) =>
-					![
-						"requestId",
-						"id",
-						"revision",
-						"digest",
-						"readComposeSource",
-						"useStagedSource",
-						"compareSourceBase",
-						"app",
-						"target",
-					].includes(key),
-			)
-		)
-			throw new Error("Unsupported preflight field");
-		const requestId = text(body.requestId, "preflight request ID", 128),
-			id = text(body.id, "draft ID", 80),
-			contentDigest = text(body.digest, "draft digest", 64);
-		this.id(id);
-		if (
-			!/^[a-f0-9]{64}$/.test(contentDigest) ||
-			!Number.isSafeInteger(body.revision) ||
-			Number(body.revision) < 1
-		)
-			throw new Error("Preflight requires exact draft revision and digest");
-		const compareBase = body.compareSourceBase === true;
-		if (
-			(body.compareSourceBase !== undefined && !compareBase) ||
-			(compareBase &&
-				(body.readComposeSource !== undefined ||
-					body.useStagedSource !== undefined))
-		)
-			throw new Error(
-				"Base comparisons require explicit compareSourceBase: true without other source modes",
-			);
-		const stagedSource = body.useStagedSource === true;
-		if (
-			(body.useStagedSource !== undefined && !stagedSource) ||
-			(stagedSource && body.readComposeSource !== undefined)
-		)
-			throw new Error(
-				"Staged checks require useStagedSource: true, without repository-read opt-in",
-			);
-		const readSource =
-			body.readComposeSource === true || stagedSource || compareBase;
-		if (
-			(body.readComposeSource !== undefined &&
-				body.readComposeSource !== true) ||
-			(!readSource && (body.app !== undefined || body.target !== undefined))
-		)
-			throw new Error(
-				"Source reads require explicit readComposeSource: true and exact app/target",
-			);
-		const selection = readSource
-			? {
-					...(compareBase
-						? { compareSourceBase: true }
-						: stagedSource
-							? { useStagedSource: true }
-							: { readComposeSource: true }),
-					app: text(body.app, "source app", 128),
-					target: text(body.target, "source target", 128),
-				}
-			: null;
-		const binding = { id, revision: body.revision, digest: contentDigest };
-		// Preserve the exact request binding of previously issued metadata receipts.
-		const request = digest(
-				JSON.stringify(selection ? { ...binding, ...selection } : binding),
-			),
-			key = digest(requestId);
+		const {
+			id,
+			contentDigest,
+			candidate,
+			compareBase,
+			stagedSource,
+			selection,
+			request,
+			key,
+		} = preflightRequest(body);
 		return this.engine().commit(async (tx) => {
 			const reports = await tx.doc(Preflights),
 				recorded = reports.requests[key];
@@ -351,16 +292,18 @@ export class DefinitionDrafts {
 					"No established source base; explicit capture/acceptance required",
 				);
 			const report: Preflight = {
-				...(comparison ??
-					(selection
-						? inspectComposeSource(
-								this.config,
-								draft.content,
-								selection.app,
-								selection.target,
-								staged,
-							)
-						: inspectDefinition(this.config, draft.content))),
+				...(candidate
+					? inspectStagedCandidate(this.config, draft)
+					: (comparison ??
+						(selection
+							? inspectComposeSource(
+									this.config,
+									draft.content,
+									selection.app,
+									selection.target,
+									staged,
+								)
+							: inspectDefinition(this.config, draft.content)))),
 				id: `preflight-${key}`,
 				draftId: id,
 				revision: draft.revision,
