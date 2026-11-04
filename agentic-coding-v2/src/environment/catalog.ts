@@ -275,6 +275,21 @@ export function loadProjects(config: Config): Project[] {
 			`Invalid environment configuration: ${file}; values are not logged`,
 		);
 	}
+	return parseProjects(config, data, (value) =>
+		fs.realpathSync(text(value, "environment repository", 4096)),
+	);
+}
+/** Schema-only parsing never opens repositories, referenced files, sockets or engines. */
+export function validateProjects(config: Config, value: unknown): Project[] {
+	return parseProjects(config, object(value), (value) =>
+		text(value, "environment repository", 4096),
+	);
+}
+function parseProjects(
+	config: Config,
+	data: Record<string, unknown>,
+	repositoryPath: (value: unknown) => string,
+): Project[] {
 	keysOnly(data, ["version", "projects"]);
 	if (data.version !== 1 || !Array.isArray(data.projects))
 		throw new Error(
@@ -310,9 +325,7 @@ export function loadProjects(config: Config): Project[] {
 			throw new Error(
 				"Environment project needs kind app/library/infrastructure and targets",
 			);
-		const repository = fs.realpathSync(
-			text(entry.repository, "environment repository", 4096),
-		);
+		const repository = repositoryPath(entry.repository);
 		if (!config.repositories.includes(repository))
 			throw new Error(
 				"Environment repository is not authorized by application configuration",

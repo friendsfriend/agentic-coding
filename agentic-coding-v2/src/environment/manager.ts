@@ -11,6 +11,7 @@ import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
 import { discoverDefinitions } from "./discovery.ts";
+import { DefinitionDrafts } from "./drafts.ts";
 import { HeldHttp } from "./http-manager.ts";
 import type { HttpReceipt } from "./http-receipts.ts";
 import { IdleLifecycle } from "./idle.ts";
@@ -49,6 +50,7 @@ function recentRuns(runs: EnvironmentRun[], history: number) {
  * Unknown effects after restart stay quarantined until authenticated inspection. */
 export class Environments {
 	readonly projects;
+	readonly drafts: DefinitionDrafts;
 	readonly clusters;
 	readonly http: HeldHttp;
 	readonly database: DatabaseDiagnostics;
@@ -68,6 +70,7 @@ export class Environments {
 	private dependencyCleanup = new Map<number, Promise<void>>();
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
+		this.drafts = new DefinitionDrafts(config, () => this.store);
 		this.idle = new IdleLifecycle(config.configDir, {
 			store: () => this.store,
 			eligible: (run) => this.canIdleRun(run),

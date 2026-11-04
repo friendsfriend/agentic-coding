@@ -12,6 +12,7 @@ import authenticatedMessage from "./web/authenticated-message.js" with {
 	type: "text",
 };
 import discovery from "./web/definition-discovery.js" with { type: "text" };
+import drafts from "./web/definition-drafts.js" with { type: "text" };
 import dom from "./web/dom.js" with { type: "text" };
 import diagnostics from "./web/environment-diagnostics.js" with {
 	type: "text",
@@ -120,6 +121,7 @@ export function serve(app: Runtime, port = 0) {
 			{ content: authenticatedMessage, type: "text/javascript" },
 		],
 		["/dom.js", { content: dom, type: "text/javascript" }],
+		["/definition-drafts.js", { content: drafts, type: "text/javascript" }],
 		[
 			"/definition-discovery.js",
 			{ content: discovery, type: "text/javascript" },
@@ -225,6 +227,23 @@ export function serve(app: Runtime, port = 0) {
 				}
 				if (
 					request.method === "GET" &&
+					url.pathname === "/api/environments/drafts"
+				) {
+					if (
+						[...url.searchParams.keys()].some((key) => key !== "id") ||
+						url.searchParams.getAll("id").length > 1
+					)
+						throw new Error("Unknown or repeated draft query parameter");
+					return json(
+						url.searchParams.has("id")
+							? await app.environments.drafts.read(
+									text(url.searchParams.get("id"), "draft ID", 80),
+								)
+							: await app.environments.drafts.list(),
+					);
+				}
+				if (
+					request.method === "GET" &&
 					url.pathname === "/api/environments/logs"
 				) {
 					const { app: project, options } = environmentLogQuery(
@@ -263,6 +282,8 @@ export function serve(app: Runtime, port = 0) {
 							text(body.requestId, "request ID", 256),
 						),
 					});
+				if (url.pathname === "/api/environments/drafts")
+					return json(await app.environments.drafts.save(body));
 				if (url.pathname === "/api/environments/revoke")
 					return json(await app.environments.operator.revoke(body));
 				if (url.pathname === "/api/environments/actions")

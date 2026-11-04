@@ -77,7 +77,15 @@ The dashboard's **Discover environment definition hints** panel works for every 
 
 This is a bounded, root-only hint scan, not authoring or validation: only `package.json` contents (at most 64 KiB) are parsed; script bodies are withheld. Known lock/build/container filenames are metadata only, and symlinks are not followed. Unambiguous declared/lock-file package-manager evidence yields at most 24 untrusted script invocations with explicit omissions and a 12 KiB response bound. Conflicting or unknown manager evidence does not invent an npm/Bun default. Source digests are observations, not approval authority. No commands/CLI probes, `.env`/provider reads, definitions written/imported, catalog reloads, readiness claims or executable targets result. Invocations are **not** importable v2 target definitions. Nested/custom layouts, full definition editing, staged validation and conflict-safe approved promotion remain pending; this is not an OS filesystem sandbox.
 
-Create `CONFIG_DIR/environments.json` (restart to discover definition changes):
+### Private staged definition JSON (initial subset)
+
+The dashboard's **Private staged environment JSON** editor and authenticated `GET/POST /api/environments/drafts` stage whole `environments.json` text in private native documents, not in the repository or live configuration. This developer-only API is deliberately **not** a model tool. It starts empty: no live definition content, `.env`, provider credentials or auxiliary files are copied. Do not paste credentials; use `secretRefs`. Storage is plaintext native state, not encryption; admission requires an existing private POSIX-mode state directory outside every authorized repository (not an OS/ACL sandbox).
+
+Save with `{requestId, content}`; edit with `{requestId, id, revision, content}`. GET without `id` lists metadata; GET with `?id=...` explicitly loads content. Saves bind retries to exact input and fence concurrent/stale revisions. A replay returns the original save receipt, not a claim that its revision is still current. The UI preserves text on failure and requires explicit loading before resolving conflicts. Limits: 64 KiB per draft, 16 current drafts and 256 durable request receipts; automatic pruning/deletion is unsupported.
+
+Invalid JSON/schema text can be saved for editing. Loading recomputes **schema-only** checks against exact current authorized repository paths and binds the report to content/repository digests. It never opens referenced project files, probes engines or executes targets. An original absent/regular-file base digest is captured without copying live content; changed/unavailable base observations are visible, never automatic rebase or promotion authority. Symlinked/nonregular/over-64-KiB live definition bases are refused for creation. No live writes, reloads, task admission, approval or promotion result. Auxiliary-file staging, broader editing/symlinks, model-authorized draft writes, separately approved real-path validation, exact-content approval and conflict-safe durable promotion remain pending.
+
+Create `CONFIG_DIR/environments.json` manually for live use (restart to discover definition changes):
 
 ```json
 {

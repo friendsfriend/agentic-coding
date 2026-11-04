@@ -1,5 +1,6 @@
 import { authenticatedMessage } from "/authenticated-message.js";
 import { definitionDiscovery } from "/definition-discovery.js";
+import { definitionDrafts } from "/definition-drafts.js";
 import { button, element } from "/dom.js";
 import { environmentDiagnostics } from "/environment-diagnostics.js";
 import {
@@ -19,7 +20,7 @@ let pageActive = true;
 let refreshing;
 const notice = lifecycleNotices($("environment-notices"), openOwner);
 const discovery = definitionDiscovery(api);
-$("definition-discovery").append(discovery.panel);
+$("definition-discovery").append(discovery.panel, definitionDrafts(api));
 let revision = "";
 const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
 let token = fragmentToken;
