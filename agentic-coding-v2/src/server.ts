@@ -242,6 +242,16 @@ export function serve(app: Runtime, port = 0) {
 				}
 				if (
 					request.method === "GET" &&
+					url.pathname === "/api/environments/drafts/promotions"
+				) {
+					if (url.searchParams.size)
+						throw new Error(
+							"Promotion history does not accept query parameters",
+						);
+					return json(await app.environments.drafts.promotions());
+				}
+				if (
+					request.method === "GET" &&
 					url.pathname === "/api/environments/drafts/promotion"
 				) {
 					if (

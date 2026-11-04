@@ -498,3 +498,7 @@ Desloppify is installed locally in `.desloppify/venv`; its state and generated a
 #### Promotion replay and uncertain acknowledgements
 
 Approval equality is required **before receipt lookup**, including historical retries: a well-formed but different approval digest is refused even when the request ID already has a successful receipt. Valid historical retries preserve their original request identity and return the original record; they do not inspect or rewrite the live file. The UI labels promotion results historical and displays a separately loaded destination observation instead of claiming the receipt proves current file contents. A failed response or subsequent UI refresh does not prove that no write happened: inspect the destination and resolve the original request receipt, rather than inventing a new approval or assuming rollback.
+
+#### Discoverable promotion history
+
+`GET /api/environments/drafts/promotions` returns the bounded (maximum 64) immutable history index, newest ordinal first: record/draft IDs, revision, digest, outcome, observation time and ordinal only. It requires authentication and rejects all query parameters. **List historical configuration promotions** and **Load selected historical promotion** work independently of the current draft, including after draft deletion, without changing unsaved editor text. Loading uses a separate historical promotion display. Neither operation reads the live destination, acquires a publication lock, approves, reloads or writes configuration.

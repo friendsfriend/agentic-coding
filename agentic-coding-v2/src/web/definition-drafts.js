@@ -6,7 +6,7 @@ export function definitionDrafts(request) {
 	panel.append(
 		element(
 			"p",
-			"Developer-only drafts in private native state, outside repositories. This editor neither copies live configuration nor publishes, reloads or runs targets. Do not paste credentials; use secretRefs. Schema-only checks are not runtime validation or promotion approval. Initial scope: whole environments.json, regular/absent base, no auxiliary files or symlink editing.",
+			"Developer-only drafts in private native state, outside repositories. Editing never copies live configuration, publishes, reloads or runs targets; the separate exact-digest-confirmed promotion action writes only the configuration document. Do not paste credentials; use secretRefs. Schema-only checks are not runtime validation or promotion approval. Initial scope: whole environments.json, regular/absent base, no auxiliary files or symlink editing.",
 			"meta",
 		),
 	);
@@ -612,6 +612,46 @@ export function definitionDrafts(request) {
 				await refreshList();
 			}),
 	);
+	const promotionSelector = element("select");
+	promotionSelector.setAttribute(
+		"aria-label",
+		"Historical configuration promotions",
+	);
+	const promotionReport = element("pre", "No historical promotion loaded.");
+	promotionReport.setAttribute(
+		"aria-label",
+		"Historical configuration promotion",
+	);
+	const listPromotions = button(
+		"List historical configuration promotions",
+		() =>
+			busy(async () => {
+				const records = await request("/api/environments/drafts/promotions");
+				promotionSelector.replaceChildren(
+					...records.map((record) => {
+						const option = element(
+							"option",
+							`${record.ordinal} · ${record.outcome} · ${record.observedAt} · ${record.id}`,
+						);
+						option.value = record.id;
+						return option;
+					}),
+				);
+				status.textContent = `${records.length} historical promotion records listed. No live-file observation, write or reload; editor text unchanged.`;
+			}),
+	);
+	const loadPromotion = button("Load selected historical promotion", () =>
+		busy(async () => {
+			if (!promotionSelector.value)
+				throw Error("List and select a historical promotion first");
+			const record = await request(
+				`/api/environments/drafts/promotion?id=${encodeURIComponent(promotionSelector.value)}`,
+			);
+			promotionReport.textContent = JSON.stringify(record, null, 2);
+			status.textContent =
+				"Historical promotion loaded, even if its draft was deleted. No live-file observation, write, approval or reload; editor text unchanged.";
+		}),
+	);
 	const loadReport = button("Load latest saved preflight", () =>
 		busy(async () => {
 			if (!current) throw Error("Load a saved draft first");
@@ -670,6 +710,10 @@ export function definitionDrafts(request) {
 		promote,
 		loadReport,
 		removeStagedDraft,
+		listPromotions,
+		promotionSelector,
+		loadPromotion,
+		promotionReport,
 		status,
 		report,
 	);

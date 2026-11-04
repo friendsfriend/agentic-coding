@@ -252,6 +252,41 @@ test("exact approved staged content is promoted atomically under a destination f
 			).json(),
 		).toEqual(promoted);
 		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
+		const historyRoute = "/api/environments/drafts/promotions";
+		expect((await fetch(new URL(historyRoute, host.url))).status).toBe(401);
+		expect((await api(`${historyRoute}?id=${promoted.id}`)).status).toBe(400);
+		expect(
+			(
+				await api("/api/environments/drafts/remove", {
+					requestId: "delete-promoted-draft",
+					id: created.id,
+					revision: 1,
+				})
+			).status,
+		).toBe(200);
+		const history = await (await api(historyRoute)).json();
+		expect(history.map((entry: { id: string }) => entry.id)).toEqual([
+			released.id,
+			replaced.id,
+			unchanged.id,
+			promoted.id,
+		]);
+		expect(history.at(-1)).toEqual({
+			id: promoted.id,
+			draftId: created.id,
+			revision: 1,
+			digest: created.digest,
+			outcome: "written",
+			observedAt: promoted.observedAt,
+			ordinal: 1,
+		});
+		expect(
+			await (
+				await api(`/api/environments/drafts/promotion?id=${promoted.id}`)
+			).json(),
+		).toEqual(promoted);
+		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
+		expect(fs.existsSync(lock)).toBe(false);
 	} finally {
 		host.stop();
 	}

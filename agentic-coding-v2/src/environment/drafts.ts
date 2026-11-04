@@ -335,6 +335,26 @@ export class DefinitionDrafts {
 			background,
 		);
 	}
+	/** Bounded historical index only; never observes the live destination. */
+	async promotions() {
+		privateState(this.config);
+		const doc = await this.engine().snapshot(Promotions, background);
+		return Object.values(doc?.records ?? {})
+			.map((raw) => {
+				const { id, draftId, revision, digest, outcome, observedAt, ordinal } =
+					stored<{
+						id: string;
+						draftId: string;
+						revision: number;
+						digest: string;
+						outcome: "written" | "unchanged";
+						observedAt: string;
+						ordinal: number;
+					}>(raw);
+				return { id, draftId, revision, digest, outcome, observedAt, ordinal };
+			})
+			.sort((a, b) => b.ordinal - a.ordinal);
+	}
 	async promotion(id: string) {
 		privateState(this.config);
 		if (!/^promotion-[a-f0-9]{64}$/.test(id))

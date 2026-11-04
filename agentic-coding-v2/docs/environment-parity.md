@@ -100,7 +100,7 @@ Two authenticated routes add bounded, revision-fenced private cleanup. `POST /ap
 
 One additional public API scenario verifies anonymous/unknown-field/absent/stale refusal, removal advancing revision while keeping the JSON digest, exact retry, an accepted candidate becoming a missing-source refusal after removal, successful re-staging, stale and unknown-field draft-deletion refusal, exact deletion retry, the deleted draft disappearing from list/read/preflight while its historical report still loads, a fresh draft reusing the freed slot, unchanged live repository/config files, no snapshot leakage and reopen persistence. Browser checks verify source removal clearing the buffer and reporting revision 3, the following candidate report showing a missing source, draft deletion emptying the list and resetting the editor, and no console errors; own host/browser closed. Cleanup is therefore private-data hygiene, not pruning, garbage collection or publication.
 
-Final quiet full suite: **82 tests / 1059 assertions**; zero-diagnostic lint, whole-project type-check, build/compiled help and diff checks pass. Applicable legacy lint/boundary **71 / 278** and full type-check pass. Disposable fake-backed checks do not prove live runtime parity.
+Final quiet full suite: **82 tests / 1067 assertions**; zero-diagnostic lint, whole-project type-check, build/compiled help and diff checks pass. Applicable legacy lint/boundary **71 / 278** and full type-check pass. Disposable fake-backed checks do not prove live runtime parity.
 
 ## Exact-content configuration promotion
 
@@ -182,3 +182,7 @@ Dashboard authentication is bearer-only. The private fragment is validated and r
 ### Promotion replay hardening
 
 Approval equality is now checked before historical receipt lookup, without changing existing valid request hashes. The public promotion scenario covers a well-formed wrong approval against a successful request before and after reopen, and valid historical replay after a newer promotion leaving the newer bytes intact. Historical records and UI statuses no longer imply a live-file observation. Failed promotion responses or follow-up UI reads explicitly leave write outcome uncertain; there is no rollback claim. These checks do not close the filesystem-write/native-receipt crash window or grant source promotion/runtime authority.
+
+### Discoverable promotion history
+
+The authenticated, query-free `/api/environments/drafts/promotions` index exposes only bounded immutable summary fields, ordered newest ordinal first. The UI lists and explicitly loads records into a separate historical promotion display independently of any current draft. The public scenario verifies anonymous/query refusal, history ordering and summary projection after reopen and draft deletion, retained record readability and unchanged live bytes/lock state. Disposable browser verification listed and loaded a record after deleting its draft while retaining unsaved editor text. Own browser and fixture host were closed. History lookup is not live-file validation, approval, lock acquisition or publication.
