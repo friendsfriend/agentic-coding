@@ -24,9 +24,15 @@ export function definitionDrafts(request) {
 		"meta",
 	);
 	status.setAttribute("role", "status");
+	const report = element(
+		"pre",
+		"No metadata preflight loaded. Reports are historical; never runtime validation or approval.",
+	);
+	report.setAttribute("aria-label", "Historical definition preflight");
 	let current = null,
 		savedText = empty,
-		pending = null;
+		pending = null,
+		pendingPreflight = null;
 	const dirty = () => editor.value !== savedText;
 	const discard = () =>
 		!dirty() ||
@@ -78,6 +84,8 @@ export function definitionDrafts(request) {
 			editor.value = draft.content;
 			savedText = editor.value;
 			status.textContent = describe(draft);
+			report.textContent =
+				"No preflight loaded for this editor state. Load latest saved report explicitly or request a new observation.";
 		}),
 	);
 	const fresh = button("New empty staged draft", () => {
@@ -88,6 +96,7 @@ export function definitionDrafts(request) {
 		savedText = empty;
 		status.textContent =
 			"Unsaved new draft. No live definition content copied.";
+		report.textContent = "Unsaved draft has no preflight coverage.";
 	});
 	const save = button("Save staged revision (no publish)", () =>
 		busy(async () => {
@@ -119,10 +128,68 @@ export function definitionDrafts(request) {
 			await refreshList();
 		}),
 	);
+	const preflight = button(
+		"Observe saved draft defaults/paths (no execution)",
+		() =>
+			busy(async () => {
+				if (!current || dirty())
+					throw Error("Save these exact edits before metadata preflight");
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						digest: current.digest,
+					},
+					fingerprint = JSON.stringify(body);
+				if (!pendingPreflight || pendingPreflight.fingerprint !== fingerprint)
+					pendingPreflight = { fingerprint, requestId: crypto.randomUUID() };
+				const observed = await request("/api/environments/drafts/preflight", {
+					...body,
+					requestId: pendingPreflight.requestId,
+				});
+				pendingPreflight = null;
+				report.textContent = JSON.stringify(observed, null, 2);
+				status.textContent =
+					"Metadata preflight saved for the displayed revision. Historical observation only; NOT source-content validation, runtime validation or promotion approval.";
+				const refreshed = await request(
+					`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+				);
+				current.preflightReports = refreshed.preflightReports;
+			}),
+	);
+	const loadReport = button("Load latest saved metadata preflight", () =>
+		busy(async () => {
+			if (!current) throw Error("Load a saved draft first");
+			const latest = await request(
+					`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+				),
+				id = latest.preflightReports?.at(-1)?.id;
+			if (!id) throw Error("No saved preflight for this draft");
+			report.textContent = JSON.stringify(
+				await request(
+					`/api/environments/drafts/preflight?id=${encodeURIComponent(id)}`,
+				),
+				null,
+				2,
+			);
+			status.textContent =
+				"Historical report loaded, possibly for a different revision/source state. Unsaved editor text was NOT checked. No runtime validation or approval.";
+		}),
+	);
 	editor.oninput = () => {
 		status.textContent =
 			"Unsaved staged edits. Save for schema-only checks; nothing is published or executed.";
 	};
-	panel.append(selector, list, load, fresh, editor, save, status);
+	panel.append(
+		selector,
+		list,
+		load,
+		fresh,
+		editor,
+		save,
+		preflight,
+		loadReport,
+		status,
+		report,
+	);
 	return panel;
 }

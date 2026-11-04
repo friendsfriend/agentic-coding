@@ -227,6 +227,21 @@ export function serve(app: Runtime, port = 0) {
 				}
 				if (
 					request.method === "GET" &&
+					url.pathname === "/api/environments/drafts/preflight"
+				) {
+					if (
+						[...url.searchParams.keys()].some((key) => key !== "id") ||
+						url.searchParams.getAll("id").length !== 1
+					)
+						throw new Error("Preflight read requires exactly one report ID");
+					return json(
+						await app.environments.drafts.report(
+							text(url.searchParams.get("id"), "preflight ID", 80),
+						),
+					);
+				}
+				if (
+					request.method === "GET" &&
 					url.pathname === "/api/environments/drafts"
 				) {
 					if (
@@ -282,6 +297,11 @@ export function serve(app: Runtime, port = 0) {
 							text(body.requestId, "request ID", 256),
 						),
 					});
+				if (url.pathname === "/api/environments/drafts/preflight") {
+					if (url.searchParams.size)
+						throw new Error("Preflight writes do not accept query parameters");
+					return json(await app.environments.drafts.preflight(body));
+				}
 				if (url.pathname === "/api/environments/drafts")
 					return json(await app.environments.drafts.save(body));
 				if (url.pathname === "/api/environments/revoke")

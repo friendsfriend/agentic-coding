@@ -4,6 +4,7 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import { defineDoc, type Harness } from "@earendil-works/pi-durable";
 import { type Config, digest, text } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
+import { inspectDefinition } from "./definition-preflight.ts";
 
 type Base = {
 	destination: string;
@@ -31,6 +32,26 @@ const DraftState = defineDoc<{
 	initial: () => ({ drafts: {}, receipts: {} }),
 	checkpointWhen: () => true,
 });
+const Preflights = defineDoc<{
+	reports: Record<string, string>;
+	requests: Record<string, string>;
+}>({
+	kind: "v2.environment-definition-preflights",
+	version: 1,
+	scope: "session",
+	initial: () => ({ reports: {}, requests: {} }),
+	checkpointWhen: () => true,
+});
+type Preflight = ReturnType<typeof inspectDefinition> & {
+	id: string;
+	draftId: string;
+	revision: number;
+	digest: string;
+	observedAt: string;
+	ordinal: number;
+	historical: true;
+	authority: string;
+};
 function stored<T>(value: string): T {
 	try {
 		return JSON.parse(value) as T;
@@ -173,6 +194,18 @@ export class DefinitionDrafts {
 			raw = doc?.drafts[id];
 		if (!raw) throw new Error("Unknown definition draft");
 		const draft = parseDraft(raw);
+		const reports = await this.engine().snapshot(Preflights, background);
+		const preflightReports = Object.values(reports?.reports ?? {})
+			.map((value) => stored<Preflight>(value))
+			.filter((report) => report.draftId === id)
+			.map(({ id, revision, digest, observedAt, ordinal }) => ({
+				id,
+				revision,
+				digest,
+				observedAt,
+				ordinal,
+			}))
+			.sort((a, b) => a.ordinal - b.ordinal);
 		let baseMatches: boolean | null = null;
 		try {
 			baseMatches =
@@ -182,11 +215,81 @@ export class DefinitionDrafts {
 		}
 		return {
 			...draft,
+			preflightReports,
 			schema: schema(this.config, draft),
 			baseMatches,
 			authority:
 				"Staged text only. Base comparison is an observation, never a promotion fence. No runtime validation, approval or promotion.",
 		};
+	}
+	async report(id: string) {
+		privateState(this.config);
+		if (!/^preflight-[a-f0-9]{64}$/.test(id))
+			throw new Error("Invalid preflight ID");
+		const doc = await this.engine().snapshot(Preflights, background),
+			raw = doc?.reports[id];
+		if (!raw) throw new Error("Unknown definition preflight");
+		return stored<Preflight>(raw);
+	}
+	async preflight(body: Record<string, unknown>) {
+		privateState(this.config);
+		if (
+			Object.keys(body).some(
+				(key) => !["requestId", "id", "revision", "digest"].includes(key),
+			)
+		)
+			throw new Error("Unsupported preflight field");
+		const requestId = text(body.requestId, "preflight request ID", 128),
+			id = text(body.id, "draft ID", 80),
+			contentDigest = text(body.digest, "draft digest", 64);
+		this.id(id);
+		if (
+			!/^[a-f0-9]{64}$/.test(contentDigest) ||
+			!Number.isSafeInteger(body.revision) ||
+			Number(body.revision) < 1
+		)
+			throw new Error("Preflight requires exact draft revision and digest");
+		const request = digest(
+				JSON.stringify({ id, revision: body.revision, digest: contentDigest }),
+			),
+			key = digest(requestId);
+		return this.engine().commit(async (tx) => {
+			const reports = await tx.doc(Preflights),
+				recorded = reports.requests[key];
+			if (recorded) {
+				const receipt = stored<{ request: string; id: string }>(recorded);
+				if (receipt.request !== request)
+					throw new Error("Preflight request ID reused for different input");
+				const raw = reports.reports[receipt.id];
+				if (!raw) throw new Error("Private preflight receipt is unavailable");
+				return stored<Preflight>(raw);
+			}
+			if (Object.keys(reports.reports).length >= 64)
+				throw new Error(
+					"Private preflight capacity reached; automatic pruning is unsupported",
+				);
+			const drafts = await tx.doc(DraftState),
+				raw = drafts.drafts[id];
+			if (!raw) throw new Error("Unknown definition draft");
+			const draft = parseDraft(raw);
+			if (draft.revision !== body.revision || draft.digest !== contentDigest)
+				throw new Error("Draft changed; load current before preflight");
+			const report: Preflight = {
+				...inspectDefinition(this.config, draft.content),
+				id: `preflight-${key}`,
+				draftId: id,
+				revision: draft.revision,
+				digest: contentDigest,
+				observedAt: new Date().toISOString(),
+				ordinal: Object.keys(reports.reports).length + 1,
+				historical: true,
+				authority:
+					"Metadata observations only. No saved report restores source identity, readiness, execution, review approval or promotion authority; sources may already have changed.",
+			};
+			reports.reports[report.id] = JSON.stringify(report);
+			reports.requests[key] = JSON.stringify({ request, id: report.id });
+			return report;
+		}, background);
 	}
 	private id(value: string) {
 		if (!/^draft-[a-f0-9]{64}$/.test(value))
