@@ -309,6 +309,16 @@ export function serve(app: Runtime, port = 0) {
 						throw new Error("Source staging does not accept query parameters");
 					return json(await app.environments.drafts.saveSource(body));
 				}
+				if (url.pathname === "/api/environments/drafts/source/remove") {
+					if (url.searchParams.size)
+						throw new Error("Source removal does not accept query parameters");
+					return json(await app.environments.drafts.removeSource(body));
+				}
+				if (url.pathname === "/api/environments/drafts/remove") {
+					if (url.searchParams.size)
+						throw new Error("Draft removal does not accept query parameters");
+					return json(await app.environments.drafts.removeDraft(body));
+				}
 				if (url.pathname === "/api/environments/drafts/preflight") {
 					if (url.searchParams.size)
 						throw new Error("Preflight writes do not accept query parameters");

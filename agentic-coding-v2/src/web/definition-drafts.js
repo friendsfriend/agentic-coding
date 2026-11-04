@@ -62,6 +62,8 @@ export function definitionDrafts(request) {
 	);
 	acceptBaseLabel.prepend(acceptBase);
 	let pendingCandidate = null;
+	let pendingSourceRemoval = null;
+	let pendingDraftRemoval = null;
 	let pendingBaseSave = null,
 		pendingBaseCheck = null;
 	let sourceSavedText = "",
@@ -326,6 +328,86 @@ export function definitionDrafts(request) {
 				await refreshList();
 			}),
 	);
+	const removeStaged = button(
+		"Remove staged source for selected target (private only)",
+		() =>
+			busy(async () => {
+				if (!current || dirty())
+					throw Error(
+						"Save or discard editor text before removing a staged source",
+					);
+				if (
+					!confirm(
+						"Remove only this private staged source revision? Repository files, live configuration and historical reports are untouched.",
+					)
+				)
+					return;
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						app: sourceApp.value,
+						target: sourceTarget.value,
+					},
+					fingerprint = JSON.stringify(body);
+				if (
+					!pendingSourceRemoval ||
+					pendingSourceRemoval.fingerprint !== fingerprint
+				)
+					pendingSourceRemoval = {
+						fingerprint,
+						requestId: crypto.randomUUID(),
+					};
+				const receipt = await request(
+						"/api/environments/drafts/source/remove",
+						{ ...body, requestId: pendingSourceRemoval.requestId },
+					),
+					draft = await request(
+						`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+					);
+				pendingSourceRemoval = null;
+				if (receipt.revision && draft.revision < receipt.revision)
+					throw Error("Source removal receipt is behind the current draft");
+				current = draft;
+				sourceEditor.value = "";
+				sourceSavedText = "";
+				sourceMarker = sourceSelection();
+				status.textContent = `Private staged source removed; draft revision ${current.revision}. No repository, live configuration or report change; no promotion authority.`;
+				await refreshList();
+			}),
+	);
+	const removeStagedDraft = button("Delete private staged draft", () =>
+		busy(async () => {
+			if (!current || dirty()) throw Error("Save or discard editor text first");
+			if (
+				!confirm(
+					"Delete only this private staged draft document? Historical preflight reports and receipts remain, and no repository or live configuration changes.",
+				)
+			)
+				return;
+			const body = { id: current.id, revision: current.revision },
+				fingerprint = JSON.stringify(body);
+			if (
+				!pendingDraftRemoval ||
+				pendingDraftRemoval.fingerprint !== fingerprint
+			)
+				pendingDraftRemoval = { fingerprint, requestId: crypto.randomUUID() };
+			await request("/api/environments/drafts/remove", {
+				...body,
+				requestId: pendingDraftRemoval.requestId,
+			});
+			pendingDraftRemoval = null;
+			current = null;
+			savedText = empty;
+			editor.value = empty;
+			sourceEditor.value = "";
+			sourceSavedText = "";
+			report.textContent =
+				"No preflight loaded. Reports are historical; never runtime validation or approval.";
+			status.textContent =
+				"Private staged draft deleted. Historical reports/receipts remain and grant no authority; no repository or live configuration change.";
+			await refreshList();
+		}),
+	);
 	const checkStaged = button(
 		"Check saved staged Compose YAML (no repository source read)",
 		() =>
@@ -542,12 +624,14 @@ export function definitionDrafts(request) {
 		sourceEditor,
 		saveSource,
 		checkStaged,
+		removeStaged,
 		acceptBaseLabel,
 		captureBase,
 		compareBase,
 		candidateCheck,
 		treeCheck,
 		loadReport,
+		removeStagedDraft,
 		status,
 		report,
 	);

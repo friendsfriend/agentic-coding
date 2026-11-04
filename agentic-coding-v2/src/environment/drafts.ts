@@ -10,6 +10,8 @@ import {
 	captureSourceBase,
 	type Draft,
 	type Receipt,
+	removeDraft,
+	removeSource,
 	type SourceDraft,
 	sourceBinding,
 	stageSource,
@@ -333,6 +335,21 @@ export class DefinitionDrafts {
 		privateState(this.config);
 		return this.engine().commit(
 			async (tx) => stageSource(this.config, await tx.doc(DraftState), body),
+			background,
+		);
+	}
+	/** Explicit private cleanup only: no repository, live-config or report change. */
+	async removeSource(body: Record<string, unknown>) {
+		privateState(this.config);
+		return this.engine().commit(
+			async (tx) => removeSource(this.config, await tx.doc(DraftState), body),
+			background,
+		);
+	}
+	async removeDraft(body: Record<string, unknown>) {
+		privateState(this.config);
+		return this.engine().commit(
+			async (tx) => removeDraft(await tx.doc(DraftState), body),
 			background,
 		);
 	}

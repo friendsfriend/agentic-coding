@@ -251,3 +251,112 @@ export function captureSourceBase(
 	doc.receipts[key] = JSON.stringify({ request, result });
 	return result;
 }
+
+/** Exact-input receipt lookup shared by private draft edit transitions. */
+function recordedReceipt(
+	doc: DraftData,
+	key: string,
+	request: string,
+): Receipt["result"] | null {
+	const recorded = doc.receipts[key];
+	if (recorded) {
+		const receipt = stored<Receipt>(recorded);
+		if (receipt.request !== request)
+			throw new Error("Draft request ID reused for different input");
+		return receipt.result;
+	}
+	if (Object.keys(doc.receipts).length >= 256)
+		throw new Error("Native draft receipt capacity reached");
+	return null;
+}
+function currentDraft(doc: DraftData, id: string, revision: number) {
+	const raw = doc.drafts[id];
+	if (!raw) throw new Error("Unknown definition draft");
+	const draft = stored<Draft>(raw);
+	if (draft.revision !== revision)
+		throw new Error("Draft revision conflict; load current before editing");
+	return draft;
+}
+/** Removes one staged source bound to the exact current target. Repository
+ * files, live configuration and historical reports are never touched. */
+export function removeSource(
+	config: Config,
+	doc: DraftData,
+	body: Record<string, unknown>,
+) {
+	if (
+		Object.keys(body).some(
+			(key) => !["requestId", "id", "revision", "app", "target"].includes(key),
+		)
+	)
+		throw new Error("Unsupported staged source removal field");
+	const id = text(body.id, "draft ID", 80),
+		app = text(body.app, "source app", 128),
+		target = text(body.target, "source target", 128),
+		requestId = text(body.requestId, "draft request ID", 128);
+	if (
+		!/^draft-[a-f0-9]{64}$/.test(id) ||
+		!Number.isSafeInteger(body.revision) ||
+		Number(body.revision) < 1
+	)
+		throw new Error("Exact current revision required");
+	const request = digest(
+			JSON.stringify({
+				kind: "remove-staged-source",
+				id,
+				revision: body.revision,
+				app,
+				target,
+			}),
+		),
+		key = digest(requestId),
+		receipt = recordedReceipt(doc, key, request);
+	if (receipt) return receipt;
+	const previous = currentDraft(doc, id, Number(body.revision)),
+		binding = sourceBinding(config, previous.content, app, target),
+		sources = (previous.sources ?? []).filter(
+			(source) =>
+				source.repository !== binding.repository ||
+				source.file !== binding.file,
+		);
+	if (sources.length === (previous.sources ?? []).length)
+		throw new Error("No staged source matches this exact target binding");
+	const draft = { ...previous, revision: previous.revision + 1, sources },
+		result = { id, revision: draft.revision, digest: draft.digest };
+	doc.drafts[id] = JSON.stringify(draft);
+	doc.receipts[key] = JSON.stringify({ request, result });
+	return result;
+}
+/** Deletes only the private staged draft document. Immutable preflight reports
+ * and exact-input receipts remain historical data, not restored authority. */
+export function removeDraft(doc: DraftData, body: Record<string, unknown>) {
+	if (
+		Object.keys(body).some(
+			(key) => !["requestId", "id", "revision"].includes(key),
+		)
+	)
+		throw new Error("Unsupported staged draft removal field");
+	const id = text(body.id, "draft ID", 80),
+		requestId = text(body.requestId, "draft request ID", 128);
+	if (
+		!/^draft-[a-f0-9]{64}$/.test(id) ||
+		!Number.isSafeInteger(body.revision) ||
+		Number(body.revision) < 1
+	)
+		throw new Error("Exact current revision required");
+	const request = digest(
+			JSON.stringify({
+				kind: "remove-staged-draft",
+				id,
+				revision: body.revision,
+			}),
+		),
+		key = digest(requestId),
+		receipt = recordedReceipt(doc, key, request);
+	if (receipt) return receipt;
+	currentDraft(doc, id, Number(body.revision));
+	delete doc.drafts[id];
+	const result = { id, removed: true as const };
+	doc.receipts[key] = JSON.stringify({ request, result });
+	return result;
+}
