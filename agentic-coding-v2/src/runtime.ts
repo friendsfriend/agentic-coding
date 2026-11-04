@@ -126,7 +126,7 @@ export class Runtime {
 								environmentInspectionTools.has(tool.name),
 							),
 						],
-						instructions: `${orchestratorPrompt}\nInspect env_list before proposing environment operations. Use environment_action for direct Run/Build/Test controls without an agent/model profile. Workspace-write skill tasks may also use their own environment tools. Both require exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
+						instructions: `${orchestratorPrompt}\nInspect env_list before proposing environment operations. Use env_discover with an explicit configured repository for read-only root manifest hints; these are not trusted or validated target definitions and grant no edit, import or execution authority. Use environment_action for direct Run/Build/Test controls without an agent/model profile. Workspace-write skill tasks may also use their own environment tools. Both require exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
 						cwd: null,
 						modelTools: null,
 					}),

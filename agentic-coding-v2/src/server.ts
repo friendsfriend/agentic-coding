@@ -11,6 +11,7 @@ import script from "./web/app.js" with { type: "text" };
 import authenticatedMessage from "./web/authenticated-message.js" with {
 	type: "text",
 };
+import discovery from "./web/definition-discovery.js" with { type: "text" };
 import dom from "./web/dom.js" with { type: "text" };
 import diagnostics from "./web/environment-diagnostics.js" with {
 	type: "text",
@@ -120,6 +121,10 @@ export function serve(app: Runtime, port = 0) {
 		],
 		["/dom.js", { content: dom, type: "text/javascript" }],
 		[
+			"/definition-discovery.js",
+			{ content: discovery, type: "text/javascript" },
+		],
+		[
 			"/environment-lifecycle.js",
 			{ content: lifecycle, type: "text/javascript" },
 		],
@@ -195,6 +200,27 @@ export function serve(app: Runtime, port = 0) {
 								"Content-Disposition": "inline",
 							},
 						},
+					);
+				}
+				if (
+					request.method === "GET" &&
+					url.pathname === "/api/environments/discovery"
+				) {
+					if (
+						url.searchParams.getAll("repository").length !== 1 ||
+						[...url.searchParams.keys()].some((key) => key !== "repository")
+					)
+						throw new Error(
+							"Discovery requires exactly one repository query parameter",
+						);
+					return json(
+						app.environments.discover(
+							text(
+								url.searchParams.get("repository"),
+								"discovery repository",
+								4096,
+							),
+						),
 					);
 				}
 				if (

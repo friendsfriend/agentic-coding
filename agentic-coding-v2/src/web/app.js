@@ -1,4 +1,5 @@
 import { authenticatedMessage } from "/authenticated-message.js";
+import { definitionDiscovery } from "/definition-discovery.js";
 import { button, element } from "/dom.js";
 import { environmentDiagnostics } from "/environment-diagnostics.js";
 import {
@@ -17,6 +18,8 @@ let chatViews = new Map();
 let pageActive = true;
 let refreshing;
 const notice = lifecycleNotices($("environment-notices"), openOwner);
+const discovery = definitionDiscovery(api);
+$("definition-discovery").append(discovery.panel);
 let revision = "";
 const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
 let token = fragmentToken;
@@ -315,6 +318,7 @@ async function render() {
 		if (!pageActive) return;
 		$("connection").textContent = "Connected";
 		knownTasks = state.tasks;
+		discovery.update(state.repositories);
 		notice(state.environments);
 		updateLifecycleClocks($("environments"), state.environments.runs);
 		const next = lifecycleRevision(state, topic, focusedTask);

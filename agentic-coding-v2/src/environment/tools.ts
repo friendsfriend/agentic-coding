@@ -17,6 +17,7 @@ import type { Action, Selection } from "./selection.ts";
 import { environmentResult } from "./tool-result.ts";
 
 export const environmentInspectionTools = new Set([
+	"env_discover",
 	"env_list",
 	"env_status",
 	"env_logs",
@@ -127,6 +128,23 @@ export function createEnvironmentTools(
 		tools: [
 			...createHttpTools(manager, ownerOf),
 			...createQueryTools(manager.database, ownerOf),
+			defineTool({
+				name: "env_discover",
+				description:
+					"Inspect bounded root-only repository manifest evidence and untrusted package-script invocation hints, without executing commands or CLI probes, reading private configuration, editing/importing files or granting approval authority. Choose an exact configured repository path. The home orchestrator reads its developer checkout; native skill tasks can inspect only their own task workspace, never another repository. Only package.json contents (maximum 64 KiB) are parsed; script bodies are withheld. Other known root build/container/lock files are metadata only; symlinks are not followed. No defaults, nested layouts, service topology, readiness or runtime compatibility inferred. This does not author, validate, promote or reload environments.json, and does not renew app leases.",
+				parameters: Type.Object(
+					{ repository: Type.String({ minLength: 1, maxLength: 4096 }) },
+					{ additionalProperties: false },
+				),
+				replay: "safe",
+				execute: async (args, api) =>
+					environmentResult(
+						manager.discover(
+							args.repository,
+							(await ownerOf(api.conversationId)) ?? undefined,
+						),
+					),
+			}),
 			defineTool({
 				name: "env_cluster_status",
 				description:

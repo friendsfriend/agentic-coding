@@ -10,6 +10,7 @@ import type { ClusterInspection } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
+import { discoverDefinitions } from "./discovery.ts";
 import { HeldHttp } from "./http-manager.ts";
 import type { HttpReceipt } from "./http-receipts.ts";
 import { IdleLifecycle } from "./idle.ts";
@@ -116,6 +117,9 @@ export class Environments {
 		};
 		this.http = new HeldHttp(config, authority);
 		this.database = new DatabaseDiagnostics(config, authority);
+	}
+	discover(repository: string, owner?: TaskInfo) {
+		return discoverDefinitions(this.config, repository, owner);
 	}
 	prepareCluster(owner: TaskInfo, id: string) {
 		const cluster = this.clusters.find((item) => item.id === id);
