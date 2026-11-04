@@ -134,6 +134,11 @@ test("exact approved staged content is promoted atomically under a destination f
 				await promote("first", created.id, 1, created.digest, created.digest)
 			).json(),
 		).toEqual(promoted);
+		expect(
+			(await promote("first", created.id, 1, created.digest, "0".repeat(64)))
+				.status,
+		).toBe(400);
+		expect(fs.readFileSync(live, "utf8")).toBe(document("v1"));
 		const record = await (
 			await api(`/api/environments/drafts/promotion?id=${promoted.id}`)
 		).json();
@@ -236,6 +241,16 @@ test("exact approved staged content is promoted atomically under a destination f
 			(await promote("first", created.id, 1, created.digest, created.digest))
 				.status,
 		).toBe(200);
+		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
+		expect(
+			(await promote("first", created.id, 1, created.digest, "0".repeat(64)))
+				.status,
+		).toBe(400);
+		expect(
+			await (
+				await promote("first", created.id, 1, created.digest, created.digest)
+			).json(),
+		).toEqual(promoted);
 		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
 	} finally {
 		host.stop();

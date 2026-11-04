@@ -116,7 +116,7 @@ export function definitionDrafts(request) {
 		try {
 			await action();
 		} catch (error) {
-			status.textContent = `Draft operation failed: ${String(error)}. Text retained; no live definitions published.`;
+			status.textContent = `Draft operation failed: ${String(error)}. Text retained. If promotion was attempted, a write may already have occurred; inspect the live destination and retry the same request to resolve its receipt.`;
 		} finally {
 			controls.forEach((control) => {
 				control.disabled = false;
@@ -608,7 +608,7 @@ export function definitionDrafts(request) {
 					`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
 				);
 				current = draft;
-				status.textContent = `Promotion ${record.outcome}: live environments.json now holds the approved staged digest. Staged sources and repositories unchanged; restart to load. ${describe(draft)}`;
+				status.textContent = `Historical promotion ${record.outcome} recorded. A retry may replay an earlier outcome without writing or observing the live file. The separately loaded destination below is only a fresh observation, not readiness or reload authority. ${describe(draft)}`;
 				await refreshList();
 			}),
 	);

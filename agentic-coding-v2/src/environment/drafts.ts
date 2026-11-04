@@ -366,6 +366,10 @@ export class DefinitionDrafts {
 			Number(body.revision) < 1
 		)
 			throw new Error("Promotion requires exact revision and content digests");
+		// Validate even an historical replay before looking up its receipt. Keeping
+		// the request hash unchanged preserves prior exact, valid retry identities.
+		if (approve !== contentDigest)
+			throw new Error("Approval must equal the exact requested content digest");
 		const request = digest(
 				JSON.stringify({ id, revision: body.revision, digest: contentDigest }),
 			),
@@ -406,7 +410,7 @@ export class DefinitionDrafts {
 					observedAt: new Date().toISOString(),
 					ordinal: Object.keys(records.records).length + 1,
 					message:
-						"Exact staged text written to the live environments.json with an exclusive temp file, fsync and same-directory rename, after re-checking the recorded destination base. No staged source, repository file, running process, container or lease was changed; a running instance may not reload automatically.",
+						"Historical promotion outcome only, not current live-file state. Written outcomes used an exclusive temp file, fsync and same-directory rename after checking the recorded base; unchanged outcomes wrote nothing. No source/repository files, processes, containers or leases were changed. No runtime validation or reload. Exact replay performs no new destination observation or write.",
 				};
 			records.records[record.id] = JSON.stringify(record);
 			records.requests[key] = JSON.stringify({ request, id: record.id });
