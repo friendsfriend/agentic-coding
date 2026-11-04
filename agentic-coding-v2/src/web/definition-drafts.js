@@ -46,12 +46,28 @@ export function definitionDrafts(request) {
 		"Allow one bounded public Compose file read (no .env/providers, links, source publication or execution)",
 	);
 	sourceLabel.prepend(sourcePermission);
+	const sourceEditor = element("textarea");
+	sourceEditor.setAttribute("aria-label", "Private staged Compose YAML");
+	sourceEditor.rows = 12;
+	sourceEditor.maxLength = 65536;
+	let sourceSavedText = "",
+		sourceMarker = "",
+		pendingSourceSave = null,
+		pendingStagedCheck = null;
+	const sourceSelection = () =>
+		JSON.stringify([
+			current?.id,
+			current?.digest,
+			sourceApp.value,
+			sourceTarget.value,
+		]);
 	let pendingSource = null;
 	let current = null,
 		savedText = empty,
 		pending = null,
 		pendingPreflight = null;
-	const dirty = () => editor.value !== savedText;
+	const jsonDirty = () => editor.value !== savedText;
+	const dirty = () => jsonDirty() || sourceEditor.value !== sourceSavedText;
 	const discard = () =>
 		!dirty() ||
 		confirm(
@@ -98,6 +114,9 @@ export function definitionDrafts(request) {
 				`/api/environments/drafts?id=${encodeURIComponent(selector.value)}`,
 			);
 			current = draft;
+			sourceEditor.value = "";
+			sourceSavedText = "";
+			sourceMarker = "";
 			sourcePermission.checked = false;
 			pending = null;
 			editor.value = draft.content;
@@ -110,6 +129,9 @@ export function definitionDrafts(request) {
 	const fresh = button("New empty staged draft", () => {
 		if (!discard()) return;
 		current = null;
+		sourceEditor.value = "";
+		sourceSavedText = "";
+		sourceMarker = "";
 		sourcePermission.checked = false;
 		pending = null;
 		editor.value = empty;
@@ -212,6 +234,110 @@ export function definitionDrafts(request) {
 				}
 			}),
 	);
+	const loadSource = button(
+		"Load private staged source / new blank buffer",
+		() =>
+			busy(async () => {
+				if (!current || jsonDirty())
+					throw Error("Save/load the exact JSON draft first");
+				if (
+					sourceEditor.value !== sourceSavedText &&
+					!confirm("Discard unsaved Compose YAML?")
+				)
+					return;
+				const project = JSON.parse(current.content).projects.find(
+						(project) => project.id === sourceApp.value,
+					),
+					target = project?.targets.find(
+						(target) => target.id === sourceTarget.value,
+					);
+				if (!target?.compose)
+					throw Error("Choose an exact saved Compose app/target");
+				const file = target.compose.file
+						.split("/")
+						.filter((part) => part !== ".")
+						.join("/"),
+					source = current.sources?.find(
+						(source) =>
+							source.repository === project.repository && source.file === file,
+					);
+				sourceEditor.value = source?.content ?? "";
+				sourceSavedText = sourceEditor.value;
+				sourceMarker = sourceSelection();
+				status.textContent =
+					"Private staged source buffer loaded (or new blank). No repository source contents read. Base unobserved; promotion unsupported.";
+			}),
+	);
+	const saveSource = button(
+		"Save selected Compose YAML privately (no publish)",
+		() =>
+			busy(async () => {
+				if (!current || jsonDirty() || sourceMarker !== sourceSelection())
+					throw Error(
+						"Load the selected source buffer for these exact saved JSON/app/target bindings first",
+					);
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						app: sourceApp.value,
+						target: sourceTarget.value,
+						content: sourceEditor.value,
+					},
+					fingerprint = JSON.stringify(body);
+				if (!pendingSourceSave || pendingSourceSave.fingerprint !== fingerprint)
+					pendingSourceSave = { fingerprint, requestId: crypto.randomUUID() };
+				const receipt = await request("/api/environments/drafts/source", {
+						...body,
+						requestId: pendingSourceSave.requestId,
+					}),
+					draft = await request(
+						`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+					);
+				if (
+					draft.revision !== receipt.revision ||
+					draft.digest !== receipt.digest
+				)
+					throw Error(
+						"Source receipt exists but draft advanced; load explicitly. Text retained.",
+					);
+				current = draft;
+				sourceSavedText = sourceEditor.value;
+				pendingSourceSave = null;
+				sourcePermission.checked = false;
+				status.textContent = `Private source saved; draft revision ${current.revision}. Base unobserved; no execution or promotion.`;
+				await refreshList();
+			}),
+	);
+	const checkStaged = button(
+		"Check saved staged Compose YAML (no repository source read)",
+		() =>
+			busy(async () => {
+				if (!current || dirty() || sourceMarker !== sourceSelection())
+					throw Error("Save the exact selected source/JSON edits first");
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						digest: current.digest,
+						app: sourceApp.value,
+						target: sourceTarget.value,
+						useStagedSource: true,
+					},
+					fingerprint = JSON.stringify(body);
+				if (
+					!pendingStagedCheck ||
+					pendingStagedCheck.fingerprint !== fingerprint
+				)
+					pendingStagedCheck = { fingerprint, requestId: crypto.randomUUID() };
+				const observed = await request("/api/environments/drafts/preflight", {
+					...body,
+					requestId: pendingStagedCheck.requestId,
+				});
+				pendingStagedCheck = null;
+				report.textContent = JSON.stringify(observed, null, 2);
+				status.textContent =
+					"Historical staged-source parser report saved. Repository source contents were NOT read; bind metadata may be checked. No runtime, base fence or promotion authority.";
+			}),
+	);
 	const loadReport = button("Load latest saved preflight", () =>
 		busy(async () => {
 			if (!current) throw Error("Load a saved draft first");
@@ -252,6 +378,15 @@ export function definitionDrafts(request) {
 		sourceTarget,
 		sourceLabel,
 		sourceCheck,
+		element(
+			"p",
+			"Alternatively stage Compose YAML privately. Load/new buffer, edit, save separately, then check saved staged bytes. No live-file imports/writes; base unobserved and promotion unsupported.",
+			"meta",
+		),
+		loadSource,
+		sourceEditor,
+		saveSource,
+		checkStaged,
 		loadReport,
 		status,
 		report,

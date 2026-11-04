@@ -297,6 +297,11 @@ export function serve(app: Runtime, port = 0) {
 							text(body.requestId, "request ID", 256),
 						),
 					});
+				if (url.pathname === "/api/environments/drafts/source") {
+					if (url.searchParams.size)
+						throw new Error("Source staging does not accept query parameters");
+					return json(await app.environments.drafts.saveSource(body));
+				}
 				if (url.pathname === "/api/environments/drafts/preflight") {
 					if (url.searchParams.size)
 						throw new Error("Preflight writes do not accept query parameters");

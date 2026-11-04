@@ -6,11 +6,7 @@ import { compileComposeSource } from "./compose-config.ts";
 
 /** Deliberately narrow public-source convention. No private inputs, links,
  * hard links, arbitrary filenames, tree walk, subprocess or source publication. */
-function capture(repository: string, requested: string) {
-	if (process.platform === "win32")
-		throw new Error(
-			"Source capture requires POSIX file identity/no-follow semantics",
-		);
+export function publicComposePath(requested: string) {
 	const parts = requested.split("/").filter((part) => part !== ".");
 	if (
 		!parts.length ||
@@ -26,6 +22,14 @@ function capture(repository: string, requested: string) {
 		!/^(?:docker-)?compose(?:\.[a-z0-9_-]+)?\.ya?ml$/i.test(parts.at(-1) ?? "")
 	)
 		throw new Error("Unsupported public source name");
+	return parts.join("/");
+}
+function capture(repository: string, requested: string) {
+	if (process.platform === "win32")
+		throw new Error(
+			"Source capture requires POSIX file identity/no-follow semantics",
+		);
+	const parts = publicComposePath(requested).split("/");
 	if (fs.realpathSync(repository) !== repository)
 		throw new Error("Repository binding changed");
 	const directories = [repository];
@@ -108,10 +112,13 @@ export function inspectComposeSource(
 	content: string,
 	app: string,
 	targetId: string,
+	staged?: { content: string; digest: string },
 ) {
 	const scope = {
 		repositoryDigest: digest(JSON.stringify(config.repositories)),
-		kind: "compose-source" as const,
+		kind: staged
+			? ("staged-compose-source" as const)
+			: ("compose-source" as const),
 		app,
 		target: targetId,
 		sourceContentsChecked: false as const,
@@ -127,7 +134,16 @@ export function inspectComposeSource(
 			(target) => target.id === targetId,
 		)?.compose;
 		if (!project || !definition) throw new Error("No exact Compose target");
-		const captured = capture(project.repository, definition.file);
+		publicComposePath(definition.file);
+		if (staged && digest(staged.content) !== staged.digest)
+			throw new Error("Staged source digest mismatch");
+		const captured = staged
+			? {
+					source: staged.content,
+					contentDigest: digest(Buffer.from(staged.content).toString("base64")),
+					bytes: Buffer.byteLength(staged.content),
+				}
+			: capture(project.repository, definition.file);
 		checkedSource = {
 			contentDigest: captured.contentDigest,
 			bytes: captured.bytes,
@@ -139,8 +155,11 @@ export function inspectComposeSource(
 			checkedSource,
 			compiledDigest: digest(JSON.stringify(plan)),
 			serviceCount: plan.services.length,
+			origin: staged ? "private-staged-text" : "repository-file",
+			stagedDigest: staged?.digest,
+			base: staged ? "unobserved; promotion unsupported" : undefined,
 			message:
-				"Selected public Compose source accepted by the native strict subset parser. Only this file was read; source text, commands, environment values and compiled plans are withheld. Bind paths are containment-checked, not validated as a complete source tree. No secrets, engine calls, runtime tests or promotion authority. Other sources remain unchecked.",
+				"Selected Compose source accepted by the native strict subset parser. Only the selected bytes were parsed (staged text or opted-in repository capture); source text, commands, environment values and compiled plans are withheld. Bind paths are containment-checked, not validated as a complete source tree. No secrets, engine calls, runtime tests or promotion authority. Other sources remain unchecked.",
 		};
 	} catch {
 		return {

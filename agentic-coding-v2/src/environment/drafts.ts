@@ -4,25 +4,18 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import { defineDoc, type Harness } from "@earendil-works/pi-durable";
 import { type Config, digest, text } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
+import {
+	type Base,
+	type Draft,
+	type Receipt,
+	type SourceDraft,
+	sourceBinding,
+	stageSource,
+	stored,
+} from "./definition-draft-data.ts";
 import { inspectDefinition } from "./definition-preflight.ts";
 import { inspectComposeSource } from "./definition-source-check.ts";
 
-type Base = {
-	destination: string;
-	state: "absent" | "regular";
-	digest?: string;
-};
-type Draft = {
-	id: string;
-	revision: number;
-	content: string;
-	digest: string;
-	base: Base;
-};
-type Receipt = {
-	request: string;
-	result: { id: string; revision: number; digest: string };
-};
 const DraftState = defineDoc<{
 	drafts: Record<string, string>;
 	receipts: Record<string, string>;
@@ -56,15 +49,6 @@ type Preflight = (
 	historical: true;
 	authority: string;
 };
-function stored<T>(value: string): T {
-	try {
-		return JSON.parse(value) as T;
-	} catch {
-		throw new Error(
-			"Private draft state is malformed; contents and parser errors are withheld",
-		);
-	}
-}
 const parseDraft = (value: string) => stored<Draft>(value);
 
 function base(config: Config): Base {
@@ -246,6 +230,7 @@ export class DefinitionDrafts {
 						"revision",
 						"digest",
 						"readComposeSource",
+						"useStagedSource",
 						"app",
 						"target",
 					].includes(key),
@@ -262,9 +247,18 @@ export class DefinitionDrafts {
 			Number(body.revision) < 1
 		)
 			throw new Error("Preflight requires exact draft revision and digest");
-		const readSource = body.readComposeSource === true;
+		const stagedSource = body.useStagedSource === true;
 		if (
-			(body.readComposeSource !== undefined && !readSource) ||
+			(body.useStagedSource !== undefined && !stagedSource) ||
+			(stagedSource && body.readComposeSource !== undefined)
+		)
+			throw new Error(
+				"Staged checks require useStagedSource: true, without repository-read opt-in",
+			);
+		const readSource = body.readComposeSource === true || stagedSource;
+		if (
+			(body.readComposeSource !== undefined &&
+				body.readComposeSource !== true) ||
 			(!readSource && (body.app !== undefined || body.target !== undefined))
 		)
 			throw new Error(
@@ -272,7 +266,9 @@ export class DefinitionDrafts {
 			);
 		const selection = readSource
 			? {
-					readComposeSource: true,
+					...(stagedSource
+						? { useStagedSource: true }
+						: { readComposeSource: true }),
 					app: text(body.app, "source app", 128),
 					target: text(body.target, "source target", 128),
 				}
@@ -304,6 +300,24 @@ export class DefinitionDrafts {
 			const draft = parseDraft(raw);
 			if (draft.revision !== body.revision || draft.digest !== contentDigest)
 				throw new Error("Draft changed; load current before preflight");
+			let staged: SourceDraft | undefined;
+			if (stagedSource && selection) {
+				const binding = sourceBinding(
+					this.config,
+					draft.content,
+					selection.app,
+					selection.target,
+				);
+				staged = draft.sources?.find(
+					(source) =>
+						source.repository === binding.repository &&
+						source.file === binding.file,
+				);
+				if (!staged)
+					throw new Error(
+						"No saved source matches this exact current target binding",
+					);
+			}
 			const report: Preflight = {
 				...(selection
 					? inspectComposeSource(
@@ -311,6 +325,7 @@ export class DefinitionDrafts {
 							draft.content,
 							selection.app,
 							selection.target,
+							staged,
 						)
 					: inspectDefinition(this.config, draft.content)),
 				id: `preflight-${key}`,
@@ -327,6 +342,13 @@ export class DefinitionDrafts {
 			reports.requests[key] = JSON.stringify({ request, id: report.id });
 			return report;
 		}, background);
+	}
+	async saveSource(body: Record<string, unknown>) {
+		privateState(this.config);
+		return this.engine().commit(
+			async (tx) => stageSource(this.config, await tx.doc(DraftState), body),
+			background,
+		);
 	}
 	private id(value: string) {
 		if (!/^draft-[a-f0-9]{64}$/.test(value))
@@ -396,6 +418,7 @@ export class DefinitionDrafts {
 				content,
 				digest: digest(content),
 				base: previous?.base ?? base(this.config),
+				...(previous?.sources ? { sources: previous.sources } : {}),
 			};
 			const result = { id, revision: draft.revision, digest: draft.digest };
 			doc.drafts[id] = JSON.stringify(draft);
