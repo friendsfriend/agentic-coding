@@ -297,6 +297,13 @@ export function serve(app: Runtime, port = 0) {
 							text(body.requestId, "request ID", 256),
 						),
 					});
+				if (url.pathname === "/api/environments/drafts/source/base") {
+					if (url.searchParams.size)
+						throw new Error(
+							"Source base establishment does not accept query parameters",
+						);
+					return json(await app.environments.drafts.captureBase(body));
+				}
 				if (url.pathname === "/api/environments/drafts/source") {
 					if (url.searchParams.size)
 						throw new Error("Source staging does not accept query parameters");

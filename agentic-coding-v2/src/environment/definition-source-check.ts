@@ -157,9 +157,11 @@ export function inspectComposeSource(
 			serviceCount: plan.services.length,
 			origin: staged ? "private-staged-text" : "repository-file",
 			stagedDigest: staged?.digest,
-			base: staged ? "unobserved; promotion unsupported" : undefined,
+			base: staged
+				? "not validated by parser; promotion unsupported"
+				: undefined,
 			message:
-				"Selected Compose source accepted by the native strict subset parser. Only the selected bytes were parsed (staged text or opted-in repository capture); source text, commands, environment values and compiled plans are withheld. Bind paths are containment-checked, not validated as a complete source tree. No secrets, engine calls, runtime tests or promotion authority. Other sources remain unchecked.",
+				"Selected Compose source accepted by the native strict subset parser. Only the selected bytes were parsed (staged text or opted-in repository capture); source text, commands, environment values and compiled plans are withheld. Bind paths are containment-checked, not validated as a complete source tree. No credential resolution, engine calls, runtime tests or promotion authority. Other sources remain unchecked.",
 		};
 	} catch {
 		return {

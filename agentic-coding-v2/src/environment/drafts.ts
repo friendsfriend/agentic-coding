@@ -6,6 +6,7 @@ import { type Config, digest, text } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
 import {
 	type Base,
+	captureSourceBase,
 	type Draft,
 	type Receipt,
 	type SourceDraft,
@@ -14,6 +15,10 @@ import {
 	stored,
 } from "./definition-draft-data.ts";
 import { inspectDefinition } from "./definition-preflight.ts";
+import {
+	inspectSourceBase,
+	observeSourceBase,
+} from "./definition-source-base.ts";
 import { inspectComposeSource } from "./definition-source-check.ts";
 
 const DraftState = defineDoc<{
@@ -39,6 +44,7 @@ const Preflights = defineDoc<{
 type Preflight = (
 	| ReturnType<typeof inspectDefinition>
 	| ReturnType<typeof inspectComposeSource>
+	| ReturnType<typeof inspectSourceBase>
 ) & {
 	id: string;
 	draftId: string;
@@ -231,6 +237,7 @@ export class DefinitionDrafts {
 						"digest",
 						"readComposeSource",
 						"useStagedSource",
+						"compareSourceBase",
 						"app",
 						"target",
 					].includes(key),
@@ -247,6 +254,16 @@ export class DefinitionDrafts {
 			Number(body.revision) < 1
 		)
 			throw new Error("Preflight requires exact draft revision and digest");
+		const compareBase = body.compareSourceBase === true;
+		if (
+			(body.compareSourceBase !== undefined && !compareBase) ||
+			(compareBase &&
+				(body.readComposeSource !== undefined ||
+					body.useStagedSource !== undefined))
+		)
+			throw new Error(
+				"Base comparisons require explicit compareSourceBase: true without other source modes",
+			);
 		const stagedSource = body.useStagedSource === true;
 		if (
 			(body.useStagedSource !== undefined && !stagedSource) ||
@@ -255,7 +272,8 @@ export class DefinitionDrafts {
 			throw new Error(
 				"Staged checks require useStagedSource: true, without repository-read opt-in",
 			);
-		const readSource = body.readComposeSource === true || stagedSource;
+		const readSource =
+			body.readComposeSource === true || stagedSource || compareBase;
 		if (
 			(body.readComposeSource !== undefined &&
 				body.readComposeSource !== true) ||
@@ -266,9 +284,11 @@ export class DefinitionDrafts {
 			);
 		const selection = readSource
 			? {
-					...(stagedSource
-						? { useStagedSource: true }
-						: { readComposeSource: true }),
+					...(compareBase
+						? { compareSourceBase: true }
+						: stagedSource
+							? { useStagedSource: true }
+							: { readComposeSource: true }),
 					app: text(body.app, "source app", 128),
 					target: text(body.target, "source target", 128),
 				}
@@ -301,7 +321,7 @@ export class DefinitionDrafts {
 			if (draft.revision !== body.revision || draft.digest !== contentDigest)
 				throw new Error("Draft changed; load current before preflight");
 			let staged: SourceDraft | undefined;
-			if (stagedSource && selection) {
+			if ((stagedSource || compareBase) && selection) {
 				const binding = sourceBinding(
 					this.config,
 					draft.content,
@@ -318,16 +338,29 @@ export class DefinitionDrafts {
 						"No saved source matches this exact current target binding",
 					);
 			}
-			const report: Preflight = {
-				...(selection
-					? inspectComposeSource(
-							this.config,
-							draft.content,
+			const comparison =
+				compareBase && selection && staged && staged.base !== "unobserved"
+					? inspectSourceBase(
+							{ ...staged, base: staged.base },
 							selection.app,
 							selection.target,
-							staged,
 						)
-					: inspectDefinition(this.config, draft.content)),
+					: null;
+			if (compareBase && !comparison)
+				throw new Error(
+					"No established source base; explicit capture/acceptance required",
+				);
+			const report: Preflight = {
+				...(comparison ??
+					(selection
+						? inspectComposeSource(
+								this.config,
+								draft.content,
+								selection.app,
+								selection.target,
+								staged,
+							)
+						: inspectDefinition(this.config, draft.content))),
 				id: `preflight-${key}`,
 				draftId: id,
 				revision: draft.revision,
@@ -342,6 +375,19 @@ export class DefinitionDrafts {
 			reports.requests[key] = JSON.stringify({ request, id: report.id });
 			return report;
 		}, background);
+	}
+	async captureBase(body: Record<string, unknown>) {
+		privateState(this.config);
+		return this.engine().commit(
+			async (tx) =>
+				captureSourceBase(
+					this.config,
+					await tx.doc(DraftState),
+					body,
+					observeSourceBase,
+				),
+			background,
+		);
 	}
 	async saveSource(body: Record<string, unknown>) {
 		privateState(this.config);

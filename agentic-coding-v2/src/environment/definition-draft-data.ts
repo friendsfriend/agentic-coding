@@ -1,5 +1,6 @@
 import { type Config, digest, text } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
+import type { SourceBase } from "./definition-source-base.ts";
 import { publicComposePath } from "./definition-source-check.ts";
 
 export type SourceDraft = {
@@ -7,7 +8,7 @@ export type SourceDraft = {
 	file: string;
 	content: string;
 	digest: string;
-	base: "unobserved";
+	base: "unobserved" | SourceBase;
 };
 export type Base = {
 	destination: string;
@@ -124,6 +125,11 @@ export function stageSource(
 			"Draft revision conflict; load current before saving source",
 		);
 	const binding = sourceBinding(config, previous.content, app, target),
+		original = previous.sources?.find(
+			(source) =>
+				source.repository === binding.repository &&
+				source.file === binding.file,
+		),
 		sources = (previous.sources ?? []).filter(
 			(source) =>
 				source.repository !== binding.repository ||
@@ -133,7 +139,7 @@ export function stageSource(
 		...binding,
 		content,
 		digest: digest(content),
-		base: "unobserved",
+		base: original?.base ?? "unobserved",
 	});
 	if (
 		sources.length > 4 ||
@@ -146,6 +152,100 @@ export function stageSource(
 			"Staged source capacity exceeded (4 files / 128 KiB per draft)",
 		);
 	const draft = { ...previous, revision: previous.revision + 1, sources },
+		result = { id, revision: draft.revision, digest: draft.digest };
+	doc.drafts[id] = JSON.stringify(draft);
+	doc.receipts[key] = JSON.stringify({ request, result });
+	return result;
+}
+
+/** Explicit late-base establishment; the native caller owns the transaction and
+ * supplies the bounded read adapter. Existing bases cannot be overwritten. */
+export function captureSourceBase(
+	config: Config,
+	doc: DraftData,
+	body: Record<string, unknown>,
+	observe: (repository: string, file: string) => SourceBase,
+) {
+	if (
+		Object.keys(body).some(
+			(key) =>
+				![
+					"requestId",
+					"id",
+					"revision",
+					"app",
+					"target",
+					"sourceDigest",
+					"readBase",
+					"acceptCurrentBase",
+				].includes(key),
+		) ||
+		body.readBase !== true ||
+		body.acceptCurrentBase !== true
+	)
+		throw new Error(
+			"Explicit source-base read and current-not-staging-time base acceptance required; unknown fields refused",
+		);
+	const id = text(body.id, "draft ID", 80),
+		app = text(body.app, "source app", 128),
+		target = text(body.target, "source target", 128),
+		sourceDigest = text(body.sourceDigest, "source digest", 64),
+		requestId = text(body.requestId, "base request ID", 128);
+	if (
+		!/^draft-[a-f0-9]{64}$/.test(id) ||
+		!/^[a-f0-9]{64}$/.test(sourceDigest) ||
+		!Number.isSafeInteger(body.revision) ||
+		Number(body.revision) < 1
+	)
+		throw new Error("Exact current revision and source digest required");
+	const request = digest(
+			JSON.stringify({
+				kind: "establish-source-base",
+				id,
+				revision: body.revision,
+				app,
+				target,
+				sourceDigest,
+				readBase: true,
+				acceptCurrentBase: true,
+			}),
+		),
+		key = digest(requestId),
+		recorded = doc.receipts[key];
+	if (recorded) {
+		const receipt = stored<Receipt>(recorded);
+		if (receipt.request !== request)
+			throw new Error("Base request ID reused for different input");
+		return receipt.result;
+	}
+	if (Object.keys(doc.receipts).length >= 256)
+		throw new Error("Native draft receipt capacity reached");
+	const raw = doc.drafts[id];
+	if (!raw) throw new Error("Unknown definition draft");
+	const previous = stored<Draft>(raw);
+	if (previous.revision !== body.revision)
+		throw new Error(
+			"Draft revision conflict; load current before establishing base",
+		);
+	const binding = sourceBinding(config, previous.content, app, target),
+		source = previous.sources?.find(
+			(source) =>
+				source.repository === binding.repository &&
+				source.file === binding.file,
+		);
+	if (
+		!source ||
+		source.digest !== sourceDigest ||
+		digest(source.content) !== sourceDigest
+	)
+		throw new Error("No exact matching staged source");
+	if (source.base !== "unobserved")
+		throw new Error("Source base already established; rebasing is unsupported");
+	const base = observe(binding.repository, binding.file),
+		sources = previous.sources?.map((candidate) =>
+			candidate === source ? { ...candidate, base } : candidate,
+		),
+		draft = { ...previous, revision: previous.revision + 1, sources },
 		result = { id, revision: draft.revision, digest: draft.digest };
 	doc.drafts[id] = JSON.stringify(draft);
 	doc.receipts[key] = JSON.stringify({ request, result });

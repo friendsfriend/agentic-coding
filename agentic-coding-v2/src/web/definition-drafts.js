@@ -50,6 +50,19 @@ export function definitionDrafts(request) {
 	sourceEditor.setAttribute("aria-label", "Private staged Compose YAML");
 	sourceEditor.rows = 12;
 	sourceEditor.maxLength = 65536;
+	const acceptBase = element("input");
+	acceptBase.type = "checkbox";
+	acceptBase.setAttribute(
+		"aria-label",
+		"Accept current file as base, not original staging-time base",
+	);
+	const acceptBaseLabel = element(
+		"label",
+		"Accept CURRENT file/absence as the base now (not its original staging-time state; no promotion approval)",
+	);
+	acceptBaseLabel.prepend(acceptBase);
+	let pendingBaseSave = null,
+		pendingBaseCheck = null;
 	let sourceSavedText = "",
 		sourceMarker = "",
 		pendingSourceSave = null,
@@ -61,6 +74,24 @@ export function definitionDrafts(request) {
 			sourceApp.value,
 			sourceTarget.value,
 		]);
+	const selectedSource = () => {
+		const project = JSON.parse(current.content).projects.find(
+				(project) => project.id === sourceApp.value,
+			),
+			target = project?.targets.find(
+				(target) => target.id === sourceTarget.value,
+			);
+		if (!target?.compose)
+			throw Error("Choose an exact saved Compose app/target");
+		const file = target.compose.file
+			.split("/")
+			.filter((part) => part !== ".")
+			.join("/");
+		return current.sources?.find(
+			(source) =>
+				source.repository === project.repository && source.file === file,
+		);
+	};
 	let pendingSource = null;
 	let current = null,
 		savedText = empty,
@@ -245,27 +276,13 @@ export function definitionDrafts(request) {
 					!confirm("Discard unsaved Compose YAML?")
 				)
 					return;
-				const project = JSON.parse(current.content).projects.find(
-						(project) => project.id === sourceApp.value,
-					),
-					target = project?.targets.find(
-						(target) => target.id === sourceTarget.value,
-					);
-				if (!target?.compose)
-					throw Error("Choose an exact saved Compose app/target");
-				const file = target.compose.file
-						.split("/")
-						.filter((part) => part !== ".")
-						.join("/"),
-					source = current.sources?.find(
-						(source) =>
-							source.repository === project.repository && source.file === file,
-					);
+				const source = selectedSource();
+				sourcePermission.checked = false;
+				acceptBase.checked = false;
 				sourceEditor.value = source?.content ?? "";
 				sourceSavedText = sourceEditor.value;
 				sourceMarker = sourceSelection();
-				status.textContent =
-					"Private staged source buffer loaded (or new blank). No repository source contents read. Base unobserved; promotion unsupported.";
+				status.textContent = `Private staged source buffer loaded (or new blank). No repository source contents read. ${source?.base && source.base !== "unobserved" ? "Explicit current base established (NOT original staging-time state)." : "Base unobserved."} No promotion authority.`;
 			}),
 	);
 	const saveSource = button(
@@ -304,7 +321,7 @@ export function definitionDrafts(request) {
 				sourceSavedText = sourceEditor.value;
 				pendingSourceSave = null;
 				sourcePermission.checked = false;
-				status.textContent = `Private source saved; draft revision ${current.revision}. Base unobserved; no execution or promotion.`;
+				status.textContent = `Private source saved; draft revision ${current.revision}. Source base retained as saved; no execution or promotion.`;
 				await refreshList();
 			}),
 	);
@@ -336,6 +353,94 @@ export function definitionDrafts(request) {
 				report.textContent = JSON.stringify(observed, null, 2);
 				status.textContent =
 					"Historical staged-source parser report saved. Repository source contents were NOT read; bind metadata may be checked. No runtime, base fence or promotion authority.";
+			}),
+	);
+	const captureBase = button(
+		"Establish current source base (no promotion)",
+		() =>
+			busy(async () => {
+				const allowed = sourcePermission.checked,
+					accepted = acceptBase.checked;
+				sourcePermission.checked = false;
+				acceptBase.checked = false;
+				if (
+					!current ||
+					dirty() ||
+					sourceMarker !== sourceSelection() ||
+					!allowed ||
+					!accepted
+				)
+					throw Error(
+						"Save/load exact selected source, allow its read and explicitly accept current-not-staging-time base first",
+					);
+				const source = selectedSource();
+				if (!source) throw Error("Save selected source first");
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						app: sourceApp.value,
+						target: sourceTarget.value,
+						sourceDigest: source.digest,
+						readBase: true,
+						acceptCurrentBase: true,
+					},
+					fingerprint = JSON.stringify(body);
+				if (!pendingBaseSave || pendingBaseSave.fingerprint !== fingerprint)
+					pendingBaseSave = { fingerprint, requestId: crypto.randomUUID() };
+				const receipt = await request("/api/environments/drafts/source/base", {
+						...body,
+						requestId: pendingBaseSave.requestId,
+					}),
+					draft = await request(
+						`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+					);
+				if (
+					draft.revision !== receipt.revision ||
+					draft.digest !== receipt.digest
+				)
+					throw Error(
+						"Base receipt exists but draft advanced; load explicitly",
+					);
+				current = draft;
+				pendingBaseSave = null;
+				status.textContent = `Explicit current source base saved; draft revision ${current.revision}. Not original staging-time state or promotion authority.`;
+				await refreshList();
+			}),
+	);
+	const compareBase = button(
+		"Compare established source base (read only)",
+		() =>
+			busy(async () => {
+				const allowed = sourcePermission.checked;
+				sourcePermission.checked = false;
+				if (
+					!current ||
+					dirty() ||
+					sourceMarker !== sourceSelection() ||
+					!allowed
+				)
+					throw Error(
+						"Save/load exact source and allow a fresh repository source read first",
+					);
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						digest: current.digest,
+						app: sourceApp.value,
+						target: sourceTarget.value,
+						compareSourceBase: true,
+					},
+					fingerprint = JSON.stringify(body);
+				if (!pendingBaseCheck || pendingBaseCheck.fingerprint !== fingerprint)
+					pendingBaseCheck = { fingerprint, requestId: crypto.randomUUID() };
+				const observed = await request("/api/environments/drafts/preflight", {
+					...body,
+					requestId: pendingBaseCheck.requestId,
+				});
+				pendingBaseCheck = null;
+				report.textContent = JSON.stringify(observed, null, 2);
+				status.textContent =
+					"Historical live-vs-established-base comparison saved. Does NOT compare staged text with live content, guarantee atomic publication or grant promotion approval.";
 			}),
 	);
 	const loadReport = button("Load latest saved preflight", () =>
@@ -387,6 +492,9 @@ export function definitionDrafts(request) {
 		sourceEditor,
 		saveSource,
 		checkStaged,
+		acceptBaseLabel,
+		captureBase,
+		compareBase,
 		loadReport,
 		status,
 		report,
