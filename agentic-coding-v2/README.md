@@ -139,6 +139,16 @@ Only per-path digests, content digests, byte counts and the aggregate `treeDiges
 
 The UI requires saved (not dirty) editor text and an explicit confirmation, clears the loaded source buffer on removal, resets to an empty draft after deletion, and reports the resulting revision. Both routes are authenticated, reject query parameters and unknown fields, and remain unavailable to model tools.
 
+### Promoting the exact staged configuration
+
+**Promote exact staged config to live environments.json** uses `POST /api/environments/drafts/promote` with `{requestId, id, revision, digest, approve}`. `approve` must equal the exact current staged content digest, and `revision`/`digest` must still match the stored draft; anything else is refused. Only the private staged document is promoted: staged Compose sources, repository files, running processes, containers, leases and staging trees are never touched, and a running instance may not reload the new configuration automatically.
+
+Promotion preconditions: the draft content must still digest to its stored digest and pass the native v1 schema with at most 32 projects / 128 targets, every referenced repository must already be authorized and exist at its real path, the live destination must be absent or a regular file of at most 64 KiB (never a symlink or directory), and the destination must not sit inside an authorized repository. When the live destination already holds exactly the staged bytes the route reports `unchanged` and writes nothing.
+
+The fence is the destination base recorded when the draft was created or last advanced: it is compared to the live destination (state `absent`, or `regular` plus content digest) immediately before the write and once more inside the fence check, and the promoted bytes are read back through the same no-follow path afterwards. This is a compare-and-swap, not an OS lock: a concurrent external writer inside the short window, or a second instance promoting to the same file, can still lose an update. If the read-back does not verify, the route errors and records nothing, so the fence then refuses further attempts until a new draft stages against the current state — it deliberately does not restore previous bytes, because restoring could clobber a concurrent writer.
+
+Writes are atomic per file: an exclusive same-directory temp file (`.environments.json.<digest>.tmp`, mode `0600`) is written, fsynced and renamed over the destination, then the directory is fsynced best effort; the temp file is removed on every failure path. The resulting file mode is `0600`. Each promotion is stored as an immutable history record (`promotion-<id>`, at most 64, read with `GET /api/environments/drafts/promotion?id=`) that carries the outcome, previous and resulting destination digests, byte/project/target counts and explicit `sourceFilesWritten`, `repositoriesChanged`, `runtimeChecked` and `reloaded: false` flags. Records are not pruned, survive draft deletion, and an exact retry returns the recorded record without writing again. No promotion record is runtime validation, readiness, review approval or execution authority, and none of this is a model tool.
+
 Create `CONFIG_DIR/environments.json` manually for live use (restart to discover definition changes):
 
 ```json

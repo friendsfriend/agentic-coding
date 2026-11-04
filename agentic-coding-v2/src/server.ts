@@ -242,6 +242,21 @@ export function serve(app: Runtime, port = 0) {
 				}
 				if (
 					request.method === "GET" &&
+					url.pathname === "/api/environments/drafts/promotion"
+				) {
+					if (
+						[...url.searchParams.keys()].some((key) => key !== "id") ||
+						url.searchParams.getAll("id").length !== 1
+					)
+						throw new Error("Promotion read requires exactly one record ID");
+					return json(
+						await app.environments.drafts.promotion(
+							text(url.searchParams.get("id"), "promotion ID", 80),
+						),
+					);
+				}
+				if (
+					request.method === "GET" &&
 					url.pathname === "/api/environments/drafts"
 				) {
 					if (
@@ -318,6 +333,11 @@ export function serve(app: Runtime, port = 0) {
 					if (url.searchParams.size)
 						throw new Error("Draft removal does not accept query parameters");
 					return json(await app.environments.drafts.removeDraft(body));
+				}
+				if (url.pathname === "/api/environments/drafts/promote") {
+					if (url.searchParams.size)
+						throw new Error("Promotion does not accept query parameters");
+					return json(await app.environments.drafts.promote(body));
 				}
 				if (url.pathname === "/api/environments/drafts/preflight") {
 					if (url.searchParams.size)

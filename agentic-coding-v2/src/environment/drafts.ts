@@ -20,6 +20,10 @@ import {
 import { inspectDefinition } from "./definition-preflight.ts";
 import { preflightRequest } from "./definition-preflight-request.ts";
 import {
+	inspectDestination,
+	promoteDefinition,
+} from "./definition-promotion.ts";
+import {
 	inspectSourceBase,
 	observeSourceBase,
 } from "./definition-source-base.ts";
@@ -47,6 +51,16 @@ const Preflights = defineDoc<{
 	initial: () => ({ reports: {}, requests: {} }),
 	checkpointWhen: () => true,
 });
+const Promotions = defineDoc<{
+	records: Record<string, string>;
+	requests: Record<string, string>;
+}>({
+	kind: "v2.environment-definition-promotions",
+	version: 1,
+	scope: "session",
+	initial: () => ({ records: {}, requests: {} }),
+	checkpointWhen: () => true,
+});
 type Preflight = (
 	| ReturnType<typeof inspectDefinition>
 	| ReturnType<typeof inspectComposeSource>
@@ -65,60 +79,14 @@ type Preflight = (
 };
 const parseDraft = (value: string) => stored<Draft>(value);
 
+/** Recorded live destination base; shared no-follow read, never a write. */
 function base(config: Config): Base {
-	const destination = path.join(config.configDir, "environments.json");
-	let stat: fs.Stats;
-	try {
-		stat = fs.lstatSync(destination);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT")
-			return { destination, state: "absent" };
-		throw new Error("Definition base is unavailable");
-	}
-	if (!stat.isFile() || stat.size > 65536)
-		throw new Error(
-			"Draft base requires a regular environments.json of at most 64 KiB; symlinks are unsupported",
-		);
-	const fd = fs.openSync(
-		destination,
-		fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
-	);
-	try {
-		const opened = fs.fstatSync(fd),
-			buffer = Buffer.alloc(65537);
-		if (
-			!opened.isFile() ||
-			opened.dev !== stat.dev ||
-			opened.ino !== stat.ino ||
-			opened.size > 65536
-		)
-			throw new Error("Definition base changed");
-		let length = 0;
-		while (length < buffer.length) {
-			const n = fs.readSync(fd, buffer, length, buffer.length - length, null);
-			if (!n) break;
-			length += n;
-		}
-		const after = fs.fstatSync(fd),
-			current = fs.lstatSync(destination);
-		if (
-			length > 65536 ||
-			!current.isFile() ||
-			current.dev !== opened.dev ||
-			current.ino !== opened.ino ||
-			opened.size !== after.size ||
-			opened.mtimeMs !== after.mtimeMs ||
-			opened.ctimeMs !== after.ctimeMs
-		)
-			throw new Error("Definition base changed");
-		return {
-			destination,
-			state: "regular",
-			digest: digest(buffer.subarray(0, length)),
-		};
-	} finally {
-		fs.closeSync(fd);
-	}
+	const live = inspectDestination(config);
+	return {
+		destination: live.destination,
+		state: live.state,
+		...(live.digest ? { digest: live.digest } : {}),
+	};
 }
 function privateState(config: Config) {
 	const root = fs.realpathSync(config.stateDir),
@@ -187,6 +155,13 @@ export class DefinitionDrafts {
 			raw = doc?.drafts[id];
 		if (!raw) throw new Error("Unknown definition draft");
 		const draft = parseDraft(raw);
+		let destination: unknown = null;
+		let destinationError = false;
+		try {
+			destination = inspectDestination(this.config);
+		} catch {
+			destinationError = true;
+		}
 		const reports = await this.engine().snapshot(Preflights, background);
 		const preflightReports = Object.values(reports?.reports ?? {})
 			.map((value) => stored<Preflight>(value))
@@ -211,6 +186,13 @@ export class DefinitionDrafts {
 			preflightReports,
 			schema: schema(this.config, draft),
 			baseMatches,
+			destination: destinationError
+				? { state: "unavailable" as const, digest: null }
+				: {
+						state: (destination as ReturnType<typeof inspectDestination>).state,
+						digest: (destination as ReturnType<typeof inspectDestination>)
+							.digest,
+					},
 			authority:
 				"Staged text only. Base comparison is an observation, never a promotion fence. No runtime validation, approval or promotion.",
 		};
@@ -352,6 +334,84 @@ export class DefinitionDrafts {
 			async (tx) => removeDraft(await tx.doc(DraftState), body),
 			background,
 		);
+	}
+	async promotion(id: string) {
+		privateState(this.config);
+		if (!/^promotion-[a-f0-9]{64}$/.test(id))
+			throw new Error("Invalid promotion record ID");
+		const doc = await this.engine().snapshot(Promotions, background),
+			raw = doc?.records[id];
+		if (!raw) throw new Error("Unknown promotion record");
+		return stored<unknown>(raw);
+	}
+	/** Single explicit developer action: exact staged content to live configuration. */
+	async promote(body: Record<string, unknown>) {
+		privateState(this.config);
+		if (
+			Object.keys(body).some(
+				(key) =>
+					!["requestId", "id", "revision", "digest", "approve"].includes(key),
+			)
+		)
+			throw new Error("Unsupported promotion field");
+		const requestId = text(body.requestId, "promotion request ID", 128),
+			id = text(body.id, "draft ID", 80),
+			contentDigest = text(body.digest, "draft digest", 64),
+			approve = text(body.approve, "approved content digest", 64);
+		this.id(id);
+		if (
+			!/^[a-f0-9]{64}$/.test(contentDigest) ||
+			!/^[a-f0-9]{64}$/.test(approve) ||
+			!Number.isSafeInteger(body.revision) ||
+			Number(body.revision) < 1
+		)
+			throw new Error("Promotion requires exact revision and content digests");
+		const request = digest(
+				JSON.stringify({ id, revision: body.revision, digest: contentDigest }),
+			),
+			key = digest(requestId);
+		return this.engine().commit(async (tx) => {
+			const records = await tx.doc(Promotions),
+				recorded = records.requests[key];
+			if (recorded) {
+				const receipt = stored<{ request: string; id: string }>(recorded);
+				if (receipt.request !== request)
+					throw new Error("Promotion request ID reused for different input");
+				const raw = records.records[receipt.id];
+				if (!raw) throw new Error("Private promotion receipt is unavailable");
+				return stored<unknown>(raw);
+			}
+			if (Object.keys(records.records).length >= 64)
+				throw new Error(
+					"Private promotion history capacity reached; automatic pruning is unsupported",
+				);
+			const drafts = await tx.doc(DraftState),
+				raw = drafts.drafts[id];
+			if (!raw) throw new Error("Unknown definition draft");
+			const draft = parseDraft(raw);
+			if (draft.revision !== body.revision || draft.digest !== contentDigest)
+				throw new Error("Draft changed; load current before promotion");
+			const result = promoteDefinition(this.config, draft, approve),
+				record = {
+					...result,
+					id: `promotion-${key}`,
+					draftId: id,
+					revision: draft.revision,
+					digest: draft.digest,
+					destination: "environments.json",
+					sourceFilesWritten: false,
+					repositoriesChanged: false,
+					runtimeChecked: false,
+					reloaded: false,
+					observedAt: new Date().toISOString(),
+					ordinal: Object.keys(records.records).length + 1,
+					message:
+						"Exact staged text written to the live environments.json with an exclusive temp file, fsync and same-directory rename, after re-checking the recorded destination base. No staged source, repository file, running process, container or lease was changed; a running instance may not reload automatically.",
+				};
+			records.records[record.id] = JSON.stringify(record);
+			records.requests[key] = JSON.stringify({ request, id: record.id });
+			return record;
+		}, background);
 	}
 	private id(value: string) {
 		if (!/^draft-[a-f0-9]{64}$/.test(value))

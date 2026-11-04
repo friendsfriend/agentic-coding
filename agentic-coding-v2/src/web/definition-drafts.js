@@ -62,6 +62,7 @@ export function definitionDrafts(request) {
 	);
 	acceptBaseLabel.prepend(acceptBase);
 	let pendingCandidate = null;
+	let pendingPromotion = null;
 	let pendingSourceRemoval = null;
 	let pendingDraftRemoval = null;
 	let pendingBaseSave = null,
@@ -123,7 +124,7 @@ export function definitionDrafts(request) {
 		}
 	};
 	const describe = (draft) =>
-		`${draft.id} · revision ${draft.revision} · ${draft.digest}. ${draft.schema.message} Base observation: ${draft.baseMatches === null ? "unavailable" : draft.baseMatches ? "unchanged" : "CHANGED since creation"}. No promotion authority.`;
+		`${draft.id} · revision ${draft.revision} · ${draft.digest}. ${draft.schema.message} Base observation: ${draft.baseMatches === null ? "unavailable" : draft.baseMatches ? "unchanged" : "CHANGED since creation"}. Live destination: ${draft.destination?.state === "unavailable" ? "unavailable" : draft.destination?.state === "absent" ? "absent" : `regular ${draft.destination?.digest ?? ""}`}. Promotion writes only this exact staged configuration text.`;
 	const refreshList = async () => {
 		const drafts = await request("/api/environments/drafts");
 		selector.replaceChildren(
@@ -575,6 +576,42 @@ export function definitionDrafts(request) {
 				"Ephemeral tree assembled from saved text only, verified and discarded. NOT a retained staged tree, runtime/readiness validation, review or promotion approval.",
 			),
 	);
+	const promote = button(
+		"Promote exact staged config to live environments.json",
+		() =>
+			busy(async () => {
+				if (!current)
+					throw Error("Load and save the staged draft to promote first");
+				if (dirty()) throw Error("Save the exact staged text before promoting");
+				if (
+					!confirm(
+						`Write this exact staged content (${current.digest}) to the live environments.json? This changes live configuration; running processes, containers and repositories are untouched.`,
+					)
+				)
+					return;
+				const body = {
+						id: current.id,
+						revision: current.revision,
+						digest: current.digest,
+						approve: current.digest,
+					},
+					fingerprint = JSON.stringify(body);
+				if (!pendingPromotion || pendingPromotion.fingerprint !== fingerprint)
+					pendingPromotion = { fingerprint, requestId: crypto.randomUUID() };
+				const record = await request("/api/environments/drafts/promote", {
+					...body,
+					requestId: pendingPromotion.requestId,
+				});
+				pendingPromotion = null;
+				report.textContent = JSON.stringify(record, null, 2);
+				const draft = await request(
+					`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+				);
+				current = draft;
+				status.textContent = `Promotion ${record.outcome}: live environments.json now holds the approved staged digest. Staged sources and repositories unchanged; restart to load. ${describe(draft)}`;
+				await refreshList();
+			}),
+	);
 	const loadReport = button("Load latest saved preflight", () =>
 		busy(async () => {
 			if (!current) throw Error("Load a saved draft first");
@@ -630,6 +667,7 @@ export function definitionDrafts(request) {
 		compareBase,
 		candidateCheck,
 		treeCheck,
+		promote,
 		loadReport,
 		removeStagedDraft,
 		status,
