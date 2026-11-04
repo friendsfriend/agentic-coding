@@ -12,6 +12,7 @@ export type SourceDraft = {
 };
 export type Base = {
 	destination: string;
+	directoryDigest?: string;
 	state: "absent" | "regular";
 	digest?: string;
 };

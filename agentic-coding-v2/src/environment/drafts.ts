@@ -84,6 +84,7 @@ function base(config: Config): Base {
 	const live = inspectDestination(config);
 	return {
 		destination: live.destination,
+		directoryDigest: live.directoryDigest,
 		state: live.state,
 		...(live.digest ? { digest: live.digest } : {}),
 	};

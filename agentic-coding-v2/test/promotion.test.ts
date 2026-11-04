@@ -252,6 +252,48 @@ test("exact approved staged content is promoted atomically under a destination f
 			).json(),
 		).toEqual(promoted);
 		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
+		const directoryDraft = await (
+				await create("directory-draft", document("v4"))
+			).json(),
+			originalDirectory = `${config.configDir}-original`;
+		fs.renameSync(config.configDir, originalDirectory);
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+		fs.writeFileSync(live, document("v3"));
+		try {
+			expect(
+				(
+					await promote(
+						"replaced-directory",
+						directoryDraft.id,
+						1,
+						directoryDraft.digest,
+						directoryDraft.digest,
+					)
+				).status,
+			).toBe(400);
+			expect(fs.readFileSync(live, "utf8")).toBe(document("v3"));
+			expect(
+				fs.readFileSync(
+					path.join(originalDirectory, "environments.json"),
+					"utf8",
+				),
+			).toBe(document("v3"));
+			expect(fs.existsSync(lock)).toBe(false);
+			const loaded = await (
+				await api(`/api/environments/drafts?id=${directoryDraft.id}`)
+			).json();
+			expect(loaded.baseMatches).toBe(false);
+		} finally {
+			fs.rmSync(config.configDir, { recursive: true });
+			fs.renameSync(originalDirectory, config.configDir);
+		}
+		expect(
+			(
+				await (
+					await api(`/api/environments/drafts?id=${directoryDraft.id}`)
+				).json()
+			).baseMatches,
+		).toBe(true);
 		const historyRoute = "/api/environments/drafts/promotions";
 		expect((await fetch(new URL(historyRoute, host.url))).status).toBe(401);
 		expect((await api(`${historyRoute}?id=${promoted.id}`)).status).toBe(400);

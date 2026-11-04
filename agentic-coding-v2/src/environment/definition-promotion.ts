@@ -8,15 +8,39 @@ import { within } from "./path-within.ts";
 const limit = 65536,
 	name = "environments.json",
 	lockName = `.${name}.lock`;
+function directoryIdentity(config: Config) {
+	const directory = fs.realpathSync(config.configDir),
+		stat = fs.lstatSync(directory);
+	if (!stat.isDirectory())
+		throw new Error("Live configuration directory is unavailable");
+	return {
+		directory,
+		directoryDigest: digest(
+			JSON.stringify({ directory, dev: stat.dev, ino: stat.ino }),
+		),
+	};
+}
+function sameDirectory(config: Config, expected: string) {
+	if (directoryIdentity(config).directoryDigest !== expected)
+		throw new Error("Live configuration directory identity changed");
+}
 /** Reads the live destination without following links; never creates or writes. */
 export function inspectDestination(config: Config) {
-	const destination = path.join(config.configDir, name);
+	const { directory, directoryDigest } = directoryIdentity(config),
+		destination = path.join(directory, name);
 	let stat: fs.Stats;
 	try {
 		stat = fs.lstatSync(destination);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT")
-			return { destination, state: "absent" as const, digest: null };
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			sameDirectory(config, directoryDigest);
+			return {
+				destination,
+				directoryDigest,
+				state: "absent" as const,
+				digest: null,
+			};
+		}
 		throw new Error("Live destination is unavailable");
 	}
 	if (!stat.isFile() || stat.size > limit)
@@ -61,8 +85,10 @@ export function inspectDestination(config: Config) {
 			opened.ctimeMs !== after.ctimeMs
 		)
 			throw new Error("Live destination changed");
+		sameDirectory(config, directoryDigest);
 		return {
 			destination,
+			directoryDigest,
 			state: "regular" as const,
 			digest: digest(buffer.subarray(0, length)),
 		};
@@ -70,14 +96,15 @@ export function inspectDestination(config: Config) {
 		fs.closeSync(fd);
 	}
 }
-/** Recorded staging-time destination state must still hold immediately before
- * and after the write. This is a compare-and-swap, not an OS lock. */
+/** Recorded staging-time content and directory identity must still match.
+ * These path-based observations are not an OS compare-and-swap primitive. */
 function fence(draft: Draft, live: ReturnType<typeof inspectDestination>) {
 	const base = draft.base;
 	return (
 		base !== null &&
 		typeof base === "object" &&
 		["absent", "regular"].includes(base.state) &&
+		base.directoryDigest === live.directoryDigest &&
 		base.state === live.state &&
 		(base.digest ?? null) === live.digest
 	);
@@ -210,9 +237,18 @@ export function promoteDefinition(
 			"Promotion requires explicit approval of the exact current staged content digest",
 		);
 	const { bytes, projects, targets } = payload(config, draft),
-		destination = writable(config);
+		destination = writable(config),
+		pinned = directoryIdentity(config),
+		canonical = { ...config, configDir: pinned.directory };
+	if (destination !== path.join(pinned.directory, name))
+		throw new Error("Live configuration directory identity changed");
 	return locked(destination, () => {
-		const live = inspectDestination(config);
+		sameDirectory(config, pinned.directoryDigest);
+		if (draft.base.directoryDigest !== pinned.directoryDigest)
+			throw new Error(
+				"Draft lacks the current configuration-directory identity; create a fresh draft",
+			);
+		const live = inspectDestination(canonical);
 		if (live.state === "regular" && live.digest === draft.digest)
 			return {
 				outcome: "unchanged" as const,
@@ -225,8 +261,10 @@ export function promoteDefinition(
 			throw new Error(
 				"Live destination changed since this draft's recorded base; start or reload a draft to stage against the current configuration",
 			);
+		sameDirectory(config, pinned.directoryDigest);
 		replace(destination, bytes, draft.digest);
-		const after = inspectDestination(config);
+		const after = inspectDestination(canonical);
+		sameDirectory(config, pinned.directoryDigest);
 		if (after.state !== "regular" || after.digest !== draft.digest)
 			throw new Error(
 				"Promoted bytes did not verify against the staged digest; the live configuration state is unverified and further promotion needs a fresh draft",

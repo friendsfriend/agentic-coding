@@ -100,7 +100,7 @@ Two authenticated routes add bounded, revision-fenced private cleanup. `POST /ap
 
 One additional public API scenario verifies anonymous/unknown-field/absent/stale refusal, removal advancing revision while keeping the JSON digest, exact retry, an accepted candidate becoming a missing-source refusal after removal, successful re-staging, stale and unknown-field draft-deletion refusal, exact deletion retry, the deleted draft disappearing from list/read/preflight while its historical report still loads, a fresh draft reusing the freed slot, unchanged live repository/config files, no snapshot leakage and reopen persistence. Browser checks verify source removal clearing the buffer and reporting revision 3, the following candidate report showing a missing source, draft deletion emptying the list and resetting the editor, and no console errors; own host/browser closed. Cleanup is therefore private-data hygiene, not pruning, garbage collection or publication.
 
-Final quiet full suite: **82 tests / 1067 assertions**; zero-diagnostic lint, whole-project type-check, build/compiled help and diff checks pass. Applicable legacy lint/boundary **71 / 278** and full type-check pass. Disposable fake-backed checks do not prove live runtime parity.
+Final quiet full suite: **82 tests / 1073 assertions**; zero-diagnostic lint, whole-project type-check, build/compiled help and diff checks pass. Applicable legacy lint/boundary **71 / 278** and full type-check pass. Disposable fake-backed checks do not prove live runtime parity.
 
 ## Exact-content configuration promotion
 
@@ -186,3 +186,7 @@ Approval equality is now checked before historical receipt lookup, without chang
 ### Discoverable promotion history
 
 The authenticated, query-free `/api/environments/drafts/promotions` index exposes only bounded immutable summary fields, ordered newest ordinal first. The UI lists and explicitly loads records into a separate historical promotion display independently of any current draft. The public scenario verifies anonymous/query refusal, history ordering and summary projection after reopen and draft deletion, retained record readability and unchanged live bytes/lock state. Disposable browser verification listed and loaded a record after deleting its draft while retaining unsaved editor text. Own browser and fixture host were closed. History lookup is not live-file validation, approval, lock acquisition or publication.
+
+### Configuration-directory identity fencing
+
+New recorded bases also bind canonical configuration-directory path/device/inode identity. Destination observations verify that identity across their no-follow file reads. Promotion uses the canonical directory for both lock and destination I/O and checks identity before replacement and after read-back. Fresh promotion of older drafts lacking the binding is refused; their historical receipts remain replayable. Public-boundary verification replaces the configuration directory with another containing identical live bytes, verifies refusal/no changes to either directory/no leftover lock, observes a base mismatch, then restores the original directory and observes its base match again. This is a bounded path-based check, not descriptor-relative namespace protection; external races between checks, ABA and filesystem-write/native-receipt crash uncertainty remain open.
