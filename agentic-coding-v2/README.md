@@ -123,6 +123,14 @@ Acceptance requires at least one declared target, every declared target to be a 
 
 **Candidate acceptance is not isolated-tree or runtime validation.** Bases are bound but not freshly compared. Bind contents, auxiliary/provider/private inputs, complete staged trees, namespace-race-safe publication and independently reviewed exact-content promotion remain pending. Reports explicitly set isolated-tree, base-freshness, bind-content, runtime and publication flags false; no model tool, task, review, live catalog mutation or promotion capability is added.
 
+### Ephemeral isolated staged trees
+
+**Assemble isolated staged tree (verify then discard)** uses `{requestId, id, revision, digest, materializeStagedTree: true}`. It is mutually exclusive with candidate and selected-source modes, accepts no app/target fields, and requires an accepted saved candidate; an incomplete candidate produces a data-free `accepted: false` report and assembles nothing.
+
+A complete candidate is written into a freshly created `CONFIG_DIR`-independent private staging directory (`STATE_DIR/native/staging/tree-*`, `0700`) that must be outside every authorized repository, using saved JSON and staged text only: `environments.json` plus each staged source at its conventional normalized path. Files are created `O_EXCL`, mode-pinned `0400` with `0500` directories, then every path is re-opened with no-follow, confirmed to be one regular single-link file of the expected size, and re-digested. Duplicate tree paths, absolute or escaping paths and non-private staging roots are refused. The tree is always removed afterwards; the staging root is left empty.
+
+Only per-path digests, content digests, byte counts and the aggregate `treeDigest` are reported — never paths, source text, services, commands, values or filesystem errors. `isolatedTreeChecked` is true while `sourceContentsChecked`, `bindContentsChecked`, `baseFreshnessChecked`, `runtimeChecked`, `dependenciesExpanded`, `executionAllowed`, `publicationAllowed` and `treeRetained` stay false. No repository write, live source read, base refresh, runtime call, task/review admission, catalog reload or publication occurs. The tree is transient: it is not a retained staged tree, not materialized runtime input and not an approval gate or promotion capability.
+
 Create `CONFIG_DIR/environments.json` manually for live use (restart to discover definition changes):
 
 ```json

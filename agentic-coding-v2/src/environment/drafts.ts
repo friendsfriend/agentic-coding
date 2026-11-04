@@ -22,6 +22,8 @@ import {
 	observeSourceBase,
 } from "./definition-source-base.ts";
 import { inspectComposeSource } from "./definition-source-check.ts";
+import { assembleStagedTree } from "./definition-staged-tree.ts";
+import { within } from "./path-within.ts";
 
 const DraftState = defineDoc<{
 	drafts: Record<string, string>;
@@ -48,6 +50,7 @@ type Preflight = (
 	| ReturnType<typeof inspectComposeSource>
 	| ReturnType<typeof inspectSourceBase>
 	| ReturnType<typeof inspectStagedCandidate>
+	| ReturnType<typeof assembleStagedTree>
 ) & {
 	id: string;
 	draftId: string;
@@ -114,15 +117,6 @@ function base(config: Config): Base {
 	} finally {
 		fs.closeSync(fd);
 	}
-}
-function within(parent: string, child: string) {
-	const relative = path.relative(parent, child);
-	return (
-		relative === "" ||
-		(!relative.startsWith(`..${path.sep}`) &&
-			relative !== ".." &&
-			!path.isAbsolute(relative))
-	);
 }
 function privateState(config: Config) {
 	const root = fs.realpathSync(config.stateDir),
@@ -234,6 +228,7 @@ export class DefinitionDrafts {
 			id,
 			contentDigest,
 			candidate,
+			tree,
 			compareBase,
 			stagedSource,
 			selection,
@@ -294,16 +289,18 @@ export class DefinitionDrafts {
 			const report: Preflight = {
 				...(candidate
 					? inspectStagedCandidate(this.config, draft)
-					: (comparison ??
-						(selection
-							? inspectComposeSource(
-									this.config,
-									draft.content,
-									selection.app,
-									selection.target,
-									staged,
-								)
-							: inspectDefinition(this.config, draft.content)))),
+					: tree
+						? assembleStagedTree(this.config, draft)
+						: (comparison ??
+							(selection
+								? inspectComposeSource(
+										this.config,
+										draft.content,
+										selection.app,
+										selection.target,
+										staged,
+									)
+								: inspectDefinition(this.config, draft.content)))),
 				id: `preflight-${key}`,
 				draftId: id,
 				revision: draft.revision,

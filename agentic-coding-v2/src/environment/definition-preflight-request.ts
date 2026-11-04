@@ -5,6 +5,12 @@ const modes = [
 	"useStagedSource",
 	"compareSourceBase",
 	"validateStagedCandidate",
+	"materializeStagedTree",
+] as const;
+const selectedModes = [
+	"readComposeSource",
+	"useStagedSource",
+	"compareSourceBase",
 ] as const;
 function preflightMode(body: Record<string, unknown>) {
 	const allowed = [
@@ -25,7 +31,7 @@ function preflightMode(body: Record<string, unknown>) {
 		);
 	const mode = active[0];
 	if (
-		(!mode || mode === "validateStagedCandidate") &&
+		(!mode || !(selectedModes as readonly (typeof mode)[]).includes(mode)) &&
 		(body.app !== undefined || body.target !== undefined)
 	)
 		throw new Error(
@@ -48,8 +54,9 @@ export function preflightRequest(body: Record<string, unknown>) {
 	)
 		throw new Error("Preflight requires exact draft revision and digest");
 	const candidate = mode === "validateStagedCandidate",
+		tree = mode === "materializeStagedTree",
 		selection =
-			mode && !candidate
+			mode && (selectedModes as readonly (typeof mode)[]).includes(mode)
 				? {
 						[mode]: true,
 						app: text(body.app, "source app", 128),
@@ -60,8 +67,13 @@ export function preflightRequest(body: Record<string, unknown>) {
 	// Keep prior metadata and selected-source request hash property order exactly.
 	const request = digest(
 		JSON.stringify(
-			candidate
-				? { ...binding, validateStagedCandidate: true }
+			candidate || tree
+				? {
+						...binding,
+						...(candidate
+							? { validateStagedCandidate: true }
+							: { materializeStagedTree: true }),
+					}
 				: selection
 					? { ...binding, ...selection }
 					: binding,
@@ -71,6 +83,7 @@ export function preflightRequest(body: Record<string, unknown>) {
 		id,
 		contentDigest,
 		candidate,
+		tree,
 		compareBase: mode === "compareSourceBase",
 		stagedSource: mode === "useStagedSource",
 		selection,
