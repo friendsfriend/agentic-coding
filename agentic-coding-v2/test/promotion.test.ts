@@ -172,6 +172,44 @@ test("exact approved staged content is promoted atomically under a destination f
 		expect(
 			JSON.parse(fs.readFileSync(live, "utf8")).projects[0].targets[0].id,
 		).toBe("v2");
+		const lock = path.join(config.configDir, ".environments.json.lock"),
+			third = await (await create("promote-third", document("v3"))).json();
+		fs.mkdirSync(lock, { mode: 0o700 });
+		expect(
+			(await promote("lock-held", third.id, 1, third.digest, third.digest))
+				.status,
+		).toBe(400);
+		expect(fs.existsSync(lock)).toBe(true);
+		expect(
+			JSON.parse(fs.readFileSync(live, "utf8")).projects[0].targets[0].id,
+		).toBe("v2");
+		fs.rmdirSync(lock);
+		fs.writeFileSync(lock, "not-a-directory");
+		expect(
+			(await promote("lock-file", third.id, 1, third.digest, third.digest))
+				.status,
+		).toBe(400);
+		expect(
+			JSON.parse(fs.readFileSync(live, "utf8")).projects[0].targets[0].id,
+		).toBe("v2");
+		fs.rmSync(lock);
+		fs.mkdirSync(lock, { mode: 0o700 });
+		const stale = new Date(Date.now() - 60000);
+		fs.utimesSync(lock, stale, stale);
+		expect(
+			(await promote("lock-stale", third.id, 1, third.digest, third.digest))
+				.status,
+		).toBe(400);
+		expect(fs.existsSync(lock)).toBe(true);
+		expect(
+			JSON.parse(fs.readFileSync(live, "utf8")).projects[0].targets[0].id,
+		).toBe("v2");
+		fs.rmdirSync(lock);
+		const released = await (
+			await promote("lock-released", third.id, 1, third.digest, third.digest)
+		).json();
+		expect(released.outcome).toBe("written");
+		expect(fs.existsSync(lock)).toBe(false);
 		const invalid = await (
 			await create(
 				"promote-invalid",
@@ -198,7 +236,7 @@ test("exact approved staged content is promoted atomically under a destination f
 			(await promote("first", created.id, 1, created.digest, created.digest))
 				.status,
 		).toBe(200);
-		expect(fs.readFileSync(live, "utf8")).toContain('"v2"');
+		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
 	} finally {
 		host.stop();
 	}

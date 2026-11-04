@@ -6,7 +6,8 @@ import type { Draft } from "./definition-draft-data.ts";
 import { within } from "./path-within.ts";
 
 const limit = 65536,
-	name = "environments.json";
+	name = "environments.json",
+	lockName = `.${name}.lock`;
 /** Reads the live destination without following links; never creates or writes. */
 export function inspectDestination(config: Config) {
 	const destination = path.join(config.configDir, name);
@@ -92,6 +93,34 @@ function writable(config: Config) {
 		);
 	return destination;
 }
+function acquire(lock: string) {
+	try {
+		fs.mkdirSync(lock, { mode: 0o700 });
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+		throw new Error("Promotion lock is unavailable");
+	}
+}
+/** Cooperative exclusion only. Never infer abandonment from age: a paused
+ * writer may still own the directory. Crash recovery requires operator action. */
+function locked<T>(destination: string, action: () => T) {
+	const lock = path.join(path.dirname(destination), lockName);
+	if (!acquire(lock))
+		throw new Error(
+			"Promotion lock already exists; wait for its owner or verify abandonment before explicit operator removal",
+		);
+	try {
+		return action();
+	} finally {
+		try {
+			fs.rmdirSync(lock);
+		} catch {
+			/* Fail closed on the next attempt; never reclaim by elapsed time. */
+		}
+	}
+}
+
 function parsed(content: string) {
 	try {
 		return JSON.parse(content) as unknown;
@@ -181,31 +210,33 @@ export function promoteDefinition(
 			"Promotion requires explicit approval of the exact current staged content digest",
 		);
 	const { bytes, projects, targets } = payload(config, draft),
-		destination = writable(config),
-		live = inspectDestination(config);
-	if (live.state === "regular" && live.digest === draft.digest)
+		destination = writable(config);
+	return locked(destination, () => {
+		const live = inspectDestination(config);
+		if (live.state === "regular" && live.digest === draft.digest)
+			return {
+				outcome: "unchanged" as const,
+				previous: live.digest,
+				projects: projects.length,
+				targets,
+				bytes: bytes.length,
+			};
+		if (!fence(draft, live))
+			throw new Error(
+				"Live destination changed since this draft's recorded base; start or reload a draft to stage against the current configuration",
+			);
+		replace(destination, bytes, draft.digest);
+		const after = inspectDestination(config);
+		if (after.state !== "regular" || after.digest !== draft.digest)
+			throw new Error(
+				"Promoted bytes did not verify against the staged digest; the live configuration state is unverified and further promotion needs a fresh draft",
+			);
 		return {
-			outcome: "unchanged" as const,
+			outcome: "written" as const,
 			previous: live.digest,
 			projects: projects.length,
 			targets,
 			bytes: bytes.length,
 		};
-	if (!fence(draft, live) || !fence(draft, inspectDestination(config)))
-		throw new Error(
-			"Live destination changed since this draft's recorded base; start or reload a draft to stage against the current configuration",
-		);
-	replace(destination, bytes, draft.digest);
-	const after = inspectDestination(config);
-	if (after.state !== "regular" || after.digest !== draft.digest)
-		throw new Error(
-			"Promoted bytes did not verify against the staged digest; the live configuration state is unverified and further promotion needs a fresh draft",
-		);
-	return {
-		outcome: "written" as const,
-		previous: live.digest,
-		projects: projects.length,
-		targets,
-		bytes: bytes.length,
-	};
+	});
 }
