@@ -1,6 +1,7 @@
 import { type Config, digest } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
 import {
+	sourceBindingDigest as binding,
 	type Draft,
 	type SourceDraft,
 	stored,
@@ -12,8 +13,6 @@ import {
 
 const sourceByteLimit = 64 * 1024,
 	totalByteLimit = 128 * 1024;
-const binding = (repository: string, file: string) =>
-	digest(JSON.stringify({ repository, file }));
 type Project = ReturnType<typeof validateProjects>[number];
 type Entry = {
 	app: string;

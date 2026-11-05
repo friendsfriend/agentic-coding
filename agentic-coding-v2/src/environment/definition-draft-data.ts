@@ -41,6 +41,9 @@ export function stored<T>(value: string): T {
 		);
 	}
 }
+/** Stable private saved-source identity, independent of JSON target selection. */
+export const sourceBindingDigest = (repository: string, file: string) =>
+	digest(JSON.stringify({ repository, file }));
 export function sourceBinding(
 	config: Config,
 	content: string,
@@ -278,7 +281,7 @@ function currentDraft(doc: DraftData, id: string, revision: number) {
 		throw new Error("Draft revision conflict; load current before editing");
 	return draft;
 }
-/** Removes one staged source bound to the exact current target. Repository
+/** Removes one saved binding, selected by exact target or binding digest. Repository
  * files, live configuration and historical reports are never touched. */
 export function removeSource(
 	config: Config,
@@ -287,13 +290,19 @@ export function removeSource(
 ) {
 	if (
 		Object.keys(body).some(
-			(key) => !["requestId", "id", "revision", "app", "target"].includes(key),
+			(key) =>
+				![
+					"requestId",
+					"id",
+					"revision",
+					"app",
+					"target",
+					"bindingDigest",
+				].includes(key),
 		)
 	)
 		throw new Error("Unsupported staged source removal field");
 	const id = text(body.id, "draft ID", 80),
-		app = text(body.app, "source app", 128),
-		target = text(body.target, "source target", 128),
 		requestId = text(body.requestId, "draft request ID", 128);
 	if (
 		!/^draft-[a-f0-9]{64}$/.test(id) ||
@@ -301,24 +310,46 @@ export function removeSource(
 		Number(body.revision) < 1
 	)
 		throw new Error("Exact current revision required");
+	const byDigest = body.bindingDigest !== undefined;
+	if (byDigest && (body.app !== undefined || body.target !== undefined))
+		throw new Error("Choose a binding digest or app/target, not both");
+	const selection = byDigest
+		? { bindingDigest: text(body.bindingDigest, "source binding digest", 64) }
+		: {
+				app: text(body.app, "source app", 128),
+				target: text(body.target, "source target", 128),
+			};
+	if (
+		selection.bindingDigest &&
+		!/^[a-f0-9]{64}$/.test(selection.bindingDigest)
+	)
+		throw new Error("Invalid saved source binding digest");
 	const request = digest(
 			JSON.stringify({
 				kind: "remove-staged-source",
 				id,
 				revision: body.revision,
-				app,
-				target,
+				...selection,
 			}),
 		),
 		key = digest(requestId),
 		receipt = recordedReceipt(doc, key, request);
 	if (receipt) return receipt;
 	const previous = currentDraft(doc, id, Number(body.revision)),
-		binding = sourceBinding(config, previous.content, app, target),
+		binding = selection.bindingDigest
+			? null
+			: sourceBinding(
+					config,
+					previous.content,
+					text(selection.app, "source app", 128),
+					text(selection.target, "source target", 128),
+				),
+		selectedDigest =
+			selection.bindingDigest ??
+			(binding && sourceBindingDigest(binding.repository, binding.file)),
 		sources = (previous.sources ?? []).filter(
 			(source) =>
-				source.repository !== binding.repository ||
-				source.file !== binding.file,
+				sourceBindingDigest(source.repository, source.file) !== selectedDigest,
 		);
 	if (sources.length === (previous.sources ?? []).length)
 		throw new Error("No staged source matches this exact target binding");

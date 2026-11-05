@@ -14,6 +14,7 @@ import {
 	removeSource,
 	type SourceDraft,
 	sourceBinding,
+	sourceBindingDigest,
 	stageSource,
 	stored,
 } from "./definition-draft-data.ts";
@@ -185,6 +186,11 @@ export class DefinitionDrafts {
 		return {
 			...draft,
 			preflightReports,
+			sourceBindings: (draft.sources ?? []).map(({ repository, file }) => ({
+				bindingDigest: sourceBindingDigest(repository, file),
+				repository,
+				file,
+			})),
 			schema: schema(this.config, draft),
 			baseMatches,
 			destination: destinationError

@@ -329,52 +329,102 @@ export function definitionDrafts(request) {
 				await refreshList();
 			}),
 	);
+	const removeSavedSource = (selection) =>
+		busy(async () => {
+			if (!current || dirty())
+				throw Error(
+					"Save or discard editor text before removing a staged source",
+				);
+			if (
+				!confirm(
+					"Remove only this private staged source revision? Repository files, live configuration and historical reports are untouched.",
+				)
+			)
+				return;
+			const body = {
+					id: current.id,
+					revision: current.revision,
+					...selection,
+				},
+				fingerprint = JSON.stringify(body);
+			if (
+				!pendingSourceRemoval ||
+				pendingSourceRemoval.fingerprint !== fingerprint
+			)
+				pendingSourceRemoval = {
+					fingerprint,
+					requestId: crypto.randomUUID(),
+				};
+			const receipt = await request("/api/environments/drafts/source/remove", {
+					...body,
+					requestId: pendingSourceRemoval.requestId,
+				}),
+				draft = await request(
+					`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+				);
+			pendingSourceRemoval = null;
+			if (receipt.revision && draft.revision < receipt.revision)
+				throw Error("Source removal receipt is behind the current draft");
+			current = draft;
+			sourceEditor.value = "";
+			sourceSavedText = "";
+			sourceMarker = sourceSelection();
+			status.textContent = `Private staged source removed; draft revision ${current.revision}. No repository, live configuration or report change; no promotion authority.`;
+			await refreshList();
+		});
 	const removeStaged = button(
 		"Remove staged source for selected target (private only)",
 		() =>
+			removeSavedSource({ app: sourceApp.value, target: sourceTarget.value }),
+	);
+	const bindingSelector = element("select");
+	bindingSelector.setAttribute("aria-label", "Saved staged source bindings");
+	let listedBindingRevision = "";
+	const bindingRevision = () =>
+		JSON.stringify([current?.id, current?.revision]);
+	const listBindings = button(
+		"List saved source bindings (including orphans)",
+		() =>
 			busy(async () => {
 				if (!current || dirty())
+					throw Error("Save or discard edits before listing saved bindings");
+				const draft = await request(
+					`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+				);
+				if (
+					draft.revision !== current.revision ||
+					draft.digest !== current.digest
+				)
 					throw Error(
-						"Save or discard editor text before removing a staged source",
+						"Draft advanced; load current before selecting a saved binding",
 					);
-				if (
-					!confirm(
-						"Remove only this private staged source revision? Repository files, live configuration and historical reports are untouched.",
-					)
-				)
-					return;
-				const body = {
-						id: current.id,
-						revision: current.revision,
-						app: sourceApp.value,
-						target: sourceTarget.value,
-					},
-					fingerprint = JSON.stringify(body);
-				if (
-					!pendingSourceRemoval ||
-					pendingSourceRemoval.fingerprint !== fingerprint
-				)
-					pendingSourceRemoval = {
-						fingerprint,
-						requestId: crypto.randomUUID(),
-					};
-				const receipt = await request(
-						"/api/environments/drafts/source/remove",
-						{ ...body, requestId: pendingSourceRemoval.requestId },
-					),
-					draft = await request(
-						`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
-					);
-				pendingSourceRemoval = null;
-				if (receipt.revision && draft.revision < receipt.revision)
-					throw Error("Source removal receipt is behind the current draft");
-				current = draft;
-				sourceEditor.value = "";
-				sourceSavedText = "";
-				sourceMarker = sourceSelection();
-				status.textContent = `Private staged source removed; draft revision ${current.revision}. No repository, live configuration or report change; no promotion authority.`;
-				await refreshList();
+				bindingSelector.replaceChildren(
+					...draft.sourceBindings.map((binding) => {
+						const option = element(
+							"option",
+							`${binding.file} · ${binding.repository} · ${binding.bindingDigest}`,
+						);
+						option.value = binding.bindingDigest;
+						return option;
+					}),
+				);
+				listedBindingRevision = bindingRevision();
+				status.textContent = `${draft.sourceBindings.length} saved source bindings listed. Removal affects private staged text only, not repository files or historical reports.`;
 			}),
+	);
+	const removeBinding = button(
+		"Remove selected saved binding (private only)",
+		() => {
+			if (
+				!bindingSelector.value ||
+				listedBindingRevision !== bindingRevision()
+			) {
+				status.textContent =
+					"List saved bindings for the current draft revision before removing one.";
+				return;
+			}
+			return removeSavedSource({ bindingDigest: bindingSelector.value });
+		},
 	);
 	const removeStagedDraft = button("Delete private staged draft", () =>
 		busy(async () => {
@@ -702,6 +752,9 @@ export function definitionDrafts(request) {
 		saveSource,
 		checkStaged,
 		removeStaged,
+		listBindings,
+		bindingSelector,
+		removeBinding,
 		acceptBaseLabel,
 		captureBase,
 		compareBase,
