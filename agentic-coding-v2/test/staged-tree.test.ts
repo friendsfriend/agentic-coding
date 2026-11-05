@@ -506,6 +506,7 @@ test("a retained staged tree is owned by its digest, inspectable, and released b
 			id: expect.any(String),
 			name: first.treeDigest,
 			kind: "supersede",
+			revision: 2,
 			status: "completed",
 			startedAt: expect.any(String),
 		});
@@ -710,6 +711,41 @@ test("a retained tree is disclosed by metadata and released by its digest withou
 				})
 			).status,
 		).toBe(400);
+		const pending = uncertain.cleanupAttempts.find(
+				(attempt: { status: string }) => attempt.status === "pending",
+			),
+			ack = (requestId: string, revision: number) =>
+				api("/api/environments/drafts/tree-cleanup/acknowledge", {
+					requestId,
+					id: pending.id,
+					revision,
+					acknowledge: true,
+				});
+		expect((await ack("stale-ack", pending.revision + 1)).status).toBe(400);
+		const acknowledged = await (await ack("ack", pending.revision)).json();
+		expect(acknowledged).toEqual({
+			id: pending.id,
+			revision: pending.revision + 1,
+			status: "acknowledged",
+		});
+		expect(fs.existsSync(held)).toBe(true);
+		expect(await (await ack("ack", pending.revision)).json()).toEqual(
+			acknowledged,
+		);
+		expect((await ack("ack", pending.revision + 1)).status).toBe(400);
+		// Acknowledgement retires the blocker, not the failed deletion request.
+		expect((await release("uncertain", tree.treeDigest)).status).toBe(400);
+		expect(
+			(await api(`/api/environments/drafts?id=${created.id}`)).status,
+		).toBe(200);
+		const freshRelease = await (
+			await release("after-ack", tree.treeDigest)
+		).json();
+		expect(freshRelease.released).toBe(true);
+		expect(fs.existsSync(held)).toBe(false);
+		expect(await (await ack("ack", pending.revision)).json()).toEqual(
+			acknowledged,
+		);
 	} finally {
 		host.stop();
 	}
@@ -843,6 +879,7 @@ test("a draft read discloses whether its recorded tree identity is current and r
 			id: expect.any(String),
 			name: current.stagedTree.treeDigest,
 			kind: "supersede",
+			revision: 1,
 			status: "pending",
 			startedAt: expect.any(String),
 		});

@@ -5,7 +5,8 @@ export type TreeCleanup = {
 	request: string;
 	name: string | null;
 	kind: "release" | "delete-draft" | "supersede";
-	status: "pending" | "completed";
+	status: "pending" | "completed" | "acknowledged";
+	revision?: number;
 	startedAt: string;
 	result?: string;
 };
@@ -44,6 +45,10 @@ export function beginTreeCleanup(
 	name: string | null,
 ) {
 	assertNoTreeCleanup(doc);
+	if (doc.treeCleanups?.[key])
+		throw new Error(
+			"Cleanup attempt already exists; acknowledgement never authorizes reuse of its request ID",
+		);
 	if (Object.keys(doc.treeCleanups ?? {}).length >= 128)
 		throw new Error(
 			"Retained-tree cleanup capacity reached; automatic pruning is unsupported",
@@ -54,6 +59,7 @@ export function beginTreeCleanup(
 		kind,
 		name,
 		status: "pending",
+		revision: 1,
 		startedAt: new Date().toISOString(),
 	} satisfies TreeCleanup);
 }
@@ -71,13 +77,22 @@ export function finishTreeCleanup(
 		doc.treeCleanups[key] = JSON.stringify({
 			...attempt,
 			status: "completed",
+			revision: (attempt.revision ?? 1) + 1,
 			result: JSON.stringify(result),
 		} satisfies TreeCleanup);
 }
 export function treeCleanupHistory(doc: Readonly<DraftData> | undefined) {
 	return Object.entries(doc?.treeCleanups ?? {}).map(([key, raw]) => {
-		const { name, kind, status, startedAt } = stored<TreeCleanup>(raw);
-		return { id: `tree-cleanup-${key}`, name, kind, status, startedAt };
+		const { name, kind, status, startedAt, revision } =
+			stored<TreeCleanup>(raw);
+		return {
+			id: `tree-cleanup-${key}`,
+			name,
+			kind,
+			status,
+			startedAt,
+			revision: revision ?? (status === "pending" ? 1 : 2),
+		};
 	});
 }
 export function deletionIdentity(body: Record<string, unknown>) {
@@ -101,4 +116,75 @@ export function deletionIdentity(body: Record<string, unknown>) {
 			JSON.stringify({ kind: "delete-draft", id, revision: body.revision }),
 		),
 	};
+}
+
+/** Retire only the uncertainty blocker. No filesystem operation or retry grant. */
+export function acknowledgeTreeCleanup(
+	doc: DraftData,
+	body: Record<string, unknown>,
+	active: ReadonlySet<string>,
+) {
+	if (
+		Object.keys(body).some(
+			(key) => !["requestId", "id", "revision", "acknowledge"].includes(key),
+		)
+	)
+		throw new Error("Unsupported cleanup acknowledgement field");
+	const id = text(body.id, "cleanup attempt ID", 80),
+		requestId = text(body.requestId, "acknowledgement request ID", 128);
+	if (
+		!/^tree-cleanup-[a-f0-9]{64}$/.test(id) ||
+		body.acknowledge !== true ||
+		!Number.isSafeInteger(body.revision) ||
+		Number(body.revision) < 1
+	)
+		throw new Error(
+			"Explicit true acknowledgement of an exact cleanup attempt ID and revision is required",
+		);
+	const key = id.slice("tree-cleanup-".length),
+		receiptKey = digest(requestId),
+		request = digest(
+			JSON.stringify({ id, revision: body.revision, acknowledge: true }),
+		),
+		previous = doc.treeCleanupAcknowledgements?.[receiptKey];
+	if (previous) {
+		const receipt = stored<{
+			request: string;
+			result: { id: string; revision: number; status: "acknowledged" };
+		}>(previous);
+		if (receipt.request !== request)
+			throw new Error("Acknowledgement request ID reused for different input");
+		return receipt.result;
+	}
+	const raw = doc.treeCleanups?.[key];
+	if (!raw) throw new Error("Unknown cleanup attempt");
+	if (active.has(key))
+		throw new Error("A live cleanup attempt cannot be acknowledged");
+	const attempt = stored<TreeCleanup>(raw),
+		revision = attempt.revision ?? (attempt.status === "pending" ? 1 : 2);
+	if (attempt.status !== "pending" || revision !== body.revision)
+		throw new Error(
+			"Only the exact current revision of a pending cleanup attempt can be acknowledged",
+		);
+	if (Object.keys(doc.treeCleanupAcknowledgements ?? {}).length >= 128)
+		throw new Error(
+			"Cleanup acknowledgement capacity reached; automatic pruning is unsupported",
+		);
+	const result = {
+		id,
+		revision: revision + 1,
+		status: "acknowledged" as const,
+	};
+	if (doc.treeCleanups)
+		doc.treeCleanups[key] = JSON.stringify({
+			...attempt,
+			status: "acknowledged",
+			revision: result.revision,
+		} satisfies TreeCleanup);
+	doc.treeCleanupAcknowledgements ??= {};
+	doc.treeCleanupAcknowledgements[receiptKey] = JSON.stringify({
+		request,
+		result,
+	});
+	return result;
 }

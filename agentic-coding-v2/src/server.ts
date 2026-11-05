@@ -431,6 +431,17 @@ export function serve(app: Runtime, port = 0) {
 						throw new Error("Source removal does not accept query parameters");
 					return json(await app.environments.drafts.removeSource(body));
 				}
+				if (
+					url.pathname === "/api/environments/drafts/tree-cleanup/acknowledge"
+				) {
+					if (url.searchParams.size)
+						throw new Error(
+							"Cleanup acknowledgement does not accept query parameters",
+						);
+					return json(
+						await app.environments.drafts.acknowledgeTreeCleanup(body),
+					);
+				}
 				if (url.pathname === "/api/environments/drafts/tree/release") {
 					if (url.searchParams.size)
 						throw new Error(

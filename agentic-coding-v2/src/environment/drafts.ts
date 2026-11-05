@@ -52,6 +52,7 @@ import {
 	stagedTreeIdentity,
 } from "./definition-staged-tree.ts";
 import {
+	acknowledgeTreeCleanup,
 	assertNoTreeCleanup,
 	beginTreeCleanup,
 	cleanupReplay,
@@ -155,6 +156,17 @@ function schema(config: Config, draft: Draft) {
  * restored execution authority. No content is included in environment snapshots. */
 export class DefinitionDrafts {
 	private activePromotions = new Set<string>();
+	private activeTreeCleanups = new Set<string>();
+	private async withTreeCleanup<T>(key: string, action: () => Promise<T>) {
+		if (this.activeTreeCleanups.has(key))
+			throw new Error("This cleanup request is still active");
+		this.activeTreeCleanups.add(key);
+		try {
+			return await action();
+		} finally {
+			this.activeTreeCleanups.delete(key);
+		}
+	}
 	constructor(
 		private config: Config,
 		private engine: () => Harness,
@@ -279,174 +291,188 @@ export class DefinitionDrafts {
 			request,
 			key,
 		} = preflightRequest(body);
-		const prepared = await this.engine().commit(async (tx) => {
-			const reports = await tx.doc(Preflights),
-				recorded = reports.requests[key];
-			if (recorded) {
-				const receipt = stored<{ request: string; id: string }>(recorded);
-				if (receipt.request !== request)
-					throw new Error("Preflight request ID reused for different input");
-				const raw = reports.reports[receipt.id];
-				if (!raw) throw new Error("Private preflight receipt is unavailable");
-				return { report: stored<Preflight>(raw), cleanup: null };
-			}
-			if (Object.keys(reports.reports).length >= 64)
-				throw new Error(
-					"Private preflight capacity reached; automatic pruning is unsupported",
-				);
-			const drafts = await tx.doc(DraftState),
-				raw = drafts.drafts[id];
-			if (!raw) throw new Error("Unknown definition draft");
-			const draft = parseDraft(raw);
-			if (tree) assertNoTreeCleanup(drafts);
-			if (draft.revision !== body.revision || draft.digest !== contentDigest)
-				throw new Error("Draft changed; load current before preflight");
-			let staged: SourceDraft | undefined;
-			if ((stagedSource || compareBase) && selection) {
-				const binding = sourceBinding(
-					this.config,
-					draft.content,
-					selection.app,
-					selection.target,
-				);
-				staged = draft.sources?.find(
-					(source) =>
-						source.repository === binding.repository &&
-						source.file === binding.file,
-				);
-				if (!staged)
-					throw new Error(
-						"No saved source matches this exact current target binding",
-					);
-			}
-			const comparison =
-				compareBase && selection && staged && staged.base !== "unobserved"
-					? inspectSourceBase(
-							{ ...staged, base: staged.base },
+		return this.withTreeCleanup(
+			digest(`preflight-supersession:${key}`),
+			async () => {
+				const prepared = await this.engine().commit(async (tx) => {
+					const reports = await tx.doc(Preflights),
+						recorded = reports.requests[key];
+					if (recorded) {
+						const receipt = stored<{ request: string; id: string }>(recorded);
+						if (receipt.request !== request)
+							throw new Error(
+								"Preflight request ID reused for different input",
+							);
+						const raw = reports.reports[receipt.id];
+						if (!raw)
+							throw new Error("Private preflight receipt is unavailable");
+						return { report: stored<Preflight>(raw), cleanup: null };
+					}
+					if (Object.keys(reports.reports).length >= 64)
+						throw new Error(
+							"Private preflight capacity reached; automatic pruning is unsupported",
+						);
+					const drafts = await tx.doc(DraftState),
+						raw = drafts.drafts[id];
+					if (!raw) throw new Error("Unknown definition draft");
+					const draft = parseDraft(raw);
+					if (tree) assertNoTreeCleanup(drafts);
+					if (
+						draft.revision !== body.revision ||
+						draft.digest !== contentDigest
+					)
+						throw new Error("Draft changed; load current before preflight");
+					let staged: SourceDraft | undefined;
+					if ((stagedSource || compareBase) && selection) {
+						const binding = sourceBinding(
+							this.config,
+							draft.content,
 							selection.app,
 							selection.target,
-						)
-					: null;
-			if (compareBase && !comparison)
-				throw new Error(
-					"No established source base; explicit capture/acceptance required",
-				);
-			if (retain) {
-				const name = stagedTreeIdentity(draft).treeDigest;
-				for (const otherId of Object.keys(drafts.trees ?? {})) {
+						);
+						staged = draft.sources?.find(
+							(source) =>
+								source.repository === binding.repository &&
+								source.file === binding.file,
+						);
+						if (!staged)
+							throw new Error(
+								"No saved source matches this exact current target binding",
+							);
+					}
+					const comparison =
+						compareBase && selection && staged && staged.base !== "unobserved"
+							? inspectSourceBase(
+									{ ...staged, base: staged.base },
+									selection.app,
+									selection.target,
+								)
+							: null;
+					if (compareBase && !comparison)
+						throw new Error(
+							"No established source base; explicit capture/acceptance required",
+						);
+					if (retain) {
+						const name = stagedTreeIdentity(draft).treeDigest;
+						for (const otherId of Object.keys(drafts.trees ?? {})) {
+							if (
+								otherId !== id &&
+								stagedTreeReceipt(drafts, otherId)?.retained?.name === name
+							)
+								throw new Error(
+									"Retained tree is owned by another draft; cross-draft retention sharing is unsupported",
+								);
+						}
+					}
+					const report: Preflight = {
+						...(candidate
+							? inspectStagedCandidate(this.config, draft)
+							: tree
+								? assembleStagedTree(this.config, draft, { retain })
+								: (comparison ??
+									(selection
+										? inspectComposeSource(
+												this.config,
+												draft.content,
+												selection.app,
+												selection.target,
+												staged,
+											)
+										: inspectDefinition(this.config, draft.content)))),
+						id: `preflight-${key}`,
+						draftId: id,
+						revision: draft.revision,
+						digest: contentDigest,
+						observedAt: new Date().toISOString(),
+						ordinal: Object.keys(reports.reports).length + 1,
+						historical: true,
+						authority:
+							"Historical preflight data only. No saved report restores source identity, readiness, execution, review approval or promotion authority; sources may already have changed.",
+					};
+					// A verified tree becomes a durable digest-only identity for this exact
+					// revision, so promotion can require it without retaining the tree.
+					if (tree && "accepted" in report && report.accepted) {
+						const assembled = report as {
+								candidateDigest: string;
+								treeDigest: string;
+							},
+							previous = stagedTreeReceipt(drafts, id),
+							retained = retain ? { name: assembled.treeDigest } : undefined;
+						if (
+							previous?.retained &&
+							previous.retained.name !== retained?.name
+						) {
+							const cleanupKey = digest(`preflight-supersession:${key}`);
+							beginTreeCleanup(
+								drafts,
+								cleanupKey,
+								request,
+								"supersede",
+								previous.retained.name,
+							);
+							return {
+								report,
+								cleanup: {
+									key: cleanupKey,
+									name: previous.retained.name,
+									draft,
+									candidateDigest: assembled.candidateDigest,
+									retained,
+								},
+							};
+						}
+						recordStagedTree(
+							drafts,
+							draft,
+							stagedTreeIdentity(draft),
+							assembled.candidateDigest,
+							retained,
+						);
+					}
+					reports.reports[report.id] = JSON.stringify(report);
+					reports.requests[key] = JSON.stringify({ request, id: report.id });
+					return { report, cleanup: null };
+				}, background);
+				const cleanup = prepared.cleanup;
+				if (!cleanup) return prepared.report;
+				// Admission is durably closed before deleting the superseded directory.
+				releaseStagedTree(this.config, cleanup.name);
+				return this.engine().commit(async (tx) => {
+					const drafts = await tx.doc(DraftState),
+						reports = await tx.doc(Preflights),
+						raw = drafts.drafts[id];
+					if (!raw)
+						throw new Error("Draft disappeared during retained-tree cleanup");
+					const current = parseDraft(raw);
 					if (
-						otherId !== id &&
-						stagedTreeReceipt(drafts, otherId)?.retained?.name === name
+						current.revision !== cleanup.draft.revision ||
+						current.digest !== cleanup.draft.digest
 					)
 						throw new Error(
-							"Retained tree is owned by another draft; cross-draft retention sharing is unsupported",
+							"Draft changed during retained-tree cleanup; outcome requires inspection",
 						);
-				}
-			}
-			const report: Preflight = {
-				...(candidate
-					? inspectStagedCandidate(this.config, draft)
-					: tree
-						? assembleStagedTree(this.config, draft, { retain })
-						: (comparison ??
-							(selection
-								? inspectComposeSource(
-										this.config,
-										draft.content,
-										selection.app,
-										selection.target,
-										staged,
-									)
-								: inspectDefinition(this.config, draft.content)))),
-				id: `preflight-${key}`,
-				draftId: id,
-				revision: draft.revision,
-				digest: contentDigest,
-				observedAt: new Date().toISOString(),
-				ordinal: Object.keys(reports.reports).length + 1,
-				historical: true,
-				authority:
-					"Historical preflight data only. No saved report restores source identity, readiness, execution, review approval or promotion authority; sources may already have changed.",
-			};
-			// A verified tree becomes a durable digest-only identity for this exact
-			// revision, so promotion can require it without retaining the tree.
-			if (tree && "accepted" in report && report.accepted) {
-				const assembled = report as {
-						candidateDigest: string;
-						treeDigest: string;
-					},
-					previous = stagedTreeReceipt(drafts, id),
-					retained = retain ? { name: assembled.treeDigest } : undefined;
-				if (previous?.retained && previous.retained.name !== retained?.name) {
-					const cleanupKey = digest(`preflight-supersession:${key}`);
-					beginTreeCleanup(
+					if (Object.keys(reports.reports).length >= 64)
+						throw new Error(
+							"Private preflight capacity reached; cleanup outcome requires inspection",
+						);
+					recordStagedTree(
 						drafts,
-						cleanupKey,
-						request,
-						"supersede",
-						previous.retained.name,
+						current,
+						stagedTreeIdentity(current),
+						cleanup.candidateDigest,
+						cleanup.retained,
 					);
-					return {
-						report,
-						cleanup: {
-							key: cleanupKey,
-							name: previous.retained.name,
-							draft,
-							candidateDigest: assembled.candidateDigest,
-							retained,
-						},
+					const report = {
+						...prepared.report,
+						ordinal: Object.keys(reports.reports).length + 1,
 					};
-				}
-				recordStagedTree(
-					drafts,
-					draft,
-					stagedTreeIdentity(draft),
-					assembled.candidateDigest,
-					retained,
-				);
-			}
-			reports.reports[report.id] = JSON.stringify(report);
-			reports.requests[key] = JSON.stringify({ request, id: report.id });
-			return { report, cleanup: null };
-		}, background);
-		const cleanup = prepared.cleanup;
-		if (!cleanup) return prepared.report;
-		// Admission is durably closed before deleting the superseded directory.
-		releaseStagedTree(this.config, cleanup.name);
-		return this.engine().commit(async (tx) => {
-			const drafts = await tx.doc(DraftState),
-				reports = await tx.doc(Preflights),
-				raw = drafts.drafts[id];
-			if (!raw)
-				throw new Error("Draft disappeared during retained-tree cleanup");
-			const current = parseDraft(raw);
-			if (
-				current.revision !== cleanup.draft.revision ||
-				current.digest !== cleanup.draft.digest
-			)
-				throw new Error(
-					"Draft changed during retained-tree cleanup; outcome requires inspection",
-				);
-			if (Object.keys(reports.reports).length >= 64)
-				throw new Error(
-					"Private preflight capacity reached; cleanup outcome requires inspection",
-				);
-			recordStagedTree(
-				drafts,
-				current,
-				stagedTreeIdentity(current),
-				cleanup.candidateDigest,
-				cleanup.retained,
-			);
-			const report = {
-				...prepared.report,
-				ordinal: Object.keys(reports.reports).length + 1,
-			};
-			reports.reports[report.id] = JSON.stringify(report);
-			reports.requests[key] = JSON.stringify({ request, id: report.id });
-			finishTreeCleanup(drafts, cleanup.key, { preflightId: report.id });
-			return report;
-		}, background);
+					reports.reports[report.id] = JSON.stringify(report);
+					reports.requests[key] = JSON.stringify({ request, id: report.id });
+					finishTreeCleanup(drafts, cleanup.key, { preflightId: report.id });
+					return report;
+				}, background);
+			},
+		);
 	}
 	async captureBase(body: Record<string, unknown>) {
 		privateState(this.config);
@@ -479,35 +505,37 @@ export class DefinitionDrafts {
 	async removeDraft(body: Record<string, unknown>) {
 		privateState(this.config);
 		const { key, request } = deletionIdentity(body);
-		const admitted = await this.engine().commit(async (tx) => {
-			const drafts = await tx.doc(DraftState),
-				replay = cleanupReplay(drafts, key, request);
-			if (replay) return { replay, name: null };
-			// Validate without deleting the durable draft or its ownership claim.
-			removeDraft(
-				{
-					...drafts,
-					drafts: { ...drafts.drafts },
-					receipts: { ...drafts.receipts },
-					trees: { ...drafts.trees },
-				},
-				body,
-			);
-			const name =
-				stagedTreeReceipt(drafts, String(body.id ?? ""))?.retained?.name ??
-				null;
-			beginTreeCleanup(drafts, key, request, "delete-draft", name);
-			return { replay: null, name };
-		}, background);
-		if (admitted.replay) return admitted.replay.result;
-		// The durable pending marker fences reassembly before this effect begins.
-		if (admitted.name) releaseStagedTree(this.config, admitted.name);
-		return this.engine().commit(async (tx) => {
-			const drafts = await tx.doc(DraftState),
-				result = removeDraft(drafts, body);
-			finishTreeCleanup(drafts, key, result);
-			return result;
-		}, background);
+		return this.withTreeCleanup(key, async () => {
+			const admitted = await this.engine().commit(async (tx) => {
+				const drafts = await tx.doc(DraftState),
+					replay = cleanupReplay(drafts, key, request);
+				if (replay) return { replay, name: null };
+				// Validate without deleting the durable draft or its ownership claim.
+				removeDraft(
+					{
+						...drafts,
+						drafts: { ...drafts.drafts },
+						receipts: { ...drafts.receipts },
+						trees: { ...drafts.trees },
+					},
+					body,
+				);
+				const name =
+					stagedTreeReceipt(drafts, String(body.id ?? ""))?.retained?.name ??
+					null;
+				beginTreeCleanup(drafts, key, request, "delete-draft", name);
+				return { replay: null, name };
+			}, background);
+			if (admitted.replay) return admitted.replay.result;
+			// The durable pending marker fences reassembly before this effect begins.
+			if (admitted.name) releaseStagedTree(this.config, admitted.name);
+			return this.engine().commit(async (tx) => {
+				const drafts = await tx.doc(DraftState),
+					result = removeDraft(drafts, body);
+				finishTreeCleanup(drafts, key, result);
+				return result;
+			}, background);
+		});
 	}
 	/** Retained trees are disclosed by digest and metadata; contents stay withheld. */
 	async trees() {
@@ -558,45 +586,62 @@ export class DefinitionDrafts {
 	async releaseTree(body: Record<string, unknown>) {
 		privateState(this.config);
 		const { name, request, key } = releaseTreeRequest(body);
-		const admitted = await this.engine().commit(async (tx) => {
-			const drafts = await tx.doc(DraftState),
-				replay = cleanupReplay(drafts, key, request);
-			if (replay) return replay;
-			const previous = drafts.receipts[key];
-			if (previous) {
-				const receipt = stored<{ request: string; result: unknown }>(previous);
-				if (receipt.request !== request)
-					throw new Error("Release request ID reused for different input");
-				return { result: receipt.result };
-			}
-			const owned = Object.values(drafts.trees ?? {}).some(
-				(raw) =>
-					stored<{ retained?: { name: string } }>(raw).retained?.name === name,
-			);
-			if (!owned && !retainedStagedTrees(this.config).includes(name))
-				throw new Error(
-					"Unknown retained tree; release requires a recorded or present digest",
+		return this.withTreeCleanup(key, async () => {
+			const admitted = await this.engine().commit(async (tx) => {
+				const drafts = await tx.doc(DraftState),
+					replay = cleanupReplay(drafts, key, request);
+				if (replay) return replay;
+				const previous = drafts.receipts[key];
+				if (previous) {
+					const receipt = stored<{ request: string; result: unknown }>(
+						previous,
+					);
+					if (receipt.request !== request)
+						throw new Error("Release request ID reused for different input");
+					return { result: receipt.result };
+				}
+				const owned = Object.values(drafts.trees ?? {}).some(
+					(raw) =>
+						stored<{ retained?: { name: string } }>(raw).retained?.name ===
+						name,
 				);
-			if (Object.keys(drafts.receipts).length >= 256)
-				throw new Error("Native draft receipt capacity reached");
-			beginTreeCleanup(drafts, key, request, "release", name);
-			return null;
-		}, background);
-		if (admitted) return admitted.result;
-		const released = releaseStagedTree(this.config, name).released;
-		return this.engine().commit(async (tx) => {
-			const drafts = await tx.doc(DraftState),
-				owner = clearRetainedTree(drafts, name),
-				result = {
-					name,
-					released,
-					owner: owner?.draftId ?? null,
-					revision: owner?.revision ?? null,
-				};
-			drafts.receipts[key] = JSON.stringify({ request, result });
-			finishTreeCleanup(drafts, key, result);
-			return result;
-		}, background);
+				if (!owned && !retainedStagedTrees(this.config).includes(name))
+					throw new Error(
+						"Unknown retained tree; release requires a recorded or present digest",
+					);
+				if (Object.keys(drafts.receipts).length >= 256)
+					throw new Error("Native draft receipt capacity reached");
+				beginTreeCleanup(drafts, key, request, "release", name);
+				return null;
+			}, background);
+			if (admitted) return admitted.result;
+			const released = releaseStagedTree(this.config, name).released;
+			return this.engine().commit(async (tx) => {
+				const drafts = await tx.doc(DraftState),
+					owner = clearRetainedTree(drafts, name),
+					result = {
+						name,
+						released,
+						owner: owner?.draftId ?? null,
+						revision: owner?.revision ?? null,
+					};
+				drafts.receipts[key] = JSON.stringify({ request, result });
+				finishTreeCleanup(drafts, key, result);
+				return result;
+			}, background);
+		});
+	}
+	async acknowledgeTreeCleanup(body: Record<string, unknown>) {
+		privateState(this.config);
+		return this.engine().commit(
+			async (tx) =>
+				acknowledgeTreeCleanup(
+					await tx.doc(DraftState),
+					body,
+					this.activeTreeCleanups,
+				),
+			background,
+		);
 	}
 	/** Historical reads remain behind the same private-state/authenticated boundary. */
 	async promotions() {
