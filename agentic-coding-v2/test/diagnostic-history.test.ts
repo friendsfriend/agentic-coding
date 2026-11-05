@@ -52,10 +52,10 @@ test("bounded retained history reports omissions while older exact IDs remain ru
 		});
 		const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 			fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
-		// One entry beyond the public list boundary, not a validation matrix.
+		// One entry beyond the list boundary, then one append while paging.
 		fake.setResponses([
 			call("env_start", { apps: ["api"] }),
-			...Array.from({ length: 201 }, (_, index) =>
+			...Array.from({ length: 202 }, (_, index) =>
 				call("env_http_get", {
 					app: "api",
 					endpoint: "web",
@@ -71,9 +71,10 @@ test("bounded retained history reports omissions while older exact IDs remain ru
 		try {
 			const base = new URL(host.url),
 				token = new URLSearchParams(base.hash.slice(1)).get("token"),
-				get = (run: string, operation?: string) => {
+				get = (run: string, operation?: string, cursor?: string) => {
 					const query = new URLSearchParams({ run });
 					if (operation !== undefined) query.set("operation", operation);
+					if (cursor !== undefined) query.set("cursor", cursor);
 					return fetch(
 						new URL(`/api/environments/http-history?${query}`, base),
 						{ headers: { Authorization: `Bearer ${token}` } },
@@ -97,9 +98,7 @@ test("bounded retained history reports omissions while older exact IDs remain ru
 				oldest = initial.records[0].id;
 			for (let index = 1; index < 201; index++)
 				await approve(app, task, "Endpoint GET: api/web");
-			await approve(app, task); // Startup approval for the later run; stop uses existing cleanup authority.
-			await approve(app, task, "Endpoint GET: api/web");
-			await app.harness.waitForTask(task as TaskId, context);
+			await pendingReview(app, task, "Endpoint GET: api/web");
 			const history = await (await get(firstRun.id)).json();
 			expect(history).toMatchObject({
 				total: 201,
@@ -118,6 +117,41 @@ test("bounded retained history reports omissions while older exact IDs remain ru
 				state: "completed",
 				result: { body: "/history-0" },
 			});
+			// Append to the same run after saving the first page's boundary.
+			await approve(app, task, "Endpoint GET: api/web");
+			await approve(app, task); // Later startup; stop uses existing cleanup authority.
+			await approve(app, task, "Endpoint GET: api/web");
+			await app.harness.waitForTask(task as TaskId, context);
+			const older = await (
+				await get(firstRun.id, undefined, history.nextCursor)
+			).json();
+			expect(older).toMatchObject({
+				total: 202,
+				returned: 1,
+				newer: 201,
+				remainingOlder: 0,
+				nextCursor: null,
+			});
+			expect(older.records[0].id).toBe(oldest);
+			expect(
+				new Set(
+					[...history.records, ...older.records].map(
+						(record: { id: string }) => record.id,
+					),
+				).size,
+			).toBe(201);
+			expect(await (await get(firstRun.id)).json()).toMatchObject({
+				total: 202,
+				returned: 200,
+				newer: 0,
+				remainingOlder: 2,
+			});
+			expect((await get(firstRun.id, oldest, history.nextCursor)).status).toBe(
+				400,
+			);
+			expect((await get(firstRun.id, undefined, "0".repeat(64))).status).toBe(
+				400,
+			);
 			const secondRun = (await app.environments.snapshot()).runs.find(
 				(run) => run.id !== firstRun.id,
 			);
@@ -128,9 +162,12 @@ test("bounded retained history reports omissions while older exact IDs remain ru
 				omitted: 0,
 			});
 			expect((await get(secondRun.id, oldest)).status).toBe(400);
+			expect(
+				(await get(secondRun.id, undefined, history.nextCursor)).status,
+			).toBe(400);
 			expect((await get(firstRun.id, "__proto__")).status).toBe(400);
 			expect(requests).toEqual([
-				...Array.from({ length: 201 }, (_, index) => `/history-${index}`),
+				...Array.from({ length: 202 }, (_, index) => `/history-${index}`),
 				"/later-run",
 			]);
 		} finally {

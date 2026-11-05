@@ -3,7 +3,10 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
-import { diagnosticHistory } from "./diagnostic-history.ts";
+import {
+	type DiagnosticSelection,
+	diagnosticHistory,
+} from "./diagnostic-history.ts";
 import { type EndpointRequest, endpointUrl } from "./endpoint.ts";
 import { loadEndpointCa, prepareEndpointCa } from "./endpoint-ca.ts";
 import { endpointRequest } from "./http.ts";
@@ -24,7 +27,7 @@ export class HeldHttp {
 	) {}
 	/** Developer history only: never prepares an endpoint or restores a lease.
 	 * Approved request bodies/headers, URLs and secret references are withheld. */
-	async history(runId: string, operation?: string) {
+	async history(runId: string, selection: DiagnosticSelection = {}) {
 		const run = (await this.authority.records()).find(
 			(item) =>
 				item.id === runId && Object.keys(item.plan.endpoints ?? {}).length > 0,
@@ -36,7 +39,7 @@ export class HeldHttp {
 		return diagnosticHistory<HttpReceipt>(
 			doc?.httpOperations,
 			run,
-			operation,
+			selection,
 			"HTTP",
 			(receipt) => receipt.approved.app === run.plan.app,
 			(receipt) => ({

@@ -1,3 +1,4 @@
+import { digest } from "../config.ts";
 import { decode } from "../state.ts";
 
 type DiagnosticReceipt = {
@@ -8,16 +9,24 @@ type DiagnosticReceipt = {
 	state: "issued" | "completed";
 	result?: { observedAt: number };
 };
+export type DiagnosticSelection = { operation?: string; cursor?: string };
 /** Retained native observations only. Projection never returns approval payloads.
  * Exact-ID reads deliberately precede windowing, but never bypass run/owner scope. */
 export function diagnosticHistory<Receipt extends DiagnosticReceipt>(
 	records: Record<string, string> | undefined,
 	run: { id: string; owner: number },
-	operation: string | undefined,
+	{ operation, cursor }: DiagnosticSelection,
 	kind: "HTTP" | "SQL",
 	matches: (receipt: Receipt) => boolean,
 	describe: (receipt: Receipt) => Record<string, string>,
 ) {
+	if (
+		cursor !== undefined &&
+		(operation !== undefined || !/^[a-f0-9]{64}$/.test(cursor))
+	)
+		throw new Error(
+			"Choose list cursor or exact diagnostic ID, with a valid cursor",
+		);
 	const authority =
 			kind === "HTTP"
 				? "Historical HTTP diagnostic only: no new request, connection or lease. Issued is pending or uncertain, not proof of dispatch, server-side effects or response. Never automatically resend."
@@ -54,8 +63,23 @@ export function diagnosticHistory<Receipt extends DiagnosticReceipt>(
 			.map(([id, raw]) => ({ id, receipt: decode<Receipt>(raw) }))
 			.filter(({ receipt }) => inScope(receipt)),
 		limit = 200,
+		// An opaque boundary selector, not a permission or a frozen snapshot.
+		cursorFor = (id: string) =>
+			digest(
+				JSON.stringify(["diagnostic-history-v1", kind, run.owner, run.id, id]),
+			),
+		end =
+			cursor === undefined
+				? entries.length
+				: entries.findIndex(({ id }) => cursorFor(id) === cursor);
+	if (end < 0)
+		throw new Error(
+			"Unknown diagnostic cursor for this exact run and kind; reload newest history",
+		);
+	const start = Math.max(0, end - limit),
+		boundary = entries[start],
 		listed = entries
-			.slice(-limit)
+			.slice(start, end)
 			.toReversed()
 			.map(({ id, receipt }) => summary(id, receipt));
 	return {
@@ -64,9 +88,12 @@ export function diagnosticHistory<Receipt extends DiagnosticReceipt>(
 		returned: listed.length,
 		limit,
 		omitted: entries.length - listed.length,
+		newer: entries.length - end,
+		remainingOlder: start,
+		nextCursor: start > 0 && boundary ? cursorFor(boundary.id) : null,
 		order: "newest-issuance-first",
 		scope: "exact-run",
 		authority:
-			"Counts cover retained native issuances for this exact run, not all service requests/queries or complete external history. Older retained records remain readable by exact ID. No execution authority is restored.",
+			"Counts cover retained native issuances for this exact run, not all service requests/queries or complete external history. Pages are boundary-based observations, not frozen snapshots: newly appended issuances are skipped by older-page cursors. Reload newest to see them. Older retained records also remain readable by exact ID. No execution authority is restored.",
 	};
 }

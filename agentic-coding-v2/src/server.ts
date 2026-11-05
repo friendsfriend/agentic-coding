@@ -357,7 +357,7 @@ export function serve(app: Runtime, port = 0) {
 					if (
 						[...url.searchParams.keys()].some(
 							(key) =>
-								!["run", "operation"].includes(key) ||
+								!["run", "operation", "cursor"].includes(key) ||
 								url.searchParams.getAll(key).length !== 1,
 						)
 					)
@@ -367,11 +367,14 @@ export function serve(app: Runtime, port = 0) {
 					const run = text(url.searchParams.get("run"), "diagnostic run", 128),
 						operation = url.searchParams.has("operation")
 							? text(url.searchParams.get("operation"), "diagnostic ID", 128)
+							: undefined,
+						cursor = url.searchParams.has("cursor")
+							? text(url.searchParams.get("cursor"), "diagnostic cursor", 64)
 							: undefined;
 					const diagnostics = url.pathname.endsWith("/http-history")
 						? app.environments.http
 						: app.environments.database;
-					return json(await diagnostics.history(run, operation));
+					return json(await diagnostics.history(run, { operation, cursor }));
 				}
 				if (
 					request.method === "GET" &&

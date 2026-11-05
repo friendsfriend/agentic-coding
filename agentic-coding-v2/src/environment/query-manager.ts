@@ -3,7 +3,10 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import { type Config, digest } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
-import { diagnosticHistory } from "./diagnostic-history.ts";
+import {
+	type DiagnosticSelection,
+	diagnosticHistory,
+} from "./diagnostic-history.ts";
 import {
 	type EndpointCa,
 	loadEndpointCa,
@@ -61,7 +64,7 @@ export class DatabaseDiagnostics {
 	) {}
 	/** Developer history view only: no held-lease check, connection or query.
 	 * Deliberately excludes SQL text, connection settings and credential refs. */
-	async history(runId: string, operation?: string) {
+	async history(runId: string, selection: DiagnosticSelection = {}) {
 		const run = (await this.authority.records()).find(
 			(item) =>
 				item.id === runId &&
@@ -75,7 +78,7 @@ export class DatabaseDiagnostics {
 		return diagnosticHistory<QueryReceipt>(
 			doc?.queryOperations,
 			run,
-			operation,
+			selection,
 			"SQL",
 			(receipt) => receipt.approved.input.infra === run.plan.app,
 			(receipt) => ({ infra: run.plan.app, app: receipt.approved.app }),
