@@ -11,13 +11,19 @@ import type { ClusterInspection } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
+import { declaredInfrastructure } from "./dependencies.ts";
 import { discoverDefinitions } from "./discovery.ts";
 import { DefinitionDrafts } from "./drafts.ts";
 import { HeldHttp } from "./http-manager.ts";
 import type { HttpReceipt } from "./http-receipts.ts";
 import { IdleLifecycle } from "./idle.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
-import { independentRoot, validateLifetime } from "./lifetime.ts";
+import {
+	independentRoot,
+	referencedRoot,
+	scopedRoot,
+	validateLifetime,
+} from "./lifetime.ts";
 import { type LogOptions, logView } from "./logs.ts";
 import type { Plan, TelemetryOptions } from "./model.ts";
 import {
@@ -812,7 +818,10 @@ export class Environments {
 			if (running && result?.some((run) => run.state !== "running"))
 				throw new Error("An app exited before batch startup completed");
 			for (const plan of plans)
-				if (independentRoot(plan))
+				if (
+					independentRoot(plan) ||
+					(referencedRoot(plan) && plan.projectKind === "app")
+				)
 					this.idle.trackRoot(owner.id, `${batch}:${plan.app}`, plan.app);
 			return result;
 		} catch {
@@ -851,8 +860,41 @@ export class Environments {
 			if (run.state === "interrupted" || run.state === "exited") return null;
 			// Callback exits must not release infrastructure ahead of dependents. Only
 			// ordered live cleanup may finalize members of a coupled dependency batch.
-			if (run.plan.dependencyBatch && !cleanup)
-				return { batch: run.batch, owner: run.owner };
+			if (run.plan.dependencyBatch && !cleanup) {
+				if (!referencedRoot(run.plan))
+					return { batch: run.batch, owner: run.owner, targets: null };
+				const batchRuns = values<EnvironmentRun>(doc.runs).filter(
+						(item) =>
+							item.batch === run.batch &&
+							item.owner === run.owner &&
+							holdsResource(item),
+					),
+					roots = batchRuns.filter((item) => item.plan.projectKind === "app");
+				// A released root keeps no reference; a lost prerequisite invalidates
+				// every root that declared it. Ambiguous graphs fail closed.
+				if (run.plan.projectKind === "app")
+					return { batch: run.batch, owner: run.owner, targets: [id] };
+				try {
+					const plans = batchRuns.map((item) => item.plan);
+					return {
+						batch: run.batch,
+						owner: run.owner,
+						targets: roots
+							.filter((item) =>
+								declaredInfrastructure(item.plan, plans).some(
+									(plan) => plan.app === run.plan.app,
+								),
+							)
+							.map((item) => item.id),
+					};
+				} catch {
+					return {
+						batch: run.batch,
+						owner: run.owner,
+						targets: roots.map((item) => item.id),
+					};
+				}
+			}
 			doc.runs[id] = JSON.stringify({
 				...run,
 				state: process.cleanupFailed ? "interrupted" : "exited",
@@ -876,18 +918,20 @@ export class Environments {
 			return null;
 		}, background);
 		if (cascade) {
-			if (!this.closed && !this.stopped.has(cascade.batch)) {
-				this.stopped.add(cascade.batch);
+			const latch = cascade.targets ? `run:${id}` : cascade.batch;
+			if (!this.closed && !this.stopped.has(latch)) {
+				this.stopped.add(latch);
 				this.acquisitions.notify();
 				const operation = (async () =>
 					this.stopTargets(
-						(await this.records()).filter(
-							(run) =>
-								run.batch === cascade.batch &&
-								run.owner === cascade.owner &&
-								holdsResource(run),
+						(await this.records()).filter((run) =>
+							cascade.targets
+								? cascade.targets.includes(run.id)
+								: run.batch === cascade.batch &&
+									run.owner === cascade.owner &&
+									holdsResource(run),
 						),
-						[cascade.batch],
+						cascade.targets ? [] : [cascade.batch],
 						true,
 					))();
 				this.dependencyCleanup.set(cascade.owner, operation);
@@ -965,7 +1009,7 @@ export class Environments {
 				active
 					.filter(
 						(run) =>
-							(run.plan.dependencyBatch ||
+							((run.plan.dependencyBatch && !referencedRoot(run.plan)) ||
 								[...this.pending.values()].some(
 									(entry) => entry.batch === run.batch && !entry.runId,
 								)) &&
@@ -976,6 +1020,23 @@ export class Environments {
 			const selected = active.filter(
 				(run) => !apps || apps.includes(run.plan.app) || coupled.has(run.batch),
 			);
+			// A still-referenced prerequisite is retained, not stopped directly.
+			if (apps) {
+				const runs = values<EnvironmentRun>(doc.runs),
+					schedule = cleanupSchedule(
+						runs,
+						selected.map((run) => run.id),
+					);
+				for (const run of selected)
+					if (
+						referencedRoot(run.plan) &&
+						run.plan.projectKind !== "app" &&
+						schedule.blockedBy(run.id, runs).length
+					)
+						throw new Error(
+							"Referenced prerequisites cannot be stopped while a declared root still references them; release each dependent root first",
+						);
+			}
 			const waiting = values<WaitReceipt>(doc.waits).filter(
 				(receipt) =>
 					receipt.owner === owner &&
@@ -989,16 +1050,14 @@ export class Environments {
 				batches: [
 					...new Set([
 						...selected
-							.filter(
-								(run) => !independentRoot(run.plan) || coupled.has(run.batch),
-							)
+							.filter((run) => !scopedRoot(run.plan) || coupled.has(run.batch))
 							.map((run) => run.batch),
 						...waiting.map((waiter) => waiter.batch),
 					]),
 				],
 				done: false,
 			};
-			if (selected.some((run) => independentRoot(run.plan))) {
+			if (selected.some((run) => scopedRoot(run.plan))) {
 				if (selected.some((run) => run.state === "interrupted"))
 					throw new Error(
 						"Cannot stop a saved PID. Operator inspection is required",
@@ -1044,7 +1103,8 @@ export class Environments {
 	private latchStop(runs: EnvironmentRun[], batches: string[]) {
 		for (const batch of batches) this.stopped.add(batch);
 		for (const run of runs)
-			if (independentRoot(run.plan)) this.stoppedRoots.add(run.id);
+			if (scopedRoot(run.plan) && run.plan.projectKind !== "infrastructure")
+				this.stoppedRoots.add(run.id);
 		this.acquisitions.remove(batches);
 		this.acquisitions.notify();
 	}
@@ -1113,19 +1173,47 @@ export class Environments {
 				});
 			return true;
 		}
-		let uncertain = false;
-		for (const target of schedule.order) {
+		const referenced = selected.some((run) => referencedRoot(run.plan)),
+			attempted = new Set<string>();
+		let uncertain = false,
+			targets = selected;
+		for (;;) {
+			const staged =
+				targets === selected
+					? schedule
+					: cleanupSchedule(
+							await this.records(),
+							targets.map((run) => run.id),
+						);
+			for (const target of staged.order)
+				if (await this.cleanupGeneration(target.id, staged, attempted))
+					uncertain = true;
+			if (!referenced) break;
+			// Last-reference release: only after this round settled, and never by
+			// retrying a generation whose cleanup is already uncertain.
+			const next = schedule
+				.orphans(await this.records())
+				.filter((run) => !attempted.has(run.id));
+			if (!next.length) break;
+			targets = next;
+		}
+		return uncertain;
+	}
+	private async cleanupGeneration(
+		id: string,
+		schedule: {
+			blockedBy(id: string, current: readonly EnvironmentRun[]): string[];
+		},
+		attempted: Set<string>,
+	) {
+		if (attempted.has(id)) return;
+		attempted.add(id);
+		{
 			const current = await this.records(),
-				run = current.find((run) => run.id === target.id);
-			if (!run) {
-				uncertain = true;
-				continue;
-			}
-			if (run.state === "exited") continue;
-			if (run.state === "interrupted") {
-				uncertain = true;
-				continue;
-			}
+				run = current.find((run) => run.id === id);
+			if (!run) return true;
+			if (run.state === "exited") return false;
+			if (run.state === "interrupted") return true;
 			const blockedBy = schedule.blockedBy(run.id, current);
 			if (blockedBy.length) {
 				await this.update(run.id, {
@@ -1134,8 +1222,7 @@ export class Environments {
 					error:
 						"Prerequisite cleanup retained until all dependent generations are confirmed released; no stop dispatched for this generation.",
 				});
-				uncertain = true;
-				continue;
+				return true;
 			}
 			const process = this.live.get(run.id);
 			if (process) {
@@ -1144,22 +1231,22 @@ export class Environments {
 					cleanupRetention: undefined,
 					...(run.cleanupRetention ? { error: null } : {}),
 				});
-				if (!(await this.stopLive(run.id, process))) uncertain = true;
-			} else if (
+				return !(await this.stopLive(run.id, process));
+			}
+			if (
 				run.state === "reserved" ||
 				(run.state === "stopping" && run.pid === null && run.ready === null)
 			) {
 				await this.update(run.id, { state: "exited" });
-			} else {
-				await this.update(run.id, {
-					state: "interrupted",
-					error:
-						"Original live cleanup authority is unavailable; operator inspection required. No saved process identity was used.",
-				});
-				uncertain = true;
+				return false;
 			}
+			await this.update(run.id, {
+				state: "interrupted",
+				error:
+					"Original live cleanup authority is unavailable; operator inspection required. No saved process identity was used.",
+			});
+			return true;
 		}
-		return uncertain;
 	}
 	async releaseOwner(owner: number) {
 		this.idle.forget(owner);

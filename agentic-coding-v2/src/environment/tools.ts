@@ -11,7 +11,7 @@ import type { TaskInfo } from "../state.ts";
 import { environmentApproval } from "./approval.ts";
 import { resolvePlans } from "./catalog.ts";
 import { createHttpTools } from "./http-tools.ts";
-import { independentLifetime, validateLifetime } from "./lifetime.ts";
+import { type Lifetime, validateLifetime } from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
 import { createQueryTools } from "./query-tools.ts";
 import type { Action, Selection } from "./selection.ts";
@@ -36,7 +36,7 @@ export function createEnvironmentTools(
 		api: ToolExecutionApi,
 		context: Context,
 		retainQueue = false,
-		lifetime?: typeof independentLifetime,
+		lifetime?: Lifetime,
 	) {
 		const owner = await ownerOf(api.conversationId);
 		if (!owner)
@@ -286,11 +286,16 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Explicit lifetime:independent-roots-v1 instead requests independent scoped activity/idle/stop for agent-owned standalone shell app roots only, after atomic startup. Dependencies and other runtimes are refused before approval/effects. No second held run acquisition or expired sibling reacquisition while another root remains held. Legacy defaults and operator actions are unchanged. Only this task's repository/workspace is allowed. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Opt-in native telemetry additionally discloses a per-run authenticated ephemeral loopback JSON receiver and exporter variables; its buffers and receiver close with the owned shell process and grant no saved authority. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout normally releases queue position. Explicit retainQueue:true adds a disclosed retained wait receipt for env_wait continuation of only this approved plan, with no apps reserved/started between calls. Stops, task cleanup and host shutdown/restart invalidate the live entry; saved queue records never restore authority.",
+					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Explicit lifetime:independent-roots-v1 instead requests independent scoped activity/idle/stop for agent-owned standalone shell app roots only, after atomic startup. Explicit lifetime:referenced-roots-v1 instead keeps one atomic acquisition but releases app roots independently: declared shell infrastructure prerequisites are retained by the remaining roots and cleaned only with the last reference, dependent-first. Both modes refuse other runtimes and require agent ownership. No second held run acquisition or expired sibling reacquisition while another root remains held. Legacy defaults and operator actions are unchanged. Only this task's repository/workspace is allowed. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Opt-in native telemetry additionally discloses a per-run authenticated ephemeral loopback JSON receiver and exporter variables; its buffers and receiver close with the owned shell process and grant no saved authority. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout normally releases queue position. Explicit retainQueue:true adds a disclosed retained wait receipt for env_wait continuation of only this approved plan, with no apps reserved/started between calls. Stops, task cleanup and host shutdown/restart invalidate the live entry; saved queue records never restore authority.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
 					retainQueue: Type.Optional(Type.Boolean()),
-					lifetime: Type.Optional(Type.Literal(independentLifetime)),
+					lifetime: Type.Optional(
+						Type.Union([
+							Type.Literal("independent-roots-v1"),
+							Type.Literal("referenced-roots-v1"),
+						]),
+					),
 					...selectionFields,
 					timeoutSec: Type.Optional(
 						Type.Integer({ minimum: 1, maximum: 7200 }),

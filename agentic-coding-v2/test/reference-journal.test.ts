@@ -59,11 +59,15 @@ test("approved coupled shell graphs record unique generation-bound application r
 		},
 		call("env_start", { apps: ["api", "editor"] }),
 		call("request_review", { path: ".", title: "Reused graph" }),
-		call("env_stop", { apps: ["api"] }),
 		call("env_start", {
 			apps: ["api", "editor"],
 			lifetime: "referenced-roots-v1",
 		}),
+		call("request_review", {
+			path: ".",
+			title: "Referenced mode refused while a coupled batch is held",
+		}),
+		call("env_stop", { apps: ["api"] }),
 		(messages) => {
 			refused = messages.messages.some(
 				(message) =>
@@ -121,6 +125,13 @@ test("approved coupled shell graphs record unique generation-bound application r
 	await pendingReview(app, owner, "Reused graph");
 	expect((await app.environments.snapshot()).referenceGraphs).toEqual([graph]);
 	await approve(app, owner, "Reused graph");
+	// A scoped request cannot upgrade or split this held coupled batch.
+	await approve(app, owner);
+	await approve(
+		app,
+		owner,
+		"Referenced mode refused while a coupled batch is held",
+	);
 	await pendingReview(app, owner, "Coupled cleanup complete");
 	const stopped = await app.environments.snapshot(),
 		settled = stopped.referenceGraphs[0];

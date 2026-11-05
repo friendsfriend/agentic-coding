@@ -89,5 +89,22 @@ export function cleanupSchedule(
 		order: dependentFirst(selected, byId, requirements),
 		blockedBy: (id: string, current: readonly EnvironmentRun[]) =>
 			unsettledDependents(id, current, context, requirements),
+		/** Last-reference release: context generations whose dependents are all
+		 * confirmed released. Derived from immutable plans and current states. */
+		orphans: (current: readonly EnvironmentRun[]) => {
+			const settled = new Set(
+					current.filter((run) => !holdsResource(run)).map((run) => run.id),
+				),
+				referenced = new Set(
+					[...requirements.values()].flatMap((set) => [...set]),
+				);
+			return context.filter(
+				(run) =>
+					referenced.has(run.id) &&
+					!settled.has(run.id) &&
+					unsettledDependents(run.id, current, context, requirements).length ===
+						0,
+			);
+		},
 	};
 }

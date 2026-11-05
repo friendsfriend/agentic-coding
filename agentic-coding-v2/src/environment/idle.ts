@@ -3,7 +3,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import { type TaskInfo, values } from "../state.ts";
-import { independentRoot } from "./lifetime.ts";
+import { referencedRoot, scopedRoot } from "./lifetime.ts";
 import {
 	type EnvironmentRun,
 	EnvironmentState,
@@ -149,20 +149,20 @@ export class IdleLifecycle {
 		activity: Activity | undefined,
 		options: { waiting?: boolean; protectedBatch?: boolean },
 	) {
-		if (independentRoot(run.plan) && !holdsResource(run))
+		if (scopedRoot(run.plan) && !holdsResource(run))
 			return "not-known-live-running";
+		// A declared prerequisite expires only with its last live root reference.
+		if (referencedRoot(run.plan) && run.plan.projectKind !== "app")
+			return "referenced-prerequisite";
 		if (activity?.kind === "operator") return "operator-owner";
 		if (activity?.kind !== "agent") return "unknown-owner";
 		if (options.waiting) return "waiting-owner";
 		if (
-			this.ports.pending(
-				run.owner,
-				independentRoot(run.plan) ? run.id : undefined,
-			)
+			this.ports.pending(run.owner, scopedRoot(run.plan) ? run.id : undefined)
 		)
 			return "operation-in-flight";
 		if (!this.ports.eligible(run)) return "not-known-live-running";
-		if (options.protectedBatch && !independentRoot(run.plan))
+		if (options.protectedBatch && !scopedRoot(run.plan))
 			return "batch-member-not-known-live-running";
 		return null;
 	}
@@ -176,12 +176,14 @@ export class IdleLifecycle {
 		} = {},
 		now = Date.now(),
 	) {
-		const independent = independentRoot(run.plan);
+		const independent = scopedRoot(run.plan);
 		const activity = this.activity(run.owner, independent ? run.id : undefined);
 		const protection = this.protection(run, activity, options);
 		return {
 			scope: independent
-				? "independent-native-root"
+				? referencedRoot(run.plan)
+					? "referenced-native-root"
+					: "independent-native-root"
 				: "whole-native-owner-batch",
 			activityScope: independent
 				? "selected-native-root"
@@ -190,7 +192,9 @@ export class IdleLifecycle {
 			ownerHeldRuns: options.ownerHeldRuns ?? null,
 			ownerBatches: options.ownerBatches ?? null,
 			dependencyScope: run.plan.dependencyBatch
-				? "exclusive-coupled-batch"
+				? referencedRoot(run.plan)
+					? "referenced-prerequisite-closure"
+					: "exclusive-coupled-batch"
 				: "no-declared-dependency-batch",
 			ttlMs: activity?.kind === "agent" ? this.policy.ttlMs : null,
 			policySource: this.policy.source,
@@ -217,7 +221,10 @@ export class IdleLifecycle {
 		for (const run of values<EnvironmentRun>(state?.runs).filter(
 			holdsResource,
 		)) {
-			const rootId = independentRoot(run.plan) ? run.id : undefined;
+			// Prerequisites carry no clock of their own: they are retained by the
+			// live roots that declare them, never reaped independently.
+			if (referencedRoot(run.plan) && run.plan.projectKind !== "app") continue;
+			const rootId = scopedRoot(run.plan) ? run.id : undefined;
 			candidates.set(rootId ?? `owner:${run.owner}`, {
 				owner: run.owner,
 				rootId,

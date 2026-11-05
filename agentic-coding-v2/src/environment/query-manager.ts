@@ -13,6 +13,7 @@ import {
 	loadEndpointCa,
 	prepareEndpointCa,
 } from "./endpoint-ca.ts";
+import { referencedLifetime } from "./lifetime.ts";
 import { readOnlyQuery } from "./query.ts";
 import {
 	type QueryConnection,
@@ -147,7 +148,7 @@ export class DatabaseDiagnostics {
 				closure.plans.some((plan) => plan.app === infra),
 			),
 			app = selected?.app;
-		if (!selected || !app || !members.every(alive))
+		if (!selected || !app)
 			throw new Error(
 				"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
 			);
@@ -159,6 +160,16 @@ export class DatabaseDiagnostics {
 				return resource.id;
 			})
 			.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+		// Referenced roots keep whole-acquisition holdings but independent stop:
+		// only this root generation and its declared prerequisites must be live.
+		const required =
+			app.plan.lifetime === referencedLifetime
+				? [app, ...members.filter((item) => resourceRuns.includes(item.id))]
+				: members;
+		if (!required.every(alive))
+			throw new Error(
+				"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
+			);
 		this.authority.check(owner.id, signal, run.batch, run);
 		if (requiringApp !== undefined)
 			this.authority.check(owner.id, signal, app.batch, app);
