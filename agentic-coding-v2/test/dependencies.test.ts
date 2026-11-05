@@ -153,6 +153,45 @@ test("cyclic infrastructure declarations are rejected at host admission before n
 		}),
 	).rejects.toThrow("Cyclic infrastructure dependencies");
 });
+test("an app root cannot declare another app as its prerequisite", async () => {
+	// Prerequisite graphs are app roots over declared infrastructure only, so an
+	// acquisition can never attach to an app generation and no app-level
+	// reference registry is reachable.
+	await expect(
+		fixture(false, (config) => {
+			fs.mkdirSync(config.configDir);
+			const target = {
+				id: "serve",
+				action: "run",
+				runtime: "shell",
+				command: "exit 1",
+			};
+			fs.writeFileSync(
+				path.join(config.configDir, "environments.json"),
+				JSON.stringify({
+					version: 1,
+					projects: [
+						{
+							id: "api",
+							kind: "app",
+							repository: config.repositories[0],
+							requires: ["edge"],
+							targets: [target],
+						},
+						{
+							id: "edge",
+							kind: "app",
+							repository: config.repositories[0],
+							targets: [target],
+						},
+					],
+				}),
+			);
+		}),
+	).rejects.toThrow(
+		"Dependencies must name declared infrastructure in the same repository",
+	);
+});
 test("oversized dependency expansion fails before approval, reservation or commands", async () => {
 	const { app, fake, invocation } = await fixture(false, (config) => {
 		fs.mkdirSync(config.configDir);
