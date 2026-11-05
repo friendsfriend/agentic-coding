@@ -1,6 +1,6 @@
 import { digest } from "../config.ts";
 import { decode, values } from "../state.ts";
-import { expandDependencies } from "./dependencies.ts";
+import { declaredInfrastructure } from "./dependencies.ts";
 import type { Plan, ReferenceGraph, ReferenceObservation } from "./model.ts";
 import type { EnvironmentRun } from "./state.ts";
 
@@ -42,12 +42,7 @@ export function captureReferenceGraph(
 	const roots: ReferenceGraph["roots"] = [];
 	for (const plan of plans.filter((plan) => plan.projectKind === "app")) {
 		try {
-			const closure = expandDependencies([plan], (app) => {
-				const dependency = byApp.get(app);
-				if (dependency?.projectKind !== "infrastructure")
-					throw new Error("Incomplete native application requirement graph");
-				return dependency;
-			});
+			const closure = declaredInfrastructure(plan, plans);
 			roots.push({
 				run: `${batch}:${plan.app}`,
 				resources: closure

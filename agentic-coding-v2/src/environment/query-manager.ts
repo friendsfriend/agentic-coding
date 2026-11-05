@@ -3,6 +3,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import { type Config, digest } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
+import { declaredInfrastructure } from "./dependencies.ts";
 import {
 	type DiagnosticSelection,
 	diagnosticHistory,
@@ -25,6 +26,7 @@ type QueryRequest = {
 	input: QueryInput;
 	run: string;
 	app: string;
+	root?: { run: string; resources: string[] };
 	connection: QueryConnection;
 	ca?: EndpointCa;
 };
@@ -38,6 +40,7 @@ export type QueryReceipt = {
 		run: string;
 		infra: string;
 		app: string;
+		root?: QueryRequest["root"];
 		observedAt: number;
 	};
 };
@@ -81,10 +84,21 @@ export class DatabaseDiagnostics {
 			selection,
 			"SQL",
 			(receipt) => receipt.approved.input.infra === run.plan.app,
-			(receipt) => ({ infra: run.plan.app, app: receipt.approved.app }),
+			(receipt) => ({
+				infra: run.plan.app,
+				app: receipt.approved.app,
+				...(receipt.approved.root
+					? { rootRun: receipt.approved.root.run }
+					: {}),
+			}),
 		);
 	}
-	private async held(owner: TaskInfo, infra: string, signal?: AbortSignal) {
+	private async held(
+		owner: TaskInfo,
+		infra: string,
+		signal?: AbortSignal,
+		requiringApp?: string,
+	) {
 		this.authority.check(owner.id, signal);
 		if (owner.policy !== "workspace-write")
 			throw new Error(
@@ -117,30 +131,45 @@ export class DatabaseDiagnostics {
 					!live.cleanupFailed
 				);
 			};
-		const requires = (app: EnvironmentRun) => {
-			const pending = [...(app.plan.requires ?? [])],
-				seen = new Set<string>();
-			while (pending.length) {
-				const next = pending.pop();
-				if (!next || seen.has(next)) continue;
-				if (next === infra) return true;
-				seen.add(next);
-				pending.push(
-					...(members.find((item) => item.plan.app === next)?.plan.requires ??
-						[]),
-				);
-			}
-			return false;
-		};
-		const app = members.find(
-			(item) => item.plan.projectKind === "app" && requires(item),
+		const candidates = members.filter(
+			(item) =>
+				item.plan.projectKind === "app" &&
+				(requiringApp === undefined || item.plan.app === requiringApp),
 		);
-		if (!app || !members.every(alive))
+		const closures = candidates.map((app) => ({
+			app,
+			plans: declaredInfrastructure(
+				app.plan,
+				members.map((item) => item.plan),
+			),
+		}));
+		const selected = closures.find((closure) =>
+				closure.plans.some((plan) => plan.app === infra),
+			),
+			app = selected?.app;
+		if (!selected || !app || !members.every(alive))
 			throw new Error(
-				"SQL requires a live held application whose immutable dependency plan requires this infrastructure",
+				"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
 			);
+		const resourceRuns = selected.plans
+			.map((plan) => {
+				const resource = members.find((member) => member.plan === plan);
+				if (!resource)
+					throw new Error("SQL prerequisite generation is unavailable");
+				return resource.id;
+			})
+			.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 		this.authority.check(owner.id, signal, run.batch, run);
+		if (requiringApp !== undefined)
+			this.authority.check(owner.id, signal, app.batch, app);
 		return {
+			root:
+				requiringApp === undefined
+					? undefined
+					: {
+							run: app.id,
+							resources: resourceRuns,
+						},
 			run,
 			process,
 			app,
@@ -155,14 +184,20 @@ export class DatabaseDiagnostics {
 		input: QueryInput,
 		signal?: AbortSignal,
 	): Promise<QueryRequest> {
-		queryInput(input.infra, input.sql, input.limit, input.schema);
-		const { run, app } = await this.held(owner, input.infra, signal),
+		queryInput(input.infra, input.sql, input.limit, input.schema, input.app);
+		const { run, app, root } = await this.held(
+				owner,
+				input.infra,
+				signal,
+				input.app,
+			),
 			connection = run.plan.queryConnection;
 		if (!connection) throw new Error("Query connection is unavailable");
 		return {
 			input,
 			run: run.id,
 			app: app.plan.app,
+			...(root ? { root } : {}),
 			connection,
 			...(connection.caRef
 				? { ca: prepareEndpointCa(this.config.configDir, connection.caRef) }
@@ -193,11 +228,17 @@ export class DatabaseDiagnostics {
 		id: string,
 		signal?: AbortSignal,
 	) {
-		const held = await this.held(owner, approved.input.infra, signal),
+		const held = await this.held(
+				owner,
+				approved.input.infra,
+				signal,
+				approved.input.app,
+			),
 			{ run, process, app } = held;
 		if (
 			run.id !== approved.run ||
 			app.plan.app !== approved.app ||
+			JSON.stringify(held.root) !== JSON.stringify(approved.root) ||
 			JSON.stringify(run.plan.queryConnection) !==
 				JSON.stringify(approved.connection) ||
 			approved.connection.caRef !== approved.ca?.file
@@ -215,6 +256,7 @@ export class DatabaseDiagnostics {
 				bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
 			const check = () => {
 				this.authority.check(owner.id, bounded, run.batch, run);
+				if (held.root) this.authority.check(owner.id, bounded, app.batch, app);
 				for (const member of held.members)
 					if (
 						!member.process ||
@@ -256,15 +298,26 @@ export class DatabaseDiagnostics {
 					check,
 					process.redact,
 				),
-				current = await this.held(owner, approved.input.infra, bounded);
+				current = await this.held(
+					owner,
+					approved.input.infra,
+					bounded,
+					approved.input.app,
+				);
 			check();
-			if (current.run.id !== run.id || current.process !== process)
+			if (
+				current.run.id !== run.id ||
+				current.process !== process ||
+				current.app.id !== app.id ||
+				JSON.stringify(current.root) !== JSON.stringify(held.root)
+			)
 				throw new Error("SQL ownership changed; response discarded");
 			const response = {
 				...result,
 				run: run.id,
 				infra: approved.input.infra,
 				app: app.plan.app,
+				...(held.root ? { root: held.root } : {}),
 				observedAt: Date.now(),
 			};
 			await this.authority.store().commit(async (tx) => {
@@ -296,7 +349,7 @@ export class DatabaseDiagnostics {
 		this.authority.pending.set(operation, {
 			owner: owner.id,
 			batch: run.batch,
-			runId: run.id,
+			runId: held.root ? app.id : run.id,
 		});
 		try {
 			return await operation;

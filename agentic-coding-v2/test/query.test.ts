@@ -66,6 +66,8 @@ test("approved held SQL is read-only, precise, bounded and frozen-secret redacte
 	await approve(app, task);
 	const review = await pendingReview(app, task, "Query store");
 	expect(review.snapshot).toContain("read-only transaction");
+	expect(JSON.parse(review.snapshot).request).not.toHaveProperty("root");
+	expect(JSON.parse(review.snapshot).request.input).not.toHaveProperty("app");
 	expect(review.snapshot).not.toContain(disposablePassword);
 	expect(fs.existsSync(probes)).toBe(false);
 	fs.writeFileSync(
@@ -296,3 +298,121 @@ test("foreign tasks and stopped dependency receipts never grant SQL authority", 
 	expect(fs.existsSync(path.join(config.configDir, "sql-probes"))).toBe(false);
 	expect((await app.environments.snapshot()).queryOperations).toHaveLength(0);
 }, 20000);
+
+test("explicit SQL app selection binds its live transitive prerequisite generations without fallback or weakening coupled cleanup", async () => {
+	const port = disposablePort(),
+		{ app, config, fake, invocation } = await fixture(false, (config) => {
+			installPostgres(config, port);
+			const file = path.join(config.configDir, "environments.json"),
+				definition = JSON.parse(fs.readFileSync(file, "utf8"));
+			const api = definition.projects.find(
+				(project: { id: string }) => project.id === "api",
+			);
+			if (!api) throw new Error("Missing disposable SQL app");
+			definition.projects.push(
+				{ ...api, id: "relay", kind: "infrastructure", requires: ["store"] },
+				{ ...api, id: "editor", requires: ["relay", "store"] },
+				{ ...api, id: "console", requires: [] },
+			);
+			fs.writeFileSync(file, JSON.stringify(definition));
+		});
+	let results: string[] = [];
+	const query = (app: string) =>
+		call("db_query", {
+			infra: "store",
+			app,
+			sql: "SELECT count(*) AS count FROM items /* NATIVE_SQL_PROBE */",
+		});
+	fake.setResponses([
+		call("env_start", { apps: ["api", "editor", "console"] }),
+		query("console"),
+		query("missing"),
+		query("editor"),
+		call("request_review", { path: ".", title: "Selected SQL completed" }),
+		query("api"),
+		(messages) => {
+			results = messages.messages.flatMap((message) =>
+				message.role === "toolResult" && message.toolName === "db_query"
+					? message.content.flatMap((part) =>
+							part.type === "text" ? [part.text] : [],
+						)
+					: [],
+			);
+			return fauxAssistantMessage("Stopped root was not substituted");
+		},
+	]);
+	const owner = await app.startTask(invocation),
+		probes = path.join(config.configDir, "sql-probes");
+	await approve(app, owner);
+	// The two invalid selectors must fail before any query review or issuance.
+	const review = await pendingReview(app, owner, "Query store"),
+		approved = JSON.parse(review.snapshot).request;
+	const running = await app.environments.snapshot(),
+		editor = running.runs.find((run) => run.plan.app === "editor");
+	if (!editor) throw new Error("Missing selected disposable root");
+	expect(fs.existsSync(probes)).toBe(false);
+	expect(running.queryOperations).toHaveLength(0);
+	expect(approved.input.app).toBe("editor");
+	expect(approved.app).toBe("editor");
+	expect(approved.root.run).toBe(editor.id);
+	expect(new Set(approved.root.resources)).toEqual(
+		new Set(
+			running.runs
+				.filter((run) => ["relay", "store"].includes(run.plan.app))
+				.map((run) => run.id),
+		),
+	);
+	expect(approved.root.resources).toHaveLength(2); // Diamond store requirement is unique.
+	expect(review.snapshot).not.toContain(disposablePassword);
+	await approve(app, owner, "Query store");
+	await pendingReview(app, owner, "Selected SQL completed");
+	expect(fs.readFileSync(probes, "utf8").trim()).toBe("query");
+	const issued = await app.environments.snapshot(),
+		store = issued.runs.find((run) => run.plan.app === "store");
+	if (!store) throw new Error("Missing disposable infrastructure");
+	const host = serve(app);
+	try {
+		const base = new URL(host.url),
+			token = new URLSearchParams(base.hash.slice(1)).get("token"),
+			response = await fetch(
+				new URL(
+					`/api/environments/database-history?run=${encodeURIComponent(store.id)}`,
+					base,
+				),
+				{ headers: { Authorization: `Bearer ${token}` } },
+			);
+		expect(response.status).toBe(200);
+		const history = await response.json();
+		expect(history.records[0]).toMatchObject({
+			app: "editor",
+			rootRun: editor.id,
+			state: "completed",
+		});
+	} finally {
+		host.stop();
+	}
+	await approve(app, owner, "Selected SQL completed");
+	const second = await pendingReview(app, owner, "Query store"),
+		secondApproval = JSON.parse(second.snapshot).request;
+	expect(secondApproval.input.app).toBe("api");
+	expect(secondApproval.root.run).not.toBe(approved.root.run);
+	expect(secondApproval.root.resources).toEqual([store.id]);
+	// Existing coupled semantics remain: selecting any member stops this whole batch.
+	await app.environments.stopOnce("stop-reviewed-sql-root", owner, ["api"]);
+	await approve(app, owner, "Query store");
+	await app.harness.waitForTask(owner as TaskId, context);
+	expect(results).toHaveLength(4);
+	expect(results[0]).toContain("no fallback");
+	expect(results[1]).toContain("no fallback");
+	expect(JSON.parse(results[2] ?? "{}")).toMatchObject({
+		app: "editor",
+		root: approved.root,
+		rows: [{ count: "5" }],
+		rollback: "confirmed",
+	});
+	expect(results[3]).toContain("receipts grant no authority");
+	const final = await app.environments.snapshot();
+	expect(final.runs.every((run) => run.state === "exited")).toBe(true);
+	expect(final.queryOperations).toHaveLength(1);
+	expect(fs.readFileSync(probes, "utf8").trim()).toBe("query");
+}, 30000);

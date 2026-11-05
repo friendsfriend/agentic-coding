@@ -78,12 +78,14 @@ export type QueryInput = {
 	sql: string;
 	limit: number;
 	schema?: string;
+	app?: string;
 };
 export function queryInput(
 	infra: string,
 	sql: string,
 	limit = 50,
 	schema?: string,
+	app?: string,
 ): QueryInput {
 	if (
 		typeof sql !== "string" ||
@@ -108,5 +110,21 @@ export function queryInput(
 		throw new Error(
 			"Query schema must be a PostgreSQL identifier of at most 63 characters",
 		);
-	return { infra, sql, limit, ...(schema === undefined ? {} : { schema }) };
+	if (
+		app !== undefined &&
+		(typeof app !== "string" ||
+			!app.length ||
+			app.length > 64 ||
+			hasControl(app))
+	)
+		throw new Error(
+			"SQL requiring app must be an exact nonempty application ID of at most 64 characters",
+		);
+	return {
+		infra,
+		sql,
+		limit,
+		...(schema === undefined ? {} : { schema }),
+		...(app === undefined ? {} : { app }),
+	};
 }

@@ -26,6 +26,34 @@ export function validateDependencies(projects: Project[]) {
 	};
 	for (const project of projects) visit(project, new Set());
 }
+/** Project only an already-declared closed DAG; no defaults, discovery, runtime
+ * selection or ownership authority. Callers must establish same-batch authority. */
+export function declaredInfrastructure(
+	root: Plan,
+	members: readonly Plan[],
+): Plan[] {
+	const byApp = new Map(members.map((plan) => [plan.app, plan]));
+	if (byApp.size !== members.length || members.length > 16)
+		throw new Error(
+			"Declared dependency closure is ambiguous or exceeds 16 projects",
+		);
+	const ordered = new Map<string, Plan>(),
+		visiting = new Set([root.app]);
+	const visit = (app: string) => {
+		if (visiting.has(app))
+			throw new Error("Cyclic declared dependency closure");
+		if (ordered.has(app)) return;
+		const dependency = byApp.get(app);
+		if (dependency?.projectKind !== "infrastructure")
+			throw new Error("Incomplete declared infrastructure dependency closure");
+		visiting.add(app);
+		for (const next of dependency.requires ?? []) visit(next);
+		visiting.delete(app);
+		ordered.set(app, dependency);
+	};
+	for (const app of root.requires ?? []) visit(app);
+	return [...ordered.values()];
+}
 /** Dependency-first admission; one exclusive, coupled-lifetime batch, no cross-task sharing. */
 export function expandDependencies(
 	roots: Plan[],
