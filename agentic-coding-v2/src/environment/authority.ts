@@ -6,6 +6,14 @@ export type LiveEnvironmentAuthority = {
 	store: () => Harness;
 	records: () => Promise<EnvironmentRun[]>;
 	live: ReadonlyMap<string, EnvironmentProcess>;
-	pending: Map<Promise<unknown>, { owner: number; batch: string }>;
-	check: (owner: number, signal?: AbortSignal, batch?: string) => void;
+	pending: Map<
+		Promise<unknown>,
+		{ owner: number; batch: string; runId?: string }
+	>;
+	check: (
+		owner: number,
+		signal?: AbortSignal,
+		batch?: string,
+		run?: EnvironmentRun,
+	) => void;
 };

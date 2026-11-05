@@ -139,7 +139,7 @@ export class DatabaseDiagnostics {
 			throw new Error(
 				"SQL requires a live held application whose immutable dependency plan requires this infrastructure",
 			);
-		this.authority.check(owner.id, signal, run.batch);
+		this.authority.check(owner.id, signal, run.batch, run);
 		return {
 			run,
 			process,
@@ -214,7 +214,7 @@ export class DatabaseDiagnostics {
 			const deadline = AbortSignal.timeout(10000),
 				bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
 			const check = () => {
-				this.authority.check(owner.id, bounded, run.batch);
+				this.authority.check(owner.id, bounded, run.batch, run);
 				for (const member of held.members)
 					if (
 						!member.process ||
@@ -296,6 +296,7 @@ export class DatabaseDiagnostics {
 		this.authority.pending.set(operation, {
 			owner: owner.id,
 			batch: run.batch,
+			runId: run.id,
 		});
 		try {
 			return await operation;

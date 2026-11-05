@@ -242,7 +242,7 @@ The authenticated operator endpoint `GET /api/environments/logs?app=api&since=20
 
 Shell capture timing survives ordinary owned cleanup alongside its redacted output. A host crash can lose later in-memory observations; retained timing grants no restart/adoption authority. Container/Compose/Kubernetes provider event times and service timing are still pending. Native scenarios verify spoofed future/past app dates cannot control selection, bounded timing excludes older untimed records, frozen-secret redaction, same dated output after stop, an empty future window, invalid-instant refusal and no aggregate fallback for an unavailable source. No runtime CLI call or extra permission is introduced by this selection.
 
-### Agent-only idle lifecycle
+### Agent-only idle lifecycle (default coupled mode)
 
 Live **agent-owned native batches** expire after 30 minutes without owner-scoped environment use. The CLI drives a single throttled sweep through `Runtime.tick`, at most once per 60 seconds. The file-only `environment.instances.idle_ttl_minutes` setting in `config.json` is re-read each pass; a positive number representing a safe whole-millisecond duration is usable, otherwise the 30-minute default applies. Policy reads are bounded to 64 KiB; missing, malformed or oversized sources also use that default, never silently disable expiry.
 
@@ -565,4 +565,6 @@ Idle activity is **owner-wide**, not independent per app. Every held root and de
 
 The review snapshot and dashboard disclose this coarse policy. True independent per-app expiry, multiple simultaneous held run batches and shared/last-reference dependency lifetimes are not implemented. They require a new explicit approval/admission/lifetime contract, not simply a narrower sweep or an additional activity timestamp. Existing approvals and receipts are not upgraded into that authority.
 
-The [proposed independent-root lifetime contract](docs/environment-lifetime-contract.md) records the approval, admission, activity, reference and cleanup rules needed to go further. It is a design for developer review, not an enabled configuration, API or execution grant. Its first proposed implementation is opt-in standalone agent shell roots within one atomic acquisition; shared dependencies and additional held acquisitions remain later, separately gated slices.
+### Explicit standalone independent roots
+
+Native `env_start` accepts explicit `lifetime: "independent-roots-v1"` for agent-owned standalone shell app roots within one exact-approved atomic acquisition. Scoped activity/stop/idle expiry then preserves sibling roots and their live diagnostics; atomic startup still rolls back together. Defaults and operator actions are unchanged. Dependencies, sharing, other runtimes and a second held acquisition (including reacquiring an expired sibling while another remains held) are refused. The [lifetime contract](docs/environment-lifetime-contract.md) separates this bounded implementation from proposed reference/admission extensions; it grants no execution authority.

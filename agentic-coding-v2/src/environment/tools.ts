@@ -11,6 +11,7 @@ import type { TaskInfo } from "../state.ts";
 import { environmentApproval } from "./approval.ts";
 import { resolvePlans } from "./catalog.ts";
 import { createHttpTools } from "./http-tools.ts";
+import { independentLifetime, validateLifetime } from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
 import { createQueryTools } from "./query-tools.ts";
 import type { Action, Selection } from "./selection.ts";
@@ -35,6 +36,7 @@ export function createEnvironmentTools(
 		api: ToolExecutionApi,
 		context: Context,
 		retainQueue = false,
+		lifetime?: typeof independentLifetime,
 	) {
 		const owner = await ownerOf(api.conversationId);
 		if (!owner)
@@ -55,6 +57,7 @@ export function createEnvironmentTools(
 					: { replicas: selection.replicas }),
 				timeoutSec,
 				...(retainQueue ? { retainQueue: true } : {}),
+				...(lifetime ? { lifetime } : {}),
 			});
 		const previous = await manager.receipt(batch, owner.id, request);
 		if (previous) return environmentResult(previous);
@@ -83,6 +86,8 @@ export function createEnvironmentTools(
 					}
 				: plan,
 		);
+		if (lifetime) for (const plan of plans) plan.lifetime = lifetime;
+		validateLifetime(plans, owner);
 		const snapshot = environmentApproval(plans, timeoutSec, retainQueue);
 		const review = await requestReview(
 			owner,
@@ -192,7 +197,7 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_list",
 				description:
-					"List configured environment projects, profiles, declared/default target choices, current task-owned slots, idle protection/countdowns and acquisition queues. Owner-scoped reads renew a known live agent batch, not another task. No live legacy environments are imported.",
+					"List configured environment projects, profiles, declared/default target choices, current task-owned slots, idle protection/countdowns and acquisition queues. Owner-wide reads renew all this task's eligible roots (legacy owner batch or explicitly independent roots), never another task. No live legacy environments are imported.",
 				parameters: Type.Object({}),
 				replay: "safe",
 				execute: async (_args, api) => {
@@ -204,12 +209,12 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_status",
 				description:
-					"Inspect environment run receipts, process exit status, readiness, task ownership, idle protection/countdowns and recorded expiry reasons. Owner-scoped inspection renews this agent batch. Interrupted effects require developer inspection; never kill a saved PID.",
+					"Inspect environment run receipts, process exit status, readiness, task ownership, idle protection/countdowns and recorded expiry reasons. App-filtered inspection renews only the selected explicitly independent root; unfiltered inspection renews all this task's roots. Legacy activity remains owner-wide. Interrupted effects require developer inspection; never kill a saved PID.",
 				parameters: Type.Object({ app: Type.Optional(Type.String()) }),
 				replay: "safe",
 				execute: async (args, api) => {
 					const owner = await ownerOf(api.conversationId);
-					if (owner) manager.idle.touch(owner.id);
+					if (owner) manager.idle.touch(owner.id, args.app);
 					return environmentResult(await manager.snapshot(args.app));
 				},
 			}),
@@ -281,10 +286,11 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Only this task's repository/workspace is allowed. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Opt-in native telemetry additionally discloses a per-run authenticated ephemeral loopback JSON receiver and exporter variables; its buffers and receiver close with the owned shell process and grant no saved authority. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout normally releases queue position. Explicit retainQueue:true adds a disclosed retained wait receipt for env_wait continuation of only this approved plan, with no apps reserved/started between calls. Stops, task cleanup and host shutdown/restart invalidate the live entry; saved queue records never restore authority.",
+					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Explicit lifetime:independent-roots-v1 instead requests independent scoped activity/idle/stop for agent-owned standalone shell app roots only, after atomic startup. Dependencies and other runtimes are refused before approval/effects. No second held run acquisition or expired sibling reacquisition while another root remains held. Legacy defaults and operator actions are unchanged. Only this task's repository/workspace is allowed. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Opt-in native telemetry additionally discloses a per-run authenticated ephemeral loopback JSON receiver and exporter variables; its buffers and receiver close with the owned shell process and grant no saved authority. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout normally releases queue position. Explicit retainQueue:true adds a disclosed retained wait receipt for env_wait continuation of only this approved plan, with no apps reserved/started between calls. Stops, task cleanup and host shutdown/restart invalidate the live entry; saved queue records never restore authority.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
 					retainQueue: Type.Optional(Type.Boolean()),
+					lifetime: Type.Optional(Type.Literal(independentLifetime)),
 					...selectionFields,
 					timeoutSec: Type.Optional(
 						Type.Integer({ minimum: 1, maximum: 7200 }),
@@ -301,6 +307,7 @@ export function createEnvironmentTools(
 						api,
 						context,
 						args.retainQueue === true,
+						args.lifetime,
 					),
 			}),
 			defineTool({

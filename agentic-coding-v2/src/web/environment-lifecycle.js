@@ -4,6 +4,12 @@ export function idleDescription(run) {
 	if (run.idleReap)
 		return `Idle expiry requested at ${new Date(run.idleReap.at).toISOString()}; cleanup state: ${run.state}${run.inspection ? " (operator-confirmed inspection)" : ""}. Idle expiry itself neither cancels coding nor permanently revokes its authority.`;
 	if (!run.idle) return "";
+	if (run.idle.scope === "independent-native-root") {
+		if (run.idle.protection)
+			return `Independent root idle expiry protected: ${run.idle.protection}. No sibling activity renewal or shared-reference lifetime.`;
+		const seconds = Math.ceil(run.idle.remainingMs / 1000);
+		return `Independent root idle TTL: ${seconds}s remaining; scoped activity renews only this root, while owner-wide list/unfiltered status renews all. No second held acquisition or expired-sibling reacquisition until other holdings are released. Dependencies/sharing unsupported.`;
+	}
 	const scope =
 			Number.isInteger(run.idle.ownerHeldRuns) &&
 			Number.isInteger(run.idle.ownerBatches)

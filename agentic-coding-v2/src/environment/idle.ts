@@ -3,6 +3,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import { type TaskInfo, values } from "../state.ts";
+import { independentRoot } from "./lifetime.ts";
 import {
 	type EnvironmentRun,
 	EnvironmentState,
@@ -20,8 +21,8 @@ type Activity = {
 type Ports = {
 	store(): Harness;
 	eligible(run: EnvironmentRun): boolean;
-	pending(owner: number): boolean;
-	latch(batches: string[]): void;
+	pending(owner: number, runId?: string): boolean;
+	latch(runs: EnvironmentRun[], batches: string[]): void;
 	stop(runs: EnvironmentRun[], batches: string[]): Promise<void>;
 };
 
@@ -29,6 +30,10 @@ type Ports = {
  * intent is durable before dispatch; restart leaves uncertain cleanup quarantined. */
 export class IdleLifecycle {
 	private owners = new Map<number, Activity>();
+	private roots = new Map<
+		string,
+		{ owner: number; app: string; activity: Activity }
+	>();
 	private lastSweep: number | null = null;
 	private sequence = 0;
 	private policy: { ttlMs: number; source: string };
@@ -74,7 +79,7 @@ export class IdleLifecycle {
 			sequence: ++this.sequence,
 		});
 	}
-	touch(owner: number) {
+	touchOwner(owner: number) {
 		const previous = this.owners.get(owner);
 		if (previous)
 			this.owners.set(owner, {
@@ -83,8 +88,56 @@ export class IdleLifecycle {
 				sequence: ++this.sequence,
 			});
 	}
+	trackRoot(owner: number, id: string, app: string) {
+		const activity = this.owners.get(owner);
+		if (activity)
+			this.roots.set(id, {
+				owner,
+				app,
+				activity: { ...activity, at: Date.now(), sequence: ++this.sequence },
+			});
+	}
+	touch(owner: number, app?: string) {
+		this.touchOwner(owner);
+		for (const [id, root] of this.roots)
+			if (root.owner === owner && (app === undefined || root.app === app))
+				this.roots.set(id, {
+					...root,
+					activity: {
+						...root.activity,
+						at: Date.now(),
+						sequence: ++this.sequence,
+					},
+				});
+	}
+	touchRun(owner: number, id: string) {
+		this.touchOwner(owner);
+		const root = this.roots.get(id);
+		if (root?.owner === owner)
+			this.roots.set(id, {
+				...root,
+				activity: {
+					...root.activity,
+					at: Date.now(),
+					sequence: ++this.sequence,
+				},
+			});
+	}
+	forgetRoot(id: string) {
+		this.roots.delete(id);
+	}
+	private activity(owner: number, id?: string) {
+		if (!id) return this.owners.get(owner);
+		const root = this.roots.get(id);
+		return root?.owner === owner &&
+			this.owners.get(owner)?.kind === root.activity.kind
+			? root.activity
+			: undefined;
+	}
 	forget(owner: number) {
 		this.owners.delete(owner);
+		for (const [id, root] of this.roots)
+			if (root.owner === owner) this.roots.delete(id);
 	}
 	private waiting(waits: Record<string, string> | undefined, owner: number) {
 		return values<WaitReceipt>(waits).some(
@@ -96,12 +149,21 @@ export class IdleLifecycle {
 		activity: Activity | undefined,
 		options: { waiting?: boolean; protectedBatch?: boolean },
 	) {
+		if (independentRoot(run.plan) && !holdsResource(run))
+			return "not-known-live-running";
 		if (activity?.kind === "operator") return "operator-owner";
 		if (activity?.kind !== "agent") return "unknown-owner";
 		if (options.waiting) return "waiting-owner";
-		if (this.ports.pending(run.owner)) return "operation-in-flight";
+		if (
+			this.ports.pending(
+				run.owner,
+				independentRoot(run.plan) ? run.id : undefined,
+			)
+		)
+			return "operation-in-flight";
 		if (!this.ports.eligible(run)) return "not-known-live-running";
-		if (options.protectedBatch) return "batch-member-not-known-live-running";
+		if (options.protectedBatch && !independentRoot(run.plan))
+			return "batch-member-not-known-live-running";
 		return null;
 	}
 	view(
@@ -114,11 +176,16 @@ export class IdleLifecycle {
 		} = {},
 		now = Date.now(),
 	) {
-		const activity = this.owners.get(run.owner);
+		const independent = independentRoot(run.plan);
+		const activity = this.activity(run.owner, independent ? run.id : undefined);
 		const protection = this.protection(run, activity, options);
 		return {
-			scope: "whole-native-owner-batch",
-			activityScope: "all-held-runs-of-native-owner",
+			scope: independent
+				? "independent-native-root"
+				: "whole-native-owner-batch",
+			activityScope: independent
+				? "selected-native-root"
+				: "all-held-runs-of-native-owner",
 			acquisitionScope: "one-exclusive-held-run-batch-per-owner",
 			ownerHeldRuns: options.ownerHeldRuns ?? null,
 			ownerBatches: options.ownerBatches ?? null,
@@ -146,32 +213,42 @@ export class IdleLifecycle {
 		const state = await this.ports
 			.store()
 			.snapshot(EnvironmentState, background);
-		const owners = new Set(
-			values<EnvironmentRun>(state?.runs)
-				.filter(holdsResource)
-				.map((run) => run.owner),
-		);
-		for (const owner of owners) {
-			const activity = this.owners.get(owner);
+		const candidates = new Map<string, { owner: number; rootId?: string }>();
+		for (const run of values<EnvironmentRun>(state?.runs).filter(
+			holdsResource,
+		)) {
+			const rootId = independentRoot(run.plan) ? run.id : undefined;
+			candidates.set(rootId ?? `owner:${run.owner}`, {
+				owner: run.owner,
+				rootId,
+			});
+		}
+		for (const { owner, rootId } of candidates.values()) {
+			const activity = this.activity(owner, rootId);
 			if (activity?.kind !== "agent" || now - activity.at < this.policy.ttlMs)
 				continue;
 			const receipt = await this.ports.store().commit(async (tx) => {
 				const doc = await tx.doc(EnvironmentState);
 				const runs = values<EnvironmentRun>(doc.runs).filter(
-					(run) => run.owner === owner && holdsResource(run),
+					(run) =>
+						run.owner === owner &&
+						holdsResource(run) &&
+						(!rootId || run.id === rootId),
 				);
 				// Revalidate after the document read, immediately before the synchronous
 				// dispatch latch. New activity, waits or unknown batch members protect all.
 				if (
-					this.owners.get(owner) !== activity ||
+					this.activity(owner, rootId) !== activity ||
 					!runs.length ||
 					this.waiting(doc.waits, owner) ||
-					this.ports.pending(owner) ||
+					this.ports.pending(owner, rootId) ||
 					runs.some((run) => !this.ports.eligible(run))
 				)
 					return null;
-				const batches = [...new Set(runs.map((run) => run.batch))].sort();
-				const id = `idle:${owner}:${batches.join(",")}:${activity.sequence}`;
+				const batches = rootId
+					? []
+					: [...new Set(runs.map((run) => run.batch))].sort();
+				const id = `idle:${owner}:${rootId ?? batches.join(",")}:${activity.sequence}`;
 				if (doc.stops[id]) return null; // An issued receipt is never resent or overwritten.
 				const idle = {
 					at: now,
@@ -180,7 +257,7 @@ export class IdleLifecycle {
 				};
 				const saved: StopReceipt = {
 					owner,
-					apps: null,
+					apps: rootId ? runs.map((run) => run.plan.app) : null,
 					runs: runs.map((run) => run.id),
 					batches,
 					done: false,
@@ -194,7 +271,7 @@ export class IdleLifecycle {
 						revision: run.revision + 1,
 						idleReap: idle,
 					});
-				this.ports.latch(batches);
+				this.ports.latch(runs, batches);
 				return { id, saved, runs };
 			}, background);
 			if (!receipt) continue;

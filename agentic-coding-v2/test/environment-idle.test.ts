@@ -204,3 +204,230 @@ test("agent activity renews every approved root; second acquisitions are refused
 		),
 	).toBe(true);
 }, 15_000);
+
+test("explicit standalone roots expire independently without revoking a sibling endpoint; graph requests and additional acquisitions remain refused", async () => {
+	const probe = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch: () => new Response(""),
+	});
+	const port = probe.port;
+	probe.stop(true);
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		fs.mkdirSync(config.configDir);
+		fs.writeFileSync(
+			path.join(config.configDir, "config.json"),
+			JSON.stringify({ environment: { instances: { idle_ttl_minutes: 1 } } }),
+		);
+		const target = {
+			id: "serve",
+			action: "run",
+			runtime: "shell",
+			readyText: "READY",
+			command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("console.log('READY');setInterval(()=>{},1000)")}`,
+		};
+		const requests = path.join(config.configDir, "requests");
+		const source = `const fs=require('node:fs');Bun.serve({hostname:'127.0.0.1',port:${port},async fetch(r){fs.appendFileSync(${JSON.stringify(requests)},new URL(r.url).pathname+'\\n');await new Promise(resolve=>{const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path.join(config.configDir, "release-http"))})){clearInterval(t);resolve()}},5)});return new Response('independent-ok')}});console.log('READY')`;
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify({
+				version: 1,
+				projects: [
+					{
+						id: "api",
+						kind: "app",
+						repository: config.repositories[0],
+						targets: [
+							{
+								...target,
+								command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`,
+								endpoints: { web: `http://127.0.0.1:${port}` },
+							},
+						],
+					},
+					{
+						id: "editor",
+						kind: "app",
+						repository: config.repositories[0],
+						targets: [target],
+					},
+					{
+						id: "console",
+						kind: "app",
+						repository: config.repositories[0],
+						targets: [target],
+					},
+					{
+						id: "dependent",
+						kind: "app",
+						repository: config.repositories[0],
+						requires: ["cache"],
+						targets: [target],
+					},
+					{
+						id: "cache",
+						kind: "infrastructure",
+						repository: config.repositories[0],
+						targets: [target],
+					},
+				],
+			}),
+		);
+	});
+	let graphRefusal = "",
+		httpResult = "",
+		afterResult = "",
+		extraRefusal = "",
+		legacyRefusal = "";
+	const resultText = (messages: {
+		messages: { role: string; content: unknown }[];
+	}) =>
+		JSON.stringify(
+			messages.messages
+				.filter((message) => message.role === "toolResult")
+				.at(-1)?.content ?? [],
+		);
+	fake.setResponses([
+		call("env_start", {
+			apps: ["dependent"],
+			lifetime: "independent-roots-v1",
+		}),
+		(messages) => {
+			graphRefusal = resultText(messages);
+			return call("env_start", {
+				apps: ["api", "editor", "console"],
+				lifetime: "independent-roots-v1",
+			});
+		},
+		call("env_stop", { apps: ["console"] }),
+		call("request_review", { path: ".", title: "Independent before renewal" }),
+		call("env_status", { app: "api" }),
+		call("env_http_get", { app: "api", endpoint: "web", path: "/health" }),
+		(messages) => {
+			httpResult = resultText(messages);
+			return call("request_review", {
+				path: ".",
+				title: "Independent after HTTP",
+			});
+		},
+		call("env_http_get", {
+			app: "api",
+			endpoint: "web",
+			path: "/after-expiry",
+		}),
+		(messages) => {
+			afterResult = resultText(messages);
+			return call("env_start", {
+				apps: ["editor"],
+				lifetime: "independent-roots-v1",
+			});
+		},
+		(messages) => {
+			extraRefusal = resultText(messages);
+			return call("env_start", { apps: ["api"] });
+		},
+		(messages) => {
+			legacyRefusal = resultText(messages);
+			return call("env_stop", { apps: ["api"] });
+		},
+		call("request_review", { path: ".", title: "Independent done" }),
+	]);
+	const agent = await app.startTask(invocation);
+	const review = await pendingReview(app, agent);
+	expect(graphRefusal).toContain("standalone shell app roots");
+	expect(JSON.parse(review.snapshot)).toHaveProperty(
+		"plans.0.lifetime",
+		"independent-roots-v1",
+	);
+	expect(review.snapshot).toContain("expired-sibling reacquisition");
+	expect((await app.environments.snapshot()).runs).toHaveLength(0);
+	await approve(app, agent);
+	await pendingReview(app, agent, "Independent before renewal");
+	const initial = await app.environments.snapshot();
+	const before = initial.runs.find((run) => run.plan.app === "editor")?.idle
+		.lastActivityAt;
+	if (before === null || before === undefined)
+		throw new Error("Missing independent clock");
+	expect(initial.runs).toHaveLength(3);
+	expect(initial.runs.find((run) => run.plan.app === "console")?.state).toBe(
+		"exited",
+	);
+	expect(initial.runs.filter((run) => run.state === "running")).toHaveLength(2);
+	expect(
+		initial.runs.every(
+			(run) =>
+				run.idle.scope === "independent-native-root" &&
+				run.idle.ownerHeldRuns === 2,
+		),
+	).toBe(true);
+	await app.tick(before);
+	await app.environments.selectedLogs("editor", undefined, {});
+	expect(
+		(await app.environments.snapshot("editor")).runs[0]?.idle.lastActivityAt,
+	).toBe(before);
+	await approve(app, agent, "Independent before renewal");
+	await pendingReview(app, agent, "Endpoint GET: api/web");
+	const renewed = (await app.environments.snapshot("api")).runs[0]?.idle
+		.lastActivityAt;
+	if (renewed === null || renewed === undefined)
+		throw new Error("Missing root renewal");
+	expect(renewed).toBeGreaterThan(before);
+	expect(
+		(await app.environments.snapshot("editor")).runs[0]?.idle.lastActivityAt,
+	).toBe(before);
+	await approve(app, agent, "Endpoint GET: api/web");
+	const inFlight = await eventually(
+		() => app.environments.snapshot(),
+		(state) =>
+			state.runs.some(
+				(run) =>
+					run.plan.app === "api" &&
+					run.idle.protection === "operation-in-flight",
+			) && fs.existsSync(path.join(config.configDir, "requests")),
+	);
+	expect(
+		inFlight.runs.find((run) => run.plan.app === "editor")?.idle.protection,
+	).toBeNull();
+	// Both clocks are now past TTL: only the root with an actual live exchange is protected.
+	await app.tick(before + 120_000);
+	const expired = await app.environments.snapshot();
+	expect(expired.runs.find((run) => run.plan.app === "editor")).toMatchObject({
+		state: "exited",
+		idleReap: { lastActivityAt: before },
+	});
+	expect(expired.runs.find((run) => run.plan.app === "api")).toMatchObject({
+		state: "running",
+		endpoints: { web: `http://127.0.0.1:${port}/` },
+	});
+	expect(
+		(await app.harness.getTask(agent as TaskId, context))?.state.status,
+	).not.toBe("terminal");
+	fs.writeFileSync(
+		path.join(config.configDir, "release-http"),
+		"release disposable response",
+	);
+	await pendingReview(app, agent, "Independent after HTTP");
+	await approve(app, agent, "Independent after HTTP");
+	await approve(app, agent, "Endpoint GET: api/web"); // New operation after root B cleanup.
+	await approve(app, agent); // Expired sibling cannot be reacquired while api is held.
+	await approve(app, agent); // Legacy-mode plan cannot reuse an independent-mode receipt.
+	await pendingReview(app, agent, "Independent done");
+	expect(httpResult).toContain("independent-ok");
+	expect(afterResult).toContain("independent-ok");
+	expect(fs.readFileSync(path.join(config.configDir, "requests"), "utf8")).toBe(
+		"/health\n/after-expiry\n",
+	);
+	expect(extraRefusal).toContain(
+		"Release your existing app batch before acquiring another",
+	);
+	expect(legacyRefusal).toContain(
+		"Release your existing app batch before acquiring another",
+	);
+	expect(
+		(await app.environments.snapshot()).runs.every(
+			(run) => run.state === "exited",
+		),
+	).toBe(true);
+	await app.cancel(agent);
+	await app.harness.waitForTask(agent as TaskId, context);
+}, 15_000);

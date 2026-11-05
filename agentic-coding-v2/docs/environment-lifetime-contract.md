@@ -1,15 +1,15 @@
 # Independent root idle expiry and dependency references
 
-**Status: proposed contract for developer review; not implemented or approved for execution.**
+**Status: bounded standalone-shell first slice implemented as explicit opt-in; dependency/reference and admission extensions remain proposed. No execution approval is granted by this document.**
 
-This document adds no configuration fields, tools, permissions, live leases, migrations or runtime behavior. Names below describe a prospective native contract, not accepted API/schema inputs. Existing requests keep their exact approved semantics. In particular, reading or agreeing with this design is not approval to execute an environment action, share credentials/workspaces, publish configuration or operate a real runtime.
+The only implemented new input is native `env_start`'s optional `lifetime: "independent-roots-v1"`, bound into the exact approval and request identity. It permits agent-owned standalone shell app roots in one atomic acquisition, not dependencies, cross-owner sharing, a second held run batch, or new diagnostic transports. Operator actions and requests without the opt-in keep their approved semantics. There is no environment-definition field, automatic migration or default-policy change. Root clocks start after complete atomic startup; scoped stop/expiry does not invalidate sibling diagnostics. The reference, last-release/attach, multi-batch and sharing contracts below remain proposals, not accepted schemas or enabled behavior. Reading or agreeing with this document never approves a real execution, credential/workspace share, publication or runtime operation.
 
 ## 1. Baseline and reference evidence
 
 The native implementation currently has:
 
 - One exclusive held **run** acquisition batch per native owner; a second run acquisition is refused while that owner holds runs. One-off build/test actions have separate conflict rules. Complete identical live-plan reuse adds no lease.
-- One owner-wide environment-activity clock, including unrelated roots requested together. Default TTL is 30 minutes; the file-only policy is re-read on throttled 60-second sweeps, with the existing unusable-policy fallback.
+- By default, one owner-wide environment-activity clock, including unrelated roots requested together. Explicit independent mode uses private per-run/root clocks, without changing legacy coupled or operator behavior. Default TTL is 30 minutes; the file-only policy is re-read on throttled 60-second sweeps, with the existing unusable-policy fallback.
 - Atomic dependency expansion/reservation and a coupled dependency-batch lifetime. Selecting or losing a member cleans the approved batch dependent-first, not just one root.
 - Native intent/receipt journaling plus server-private live process/resource capabilities. Reopened records quarantine uncertainty; stored IDs do not restore permission to observe/control a process or runtime.
 
@@ -22,14 +22,14 @@ Read-only reference evidence, **not code or authority to import**:
 
 Therefore, “a managed owned dependency referenced by several roots” and “a shared/external service we do not own” must not be conflated. Per-app timestamps alone cannot provide either reference-safe cleanup or safe hold-and-wait admission. See the [parity ledger](environment-parity.md) for implemented versus pending capabilities.
 
-## 2. Proposed decisions
+## 2. First slice and proposed follow-ups
 
-All decisions in this table await developer review. They are conservative proposed boundaries, not permissions inferred from the parity goal.
+The bounded first slice below is implemented; all dependency/reference, extension and sharing follow-ups remain proposed. These boundaries are not execution permissions inferred from the parity goal.
 
 | Decision | Proposed contract |
 | --- | --- |
 | Opt-in | A versioned lifetime contract is part of each new exact execution approval. Existing coupled requests remain the default and are never silently upgraded. |
-| First executable slice | Independent **agent-owned standalone shell app roots**, in one atomically approved request, without `requires`, cross-owner sharing, a second held run batch, or new diagnostic transports. Operator requests retain their current lifetime behavior. |
+| Implemented first slice | Independent **agent-owned standalone shell app roots**, in one atomically approved request, without `requires`, cross-owner sharing, a second held run batch, or new diagnostic transports. Operator requests retain their current lifetime behavior. |
 | Dependency follow-up | Same-owner roots may reference one managed owned dependency generation only after reference-fenced cleanup and diagnostics are implemented together. |
 | Additional batches | Later opt-in immediate atomic extension only: reuse exact compatible live resources or grant all new resources without waiting. If blocked while holding runs, refuse; do not retain a wait edge. |
 | Waiting parity | Retained waits while holding runs require a separately reviewed transactional wait-for graph/cycle protocol. Until then, retain no-hold-and-wait; do not claim legacy wait parity. |
@@ -39,7 +39,7 @@ All decisions in this table await developer review. They are conservative propos
 
 No new runtime/transport is implied by these choices. Compose networks, Pod replicas, shell process groups, private receivers and adapter children remain indivisible resource groups unless their existing adapter provides a narrower **approved and verified** cleanup boundary. No partial Compose-service or Pod-replica expiry is proposed.
 
-The first slice is not just a timer change. Current manager stop/authority paths latch by acquisition batch (`stopped`, queue removal and diagnostic checks). Independent roots need distinct version-aware closing/operation barriers: stopping B must not invalidate A's live endpoint, telemetry, future operations or clock merely because A and B share an acquisition receipt. A batch remains the immutable atomic admission journal, not automatically the independent-mode cleanup unit. Legacy stop/cascade/replay behavior must remain unchanged.
+The first slice is not just a timer change. Legacy manager stop/authority paths still latch by acquisition batch. Independent roots now use a separate closing latch, scoped activity and diagnostic operation barriers: stopping B must not invalidate A's live endpoint, telemetry, future operations or clock merely because A and B share an acquisition receipt. Stopping any member during incomplete startup still rolls back the entire new atomic acquisition. A batch remains the immutable atomic admission journal, not automatically the independent-mode cleanup unit. Legacy stop/cascade/replay behavior must remain unchanged.
 
 ## 3. Exact approval boundary
 
@@ -57,7 +57,9 @@ An approval that permits joining a managed dependency is not HTTP write, SQL que
 
 ## 4. Native record model versus live authority
 
-Proposed durable records, using native storage rather than an imported lease subsystem:
+The standalone first slice reuses native `EnvironmentRun.id` (`batch:app`) as its root generation, immutable `plan.lifetime` and exact request for mode binding, and existing native stop intents. Its clocks/closing handles remain private; reopen restores neither. It adds no dependency reference records.
+
+Proposed records for dependency-bearing extensions, using native storage rather than an imported lease subsystem:
 
 - **Acquisition intent:** exact versioned request identity, approved plan/closure, queue ordinal where allowed, atomic admission outcome and immutable replay references.
 - **Root generation:** owner, request/root identity, immutable plan binding, versioned lifetime mode, membership revision, current recorded phase and release/expiry reason. Reacquisition creates a fresh generation.
@@ -83,12 +85,12 @@ On startup failure, withdraw admission for the new roots, join their dependent-f
 
 ## 6. Activity and independent idle expiry
 
-For the proposed independent mode:
+For independent mode (dependency-specific clauses remain proposed):
 
 - A root-specific environment operation renews **that root**, not unrelated roots. A dependency diagnostic must identify one requiring root and verify its current reference; ambiguity is refused rather than silently selecting a root or renewing every dependent.
 - Owner-wide `env_list`/unfiltered status may conservatively renew all that owner's eligible roots, but the tool/review must disclose this explicitly. Passive host/dashboard/historical reads never renew agent activity. A live authenticated developer action does not become an agent heartbeat.
 - Dependency use is protected by active root references, not by a competing autonomous dependency TTL. A root's required resources cannot expire underneath it. No separate idle reaper may delete a referenced managed resource.
-- Operator/unknown owners are not agent-expiry candidates. In-flight operation protection and revalidation are root/resource scoped; related uncertain membership protects the known dependency closure. If the closure itself cannot be established, fail closed over the affected known owner holdings rather than guessing independence.
+- Operator/unknown owners are not agent-expiry candidates. First-slice HTTP/SQL diagnostic tracking carries the selected run identity; atomic startup and workspace-wide actions conservatively protect the owner. In-flight operation protection and revalidation are root/resource scoped; related uncertain membership protects the known dependency closure. If the closure itself cannot be established, fail closed over the affected known owner holdings rather than guessing independence.
 - A valid live retained wait protects its owner's needed holdings only in a contract that actually permits hold-and-wait. A persisted waiting record, pending review or model claim cannot manufacture that protection or restore queue authority.
 
 At each throttled sweep, select eligible expired roots, then transactionally revalidate activity sequence, task state, root/membership revisions, valid references, pending operations and current live ownership immediately before committing an immutable stop intent. Latch closing admission before dispatch. Activity arriving before that latch cancels the proposed expiry; activity after it cannot resurrect the closing generation. Any fresh reacquisition needs normal approval and admission after confirmed release.
@@ -124,7 +126,9 @@ Unexpected dependency loss closes operation admission for all roots transitively
 
 ## 9. Representative acceptance scenarios and delivery gates
 
-These are future public-boundary acceptance criteria, **not tests already passing**. Avoid helper-layout, exact-argv or exhaustive matrix tests.
+The standalone and first-slice refusal evidence is recorded below. All reference-sharing, crash/reference-race and extension scenarios in the table remain **future criteria**, not passing tests. Avoid helper-layout, exact-argv or exhaustive matrix tests.
+
+Implemented public evidence in `test/environment-idle.test.ts`: three roots start under one mode-bound exact approval; manual stop of one leaves siblings held, scoped activity does not renew the idle sibling, and a real bounded HTTP exchange protects only its own root while that sibling expires. The response and a separately approved **new** HTTP request after expiry both succeed. Dependency-bearing opt-in requests fail before approval/effects; second-held acquisitions and legacy-mode reuse are refused. The existing legacy owner-wide/dependency/operator scenario still passes. The standalone fixture does not establish reference counts, cross-runtime parity, root-mode crash handling or external engine compatibility.
 
 | Slice | Required representative outcome |
 | --- | --- |
@@ -140,7 +144,7 @@ These are future public-boundary acceptance criteria, **not tests already passin
 Proposed delivery order, each separately verified and recorded in the parity ledger:
 
 1. Developer review of this contract and the first-slice scope; resolve objections without treating discussion as execution approval.
-2. Versioned opt-in approval/root identity and scoped activity for agent-owned standalone shell roots within one atomic acquisition. Preserve legacy/operator defaults, no second held batch, no dependency references or automatic migration. This deliberately does **not** yet allow reacquiring an expired sibling while another root remains held: that is an additional acquisition and belongs to step 4, with fresh approval. Disclose that limitation before the first opt-in execution.
+2. **Implemented bounded standalone slice:** versioned opt-in approval/root identity and scoped activity for agent-owned standalone shell roots within one atomic acquisition. Preserve legacy/operator defaults, no second held batch, no dependency references or automatic migration. This deliberately does **not** yet allow reacquiring an expired sibling while another root remains held: that is an additional acquisition and belongs to step 4, with fresh approval. Disclose that limitation before the first opt-in execution.
 3. Same-owner reference graph plus last-reference cleanup **and** reference-scoped diagnostic barriers; only then enable dependency-bearing independent roots. Do not temporarily bypass current same-batch SQL/HTTP authority checks.
 4. Immediate compatible extension with no hold-and-wait; subsequently review cycle-checked waits, cross-owner service ownership and external binding as distinct work.
 

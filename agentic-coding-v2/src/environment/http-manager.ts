@@ -78,7 +78,7 @@ export class HeldHttp {
 			throw new Error(
 				"Endpoint requires this task's live ready shell app; saved receipts grant no network authority",
 			);
-		this.authority.check(owner.id, signal, run.batch);
+		this.authority.check(owner.id, signal, run.batch, run);
 		return { run, process };
 	}
 	async prepare(
@@ -194,11 +194,11 @@ export class HeldHttp {
 			if (issuance) {
 				const previous = await this.authority.store().commit(async (tx) => {
 					const task = await tx.task(owner.id as TaskId);
-					this.authority.check(owner.id, signal, run.batch);
+					this.authority.check(owner.id, signal, run.batch, run);
 					if (!task || task.abortRequested || task.state.status === "terminal")
 						throw new Error("HTTP native owner has ended");
 					const doc = await tx.doc(EnvironmentState);
-					this.authority.check(owner.id, signal, run.batch);
+					this.authority.check(owner.id, signal, run.batch, run);
 					doc.httpOperations ??= {};
 					const receipts = doc.httpOperations,
 						raw = receipts[issuance.id];
@@ -215,7 +215,7 @@ export class HeldHttp {
 				}, background);
 				if (previous) return replayHttp(previous, owner.id, issuance.input);
 			}
-			this.authority.check(owner.id, signal, run.batch);
+			this.authority.check(owner.id, signal, run.batch, run);
 			if (process.outcome || process.cleanupFailed)
 				throw new Error("Endpoint app is closing; no request sent");
 			const result = await endpointRequest(
@@ -234,7 +234,7 @@ export class HeldHttp {
 							: undefined;
 					},
 					() => {
-						this.authority.check(owner.id, signal, run.batch);
+						this.authority.check(owner.id, signal, run.batch, run);
 						if (
 							process.outcome ||
 							process.cleanupFailed ||
@@ -244,7 +244,7 @@ export class HeldHttp {
 					},
 				),
 				current = await this.endpointRun(owner, approved.app, signal);
-			this.authority.check(owner.id, signal, run.batch);
+			this.authority.check(owner.id, signal, run.batch, run);
 			if (
 				current.run.id !== run.id ||
 				current.process !== process ||
@@ -263,11 +263,11 @@ export class HeldHttp {
 			if (issuance)
 				await this.authority.store().commit(async (tx) => {
 					const task = await tx.task(owner.id as TaskId);
-					this.authority.check(owner.id, signal, run.batch);
+					this.authority.check(owner.id, signal, run.batch, run);
 					if (!task || task.abortRequested || task.state.status === "terminal")
 						throw new Error("HTTP native owner ended; response discarded");
 					const doc = await tx.doc(EnvironmentState);
-					this.authority.check(owner.id, signal, run.batch);
+					this.authority.check(owner.id, signal, run.batch, run);
 					if (
 						process.outcome ||
 						process.cleanupFailed ||
@@ -301,6 +301,7 @@ export class HeldHttp {
 		this.authority.pending.set(operation, {
 			owner: owner.id,
 			batch: run.batch,
+			runId: run.id,
 		});
 		try {
 			return await operation;

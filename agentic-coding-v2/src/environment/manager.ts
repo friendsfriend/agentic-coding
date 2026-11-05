@@ -16,6 +16,7 @@ import { HeldHttp } from "./http-manager.ts";
 import type { HttpReceipt } from "./http-receipts.ts";
 import { IdleLifecycle } from "./idle.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
+import { independentRoot, validateLifetime } from "./lifetime.ts";
 import { type LogOptions, logView } from "./logs.ts";
 import type { Plan, TelemetryOptions } from "./model.ts";
 import {
@@ -64,9 +65,10 @@ export class Environments {
 	private closing: Promise<void> | null = null;
 	private pending = new Map<
 		Promise<unknown>,
-		{ owner: number; batch: string }
+		{ owner: number; batch: string; runId?: string }
 	>();
 	private stopped = new Set<string>();
+	private stoppedRoots = new Set<string>();
 	private dependencyCleanup = new Map<number, Promise<void>>();
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
@@ -74,12 +76,13 @@ export class Environments {
 		this.idle = new IdleLifecycle(config.configDir, {
 			store: () => this.store,
 			eligible: (run) => this.canIdleRun(run),
-			pending: (owner) =>
-				[...this.pending.values()].some((entry) => entry.owner === owner),
-			latch: (batches) => {
-				for (const batch of batches) this.stopped.add(batch);
-				this.acquisitions.notify();
-			},
+			pending: (owner, runId) =>
+				[...this.pending.values()].some(
+					(entry) =>
+						entry.owner === owner &&
+						(!runId || !entry.runId || entry.runId === runId),
+				),
+			latch: (runs, batches) => this.latchStop(runs, batches),
 			stop: (runs, batches) => this.stopTargets(runs, batches, true),
 		});
 		this.clusters = loadClusters(config);
@@ -113,9 +116,10 @@ export class Environments {
 			records: () => this.records(),
 			live: this.live,
 			pending: this.pending,
-			check: (owner, signal, batch) => {
-				this.check(owner, signal, batch);
-				this.idle.touch(owner);
+			check: (owner, signal, batch, run) => {
+				this.check(owner, signal, batch, run?.id);
+				if (run) this.idle.touchRun(owner, run.id);
+				else this.idle.touchOwner(owner);
 			},
 		};
 		this.http = new HeldHttp(config, authority);
@@ -200,12 +204,18 @@ export class Environments {
 			(await this.store.snapshot(EnvironmentState, background))?.runs,
 		);
 	}
-	private check(owner: number, signal?: AbortSignal, batch?: string) {
+	private check(
+		owner: number,
+		signal?: AbortSignal,
+		batch?: string,
+		runId?: string,
+	) {
 		signal?.throwIfAborted();
 		if (
 			this.closed ||
 			this.revoked.has(owner) ||
-			(batch && this.stopped.has(batch))
+			(batch && this.stopped.has(batch)) ||
+			(runId && this.stoppedRoots.has(runId))
 		)
 			throw new Error(
 				"Environment owner or acquisition is closing or cancelled",
@@ -283,6 +293,7 @@ export class Environments {
 							JSON.stringify(run.plan) === JSON.stringify(plan) &&
 							run.state === "running" &&
 							!this.stopped.has(run.batch) &&
+							!this.stoppedRoots.has(run.id) &&
 							this.live.has(run.id) &&
 							!this.live.get(run.id)?.outcome &&
 							!this.live.get(run.id)?.cleanupFailed,
@@ -309,6 +320,7 @@ export class Environments {
 			!this.closed &&
 			!this.revoked.has(run.owner) &&
 			!this.stopped.has(run.batch) &&
+			!this.stoppedRoots.has(run.id) &&
 			run.state === "running" &&
 			run.plan.action === "run" &&
 			!!process &&
@@ -353,7 +365,8 @@ export class Environments {
 				!this.live.get(run.id)?.outcome &&
 				!this.closed &&
 				!this.revoked.has(run.owner) &&
-				!this.stopped.has(run.batch)
+				!this.stopped.has(run.batch) &&
+				!this.stoppedRoots.has(run.id)
 					? (run.plan.endpoints ?? {})
 					: {},
 			...(this.live.get(run.id)?.runtimeStatus
@@ -491,7 +504,7 @@ export class Environments {
 		services = false,
 		kind?: Plan["projectKind"],
 	) {
-		if (owner !== undefined) this.idle.touch(owner);
+		if (owner !== undefined) this.idle.touch(owner, app);
 		return recentRuns(
 			(await this.records()).filter(
 				(run) =>
@@ -530,8 +543,8 @@ export class Environments {
 			throw new Error(
 				"No owned live ready native telemetry run is held for this app",
 			);
-		this.check(run.owner, undefined, run.batch);
-		if (owner !== undefined) this.idle.touch(owner);
+		this.check(run.owner, undefined, run.batch, run.id);
+		if (owner !== undefined) this.idle.touchRun(owner, run.id);
 		return process.telemetry.query(options);
 	}
 	async selectedLogs(
@@ -598,6 +611,7 @@ export class Environments {
 		retainQueue = false,
 		pollId = batch,
 	) {
+		validateLifetime(plans, owner);
 		this.idle.observe(owner);
 		const operation = this.perform(
 			batch,
@@ -664,8 +678,10 @@ export class Environments {
 		if (
 			plans[0]?.action === "run" &&
 			(await this.reuse(batch, request, owner.id, plans, signal))
-		)
+		) {
+			this.idle.touch(owner.id);
 			return this.receipt(batch, owner.id, request);
+		}
 		// Resolve referenced values only after approval, and fail before reserving or starting any app.
 		for (const plan of plans) processEnvironment(this.config.configDir, plan);
 
@@ -778,6 +794,9 @@ export class Environments {
 			const result = await this.receipt(batch, owner.id, request);
 			if (running && result?.some((run) => run.state !== "running"))
 				throw new Error("An app exited before batch startup completed");
+			for (const plan of plans)
+				if (independentRoot(plan))
+					this.idle.trackRoot(owner.id, `${batch}:${plan.app}`, plan.app);
 			return result;
 		} catch {
 			this.stopped.add(batch);
@@ -870,6 +889,7 @@ export class Environments {
 			}
 			return;
 		}
+		this.idle.forgetRoot(id);
 		this.live.delete(id);
 		this.acquisitions.notify();
 	}
@@ -891,6 +911,7 @@ export class Environments {
 				error:
 					"Environment resource cleanup could not be confirmed; inspect leftovers before releasing this resource.",
 			});
+			this.idle.forgetRoot(id);
 			this.live.delete(id);
 			return false;
 		}
@@ -917,7 +938,10 @@ export class Environments {
 				active
 					.filter(
 						(run) =>
-							run.plan.dependencyBatch &&
+							(run.plan.dependencyBatch ||
+								[...this.pending.values()].some(
+									(entry) => entry.batch === run.batch && !entry.runId,
+								)) &&
 							(!apps || apps.includes(run.plan.app)),
 					)
 					.map((run) => run.batch),
@@ -937,12 +961,29 @@ export class Environments {
 				runs: selected.map((run) => run.id),
 				batches: [
 					...new Set([
-						...selected.map((run) => run.batch),
+						...selected
+							.filter(
+								(run) => !independentRoot(run.plan) || coupled.has(run.batch),
+							)
+							.map((run) => run.batch),
 						...waiting.map((waiter) => waiter.batch),
 					]),
 				],
 				done: false,
 			};
+			if (selected.some((run) => independentRoot(run.plan))) {
+				if (selected.some((run) => run.state === "interrupted"))
+					throw new Error(
+						"Cannot stop a saved PID. Operator inspection is required",
+					);
+				for (const run of selected)
+					doc.runs[run.id] = JSON.stringify({
+						...run,
+						state: "stopping",
+						revision: run.revision + 1,
+					});
+				this.latchStop(selected, saved.batches);
+			}
 			doc.stops[id] = JSON.stringify(saved);
 			return saved;
 		}, background);
@@ -960,6 +1001,13 @@ export class Environments {
 		}, background);
 		return receipt.runs;
 	}
+	private latchStop(runs: EnvironmentRun[], batches: string[]) {
+		for (const batch of batches) this.stopped.add(batch);
+		for (const run of runs)
+			if (independentRoot(run.plan)) this.stoppedRoots.add(run.id);
+		this.acquisitions.remove(batches);
+		this.acquisitions.notify();
+	}
 	private async stopTargets(
 		selected: EnvironmentRun[],
 		batches: string[],
@@ -969,9 +1017,7 @@ export class Environments {
 			throw new Error(
 				"Cannot stop a saved PID. Operator inspection is required",
 			);
-		for (const batch of batches) this.stopped.add(batch);
-		this.acquisitions.remove(batches);
-		this.acquisitions.notify();
+		this.latchStop(selected, batches);
 		let uncertain = false;
 		for (const run of [...selected].reverse()) {
 			if (run.state === "interrupted" || run.state === "exited") continue;
@@ -983,7 +1029,11 @@ export class Environments {
 		}
 		await Promise.allSettled(
 			[...this.pending]
-				.filter(([, entry]) => batches.includes(entry.batch))
+				.filter(
+					([, entry]) =>
+						batches.includes(entry.batch) ||
+						selected.some((run) => run.id === entry.runId),
+				)
 				.map(([operation]) => operation),
 		);
 		await this.store.commit(async (tx) => {
