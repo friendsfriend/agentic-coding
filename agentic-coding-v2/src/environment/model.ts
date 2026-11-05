@@ -77,7 +77,10 @@ export type Project = {
 	defaults?: Partial<Record<Action, string>>;
 };
 export type Plan = Target & {
-	lifetime?: "independent-roots-v1" | "referenced-roots-v1";
+	lifetime?:
+		| "independent-roots-v1"
+		| "referenced-roots-v1"
+		| "shared-prerequisites-v1";
 	app: string;
 	projectKind?: Project["kind"];
 	requires?: string[];

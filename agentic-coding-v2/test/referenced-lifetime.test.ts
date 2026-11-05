@@ -602,7 +602,7 @@ test("owner cancellation releases a referenced acquisition dependent-first and l
 			apps: ["worker"],
 			lifetime: "referenced-roots-v1",
 		}),
-		async (context) => {
+		async () => {
 			restarted = (await app.environments.snapshot()).runs
 				.filter((run) => run.state === "running")
 				.map((run) => run.plan.app)
@@ -622,4 +622,76 @@ test("owner cancellation releases a referenced acquisition dependent-first and l
 		(count) => count === 3,
 	);
 	expect(restarted).toEqual(["base", "cache", "worker"]);
+}, 30000);
+
+test("a shared lifetime attaches a later acquisition to the live prerequisite generation and releases it with the last reference", async () => {
+	const { app, config, fake, invocation } = await fixture(false, referenced);
+	let expanded = 0,
+		attachedState = 0,
+		afterApi: string[] = [],
+		final: string[] = [],
+		stops = "";
+	const starts = (id: string) =>
+		fs.existsSync(path.join(config.configDir, `${id}-starts`))
+			? fs
+					.readFileSync(path.join(config.configDir, `${id}-starts`), "utf8")
+					.trim()
+					.split("\n").length
+			: 0;
+	fake.setResponses([
+		call("env_start", { apps: ["api"], lifetime: "shared-prerequisites-v1" }),
+		async () => {
+			expanded = (await app.environments.snapshot()).runs.filter(
+				(run) => run.state === "running",
+			).length;
+			return call("request_review", { path: ".", title: "First shared root" });
+		},
+		call("env_start", {
+			apps: ["worker"],
+			lifetime: "shared-prerequisites-v1",
+		}),
+		async () => {
+			attachedState = (await app.environments.snapshot()).runs.filter(
+				(run) => run.state === "running",
+			).length;
+			return call("request_review", { path: ".", title: "Attached" });
+		},
+		call("env_stop", { apps: ["api"] }),
+		async () => {
+			afterApi = (await app.environments.snapshot()).runs
+				.filter((run) => run.state === "running")
+				.map((run) => run.plan.app)
+				.sort();
+			return call("env_stop", { apps: ["worker"] });
+		},
+		async () => {
+			final = (await app.environments.snapshot()).runs.map((run) => run.state);
+			stops = fs.readFileSync(path.join(config.configDir, "stops"), "utf8");
+			return fauxAssistantMessage("Shared lifetime finished", {
+				stopReason: "stop",
+			});
+		},
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	await approve(app, owner, "First shared root");
+	await approve(app, owner, "Environment run: worker");
+	await approve(app, owner, "Attached");
+	await eventually(
+		async () => final.length,
+		(count) => count === 4,
+	);
+	// One expansion started the root and both prerequisites exactly once, and the
+	// second acquisition reused them rather than starting a second copy.
+	expect(expanded).toBe(3);
+	expect(attachedState).toBe(4);
+	expect(starts("cache")).toBe(1);
+	expect(starts("base")).toBe(1);
+	expect(starts("worker")).toBe(1);
+	// The prerequisite survives its first root: the second one still references it.
+	expect(afterApi).toEqual(["base", "cache", "worker"]);
+	// The last reference releases the shared closure dependent-first.
+	expect(final.every((state) => state === "exited")).toBe(true);
+	expect(stops.indexOf("worker")).toBeLessThan(stops.indexOf("cache"));
+	expect(stops.indexOf("cache")).toBeLessThan(stops.indexOf("base"));
 }, 30000);

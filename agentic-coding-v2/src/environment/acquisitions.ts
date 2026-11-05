@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { decode, type TaskInfo, values } from "../state.ts";
+import { sharedLifetime, sharedRoot } from "./lifetime.ts";
 import type { Plan } from "./model.ts";
 import { captureReferenceGraph } from "./reference-journal.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
@@ -78,6 +79,45 @@ export class Acquisitions {
 			signal?.addEventListener("abort", done, { once: true });
 			if (signal?.aborted || this.generation !== generation) done();
 		});
+	}
+	/** A shared acquisition attaches to the generation it declares: its app roots
+	 * must be disjoint from the live ones, and every held generation it reuses must
+	 * still be the original live, ready, unretained generation. */
+	private attachable(plans: Plan[], mine: readonly EnvironmentRun[]) {
+		if (mine.some((run) => run.plan.lifetime !== sharedLifetime))
+			throw new Error(
+				"Release the held acquisition before requesting a shared lifetime; lifetimes are not combined across acquisitions",
+			);
+		const roots = plans.filter((plan) => plan.projectKind === "app"),
+			collision = mine.find(
+				(run) =>
+					run.plan.projectKind === "app" &&
+					roots.some((plan) => plan.app === run.plan.app),
+			);
+		if (collision)
+			throw new Error(
+				`A live root generation of ${collision.plan.app} is already held; release it before requesting the same app root again`,
+			);
+		const attached = new Set<string>();
+		for (const plan of plans.filter((plan) => plan.projectKind !== "app")) {
+			const live = mine.filter((run) => run.plan.app === plan.app);
+			const only = live[0];
+			if (!only) continue;
+			if (live.length !== 1)
+				throw new Error(
+					"Shared prerequisite generation is ambiguous; no attach and no second copy",
+				);
+			if (
+				only.state !== "running" ||
+				only.ready !== true ||
+				only.cleanupRetention !== undefined
+			)
+				throw new Error(
+					"Shared prerequisite generation is closing or unavailable; no attach and no second copy",
+				);
+			attached.add(plan.app);
+		}
+		return attached;
 	}
 	async recordedWait(
 		pollId: string,
@@ -268,7 +308,9 @@ export class Acquisitions {
 		let retained = false;
 		this.notify();
 		const deadline = Date.now() + waitMs;
-		let reserved = false;
+		let reserved = false,
+			attached: string[] = [],
+			attachedApps: Set<string> | undefined;
 		try {
 			while (!reserved) {
 				this.authority.check(owner.id, signal, batch);
@@ -295,11 +337,20 @@ export class Acquisitions {
 						// Any non-exited generation still holds the fence, including one
 						// closing behind a stop or an expiry, so a later acquisition is
 						// decided against the closure rather than the batch receipt.
-						if (mine.length)
+						if (mine.some((run) => run.state === "interrupted"))
 							throw new Error(
-								mine.some((run) => run.state === "interrupted")
-									? "Release your existing app batch before acquiring another; interrupted runs need operator inspection"
-									: "Release your existing app batch before acquiring another; every held root and prerequisite generation must be released or expire first",
+								"Release your existing app batch before acquiring another; interrupted runs need operator inspection",
+							);
+						// A shared lifetime admits a second disjoint acquisition and
+						// attaches to an already-live prerequisite generation instead of
+						// starting a second copy of it.
+						const attachable = plans.some(sharedRoot)
+							? this.attachable(plans, mine)
+							: undefined;
+						attachedApps = attachable;
+						if (mine.length && !attachable)
+							throw new Error(
+								"Release your existing app batch before acquiring another; every held root and prerequisite generation must be released or expire first",
 							);
 						if (
 							values<WaitReceipt>(doc.waits)
@@ -316,8 +367,11 @@ export class Acquisitions {
 									),
 								) ||
 							held.some((run) =>
-								plans.some((plan) =>
-									runsConflict(run.plan, plan, this.stateDir),
+								plans.some(
+									(plan) =>
+										!attachable?.has(plan.app) &&
+										!(sharedRoot(plan) && mine.includes(run)) &&
+										runsConflict(run.plan, plan, this.stateDir),
 								),
 							)
 						)
@@ -346,7 +400,10 @@ export class Acquisitions {
 							observedAt: Date.now(),
 						});
 					}
+					const reused = plans.filter((plan) => attachedApps?.has(plan.app));
 					for (const plan of plans) {
+						if (reused.some((reusedPlan) => reusedPlan.app === plan.app))
+							continue;
 						const run: EnvironmentRun = {
 							id: `${batch}:${plan.app}`,
 							batch,
@@ -366,6 +423,7 @@ export class Acquisitions {
 						doc.runs[run.id] = JSON.stringify(run);
 					}
 					captureReferenceGraph(doc, batch, owner.id, request, plans);
+					attached = [...(attachedApps ?? [])];
 					return true;
 				}, background);
 				if (!reserved) {
@@ -411,7 +469,7 @@ export class Acquisitions {
 			}
 			this.waiters = this.waiters.filter((item) => item !== currentWaiter);
 			this.notify();
-			return { reserved: true as const };
+			return { reserved: true as const, attached };
 		} finally {
 			if (!retained) {
 				this.waiters = this.waiters.filter((item) => item !== currentWaiter);

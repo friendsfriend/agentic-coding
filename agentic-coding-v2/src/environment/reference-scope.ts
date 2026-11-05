@@ -1,5 +1,5 @@
 import { declaredInfrastructure } from "./dependencies.ts";
-import { referencedRoot } from "./lifetime.ts";
+import { referencedRoot, sharedRoot } from "./lifetime.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import type { EnvironmentRun } from "./state.ts";
 
@@ -31,11 +31,25 @@ export function referenceScope(
 		resources: plans
 			.map((plan) => {
 				const member = context.find((item) => item.plan === plan);
-				if (!member)
+				if (member) return member.id;
+				if (!sharedRoot(root.plan))
 					throw new Error(
 						"Referenced diagnostic prerequisite generation is unavailable",
 					);
-				return member.id;
+				// A shared lifetime reuses one live generation of its prerequisite.
+				const shared = members.filter(
+					(item) =>
+						item.owner === root.owner &&
+						sharedRoot(item.plan) &&
+						item.plan.app === plan.app &&
+						item.state === "running",
+				);
+				const only = shared[0];
+				if (!only || shared.length !== 1)
+					throw new Error(
+						"Shared diagnostic prerequisite generation is ambiguous or unavailable",
+					);
+				return only.id;
 			})
 			.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
 	};
@@ -43,21 +57,25 @@ export function referenceScope(
 /** A referenced prerequisite has no activity clock of its own: a diagnostic on
  * it belongs to the one live root that declares it. Ambiguity is refused rather
  * than silently selecting a root or renewing every dependent. */
-export function requiringRoot(
+export function requiringRoots(
 	run: EnvironmentRun,
 	members: readonly EnvironmentRun[],
-): EnvironmentRun | undefined {
-	if (!referencedRoot(run.plan) || run.plan.projectKind === "app")
-		return undefined;
+): EnvironmentRun[] {
+	if (!referencedRoot(run.plan) || run.plan.projectKind === "app") return [];
 	const live = members.filter(
 		(member) =>
 			member.owner === run.owner &&
 			member.state === "running" &&
 			member.plan.projectKind === "app" &&
 			referencedRoot(member.plan) &&
+			sharedRoot(member.plan) === sharedRoot(run.plan) &&
 			(member.plan.requires ?? []).includes(run.plan.app),
 	);
-	if (live.length === 1) return live[0];
+	const only = live[0];
+	// A shared generation is read by every live root that declares it, and each of
+	// those roots is what the read renews; ambiguity is refused elsewhere.
+	if (live.length === 1 && only) return [only];
+	if (sharedRoot(run.plan) && live.length) return live;
 	throw new Error(
 		"Referenced prerequisite diagnostics must name exactly one live requiring root; ambiguity is refused rather than renewing every dependent",
 	);

@@ -22,6 +22,7 @@ import {
 	independentRoot,
 	referencedRoot,
 	scopedRoot,
+	sharedRoot,
 	validateLifetime,
 } from "./lifetime.ts";
 import { type LogOptions, logView } from "./logs.ts";
@@ -39,7 +40,7 @@ import {
 import {
 	referenceScope,
 	requireScopeLive,
-	requiringRoot,
+	requiringRoots,
 } from "./reference-scope.ts";
 import { runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
@@ -536,8 +537,12 @@ export class Environments {
 				(run) =>
 					run.owner === owner && run.plan.app === app && holdsResource(run),
 			);
-			const requirer = selected ? requiringRoot(selected, all) : undefined;
-			if (requirer) this.idle.touchRun(owner, requirer.id);
+			const requirers = selected ? requiringRoots(selected, all) : [],
+				first = requirers[0];
+			// A shared prerequisite renews every live root that declares it.
+			if (first)
+				for (const requirer of requirers)
+					this.idle.touchRun(owner, requirer.id);
 			else this.idle.touch(owner, app);
 		}
 		return recentRuns(
@@ -583,8 +588,11 @@ export class Environments {
 		// Referenced runs disclose and revalidate their exact generation closure.
 		const root = referenceScope(run, members);
 		if (root) requireScopeLive(root, members, this.live);
-		const requirer = requiringRoot(run, members);
-		if (owner !== undefined) this.idle.touchRun(owner, requirer?.id ?? run.id);
+		const requirers = requiringRoots(run, members),
+			first = requirers[0];
+		if (owner !== undefined)
+			for (const requirer of first ? requirers : [run])
+				this.idle.touchRun(owner, requirer.id);
 		const query = await process.telemetry.query(options);
 		return root ? { ...query, root } : query;
 	}
@@ -739,10 +747,30 @@ export class Environments {
 			pollId,
 		);
 		if (!allocation.reserved) return allocation.result;
-		const running = plans[0]?.action === "run";
+		const running = plans[0]?.action === "run",
+			attached = new Set(allocation.attached);
 		try {
 			for (const plan of plans) {
 				this.check(owner.id, signal, batch);
+				// A shared lifetime reuses the live generation it declared instead of
+				// starting a second copy; the generation itself must still be the
+				// original live handle at this point.
+				if (attached.has(plan.app)) {
+					const shared = (await this.records()).filter(
+						(run) =>
+							run.owner === owner.id &&
+							run.plan.app === plan.app &&
+							run.plan.projectKind === plan.projectKind &&
+							run.state === "running" &&
+							run.ready === true &&
+							run.cleanupRetention === undefined,
+					);
+					if (shared.length !== 1)
+						throw new Error(
+							"Shared prerequisite generation closed before this acquisition completed; no second copy was started",
+						);
+					continue;
+				}
 				const id = `${batch}:${plan.app}`;
 				const frozen = plan.telemetry
 					? processEnvironment(this.config.configDir, plan)
@@ -884,10 +912,13 @@ export class Environments {
 			if (run.plan.dependencyBatch && !cleanup) {
 				if (!referencedRoot(run.plan))
 					return { batch: run.batch, owner: run.owner, targets: null };
+				// A shared prerequisite is declared by roots of more than one
+				// acquisition, so its loss invalidates every live one of them.
 				const batchRuns = values<EnvironmentRun>(doc.runs).filter(
 						(item) =>
-							item.batch === run.batch &&
 							item.owner === run.owner &&
+							item.plan.action === "run" &&
+							(sharedRoot(run.plan) || item.batch === run.batch) &&
 							holdsResource(item),
 					),
 					roots = batchRuns.filter((item) => item.plan.projectKind === "app");
