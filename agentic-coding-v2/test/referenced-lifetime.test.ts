@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../src/config.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
@@ -98,7 +100,12 @@ test("referenced roots are stopped one at a time and prerequisites are released 
 	expect(cache?.idle.dependencyScope).toBe("referenced-prerequisite-closure");
 	expect(cache?.idle.protection).toBe("referenced-prerequisite");
 	expect(base?.idle.protection).toBe("referenced-prerequisite");
+	// A retained prerequisite is disclosed as a generation without its own clock.
+	expect(cache?.idle.scope).toBe("referenced-prerequisite-generation");
+	expect(cache?.idle.activityScope).toBe("no-own-activity-clock");
+	expect(cache?.idle.lastActivityAt).toBeNull();
 	expect(byApp("api")?.idle.scope).toBe("referenced-native-root");
+	expect(byApp("api")?.idle.activityScope).toBe("selected-native-root");
 	expect(byApp("api")?.idle.protection).toBeNull();
 
 	const api = await app.environments.stopOnce("stop-referenced-api", owner, [
@@ -530,4 +537,89 @@ test("a later acquisition is decided against the held closure and is admitted on
 	expect(receipts[2]).not.toContain("<harness>");
 	expect(running).toEqual(["base", "cache", "worker"]);
 	expect(stops.indexOf("cache")).toBeLessThan(stops.indexOf("base"));
+}, 30000);
+
+test("owner cancellation releases a referenced acquisition dependent-first and leaves no quarantine behind", async () => {
+	const probe = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("unused"),
+		}),
+		port = probe.port;
+	probe.stop(true);
+	const { app, config, fake, invocation } = await fixture(false, (config) =>
+		referenced(config, port),
+	);
+	let starts = 0;
+	// The pending endpoint review keeps the task alive until it is cancelled.
+	fake.setResponses([
+		call("env_start", {
+			apps: ["api", "worker"],
+			lifetime: "referenced-roots-v1",
+		}),
+		call("env_http_request", { app: "api", endpoint: "web" }),
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.filter((run) => run.state === "running").length === 4,
+	);
+	starts = ["api", "worker", "cache", "base"].filter((app) =>
+		fs.existsSync(path.join(config.configDir, `${app}-starts`)),
+	).length;
+	expect(starts).toBe(4);
+	await app.cancel(owner);
+	await app.harness.waitForTask(owner as TaskId, context);
+	const released = await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.every((run) => run.state === "exited"),
+	);
+	// Roots are released before their prerequisites, and dependents before bases.
+	const stops = fs
+		.readFileSync(path.join(config.configDir, "stops"), "utf8")
+		.trim()
+		.split("\n");
+	expect(stops).toHaveLength(4);
+	expect(stops.indexOf("cache")).toBeLessThan(stops.indexOf("base"));
+	for (const root of ["api", "worker"])
+		expect(stops.indexOf(root)).toBeLessThan(stops.indexOf("cache"));
+	// Nothing is retained or quarantined once the owner's closure has exited.
+	expect(released.runs.every((run) => run.cleanupRetention === undefined)).toBe(
+		true,
+	);
+	expect(
+		released.runs.every(
+			(run) =>
+				run.idle.protection === "not-known-live-running" &&
+				run.idle.lastActivityAt === null,
+		),
+	).toBe(true);
+	// The stopped acquisition does not wedge a later one.
+	let restarted: string[] = [];
+	fake.setResponses([
+		call("env_start", {
+			apps: ["worker"],
+			lifetime: "referenced-roots-v1",
+		}),
+		async (context) => {
+			restarted = (await app.environments.snapshot()).runs
+				.filter((run) => run.state === "running")
+				.map((run) => run.plan.app)
+				.sort();
+			return fauxAssistantMessage("Referenced restart finished", {
+				stopReason: "stop",
+			});
+		},
+	]);
+	const successor = await app.startTask({
+		...invocation,
+		requestId: "referenced-after-cancellation",
+	});
+	await approve(app, successor);
+	await eventually(
+		async () => restarted.length,
+		(count) => count === 3,
+	);
+	expect(restarted).toEqual(["base", "cache", "worker"]);
 }, 30000);

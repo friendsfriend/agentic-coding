@@ -176,18 +176,30 @@ export class IdleLifecycle {
 		} = {},
 		now = Date.now(),
 	) {
-		const independent = scopedRoot(run.plan);
-		const activity = this.activity(run.owner, independent ? run.id : undefined);
+		const independent = scopedRoot(run.plan),
+			referenced = referencedRoot(run.plan),
+			// A referenced prerequisite is retained, never a root with its own clock.
+			prerequisite =
+				independent && referenced && run.plan.projectKind !== "app";
+		// A generation without its own clock reports no activity at all, not the
+		// owner's: it must never inherit a clock it does not have.
+		const activity = prerequisite
+			? undefined
+			: this.activity(run.owner, independent ? run.id : undefined);
 		const protection = this.protection(run, activity, options);
 		return {
-			scope: independent
-				? referencedRoot(run.plan)
-					? "referenced-native-root"
-					: "independent-native-root"
-				: "whole-native-owner-batch",
-			activityScope: independent
-				? "selected-native-root"
-				: "all-held-runs-of-native-owner",
+			scope: prerequisite
+				? "referenced-prerequisite-generation"
+				: independent
+					? referenced
+						? "referenced-native-root"
+						: "independent-native-root"
+					: "whole-native-owner-batch",
+			activityScope: prerequisite
+				? "no-own-activity-clock"
+				: independent
+					? "selected-native-root"
+					: "all-held-runs-of-native-owner",
 			acquisitionScope: "one-exclusive-held-run-batch-per-owner",
 			ownerHeldRuns: options.ownerHeldRuns ?? null,
 			ownerBatches: options.ownerBatches ?? null,
