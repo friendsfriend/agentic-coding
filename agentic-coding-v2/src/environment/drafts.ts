@@ -51,6 +51,14 @@ import {
 	retainedStagedTrees,
 	stagedTreeIdentity,
 } from "./definition-staged-tree.ts";
+import {
+	assertNoTreeCleanup,
+	beginTreeCleanup,
+	cleanupReplay,
+	deletionIdentity,
+	finishTreeCleanup,
+	treeCleanupHistory,
+} from "./definition-tree-cleanup.ts";
 import { within } from "./path-within.ts";
 
 const DraftState = defineDoc<DraftData>({
@@ -290,6 +298,7 @@ export class DefinitionDrafts {
 				raw = drafts.drafts[id];
 			if (!raw) throw new Error("Unknown definition draft");
 			const draft = parseDraft(raw);
+			if (tree) assertNoTreeCleanup(drafts);
 			if (draft.revision !== body.revision || draft.digest !== contentDigest)
 				throw new Error("Draft changed; load current before preflight");
 			let staged: SourceDraft | undefined;
@@ -414,15 +423,36 @@ export class DefinitionDrafts {
 	}
 	async removeDraft(body: Record<string, unknown>) {
 		privateState(this.config);
-		const removed = await this.engine().commit(async (tx) => {
+		const { key, request } = deletionIdentity(body);
+		const admitted = await this.engine().commit(async (tx) => {
 			const drafts = await tx.doc(DraftState),
-				receipt = stagedTreeReceipt(drafts, String(body.id ?? "")),
-				result = removeDraft(drafts, body);
-			return { result, retained: receipt?.retained?.name ?? null };
+				replay = cleanupReplay(drafts, key, request);
+			if (replay) return { replay, name: null };
+			// Validate without deleting the durable draft or its ownership claim.
+			removeDraft(
+				{
+					...drafts,
+					drafts: { ...drafts.drafts },
+					receipts: { ...drafts.receipts },
+					trees: { ...drafts.trees },
+				},
+				body,
+			);
+			const name =
+				stagedTreeReceipt(drafts, String(body.id ?? ""))?.retained?.name ??
+				null;
+			beginTreeCleanup(drafts, key, request, "delete-draft", name);
+			return { replay: null, name };
 		}, background);
-		// Deletion is committed first; only then is the draft's own tree released.
-		if (removed.retained) releaseStagedTree(this.config, removed.retained);
-		return removed.result;
+		if (admitted.replay) return admitted.replay.result;
+		// The durable pending marker fences reassembly before this effect begins.
+		if (admitted.name) releaseStagedTree(this.config, admitted.name);
+		return this.engine().commit(async (tx) => {
+			const drafts = await tx.doc(DraftState),
+				result = removeDraft(drafts, body);
+			finishTreeCleanup(drafts, key, result);
+			return result;
+		}, background);
 	}
 	/** Retained trees are disclosed by digest and metadata; contents stay withheld. */
 	async trees() {
@@ -462,6 +492,7 @@ export class DefinitionDrafts {
 			});
 		return {
 			trees: records,
+			cleanupAttempts: treeCleanupHistory(drafts),
 			// Present directories no record owns are disclosed, never deleted here.
 			unowned: [...present].filter((name) => !owned.includes(name)),
 			authority:
@@ -471,40 +502,36 @@ export class DefinitionDrafts {
 	/** Explicit digest-addressed release of one retained tree. */
 	async releaseTree(body: Record<string, unknown>) {
 		privateState(this.config);
-		const { name, request, key } = releaseTreeRequest(body),
-			recorded: Readonly<DraftData> = (await this.engine().snapshot(
-				DraftState,
-				background,
-			)) ?? {
-				drafts: {},
-				receipts: {},
-			},
-			previous = recorded.receipts[key];
-		if (previous) {
-			const receipt = stored<{ request: string; result: unknown }>(previous);
-			if (receipt.request !== request)
-				throw new Error("Release request ID reused for different input");
-			return receipt.result;
-		}
-		const owned = Object.values(recorded.trees ?? {}).some(
-			(raw) =>
-				stored<{ retained?: { name: string } }>(raw).retained?.name === name,
-		);
-		if (!owned && !retainedStagedTrees(this.config).includes(name))
-			throw new Error(
-				"Unknown retained tree; release requires a recorded or present digest",
+		const { name, request, key } = releaseTreeRequest(body);
+		const admitted = await this.engine().commit(async (tx) => {
+			const drafts = await tx.doc(DraftState),
+				replay = cleanupReplay(drafts, key, request);
+			if (replay) return replay;
+			const previous = drafts.receipts[key];
+			if (previous) {
+				const receipt = stored<{ request: string; result: unknown }>(previous);
+				if (receipt.request !== request)
+					throw new Error("Release request ID reused for different input");
+				return { result: receipt.result };
+			}
+			const owned = Object.values(drafts.trees ?? {}).some(
+				(raw) =>
+					stored<{ retained?: { name: string } }>(raw).retained?.name === name,
 			);
+			if (!owned && !retainedStagedTrees(this.config).includes(name))
+				throw new Error(
+					"Unknown retained tree; release requires a recorded or present digest",
+				);
+			if (Object.keys(drafts.receipts).length >= 256)
+				throw new Error("Native draft receipt capacity reached");
+			beginTreeCleanup(drafts, key, request, "release", name);
+			return null;
+		}, background);
+		if (admitted) return admitted.result;
 		const released = releaseStagedTree(this.config, name).released;
 		return this.engine().commit(async (tx) => {
 			const drafts = await tx.doc(DraftState),
-				retry = drafts.receipts[key];
-			if (retry) {
-				const receipt = stored<{ request: string; result: unknown }>(retry);
-				if (receipt.request !== request)
-					throw new Error("Release request ID reused for different input");
-				return receipt.result;
-			}
-			const owner = clearRetainedTree(drafts, name),
+				owner = clearRetainedTree(drafts, name),
 				result = {
 					name,
 					released,
@@ -512,6 +539,7 @@ export class DefinitionDrafts {
 					revision: owner?.revision ?? null,
 				};
 			drafts.receipts[key] = JSON.stringify({ request, result });
+			finishTreeCleanup(drafts, key, result);
 			return result;
 		}, background);
 	}

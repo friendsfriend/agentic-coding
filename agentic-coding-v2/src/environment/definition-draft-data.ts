@@ -49,6 +49,7 @@ export type DraftData = {
 	drafts: Record<string, string>;
 	receipts: Record<string, string>;
 	trees?: Record<string, string>;
+	treeCleanups?: Record<string, string>;
 };
 export function stored<T>(value: string): T {
 	try {

@@ -642,6 +642,60 @@ test("a retained tree is disclosed by metadata and released by its digest withou
 			revision: null,
 		});
 		expect(fs.readdirSync(trees)).toEqual([]);
+		// A failed effect leaves a durable uncertainty fence, not a retry grant.
+		await api("/api/environments/drafts/preflight", {
+			requestId: "retain-again",
+			id: created.id,
+			revision: staged.revision,
+			digest: staged.digest,
+			materializeStagedTree: true,
+			retainStagedTree: true,
+		});
+		const held = path.join(trees, tree.treeDigest),
+			parked = path.join(config.stateDir, "parked-tree");
+		expect(await (await release("release", tree.treeDigest)).json()).toEqual(
+			released,
+		);
+		expect(fs.existsSync(held)).toBe(true);
+		fs.renameSync(held, parked);
+		fs.symlinkSync(parked, held);
+		expect((await release("uncertain", tree.treeDigest)).status).toBe(400);
+		fs.unlinkSync(held);
+		fs.renameSync(parked, held);
+		// Restoring the directory is not evidence that the effect never issued.
+		const retry = await release("uncertain", tree.treeDigest);
+		expect(retry.status).toBe(400);
+		expect(await retry.text()).toContain("automatic retry is forbidden");
+		expect(
+			(await release("fresh-after-uncertain", tree.treeDigest)).status,
+		).toBe(400);
+		const blocked = await api("/api/environments/drafts/preflight", {
+			requestId: "blocked-assembly",
+			id: created.id,
+			revision: staged.revision,
+			digest: staged.digest,
+			materializeStagedTree: true,
+			retainStagedTree: true,
+		});
+		expect(blocked.status).toBe(400);
+		expect(fs.existsSync(held)).toBe(true);
+		const uncertain = await (
+			await api("/api/environments/drafts/trees")
+		).json();
+		expect(
+			uncertain.cleanupAttempts.some(
+				(attempt: { status: string }) => attempt.status === "pending",
+			),
+		).toBe(true);
+		expect(
+			(
+				await api("/api/environments/drafts/remove", {
+					requestId: "delete-after-uncertain",
+					id: created.id,
+					revision: staged.revision,
+				})
+			).status,
+		).toBe(400);
 	} finally {
 		host.stop();
 	}
