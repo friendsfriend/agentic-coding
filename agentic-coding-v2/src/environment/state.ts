@@ -12,6 +12,7 @@ export const EnvironmentState = defineDoc<{
 	waits?: Record<string, string>;
 	waitPolls?: Record<string, string>;
 	waitOrdinal?: number;
+	referenceGraphs?: Record<string, string>;
 }>({
 	kind: "v2.environments",
 	version: 1,

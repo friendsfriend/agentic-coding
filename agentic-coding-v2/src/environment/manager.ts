@@ -25,6 +25,10 @@ import {
 } from "./operator-revocation.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { DatabaseDiagnostics, type QueryReceipt } from "./query-manager.ts";
+import {
+	referenceGraphHistory,
+	refreshReferenceGraphs,
+} from "./reference-journal.ts";
 import { runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
 import {
@@ -197,6 +201,7 @@ export class Environments {
 						"Host restarted with ambiguous environment effects. Inspect and stop/remove leftovers before releasing this resource. Saved PIDs, container IDs and labels are diagnostic only, never automatic cleanup/adoption authority.";
 					doc.runs[run.id] = JSON.stringify(run);
 				}
+			refreshReferenceGraphs(doc);
 		}, background);
 	}
 	private async records() {
@@ -470,6 +475,10 @@ export class Environments {
 				authority:
 					"diagnostic-only; issued means pending or uncertain, never dispatch/outcome or live authority",
 			})),
+			referenceGraphScope:
+				"Partial observation-only shell coupled-batch journal: all unsettled plus newest 200 settled observations; no backfill or live/reference-control authority",
+			referenceGraphHistoryLimit: 200,
+			referenceGraphs: referenceGraphHistory(state?.referenceGraphs, app),
 			clusters: this.clusters.map(({ id, repository, context }) => ({
 				id,
 				repository,
@@ -598,6 +607,7 @@ export class Environments {
 				...patch,
 				revision: run.revision + 1,
 			});
+			if (patch.state) refreshReferenceGraphs(doc, run.batch);
 		}, background);
 		this.acquisitions.notify();
 	}
@@ -785,6 +795,7 @@ export class Environments {
 								? { runtimeStatus: process.runtimeStatus }
 								: {}),
 						});
+						refreshReferenceGraphs(doc, batch);
 					}, background);
 				} else {
 					await process.wait(signal);
@@ -814,6 +825,7 @@ export class Environments {
 								state: "exited",
 								revision: run.revision + 1,
 							});
+						refreshReferenceGraphs(doc, batch);
 					}, background);
 				await this.update(id, {
 					error: running
@@ -862,6 +874,7 @@ export class Environments {
 					? "Environment resource cleanup could not be confirmed; inspect leftovers before releasing this resource."
 					: run.error,
 			});
+			refreshReferenceGraphs(doc, run.batch);
 			return null;
 		}, background);
 		if (cascade) {
@@ -1105,6 +1118,7 @@ export class Environments {
 				error:
 					"Operator confirmed inspection and cleanup of ambiguous effects; resource released without changing recorded exit status.",
 			});
+			refreshReferenceGraphs(doc, run.batch);
 		}, background);
 		this.acquisitions.notify();
 	}

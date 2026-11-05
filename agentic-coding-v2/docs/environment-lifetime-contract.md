@@ -1,6 +1,6 @@
 # Independent root idle expiry and dependency references
 
-**Status: bounded standalone-shell first slice implemented as explicit opt-in; dependency/reference and admission extensions remain proposed. No execution approval is granted by this document.**
+**Status: bounded standalone-shell first slice implemented as explicit opt-in; an observation-only coupled-graph journal is implemented. Managed dependency/reference control and admission extensions remain proposed. No execution approval is granted by this document.**
 
 The only implemented new input is native `env_start`'s optional `lifetime: "independent-roots-v1"`, bound into the exact approval and request identity. It permits agent-owned standalone shell app roots in one atomic acquisition, not dependencies, cross-owner sharing, a second held run batch, or new diagnostic transports. Operator actions and requests without the opt-in keep their approved semantics. There is no environment-definition field, automatic migration or default-policy change. Root clocks start after complete atomic startup; scoped stop/expiry does not invalidate sibling diagnostics. The reference, last-release/attach, multi-batch and sharing contracts below remain proposals, not accepted schemas or enabled behavior. Reading or agreeing with this document never approves a real execution, credential/workspace share, publication or runtime operation.
 
@@ -24,7 +24,7 @@ Therefore, “a managed owned dependency referenced by several roots” and “a
 
 ## 2. First slice and proposed follow-ups
 
-The bounded first slice below is implemented; all dependency/reference, extension and sharing follow-ups remain proposed. These boundaries are not execution permissions inferred from the parity goal.
+The bounded first slice below is implemented; all managed dependency/reference-control, extension and sharing follow-ups remain proposed. These boundaries are not execution permissions inferred from the parity goal.
 
 | Decision | Proposed contract |
 | --- | --- |
@@ -57,7 +57,7 @@ An approval that permits joining a managed dependency is not HTTP write, SQL que
 
 ## 4. Native record model versus live authority
 
-The standalone first slice reuses native `EnvironmentRun.id` (`batch:app`) as its root generation, immutable `plan.lifetime` and exact request for mode binding, and existing native stop intents. Its clocks/closing handles remain private; reopen restores neither. It adds no dependency reference records.
+The standalone first slice reuses native `EnvironmentRun.id` (`batch:app`) as its root generation, immutable `plan.lifetime` and exact request for mode binding, and existing native stop intents. Its clocks/closing handles remain private; reopen restores neither. It adds no managed dependency reference leases. A separate passive coupled-graph journal is described below; those records cannot become control authority.
 
 Proposed records for dependency-bearing extensions, using native storage rather than an imported lease subsystem:
 
@@ -70,6 +70,18 @@ Proposed records for dependency-bearing extensions, using native storage rather 
 Reference counts are derived from reference records, not an independently mutable integer. Reserved, active, releasing and quarantined references all block incompatible reuse and last-reference deletion. Historical released references count as audit only. An infrastructure resource can itself depend on another resource. A root's transitive reference closure remains blocking until the resource cleanups that need it settle: references are released along the reverse dependency DAG, not all at once when the app process exits. Every non-released dependent reference must retain its prerequisite closure, including through uncertainty.
 
 Live handles, original frozen secrets, current observation ports, activity clocks and in-flight operation barriers remain host-private. A serialized reference never constructs one. Public status may expose bounded identities/counts/reasons but must label “recorded reference” versus “current verified live holder.” No cross-owner logs, private inputs or tokens are exposed by that metadata.
+
+### Implemented journal foundation (not reference control)
+
+The proposed managed reference lifecycle table below is **not implemented** by this journal. New eligible default **coupled** shell acquisitions now record `native-root-reference-graph-v1` with `control: "coupled-observation-only"` in the same native reservation transaction as their runs. The closed graph binds the exact native owner, batch/request digest, member run generations and privately retained configured-plan digests. Each application root has a deduplicated transitive infrastructure requirement closure (including diamond graphs). These are declared application requirements, **not granted leases or live reference counts**; direct infrastructure-root intent is not represented. Graphs with orphan infrastructure, unsupported runtimes/modes or incomplete closures are not inferred. No old graph is backfilled and no new lifetime input is accepted.
+
+Native state transitions, reopen quarantine and explicit revision-fenced inspection update observed phases in their existing transactions. Phases have explicit `-observed` suffixes. Missing/mismatched member identity or interrupted receipts remain interrupted observations; neither actual fixture reaping nor reading a saved graph establishes release. `settled-observed` means the relevant native rows exited or were explicitly inspected, **not** independent proof of resource absence, successful rollback or permission to delete a prerequisite. Root/resource relationships stay immutable; no reference increment, attach, stop, diagnostic or clock effect is dispatched from this journal.
+
+Existing native `env_list`/`env_status` and authenticated environment state expose metadata-only projections, omitting commands/environment/credential values and private configured-plan digests from the graph view. Reads do not mutate it. Views retain all unsettled generations plus up to 200 settled observations; partial journal coverage is explicit. There is no reference-control UI or separate graph-history pager. Resolved secrets are neither read nor hashed by this addition. Existing coupled behavior (including any-member stop), standalone opt-in semantics, owner-wide clocks, operation barriers and acquisition refusals are unchanged. Identical complete-plan reuse records no new graph/generation and does not rewrite the graph.
+
+Public native evidence: `test/reference-journal.test.ts` approves two apps requiring one cache/base diamond, observes two unique requirements per resource and one actual start per member, reuses the same graph unchanged, stops the whole default batch by selecting one app, and refuses the still-unimplemented `referenced-roots-v1` input without more starts. The existing SQL SIGKILL/reopen scenario now verifies interrupted graph observations despite fixture reaping, no SQL resend/saved-run stop, and observational settlement only after explicit inspection. This is a staged journal foundation, **not** passing evidence for last-reference retention or cleanup, surviving sibling SQL/HTTP authority, attach races, root-scoped dependency expiry or any live runtime.
+
+**Next concrete step:** implement a separately versioned live reference controller with prerequisite-retaining release, dependent-first last-reference cleanup, closing-generation admission and exact-root SQL/HTTP/telemetry barriers. Enable dependency-bearing independent roots only when those controls land together; never promote these historical graphs into capabilities.
 
 ## 5. Admission and start transaction
 

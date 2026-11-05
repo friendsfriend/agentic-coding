@@ -2,6 +2,7 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { decode, type TaskInfo, values } from "../state.ts";
 import type { Plan } from "./model.ts";
+import { captureReferenceGraph } from "./reference-journal.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
 import {
 	type EnvironmentRun,
@@ -358,6 +359,7 @@ export class Acquisitions {
 						};
 						doc.runs[run.id] = JSON.stringify(run);
 					}
+					captureReferenceGraph(doc, batch, owner.id, request, plans);
 					return true;
 				}, background);
 				if (!reserved) {

@@ -87,3 +87,33 @@ export type Plan = Target & {
 	composePlan?: ComposePlan;
 	clusterConnection?: ClusterInspection;
 };
+
+/** Generation-bound observations, deliberately not a managed-reference lease. */
+export type ReferenceObservation =
+	| "reserved-observed"
+	| "running-observed"
+	| "closing-observed"
+	| "settled-observed"
+	| "interrupted-observed";
+export type ReferenceGraph = {
+	protocol: "native-root-reference-graph-v1";
+	control: "coupled-observation-only";
+	batch: string;
+	owner: number;
+	requestDigest: string;
+	revision: number;
+	createdAt: number;
+	observation: ReferenceObservation;
+	roots: {
+		run: string;
+		resources: string[];
+		observation: ReferenceObservation;
+	}[];
+	members: {
+		run: string;
+		app: string;
+		kind: Plan["projectKind"];
+		planDigest: string;
+		requires: string[];
+	}[];
+};

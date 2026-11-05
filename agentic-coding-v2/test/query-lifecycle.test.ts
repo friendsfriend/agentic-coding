@@ -151,11 +151,31 @@ test("SIGKILL preserves uncertain SQL issuance and reopen never replays it or ad
 		expect(snapshot.runs.every((run) => run.state === "interrupted")).toBe(
 			true,
 		);
+		expect(snapshot.referenceGraphs).toHaveLength(1);
+		expect(snapshot.referenceGraphs[0]).toMatchObject({
+			control: "coupled-observation-only",
+			observation: "interrupted-observed",
+			resources: [
+				{
+					applicationRequirements: 1,
+					unsettledRequirements: 1,
+					interruptedRequirements: 1,
+				},
+			],
+		});
 		expect(transcript).toContain("native replay cannot resend");
 		expect(fs.readFileSync(probes, "utf8").trim()).toBe("query");
 		await expect(
 			restored.environments.stopOnce("refuse-sql-adoption", ready.id, ["api"]),
 		).rejects.toThrow();
+		// These two disposable wrappers already reported their own reaping above.
+		// Trusted operator inspection records observations, never a saved-ID stop.
+		for (const run of snapshot.runs)
+			await restored.environments.acknowledge(run.id, run.revision);
+		const settled = (await restored.environments.snapshot()).referenceGraphs[0];
+		expect(settled?.observation).toBe("settled-observed");
+		expect(settled?.resources[0]?.unsettledRequirements).toBe(0);
+		expect(fs.readFileSync(probes, "utf8").trim()).toBe("query");
 	} finally {
 		if (host.exitCode === null) {
 			host.kill("SIGTERM");
