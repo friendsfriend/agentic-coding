@@ -222,6 +222,24 @@ test("explicit private staged-source and draft removal is revision-fenced, idemp
 				await api(`${checkRoute}?id=${encodeURIComponent(restored.id)}`)
 			).json(),
 		).toEqual(restored);
+		const historyRoute = "/api/environments/drafts/preflights";
+		expect((await fetch(new URL(historyRoute, host.url))).status).toBe(401);
+		expect((await api(`${historyRoute}?id=${restored.id}`)).status).toBe(400);
+		const history = await (await api(historyRoute)).json();
+		expect(history.map((entry: { id: string }) => entry.id)).toEqual([
+			restored.id,
+			afterRemoval.id,
+			candidateBefore.id,
+		]);
+		expect(history[0]).toEqual({
+			id: restored.id,
+			draftId: created.id,
+			revision: 4,
+			digest: created.digest,
+			observedAt: restored.observedAt,
+			ordinal: restored.ordinal,
+		});
+		expect(fs.readFileSync(live, "utf8")).toBe(liveText);
 	} finally {
 		host.stop();
 	}

@@ -1,3 +1,4 @@
+import { definitionHistory } from "./definition-history.js";
 import { button, element } from "./dom.js";
 
 export function definitionDrafts(request) {
@@ -662,46 +663,22 @@ export function definitionDrafts(request) {
 				await refreshList();
 			}),
 	);
-	const promotionSelector = element("select");
-	promotionSelector.setAttribute(
-		"aria-label",
-		"Historical configuration promotions",
-	);
-	const promotionReport = element("pre", "No historical promotion loaded.");
-	promotionReport.setAttribute(
-		"aria-label",
-		"Historical configuration promotion",
-	);
-	const listPromotions = button(
-		"List historical configuration promotions",
-		() =>
-			busy(async () => {
-				const records = await request("/api/environments/drafts/promotions");
-				promotionSelector.replaceChildren(
-					...records.map((record) => {
-						const option = element(
-							"option",
-							`${record.ordinal} · ${record.outcome} · ${record.observedAt} · ${record.id}`,
-						);
-						option.value = record.id;
-						return option;
-					}),
-				);
-				status.textContent = `${records.length} historical promotion records listed. No live-file observation, write or reload; editor text unchanged.`;
-			}),
-	);
-	const loadPromotion = button("Load selected historical promotion", () =>
-		busy(async () => {
-			if (!promotionSelector.value)
-				throw Error("List and select a historical promotion first");
-			const record = await request(
-				`/api/environments/drafts/promotion?id=${encodeURIComponent(promotionSelector.value)}`,
-			);
-			promotionReport.textContent = JSON.stringify(record, null, 2);
-			status.textContent =
-				"Historical promotion loaded, even if its draft was deleted. No live-file observation, write, approval or reload; editor text unchanged.";
-		}),
-	);
+	const promotionHistory = definitionHistory(request, busy, status, {
+		selectionLabel: "Historical configuration promotions",
+		reportLabel: "Historical configuration promotion",
+		listLabel: "List historical configuration promotions",
+		loadLabel: "Load selected historical promotion",
+		indexRoute: "/api/environments/drafts/promotions",
+		recordRoute: "/api/environments/drafts/promotion",
+	});
+	const preflightHistory = definitionHistory(request, busy, status, {
+		selectionLabel: "Historical saved preflights",
+		reportLabel: "Historical saved preflight",
+		listLabel: "List historical saved preflights",
+		loadLabel: "Load selected historical preflight",
+		indexRoute: "/api/environments/drafts/preflights",
+		recordRoute: "/api/environments/drafts/preflight",
+	});
 	const loadReport = button("Load latest saved preflight", () =>
 		busy(async () => {
 			if (!current) throw Error("Load a saved draft first");
@@ -763,10 +740,8 @@ export function definitionDrafts(request) {
 		promote,
 		loadReport,
 		removeStagedDraft,
-		listPromotions,
-		promotionSelector,
-		loadPromotion,
-		promotionReport,
+		...promotionHistory,
+		...preflightHistory,
 		status,
 		report,
 	);

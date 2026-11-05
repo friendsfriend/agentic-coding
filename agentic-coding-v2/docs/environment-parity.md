@@ -100,7 +100,7 @@ Two authenticated routes add bounded, revision-fenced private cleanup. `POST /ap
 
 One additional public API scenario verifies anonymous/unknown-field/absent/stale refusal, removal advancing revision while keeping the JSON digest, exact retry, an accepted candidate becoming a missing-source refusal after removal, successful re-staging, stale and unknown-field draft-deletion refusal, exact deletion retry, the deleted draft disappearing from list/read/preflight while its historical report still loads, a fresh draft reusing the freed slot, unchanged live repository/config files, no snapshot leakage and reopen persistence. Browser checks verify source removal clearing the buffer and reporting revision 3, the following candidate report showing a missing source, draft deletion emptying the list and resetting the editor, and no console errors; own host/browser closed. Cleanup is therefore private-data hygiene, not pruning, garbage collection or publication.
 
-Final quiet full suite: **83 tests / 1089 assertions**; zero-diagnostic lint, whole-project type-check, build/compiled help and diff checks pass. Applicable legacy lint/boundary **71 / 278** and full type-check pass. Disposable fake-backed checks do not prove live runtime parity.
+Final quiet full suite: **83 tests / 1094 assertions**; zero-diagnostic lint, whole-project type-check, build/compiled help and diff checks pass. Applicable legacy lint/boundary **71 / 278** and full type-check pass. Disposable fake-backed checks do not prove live runtime parity.
 
 ## Exact-content configuration promotion
 
@@ -198,3 +198,7 @@ Saved binding-digest selection extends private source removal beyond currently r
 ### Promotion record boundary cleanup
 
 Promotion request validation, historical projection/replay, native promotion-document declaration and record construction now live in `definition-promotion-records.ts`. The draft service retains private-state enforcement and native transaction ownership; filesystem publication remains in `definition-promotion.ts`. Durable kind/version/scope, request hash property order, record shape, capacity and approval-before-replay behavior are unchanged. Existing public scenarios verify the refactor, including an explicit historical retry after draft deletion leaving newer live bytes intact. This is structural maintenance, not additional environment parity or crash-atomic publication.
+
+### Discoverable preflight history
+
+The authenticated query-free preflight index and explicit history selector now expose retained reports independently of deleted drafts. Promotion/preflight history share a read-only UI component; both preserve unsaved editor text, and neither observes live files or restores execution/publication authority. The public deletion/reopen scenario verifies index authentication, query refusal, bounded summary projection/newest-first ordering and unchanged repository bytes. Disposable browser verification lists and loads both a retained preflight and promotion after deleting their draft, preserving unsaved text; browser/fixture host closed. Existing latest-preflight loading remains unchanged.

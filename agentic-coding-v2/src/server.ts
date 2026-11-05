@@ -13,6 +13,9 @@ import authenticatedMessage from "./web/authenticated-message.js" with {
 };
 import discovery from "./web/definition-discovery.js" with { type: "text" };
 import drafts from "./web/definition-drafts.js" with { type: "text" };
+import definitionHistory from "./web/definition-history.js" with {
+	type: "text",
+};
 import dom from "./web/dom.js" with { type: "text" };
 import diagnostics from "./web/environment-diagnostics.js" with {
 	type: "text",
@@ -123,6 +126,10 @@ export function serve(app: Runtime, port = 0) {
 		["/dom.js", { content: dom, type: "text/javascript" }],
 		["/definition-drafts.js", { content: drafts, type: "text/javascript" }],
 		[
+			"/definition-history.js",
+			{ content: definitionHistory, type: "text/javascript" },
+		],
+		[
 			"/definition-discovery.js",
 			{ content: discovery, type: "text/javascript" },
 		],
@@ -224,6 +231,16 @@ export function serve(app: Runtime, port = 0) {
 							),
 						),
 					);
+				}
+				if (
+					request.method === "GET" &&
+					url.pathname === "/api/environments/drafts/preflights"
+				) {
+					if (url.searchParams.size)
+						throw new Error(
+							"Preflight history does not accept query parameters",
+						);
+					return json(await app.environments.drafts.preflights());
 				}
 				if (
 					request.method === "GET" &&

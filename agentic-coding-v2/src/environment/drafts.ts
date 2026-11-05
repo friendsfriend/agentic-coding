@@ -199,6 +199,18 @@ export class DefinitionDrafts {
 				"Staged text only. Base comparison is an observation, never a promotion fence. No runtime validation, approval or promotion.",
 		};
 	}
+	/** Historical summaries only; independent of draft existence and live files. */
+	async preflights() {
+		privateState(this.config);
+		const doc = await this.engine().snapshot(Preflights, background);
+		return Object.values(doc?.reports ?? {})
+			.map((raw) => {
+				const { id, draftId, revision, digest, observedAt, ordinal } =
+					stored<Preflight>(raw);
+				return { id, draftId, revision, digest, observedAt, ordinal };
+			})
+			.sort((a, b) => b.ordinal - a.ordinal);
+	}
 	async report(id: string) {
 		privateState(this.config);
 		if (!/^preflight-[a-f0-9]{64}$/.test(id))
