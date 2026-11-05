@@ -185,19 +185,62 @@ function retainedRoot(config: Config) {
 		throw new Error("Retained tree root is not an ordinary private directory");
 	return root;
 }
+/** Reuse checks the bounded expected layout as well as each saved byte. A
+ * directory name is not evidence that its contents still match its digest. */
+function verifyRetained(
+	root: string,
+	files: { relative: string; content: string }[],
+) {
+	const children = new Map<string, Set<string>>();
+	for (const file of files) {
+		const directories = ancestors(root, file.relative);
+		for (const [index, directory] of directories.entries()) {
+			const names = children.get(directory) ?? new Set<string>();
+			names.add(path.basename(directories[index + 1] ?? file.relative));
+			children.set(directory, names);
+		}
+	}
+	for (const [directory, names] of children) {
+		ordinaryDirectory(directory);
+		const entries = fs.readdirSync(directory);
+		if (
+			entries.length !== names.size ||
+			entries.some((name) => !names.has(name))
+		)
+			throw new Error(
+				"Retained tree layout changed; explicit release required",
+			);
+	}
+	return verify(root, files);
+}
 /** Move one verified tree into the retained root under its own digest. */
-export function retainStagedTree(
+function retainStagedTree(
 	config: Config,
 	assembled: string,
-	treeDigest: string,
+	identity: StagedTreeIdentity,
+	files: { relative: string; content: string }[],
 ) {
+	const treeDigest = identity.treeDigest;
 	if (!/^[a-f0-9]{64}$/.test(treeDigest))
 		throw new Error("Retained trees are addressed by their verified digest");
 	const root = retainedRoot(config),
 		destination = path.join(root, treeDigest);
 	if (within(root, assembled) && assembled === destination) return destination;
-	if (fs.existsSync(destination)) {
-		// The identical identity is already retained; keep that tree.
+	let existing = false;
+	try {
+		fs.lstatSync(destination);
+		existing = true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	if (existing) {
+		if (
+			JSON.stringify(verifyRetained(destination, files)) !==
+			JSON.stringify(identity.entries)
+		)
+			throw new Error(
+				"Retained tree content changed; explicit release required",
+			);
 		discard(assembled);
 		return destination;
 	}
@@ -279,7 +322,7 @@ export function assembleStagedTree(
 		if (JSON.stringify(entries) !== JSON.stringify(identity.entries))
 			throw new Error("Staged tree content changed during verification");
 		if (options?.retain) {
-			retainStagedTree(config, root, identity.treeDigest);
+			retainStagedTree(config, root, identity, files);
 			retained = true;
 		}
 		return {

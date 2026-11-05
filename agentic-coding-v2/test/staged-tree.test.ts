@@ -448,6 +448,45 @@ test("a retained staged tree is owned by its digest, inspectable, and released b
 		expect(
 			fs.existsSync(path.join(config.configDir, "environments.json")),
 		).toBe(false);
+		// Equal bytes do not give a different draft ownership of this directory.
+		const duplicate = await (
+			await api("/api/environments/drafts", {
+				requestId: "duplicate",
+				content: fs.readFileSync(written, "utf8"),
+			})
+		).json();
+		const duplicateSource = await (
+			await api("/api/environments/drafts/source", {
+				requestId: "duplicate-source",
+				id: duplicate.id,
+				revision: duplicate.revision,
+				app: "api",
+				target: "stack",
+				content,
+			})
+		).json();
+		const shared = await api("/api/environments/drafts/preflight", {
+			requestId: "duplicate-retain",
+			id: duplicate.id,
+			revision: duplicateSource.revision,
+			digest: duplicateSource.digest,
+			materializeStagedTree: true,
+			retainStagedTree: true,
+		});
+		expect(shared.status).toBe(400);
+		expect(await shared.text()).toContain("owned by another draft");
+		// Fresh assembly cannot adopt a modified directory merely by its name.
+		const sourceFile = path.join(retained, "compose.yaml");
+		fs.chmodSync(sourceFile, 0o600);
+		fs.writeFileSync(sourceFile, "changed outside the draft");
+		const mismatched = await (
+			await assemble("retain-tampered", staged.revision, staged.digest)
+		).json();
+		expect(mismatched.accepted).toBe(false);
+		expect(mismatched.treeRetained).toBe(false);
+		expect(fs.readFileSync(sourceFile, "utf8")).toBe(
+			"changed outside the draft",
+		);
 		// A superseding verified tree replaces it by digest.
 		const edited = await stage(
 			"restage",
