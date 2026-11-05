@@ -223,3 +223,134 @@ test("an ephemeral staged tree is assembled from saved text, verified, discarded
 		host.stop();
 	}
 });
+test("promotion of a draft with staged sources requires the verified tree identity of those exact bytes", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.chmodSync(config.stateDir, 0o700);
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+	});
+	const host = serve(app);
+	const api = (route: string, body?: unknown) =>
+		fetch(new URL(route, host.url), {
+			method: body === undefined ? "GET" : "POST",
+			headers: {
+				Authorization: `Bearer ${new URLSearchParams(new URL(host.url).hash.slice(1)).get("token")}`,
+				"Content-Type": "application/json",
+			},
+			body: body === undefined ? undefined : JSON.stringify(body),
+		});
+	try {
+		const repository = config.repositories[0] ?? "",
+			content = "services:\n  api:\n    image: fixture:latest\n";
+		const created = await (
+			await api("/api/environments/drafts", {
+				requestId: "create",
+				content: JSON.stringify({
+					version: 1,
+					projects: [
+						{
+							id: "api",
+							kind: "app",
+							repository,
+							targets: [
+								{
+									id: "stack",
+									action: "run",
+									runtime: "compose",
+									compose: {
+										file: "compose.yaml",
+										provider: "docker",
+										socket: path.join(config.stateDir, "absent.sock"),
+									},
+								},
+							],
+						},
+					],
+				}),
+			})
+		).json();
+		const staged = await (
+			await api("/api/environments/drafts/source", {
+				requestId: "stage",
+				id: created.id,
+				revision: 1,
+				app: "api",
+				target: "stack",
+				content,
+			})
+		).json();
+		const promote = (requestId: string, revision: number, digest: string) =>
+			api("/api/environments/drafts/promote", {
+				requestId,
+				id: created.id,
+				revision,
+				digest,
+				approve: digest,
+			});
+		const assemble = (requestId: string, revision: number, digest: string) =>
+			api("/api/environments/drafts/preflight", {
+				requestId,
+				id: created.id,
+				revision,
+				digest,
+				materializeStagedTree: true,
+			});
+		// Saved source text alone is not a promotable artifact.
+		const unverified = await promote("no-tree", staged.revision, staged.digest);
+		expect(unverified.status).toBe(400);
+		expect(await unverified.text()).toContain(
+			"Promotion requires a verified staged tree identity",
+		);
+		const first = await (
+			await assemble("tree-1", staged.revision, staged.digest)
+		).json();
+		expect(first.accepted).toBe(true);
+		// A later edit makes the recorded identity stale, not adoptable.
+		const edited = await (
+			await api("/api/environments/drafts/source", {
+				requestId: "restage",
+				id: created.id,
+				revision: staged.revision,
+				app: "api",
+				target: "stack",
+				content: content.replace("fixture:latest", "fixture:other"),
+			})
+		).json();
+		const stale = await promote("stale", edited.revision, edited.digest);
+		expect(stale.status).toBe(400);
+		expect(await stale.text()).toContain("Staged tree identity is stale");
+		const second = await (
+			await assemble("tree-2", edited.revision, edited.digest)
+		).json();
+		expect(second.accepted).toBe(true);
+		expect(second.treeDigest).not.toBe(first.treeDigest);
+		const promoted = await (
+			await promote("verified", edited.revision, edited.digest)
+		).json();
+		expect(promoted.outcome).toBe("written");
+		expect(promoted.stagedTree).toEqual({
+			treeDigest: second.treeDigest,
+			fileCount: 2,
+			bytes:
+				Buffer.byteLength(
+					fs.readFileSync(
+						path.join(config.configDir, "environments.json"),
+						"utf8",
+					),
+				) +
+				Buffer.byteLength(content.replace("fixture:latest", "fixture:other")),
+			treeRetained: false,
+		});
+		// The promotion record is history: it does not retain the tree itself.
+		const history = await (
+			await api(`/api/environments/drafts/promotion?id=${promoted.id}`)
+		).json();
+		expect(history.stagedTree.treeDigest).toBe(second.treeDigest);
+		expect(
+			fs.existsSync(path.join(config.stateDir, "native", "staging"))
+				? fs.readdirSync(path.join(config.stateDir, "native", "staging"))
+				: [],
+		).toHaveLength(0);
+	} finally {
+		host.stop();
+	}
+});

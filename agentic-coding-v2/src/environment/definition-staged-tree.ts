@@ -139,6 +139,28 @@ function discard(root: string) {
 	}
 	fs.rmSync(root, { recursive: true, force: true });
 }
+function contentDigest(content: string) {
+	return digest(Buffer.from(content).toString("base64"));
+}
+/** Deterministic identity of the saved bytes alone: no filesystem, no source
+ * content read and no runtime observation. Promotion compares this exact
+ * identity, so a durable receipt can be checked without retaining the tree. */
+export function stagedTreeIdentity(draft: Draft) {
+	const entries = stagedFiles(draft)
+		.map((file) => ({
+			pathDigest: digest(file.relative),
+			digest: contentDigest(file.content),
+			bytes: Buffer.byteLength(file.content),
+		}))
+		.sort((a, b) => a.pathDigest.localeCompare(b.pathDigest));
+	return {
+		treeDigest: digest(JSON.stringify(entries)),
+		entries,
+		fileCount: entries.length,
+		bytes: entries.reduce((total, entry) => total + entry.bytes, 0),
+	};
+}
+export type StagedTreeIdentity = ReturnType<typeof stagedTreeIdentity>;
 const scope = {
 	kind: "staged-tree" as const,
 	sourceContentsChecked: false as const,
@@ -169,6 +191,7 @@ export function assembleStagedTree(config: Config, draft: Draft) {
 	let root: string | undefined;
 	try {
 		const files = stagedFiles(draft),
+			identity = stagedTreeIdentity(draft),
 			base = stagingRoot(config);
 		root = fs.mkdtempSync(path.join(base, "tree-"));
 		if (!within(base, root) || root === base)
@@ -176,16 +199,16 @@ export function assembleStagedTree(config: Config, draft: Draft) {
 		for (const file of files) write(root, file.relative, file.content);
 		for (const file of files) pin(root, path.join(root, file.relative));
 		const entries = verify(root, files);
+		// The written tree must be exactly the identity promotion will require.
+		if (JSON.stringify(entries) !== JSON.stringify(identity.entries))
+			throw new Error("Staged tree content changed during verification");
 		return {
 			...scope,
 			accepted: true,
 			isolatedTreeChecked: true as const,
 			treeRetained: false as const,
 			candidateDigest: candidate.candidateDigest,
-			treeDigest: digest(JSON.stringify(entries)),
-			entries,
-			fileCount: entries.length,
-			bytes: entries.reduce((total, entry) => total + entry.bytes, 0),
+			...identity,
 			message:
 				"Ephemeral isolated tree assembled from saved JSON and staged source text in a private state directory outside every authorized repository, mode-pinned, re-read and digest-verified, then discarded. Paths, source text, services, commands and values are withheld as path digests, content digests and byte counts. No repository write, live source/bind read, base refresh, runtime call, review or publication; tree identity is neither readiness nor promotion authority.",
 		};

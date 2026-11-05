@@ -2,6 +2,7 @@ import { type Config, digest, text } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
 import type { SourceBase } from "./definition-source-base.ts";
 import { publicComposePath } from "./definition-source-check.ts";
+import type { StagedTreeIdentity } from "./definition-staged-tree.ts";
 
 export type SourceDraft = {
 	repository: string;
@@ -28,9 +29,23 @@ export type Receipt = {
 	request: string;
 	result: { id: string; revision: number; digest: string };
 };
+/** Digest-only record of one verified staged tree for an exact draft revision.
+ * No path, source text or tree directory is retained. */
+export type StagedTreeReceipt = {
+	draftId: string;
+	revision: number;
+	digest: string;
+	candidateDigest: string;
+	treeDigest: string;
+	fileCount: number;
+	bytes: number;
+	observedAt: string;
+	authority: string;
+};
 export type DraftData = {
 	drafts: Record<string, string>;
 	receipts: Record<string, string>;
+	trees?: Record<string, string>;
 };
 export function stored<T>(value: string): T {
 	try {
@@ -391,4 +406,36 @@ export function removeDraft(doc: DraftData, body: Record<string, unknown>) {
 	const result = { id, removed: true as const };
 	doc.receipts[key] = JSON.stringify({ request, result });
 	return result;
+}
+
+/** Durably record the identity of a tree verified for this exact draft revision.
+ * Digest-only history: the next edit makes it stale rather than adoptable. */
+export function recordStagedTree(
+	doc: DraftData,
+	draft: Draft,
+	identity: StagedTreeIdentity,
+	candidateDigest: string,
+) {
+	if (Object.keys(doc.trees ?? {}).length >= 64 && !doc.trees?.[draft.id])
+		throw new Error(
+			"Private staged-tree record capacity reached; automatic pruning is unsupported",
+		);
+	doc.trees ??= {};
+	doc.trees[draft.id] = JSON.stringify({
+		draftId: draft.id,
+		revision: draft.revision,
+		digest: draft.digest,
+		candidateDigest,
+		treeDigest: identity.treeDigest,
+		fileCount: identity.fileCount,
+		bytes: identity.bytes,
+		observedAt: new Date().toISOString(),
+		authority:
+			"Historical digest-only tree identity for one draft revision. It proves neither current source content, runtime readiness, review approval nor publication authority, and it is not a retained tree.",
+	} satisfies StagedTreeReceipt);
+	return draft.id;
+}
+export function stagedTreeReceipt(doc: DraftData, id: string) {
+	const raw = doc.trees?.[id];
+	return raw ? stored<StagedTreeReceipt>(raw) : null;
 }

@@ -9,7 +9,9 @@ import {
 	type Base,
 	captureSourceBase,
 	type Draft,
+	type DraftData,
 	type Receipt,
+	recordStagedTree,
 	removeDraft,
 	removeSource,
 	type SourceDraft,
@@ -40,13 +42,13 @@ import {
 	observeSourceBase,
 } from "./definition-source-base.ts";
 import { inspectComposeSource } from "./definition-source-check.ts";
-import { assembleStagedTree } from "./definition-staged-tree.ts";
+import {
+	assembleStagedTree,
+	stagedTreeIdentity,
+} from "./definition-staged-tree.ts";
 import { within } from "./path-within.ts";
 
-const DraftState = defineDoc<{
-	drafts: Record<string, string>;
-	receipts: Record<string, string>;
-}>({
+const DraftState = defineDoc<DraftData>({
 	kind: "v2.environment-drafts",
 	version: 1,
 	scope: "session",
@@ -316,6 +318,17 @@ export class DefinitionDrafts {
 				authority:
 					"Historical preflight data only. No saved report restores source identity, readiness, execution, review approval or promotion authority; sources may already have changed.",
 			};
+			// A verified tree becomes a durable digest-only identity for this exact
+			// revision, so promotion can require it without retaining the tree.
+			if (tree && "accepted" in report && report.accepted) {
+				const assembled = report as { candidateDigest: string };
+				recordStagedTree(
+					drafts,
+					draft,
+					stagedTreeIdentity(draft),
+					assembled.candidateDigest,
+				);
+			}
 			reports.reports[report.id] = JSON.stringify(report);
 			reports.requests[key] = JSON.stringify({ request, id: report.id });
 			return report;

@@ -1,7 +1,13 @@
 import { defineDoc } from "@earendil-works/pi-durable";
 import { type Config, digest, text } from "../config.ts";
-import { type Draft, type DraftData, stored } from "./definition-draft-data.ts";
+import {
+	type Draft,
+	type DraftData,
+	stagedTreeReceipt,
+	stored,
+} from "./definition-draft-data.ts";
 import { promoteDefinition } from "./definition-promotion.ts";
+import { stagedTreeIdentity } from "./definition-staged-tree.ts";
 
 export type PromotionData = {
 	records: Record<string, string>;
@@ -109,6 +115,26 @@ export function recordPromotion(
 	const draft = stored<Draft>(raw);
 	if (draft.revision !== revision || draft.digest !== contentDigest)
 		throw new Error("Draft changed; load current before promotion");
+	// A draft that saved source text writes those sources nowhere, so promotion
+	// must be decided against a verified tree of exactly these bytes.
+	const verifiedTree = draft.sources?.length
+		? stagedTreeReceipt(drafts, id)
+		: null;
+	if (draft.sources?.length && !verifiedTree)
+		throw new Error(
+			"Promotion requires a verified staged tree identity for this draft revision; assemble the isolated tree first",
+		);
+	if (verifiedTree) {
+		const identity = stagedTreeIdentity(draft);
+		if (
+			verifiedTree.revision !== draft.revision ||
+			verifiedTree.digest !== draft.digest ||
+			verifiedTree.treeDigest !== identity.treeDigest
+		)
+			throw new Error(
+				"Staged tree identity is stale or does not match the staged bytes; reassemble the isolated tree for this revision",
+			);
+	}
 	const result = promoteDefinition(config, draft, approve, onWrite),
 		record = {
 			...result,
@@ -121,6 +147,16 @@ export function recordPromotion(
 			repositoriesChanged: false,
 			runtimeChecked: false,
 			reloaded: false,
+			...(verifiedTree
+				? {
+						stagedTree: {
+							treeDigest: verifiedTree.treeDigest,
+							fileCount: verifiedTree.fileCount,
+							bytes: verifiedTree.bytes,
+							treeRetained: false as const,
+						},
+					}
+				: {}),
 			observedAt: new Date().toISOString(),
 			ordinal: Object.keys(records.records).length + 1,
 			message:
