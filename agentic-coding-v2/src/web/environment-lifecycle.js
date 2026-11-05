@@ -4,12 +4,24 @@ export function idleDescription(run) {
 	if (run.idleReap)
 		return `Idle expiry requested at ${new Date(run.idleReap.at).toISOString()}; cleanup state: ${run.state}${run.inspection ? " (operator-confirmed inspection)" : ""}. Idle expiry itself neither cancels coding nor permanently revokes its authority.`;
 	if (!run.idle) return "";
+	const scope =
+			Number.isInteger(run.idle.ownerHeldRuns) &&
+			Number.isInteger(run.idle.ownerBatches)
+				? `Owner-wide activity: ${run.idle.ownerHeldRuns} held run${run.idle.ownerHeldRuns === 1 ? "" : "s"} across ${run.idle.ownerBatches} acquisition batch${run.idle.ownerBatches === 1 ? "" : "es"}.`
+				: "Owner-wide activity across all held runs.",
+		dependency =
+			run.idle.dependencyScope === "exclusive-coupled-batch"
+				? " Declared dependencies have an exclusive coupled lifetime, not shared-reference expiry."
+				: " This is not independent per-app expiry.";
 	if (run.idle.protection)
-		return `Idle expiry protected: ${run.idle.protection}.`;
+		return `Idle expiry protected: ${run.idle.protection}. ${scope}${dependency}`;
 	const seconds = Math.ceil(run.idle.remainingMs / 1000);
-	return seconds > 0
-		? `Agent batch idle TTL: ${seconds}s remaining; any owner-scoped member activity renews the whole batch.`
-		: "Agent batch idle TTL elapsed; awaiting the next protected sweep (at most once per 60 seconds).";
+	return (
+		(seconds > 0
+			? `Agent owner idle TTL: ${seconds}s remaining; any owner-scoped member activity renews all held runs.`
+			: "Agent owner idle TTL elapsed; awaiting the next protected sweep (at most once per 60 seconds).") +
+		` ${scope}${dependency}`
+	);
 }
 
 // Clock-only polls must not recreate topics, task controls or focused diagnostics.

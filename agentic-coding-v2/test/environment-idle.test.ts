@@ -12,7 +12,7 @@ afterEach(cleanup);
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 
-test("agent batch activity renews idle expiry; normal reaping cleans dependencies, preserves operator runs and permits the coding task to reacquire", async () => {
+test("agent activity renews every approved root; second acquisitions are refused and idle cleanup preserves operator runs", async () => {
 	const { app, config, fake, invocation } = await fixture(false, (config) => {
 		fs.mkdirSync(config.configDir);
 		fs.writeFileSync(
@@ -45,6 +45,12 @@ test("agent batch activity renews idle expiry; normal reaping cleans dependencie
 						targets: [target],
 					},
 					{
+						id: "editor",
+						kind: "app",
+						repository: config.repositories[0],
+						targets: [target],
+					},
+					{
 						id: "console",
 						kind: "app",
 						repository: config.repositories[0],
@@ -54,20 +60,29 @@ test("agent batch activity renews idle expiry; normal reaping cleans dependencie
 			}),
 		);
 	});
+	let secondAcquisition = "";
 	fake.setResponses([
-		call("env_start", { apps: ["api"] }),
+		call("env_start", { apps: ["api", "editor"] }),
 		call("request_review", { path: ".", title: "Before renewal" }),
 		call("env_status", { app: "api" }),
 		call("request_review", { path: ".", title: "After renewal" }),
 		call("env_start", { apps: ["api"] }),
-		call("request_review", {
-			path: ".",
-			title: "Reacquired after idle cleanup",
-		}),
+		call("env_start", { apps: ["console"], retainQueue: true, timeoutSec: 1 }),
+		(messages) => {
+			for (const message of messages.messages)
+				if (message.role === "toolResult" && message.toolName === "env_start")
+					for (const part of message.content)
+						if (part.type === "text") secondAcquisition = part.text;
+			return call("request_review", {
+				path: ".",
+				title: "Reacquired after idle cleanup",
+			});
+		},
 	]);
 	const agent = await app.startTask(invocation);
 	const start = await pendingReview(app, agent);
 	expect(start.snapshot).toContain("idleScope");
+	expect(start.snapshot).toContain("including unrelated apps");
 	await approve(app, agent);
 	await pendingReview(app, agent, "Before renewal");
 	const initial = (await app.environments.snapshot("api")).runs[0];
@@ -76,6 +91,12 @@ test("agent batch activity renews idle expiry; normal reaping cleans dependencie
 		throw new Error("No native agent activity");
 	expect(initial.idle.ttlMs).toBe(60_000);
 	expect(initial.idle.protection).toBeNull();
+	expect(initial.idle).toMatchObject({
+		ownerHeldRuns: 3,
+		ownerBatches: 1,
+		dependencyScope: "exclusive-coupled-batch",
+		activityScope: "all-held-runs-of-native-owner",
+	});
 	await app.tick(before);
 	const operator = await app.startEnvironmentAction({
 		apps: ["console"],
@@ -101,16 +122,19 @@ test("agent batch activity renews idle expiry; normal reaping cleans dependencie
 	if (renewed === null || renewed === undefined)
 		throw new Error("Missing renewed activity");
 	expect(renewed).toBeGreaterThan(before);
+	expect(
+		(await app.environments.snapshot("editor")).runs[0]?.idle.lastActivityAt,
+	).toBe(renewed);
 	await app.tick(before + 60_000);
 	expect(
 		(await app.environments.snapshot()).runs.filter(
 			(run) => run.state === "running",
 		),
-	).toHaveLength(3);
+	).toHaveLength(4);
 	await app.tick(before + 120_000);
 	const stopped = await app.environments.snapshot();
 	const expired = stopped.runs.filter((run) => run.owner === agent);
-	expect(expired).toHaveLength(2);
+	expect(expired).toHaveLength(3);
 	expect(
 		expired.every(
 			(run) =>
@@ -128,7 +152,16 @@ test("agent batch activity renews idle expiry; normal reaping cleans dependencie
 	);
 	await approve(app, agent, "After renewal");
 	await approve(app, agent);
+	await approve(app, agent); // Attempt a retained second acquisition while already holding api/cache.
 	await pendingReview(app, agent, "Reacquired after idle cleanup");
+	expect(secondAcquisition).toContain(
+		"Release your existing app batch before acquiring another",
+	);
+	expect(
+		(await app.environments.snapshot()).waits
+			.filter((wait) => wait.owner === agent)
+			.every((wait) => wait.state !== "waiting"),
+	).toBe(true);
 	const reacquired = (await app.environments.snapshot()).runs.filter(
 		(run) => run.owner === agent && run.state === "running",
 	);

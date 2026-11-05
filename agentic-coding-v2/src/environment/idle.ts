@@ -106,13 +106,25 @@ export class IdleLifecycle {
 	}
 	view(
 		run: EnvironmentRun,
-		options: { waiting?: boolean; protectedBatch?: boolean } = {},
+		options: {
+			waiting?: boolean;
+			protectedBatch?: boolean;
+			ownerHeldRuns?: number;
+			ownerBatches?: number;
+		} = {},
 		now = Date.now(),
 	) {
 		const activity = this.owners.get(run.owner);
 		const protection = this.protection(run, activity, options);
 		return {
 			scope: "whole-native-owner-batch",
+			activityScope: "all-held-runs-of-native-owner",
+			acquisitionScope: "one-exclusive-held-run-batch-per-owner",
+			ownerHeldRuns: options.ownerHeldRuns ?? null,
+			ownerBatches: options.ownerBatches ?? null,
+			dependencyScope: run.plan.dependencyBatch
+				? "exclusive-coupled-batch"
+				: "no-declared-dependency-batch",
 			ttlMs: activity?.kind === "agent" ? this.policy.ttlMs : null,
 			policySource: this.policy.source,
 			lastActivityAt: activity?.at ?? null,

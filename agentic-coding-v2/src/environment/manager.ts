@@ -383,6 +383,19 @@ export class Environments {
 				.filter((run) => !this.canIdleRun(run))
 				.map((run) => run.owner),
 		);
+		const idleScopes = new Map<
+			number,
+			{ runs: number; batches: Set<string> }
+		>();
+		for (const run of all.filter(holdsResource)) {
+			const scope = idleScopes.get(run.owner) ?? {
+				runs: 0,
+				batches: new Set<string>(),
+			};
+			scope.runs++;
+			scope.batches.add(run.batch);
+			idleScopes.set(run.owner, scope);
+		}
 		return {
 			runtime: "task-owned",
 			revocations: values<OperatorRevocation>(state?.operatorRevocations)
@@ -463,6 +476,8 @@ export class Environments {
 						(wait) => wait.owner === run.owner && wait.state === "waiting",
 					),
 					protectedBatch: protectedOwners.has(run.owner),
+					ownerHeldRuns: idleScopes.get(run.owner)?.runs ?? 0,
+					ownerBatches: idleScopes.get(run.owner)?.batches.size ?? 0,
 				}),
 			})),
 			waiters: this.acquisitions.entries
