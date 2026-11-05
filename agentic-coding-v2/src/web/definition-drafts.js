@@ -579,7 +579,7 @@ export function definitionDrafts(request) {
 					"Historical live-vs-established-base comparison saved. Does NOT compare staged text with live content, guarantee atomic publication or grant promotion approval.";
 			}),
 	);
-	const savedCheck = (mode, note) =>
+	const savedCheck = (mode, note, options) =>
 		busy(async () => {
 			sourcePermission.checked = false;
 			acceptBase.checked = false;
@@ -592,6 +592,7 @@ export function definitionDrafts(request) {
 					revision: current.revision,
 					digest: current.digest,
 					[mode]: true,
+					...(options?.retain ? { retainStagedTree: true } : {}),
 				},
 				fingerprint = JSON.stringify(body);
 			if (
@@ -627,6 +628,54 @@ export function definitionDrafts(request) {
 				"materializeStagedTree",
 				"Ephemeral tree assembled from saved text only, verified and discarded. NOT a retained staged tree, runtime/readiness validation, review or promotion approval.",
 			),
+	);
+	const retainTree = button(
+		"Assemble isolated staged tree and retain it by digest",
+		() =>
+			savedCheck(
+				"materializeStagedTree",
+				"Tree assembled from saved text only, verified and retained in private state under its own digest for inspection. NOT source freshness, runtime/readiness validation, review or promotion approval; promotion still requires the recorded digest identity.",
+				{ retain: true },
+			),
+	);
+	const treeDigest = element("input");
+	treeDigest.setAttribute("aria-label", "Retained tree digest to release");
+	treeDigest.maxLength = 64;
+	const treeStatus = element(
+		"p",
+		"Retention metadata not loaded. Retained trees are inspection history, never execution or publication input.",
+		"meta",
+	);
+	treeStatus.setAttribute("role", "status");
+	const listTrees = button("Load retained staged trees (metadata only)", () =>
+		busy(async () => {
+			const observed = await request("/api/environments/drafts/trees");
+			report.textContent = JSON.stringify(observed, null, 2);
+			const owned = observed.trees?.length ?? 0,
+				missing = (observed.trees ?? []).filter((tree) => !tree.present).length;
+			treeStatus.textContent = `${owned} retention record(s), ${missing} recorded tree(s) no longer present, ${observed.unowned?.length ?? 0} unowned directorie(s) disclosed. Contents are never read.`;
+		}),
+	);
+	const releaseTree = button("Release one retained tree by digest", () =>
+		busy(async () => {
+			const name = treeDigest.value.trim();
+			if (!/^[a-f0-9]{64}$/.test(name))
+				throw Error("Enter the exact recorded retained-tree digest");
+			if (
+				!confirm(
+					`Release retained tree ${name}? The verified tree directory is deleted; the draft, its revision and its recorded tree identity are kept.`,
+				)
+			)
+				return;
+			const released = await request("/api/environments/drafts/tree/release", {
+				requestId: crypto.randomUUID(),
+				name,
+			});
+			report.textContent = JSON.stringify(released, null, 2);
+			treeStatus.textContent = released.released
+				? "Retained tree released. The draft keeps its revision and recorded identity; promotion still reads that identity."
+				: "No retained directory was present for that digest; the retention record was cleared.";
+		}),
 	);
 	const promote = button(
 		"Promote exact staged config to live environments.json",
@@ -738,6 +787,11 @@ export function definitionDrafts(request) {
 		compareBase,
 		candidateCheck,
 		treeCheck,
+		retainTree,
+		listTrees,
+		treeDigest,
+		releaseTree,
+		treeStatus,
 		promote,
 		loadReport,
 		removeStagedDraft,
