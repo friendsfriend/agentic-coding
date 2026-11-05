@@ -491,3 +491,15 @@ Limits: this is not exactly-once or lossless log history, not a clock-skew guara
 Verification: **111 tests / 1535 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify objective/verified **83.0**, overall **20.8**, strict **20.0**; only unassessed subjective dimensions remain queued.
 
 **Next backend step:** Compose depth — shared Podman networks, completion/restart dependency conditions and health overrides — starting with the refusals that keep unsupported fields explicit.
+
+## Explicit Compose health overrides
+
+A Compose service may now declare `healthcheck`. It is narrowed to the engine's own check: the string form or exactly `[CMD-SHELL, command]`, plus `interval`, `timeout`, `retries` and `start_period` using explicit engine duration units, and a lone `disable: true` to declare none. Exec-form `[CMD, ...]` argv is refused rather than re-quoted, `disable` combined with any other setting is refused, unknown keys are refused, and malformed durations or retry counts are refused before any engine command. Native container definitions accept the same normalized shape through `health`.
+
+The declared check becomes create-time engine flags (`--health-cmd`, `--health-interval`, `--health-timeout`, `--health-retries`, `--health-start-period`). Declaring a check does **not** make a service ready: readiness is still the observed engine state or the configured `readyText`/`service_healthy` requirement, and a declared command is never treated as a passed probe. Nothing here implements restart policies, `service_completed_successfully`, health overrides replacing readiness, or shared Podman networking — those remain refused or unsupported.
+
+The public scenario starts a stack whose web service declares `[CMD-SHELL, 'curl -f …']` with `interval`, `retries` and `start_period`, and asserts the sanitized plan carries the declared check and the engine receives it at create time. Exec-form and mixed-`disable` declarations are refused with no engine command issued at all. Verification remains fixture-only: no live engine ran, so the engine's interpretation of these flags, real health transitions and image-provided checks are unverified, and a declared check is not evidence of application health.
+
+Verification: **112 tests / 1540 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify objective/verified **83.0**, overall **20.7**, strict **20.0**.
+
+**Next backend step:** Compose dependency depth — `service_completed_successfully` for one-shot prerequisites, and explicit refusal or support decisions for restart policies — before attempting shared Podman networking.

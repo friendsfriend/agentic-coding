@@ -24,6 +24,15 @@ export type ContainerTarget = {
 	dockerfile: string;
 	context: string;
 	buildArgs: string[];
+	/** Declared container health command. This configures the engine's own check;
+	 * it is not evidence that health was observed. */
+	health?: {
+		command: string;
+		interval: string;
+		timeout: string;
+		retries: number;
+		startPeriod: string | undefined;
+	};
 };
 function keys(data: Record<string, unknown>, allowed: string[]) {
 	if (Object.keys(data).some((key) => !allowed.includes(key)))
@@ -54,6 +63,46 @@ export function readLocalSocket(raw: unknown) {
 		);
 	return socket;
 }
+/** A declared engine health command. Durations must be explicit engine units;
+ * nothing here asserts that the engine ever reports a health transition. */
+export function readHealth(raw: unknown): ContainerTarget["health"] {
+	if (raw === undefined) return undefined;
+	const value = object(raw);
+	keys(value, ["command", "interval", "timeout", "retries", "startPeriod"]);
+	const command = text(value.command, "container health command", 512);
+	if (!command.trim() || /[\0\r\n]/.test(command))
+		throw new Error(
+			"Container health command must be one unbroken command line",
+		);
+	const duration = (key: string, fallback: string) => {
+		const selected = value[key] ?? fallback;
+		if (
+			typeof selected !== "string" ||
+			!/^\d+(?:\.\d+)?(?:ms|s|m|h)$/.test(selected)
+		)
+			throw new Error(
+				"Container health durations require explicit engine units such as 500ms, 30s or 2m",
+			);
+		return selected;
+	};
+	const retries = value.retries ?? 3;
+	if (
+		!Number.isSafeInteger(retries) ||
+		Number(retries) < 1 ||
+		Number(retries) > 100
+	)
+		throw new Error("Container health retries must be 1–100");
+	return {
+		command,
+		interval: duration("interval", "30s"),
+		timeout: duration("timeout", "30s"),
+		retries: Number(retries),
+		startPeriod:
+			value.startPeriod === undefined
+				? undefined
+				: duration("startPeriod", "0s"),
+	};
+}
 export function readContainer(raw: unknown): ContainerTarget {
 	const data = object(raw);
 	keys(data, [
@@ -68,6 +117,7 @@ export function readContainer(raw: unknown): ContainerTarget {
 		"dockerfile",
 		"context",
 		"buildArgs",
+		"health",
 	]);
 	const socket = readLocalSocket(data.socket);
 	const image = text(data.image, "container image", 512);
@@ -93,6 +143,7 @@ export function readContainer(raw: unknown): ContainerTarget {
 		mounts.length > 64
 	)
 		throw new Error("Invalid container ports/mounts");
+	const health = readHealth(data.health);
 	const readiness = data.readiness ?? "running";
 	if (readiness !== "running" && readiness !== "healthy")
 		throw new Error("Invalid container readiness");
@@ -105,6 +156,7 @@ export function readContainer(raw: unknown): ContainerTarget {
 			? {}
 			: { entrypoint: text(data.entrypoint, "container entrypoint", 4096) }),
 		buildArgs,
+		...(health ? { health } : {}),
 		readiness,
 		dockerfile: relative(data.dockerfile, "Dockerfile", "Dockerfile"),
 		context: relative(data.context, "build context", "."),

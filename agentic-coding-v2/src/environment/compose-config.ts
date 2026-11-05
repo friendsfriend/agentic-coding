@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { digest, object, text } from "../config.ts";
 import { contained } from "../git.ts";
-import { readContainer, readLocalSocket } from "./container-config.ts";
+import {
+	readContainer,
+	readHealth,
+	readLocalSocket,
+} from "./container-config.ts";
 import type {
 	ComposeDefinition,
 	ComposePlan,
@@ -34,6 +38,64 @@ function dependencies(raw: unknown): Dependency[] {
 	if (new Set(result.map((value) => value.id)).size !== result.length)
 		throw new Error("Duplicate Compose dependency");
 	return result;
+}
+/** Compose health overrides are narrowed to one engine command form; exec-form
+ * argv and disable-plus-settings combinations are refused rather than reinterpreted. */
+function healthcheck(raw: unknown) {
+	if (raw === undefined) return undefined;
+	const value = object(raw);
+	keys(value, [
+		"test",
+		"interval",
+		"timeout",
+		"retries",
+		"start_period",
+		"disable",
+	]);
+	if (value.disable === true) {
+		if (Object.keys(value).length > 1)
+			throw new Error(
+				"Compose healthcheck disable cannot be combined with other settings",
+			);
+		return undefined;
+	}
+	if (value.disable !== undefined && value.disable !== false)
+		throw new Error("Compose healthcheck disable must be a boolean");
+	const test = value.test;
+	if (test === undefined)
+		throw new Error("Compose healthcheck requires a test");
+	let command: string;
+	if (typeof test === "string") command = test;
+	else if (Array.isArray(test)) {
+		const [kind, ...rest] = test;
+		if (
+			kind !== "CMD-SHELL" ||
+			rest.length !== 1 ||
+			typeof rest[0] !== "string"
+		)
+			throw new Error(
+				"Compose healthcheck supports the string form or exactly [CMD-SHELL, command]; exec-form argv is unsupported",
+			);
+		command = rest[0];
+	} else throw new Error("Invalid Compose healthcheck test");
+	const duration = (key: string) => {
+		const selected = value[key];
+		if (selected === undefined) return undefined;
+		if (typeof selected !== "string")
+			throw new Error("Compose healthcheck durations must be strings");
+		const match = /^(\d+(?:\.\d+)?(?:ms|s|m|h))+$/.exec(selected);
+		if (!match) throw new Error("Invalid Compose healthcheck duration");
+		return selected;
+	};
+	return readHealth({
+		command,
+		...(duration("interval") ? { interval: duration("interval") } : {}),
+		...(duration("timeout") ? { timeout: duration("timeout") } : {}),
+		...(value.retries === undefined ? {} : { retries: value.retries }),
+		...(duration("start_period")
+			? { startPeriod: duration("start_period") }
+			: {}),
+	});
 }
 function orderServices(
 	services: ComposePlan["services"],
@@ -173,6 +235,7 @@ export function compileComposeSource(
 					"ports",
 					"volumes",
 					"depends_on",
+					"healthcheck",
 				]);
 				const environment = Object.fromEntries(
 					Object.entries(object(service.environment ?? {})).map(
@@ -197,6 +260,7 @@ export function compileComposeSource(
 				const ports = service.ports ?? [];
 				if (!Array.isArray(ports) || ports.length > 64)
 					throw new Error("Invalid Compose ports");
+				const serviceHealth = healthcheck(service.healthcheck);
 				const container = readContainer({
 					socket: definition.socket,
 					image: service.image,
@@ -226,6 +290,7 @@ export function compileComposeSource(
 						};
 					}),
 					readiness: "running",
+					...(serviceHealth ? { health: serviceHealth } : {}),
 				});
 				return {
 					id,

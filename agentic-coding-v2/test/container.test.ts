@@ -382,6 +382,52 @@ test("Compose unsupported effects are refused, and daemon loss quarantines the c
 	);
 }, 20000);
 
+test("Compose health overrides reach the engine and unsupported forms are refused before any effect", async () => {
+	for (const scenario of ["declared", "exec-form", "disable-mixed"] as const) {
+		const { app, config, fake, invocation } = await fixture(
+			false,
+			configureCompose,
+		);
+		const override =
+			scenario === "declared"
+				? "    healthcheck:\n      test: [CMD-SHELL, 'curl -f http://localhost/']\n      interval: 5s\n      retries: 4\n      start_period: 2s\n"
+				: scenario === "exec-form"
+					? "    healthcheck:\n      test: [CMD, curl, -f]\n"
+					: "    healthcheck:\n      disable: true\n      test: ignore\n";
+		await composeFile(
+			invocation.repository,
+			stackYaml.replace(
+				"    command: [serve]",
+				`    command: [serve]\n${override}`,
+			),
+		);
+		fake.setResponses([
+			call("env_start", { apps: ["api"] }),
+			scenario === "declared"
+				? call("request_review", { path: ".", title: "Hold health stack" })
+				: fauxAssistantMessage("Unsupported health override refused"),
+		]);
+		const task = await app.startTask({
+			...invocation,
+			requestId: `compose-health-${scenario}`,
+		});
+		if (scenario === "declared") {
+			await approve(app, task);
+			await pendingReview(app, task, "Hold health stack");
+			const created = readEngine(config).history.find(
+				(args) => args[2] === "create" && args.includes("--health-cmd"),
+			);
+			expect(created).toBeDefined();
+			expect(created?.includes("curl -f http://localhost/")).toBe(true);
+			expect(created?.includes("--health-retries")).toBe(true);
+			await app.cancel(task);
+		}
+		await app.harness.waitForTask(task as TaskId, context);
+		if (scenario !== "declared")
+			expect(readEngine(config).history).toHaveLength(0);
+	}
+}, 20000);
+
 test("Compose shared networks refuse foreign occupancy, copied-label replacement, foreign attachments and lost creation receipts", async () => {
 	for (const variant of ["foreign", "replacement", "attachment", "receipt"]) {
 		const { app, config, fake, invocation } = await fixture(

@@ -256,6 +256,21 @@ export class ContainerProcess {
 			...mounts,
 			...variables.flatMap((key) => ["--env", key]),
 			...(this.spec.entrypoint ? ["--entrypoint", this.spec.entrypoint] : []),
+			...(this.spec.health
+				? [
+						"--health-cmd",
+						this.spec.health.command,
+						"--health-interval",
+						this.spec.health.interval,
+						"--health-timeout",
+						this.spec.health.timeout,
+						"--health-retries",
+						String(this.spec.health.retries),
+						...(this.spec.health.startPeriod
+							? ["--health-start-period", this.spec.health.startPeriod]
+							: []),
+					]
+				: []),
 			this.spec.image,
 			...this.spec.command,
 		];
