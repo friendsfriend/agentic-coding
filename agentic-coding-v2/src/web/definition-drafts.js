@@ -31,6 +31,8 @@ export function definitionDrafts(request) {
 		"No preflight loaded. Reports are historical; never runtime validation or approval.",
 	);
 	report.setAttribute("aria-label", "Historical definition preflight");
+	const treeSummary = element("pre", "No saved tree identity loaded.");
+	treeSummary.setAttribute("aria-label", "Loaded draft staged-tree identity");
 	const sourceApp = element("input");
 	sourceApp.setAttribute("aria-label", "Compose source app ID");
 	sourceApp.maxLength = 128;
@@ -118,7 +120,7 @@ export function definitionDrafts(request) {
 		try {
 			await action();
 		} catch (error) {
-			status.textContent = `Draft operation failed: ${String(error)}. Text retained. If promotion was attempted, a write may already have occurred; inspect the live destination and retry the same request to resolve its receipt.`;
+			status.textContent = `Draft operation failed: ${String(error)}. Text retained. If promotion was attempted, a write may already have occurred; inspect the live destination and retry the same request to resolve its receipt. Cleanup may also have an uncertain outcome: keep the exact local retry ID and inspect retention metadata; discarding a local retry does not retire native uncertainty.`;
 		} finally {
 			controls.forEach((control) => {
 				control.disabled = false;
@@ -127,6 +129,36 @@ export function definitionDrafts(request) {
 	};
 	const describe = (draft) =>
 		`${draft.id} · revision ${draft.revision} · ${draft.digest}. ${draft.schema.message} Base observation: ${draft.baseMatches === null ? "unavailable" : draft.baseMatches ? "unchanged" : "CHANGED since creation"}. Live destination: ${draft.destination?.state === "unavailable" ? "unavailable" : draft.destination?.state === "absent" ? "absent" : `regular ${draft.destination?.digest ?? ""}`}. Promotion writes only this exact staged configuration text.`;
+	const showTree = (draft) => {
+		const tree = draft?.stagedTree;
+		if (!tree) {
+			treeSummary.textContent =
+				"No verified tree identity in this loaded draft snapshot. Assemble saved bytes to record one; retention is optional.";
+			return;
+		}
+		treeSummary.textContent = `Recorded tree ${tree.treeDigest} · revision ${tree.revision} · ${tree.current ? "CURRENT for this draft snapshot" : "STALE: assemble the current saved revision"}. ${tree.fileCount} file(s), ${tree.bytes} bytes. Retention: ${tree.retained ? `${tree.retained.name} · ${tree.retained.present ? "directory observed present" : "directory not observed present"}` : "no active retention claim"}. This is historical metadata, not content verification, runtime readiness, publication approval or a fresh source/base check.`;
+	};
+	const refreshLoadedTree = async () => {
+		if (!current) return;
+		try {
+			const draft = await request(
+				`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
+			);
+			if (
+				draft.revision !== current.revision ||
+				draft.digest !== current.digest
+			) {
+				treeSummary.textContent =
+					"The saved draft advanced after this editor snapshot. Reload explicitly before relying on its tree identity; unsaved editor text was not changed.";
+				return;
+			}
+			current = draft;
+			showTree(draft);
+		} catch {
+			treeSummary.textContent =
+				"The action returned, but fresh draft/tree metadata could not be loaded. Inspect retention metadata or reload the draft; no new freshness claim is made.";
+		}
+	};
 	const refreshList = async () => {
 		const drafts = await request("/api/environments/drafts");
 		selector.replaceChildren(
@@ -151,6 +183,7 @@ export function definitionDrafts(request) {
 				`/api/environments/drafts?id=${encodeURIComponent(selector.value)}`,
 			);
 			current = draft;
+			showTree(draft);
 			sourceEditor.value = "";
 			sourceSavedText = "";
 			sourceMarker = "";
@@ -166,6 +199,7 @@ export function definitionDrafts(request) {
 	const fresh = button("New empty staged draft", () => {
 		if (!discard()) return;
 		current = null;
+		showTree(null);
 		sourceEditor.value = "";
 		sourceSavedText = "";
 		sourceMarker = "";
@@ -201,6 +235,7 @@ export function definitionDrafts(request) {
 					"Saved receipt exists, but another editor advanced the draft. Load current explicitly before retrying",
 				);
 			current = draft;
+			showTree(draft);
 			sourcePermission.checked = false;
 			savedText = editor.value;
 			pending = null;
@@ -324,6 +359,7 @@ export function definitionDrafts(request) {
 						"Source receipt exists but draft advanced; load explicitly. Text retained.",
 					);
 				current = draft;
+				showTree(draft);
 				sourceSavedText = sourceEditor.value;
 				pendingSourceSave = null;
 				sourcePermission.checked = false;
@@ -368,6 +404,7 @@ export function definitionDrafts(request) {
 			if (receipt.revision && draft.revision < receipt.revision)
 				throw Error("Source removal receipt is behind the current draft");
 			current = draft;
+			showTree(draft);
 			sourceEditor.value = "";
 			sourceSavedText = "";
 			sourceMarker = sourceSelection();
@@ -450,6 +487,7 @@ export function definitionDrafts(request) {
 			});
 			pendingDraftRemoval = null;
 			current = null;
+			showTree(null);
 			savedText = empty;
 			editor.value = empty;
 			sourceEditor.value = "";
@@ -538,6 +576,7 @@ export function definitionDrafts(request) {
 						"Base receipt exists but draft advanced; load explicitly",
 					);
 				current = draft;
+				showTree(draft);
 				pendingBaseSave = null;
 				status.textContent = `Explicit current source base saved; draft revision ${current.revision}. Not original staging-time state or promotion authority.`;
 				await refreshList();
@@ -612,6 +651,7 @@ export function definitionDrafts(request) {
 			pendingCandidate = null;
 			report.textContent = JSON.stringify(observed, null, 2);
 			status.textContent = note;
+			await refreshLoadedTree();
 		});
 	const candidateCheck = button(
 		"Check saved Compose candidate (offline; no publish)",
@@ -647,34 +687,120 @@ export function definitionDrafts(request) {
 		"meta",
 	);
 	treeStatus.setAttribute("role", "status");
+	const cleanupSelector = element("select");
+	cleanupSelector.setAttribute(
+		"aria-label",
+		"Pending retained-tree cleanup attempts",
+	);
+	let cleanupAttempts = [],
+		pendingCleanupAcknowledgement = null,
+		pendingTreeRelease = null;
 	const listTrees = button("Load retained staged trees (metadata only)", () =>
 		busy(async () => {
 			const observed = await request("/api/environments/drafts/trees");
 			report.textContent = JSON.stringify(observed, null, 2);
+			cleanupAttempts = observed.cleanupAttempts ?? [];
+			cleanupSelector.replaceChildren(
+				...cleanupAttempts
+					.filter((attempt) => attempt.status === "pending")
+					.map((attempt) => {
+						const option = element(
+							"option",
+							`${attempt.id} · revision ${attempt.revision} · ${attempt.kind} · ${attempt.name ?? "no tree"}`,
+						);
+						option.value = attempt.id;
+						return option;
+					}),
+			);
 			const owned = observed.trees?.length ?? 0,
 				missing = (observed.trees ?? []).filter((tree) => !tree.present).length;
-			treeStatus.textContent = `${owned} retention record(s), ${missing} recorded tree(s) no longer present, ${observed.unowned?.length ?? 0} unowned directorie(s) disclosed. Contents are never read.`;
+			treeStatus.textContent = `${owned} retention record(s), ${missing} recorded tree(s) no longer present, ${observed.unowned?.length ?? 0} unowned directory/directories disclosed. ${cleanupAttempts.filter((attempt) => attempt.status === "pending").length} pending cleanup attempt(s): pending means live OR uncertain, not proof of failure. Contents are never read.`;
 		}),
+	);
+	const acknowledgeCleanup = button(
+		"Acknowledge / retry exact cleanup acknowledgement (no deletion)",
+		() =>
+			busy(async () => {
+				const selected = cleanupAttempts.find(
+						(attempt) =>
+							attempt.id === cleanupSelector.value &&
+							attempt.status === "pending",
+					),
+					body =
+						pendingCleanupAcknowledgement ??
+						(selected
+							? {
+									requestId: crypto.randomUUID(),
+									id: selected.id,
+									revision: selected.revision,
+									acknowledge: true,
+								}
+							: null);
+				if (!body)
+					throw Error(
+						"Load retention metadata and select a pending cleanup attempt first",
+					);
+				if (
+					!confirm(
+						`Acknowledge ${body.id}, revision ${body.revision}? Ensure no cleanup is still running and inspect retained-tree metadata first. This only retires the uncertainty blocker: it never deletes, retries, adopts a directory, certifies its contents or grants publication approval. Any saved retry uses this exact same request.`,
+					)
+				)
+					return;
+				pendingCleanupAcknowledgement = body;
+				const result = await request(
+					"/api/environments/drafts/tree-cleanup/acknowledge",
+					body,
+				);
+				pendingCleanupAcknowledgement = null;
+				cleanupAttempts = [];
+				cleanupSelector.replaceChildren();
+				report.textContent = JSON.stringify(result, null, 2);
+				treeStatus.textContent =
+					"Historical acknowledgement recorded only. No deletion or retry occurred. Reload retention metadata before selecting another attempt; a new cleanup requires its own fresh request.";
+				await refreshLoadedTree();
+			}),
+	);
+	const clearCleanupRetry = button(
+		"Discard local cleanup retries (no server action)",
+		() => {
+			if (
+				!confirm(
+					"Discard the saved local acknowledgement and release requests? Inspect server attempts first. This does not resolve any blocker, delete anything or authorize a new action.",
+				)
+			)
+				return;
+			pendingCleanupAcknowledgement = null;
+			pendingTreeRelease = null;
+			treeStatus.textContent =
+				"Local cleanup retries cleared only. Reload retention metadata; server uncertainty is unchanged.";
+		},
 	);
 	const releaseTree = button("Release one retained tree by digest", () =>
 		busy(async () => {
 			const name = treeDigest.value.trim();
 			if (!/^[a-f0-9]{64}$/.test(name))
 				throw Error("Enter the exact recorded retained-tree digest");
+			if (pendingTreeRelease && pendingTreeRelease.name !== name)
+				throw Error(
+					"Retry the saved release digest first; changing it requires discarding the local retry explicitly",
+				);
 			if (
 				!confirm(
 					`Release retained tree ${name}? The verified tree directory is deleted; the draft, its revision and its recorded tree identity are kept.`,
 				)
 			)
 				return;
-			const released = await request("/api/environments/drafts/tree/release", {
-				requestId: crypto.randomUUID(),
-				name,
-			});
+			pendingTreeRelease ??= { requestId: crypto.randomUUID(), name };
+			const released = await request(
+				"/api/environments/drafts/tree/release",
+				pendingTreeRelease,
+			);
+			pendingTreeRelease = null;
 			report.textContent = JSON.stringify(released, null, 2);
 			treeStatus.textContent = released.released
 				? "Retained tree released. The draft keeps its revision and recorded identity; promotion still reads that identity."
 				: "No retained directory was present for that digest; the retention record was cleared.";
+			await refreshLoadedTree();
 		}),
 	);
 	const promote = button(
@@ -709,6 +835,7 @@ export function definitionDrafts(request) {
 					`/api/environments/drafts?id=${encodeURIComponent(current.id)}`,
 				);
 				current = draft;
+				showTree(draft);
 				status.textContent = `Historical promotion ${record.outcome} recorded. A retry may replay an earlier outcome without writing or observing the live file. The separately loaded destination below is only a fresh observation, not readiness or reload authority. ${describe(draft)}`;
 				await refreshList();
 			}),
@@ -786,9 +913,13 @@ export function definitionDrafts(request) {
 		captureBase,
 		compareBase,
 		candidateCheck,
+		treeSummary,
 		treeCheck,
 		retainTree,
 		listTrees,
+		cleanupSelector,
+		acknowledgeCleanup,
+		clearCleanupRetry,
 		treeDigest,
 		releaseTree,
 		treeStatus,

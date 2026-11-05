@@ -527,19 +527,23 @@ test("a retained staged tree is owned by its digest, inspectable, and released b
 	}
 });
 test("a retained tree is disclosed by metadata and released by its digest without deleting its draft", async () => {
-	const { app, config } = await fixture(true, (config) => {
+	const { app, config, open } = await fixture(true, (config) => {
 		fs.chmodSync(config.stateDir, 0o700);
 		fs.mkdirSync(config.configDir, { mode: 0o700 });
 	});
-	const host = serve(app);
-	const token = new URLSearchParams(new URL(host.url).hash.slice(1)).get(
-			"token",
-		),
-		api = (route: string, body?: unknown) =>
+	let host = serve(app),
+		running = app;
+	const reopen = async () => {
+		host.stop();
+		await running.close();
+		running = await open();
+		host = serve(running);
+	};
+	const api = (route: string, body?: unknown) =>
 			fetch(new URL(route, host.url), {
 				method: body === undefined ? "GET" : "POST",
 				headers: {
-					Authorization: `Bearer ${token}`,
+					Authorization: `Bearer ${new URLSearchParams(new URL(host.url).hash.slice(1)).get("token")}`,
 					"Content-Type": "application/json",
 				},
 				body: body === undefined ? undefined : JSON.stringify(body),
@@ -711,6 +715,14 @@ test("a retained tree is disclosed by metadata and released by its digest withou
 				})
 			).status,
 		).toBe(400);
+		// A normal host reopen must preserve uncertainty without issuing cleanup.
+		await reopen();
+		expect(
+			(await (await api("/api/environments/drafts/trees")).json())
+				.cleanupAttempts,
+		).toEqual(uncertain.cleanupAttempts);
+		expect((await release("uncertain", tree.treeDigest)).status).toBe(400);
+		expect(fs.existsSync(held)).toBe(true);
 		const pending = uncertain.cleanupAttempts.find(
 				(attempt: { status: string }) => attempt.status === "pending",
 			),
@@ -743,9 +755,47 @@ test("a retained tree is disclosed by metadata and released by its digest withou
 		).json();
 		expect(freshRelease.released).toBe(true);
 		expect(fs.existsSync(held)).toBe(false);
+		await reopen();
+		expect(
+			(await (await api("/api/environments/drafts/trees")).json()).trees,
+		).toEqual([]);
 		expect(await (await ack("ack", pending.revision)).json()).toEqual(
 			acknowledged,
 		);
+		// An old acknowledgement must not retire a later pending attempt, even after reopen.
+		expect(
+			(
+				await api("/api/environments/drafts/preflight", {
+					requestId: "retain-after-ack",
+					id: created.id,
+					revision: staged.revision,
+					digest: staged.digest,
+					materializeStagedTree: true,
+					retainStagedTree: true,
+				})
+			).status,
+		).toBe(200);
+		fs.renameSync(held, parked);
+		fs.symlinkSync(parked, held);
+		expect((await release("second-uncertain", tree.treeDigest)).status).toBe(
+			400,
+		);
+		fs.unlinkSync(held);
+		fs.renameSync(parked, held);
+		await reopen();
+		expect(await (await ack("ack", pending.revision)).json()).toEqual(
+			acknowledged,
+		);
+		expect((await release("fresh-after-old-ack", tree.treeDigest)).status).toBe(
+			400,
+		);
+		const later = await (await api("/api/environments/drafts/trees")).json();
+		expect(
+			later.cleanupAttempts.filter(
+				(attempt: { status: string }) => attempt.status === "pending",
+			),
+		).toHaveLength(1);
+		expect(fs.existsSync(held)).toBe(true);
 	} finally {
 		host.stop();
 	}
