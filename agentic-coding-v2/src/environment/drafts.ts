@@ -20,10 +20,15 @@ import {
 } from "./definition-draft-data.ts";
 import { inspectDefinition } from "./definition-preflight.ts";
 import { preflightRequest } from "./definition-preflight-request.ts";
+import { inspectDestination } from "./definition-promotion.ts";
 import {
-	inspectDestination,
-	promoteDefinition,
-} from "./definition-promotion.ts";
+	Promotions,
+	promotionIndex,
+	promotionRequest,
+	readPromotion,
+	recordPromotion,
+	replayPromotion,
+} from "./definition-promotion-records.ts";
 import {
 	inspectSourceBase,
 	observeSourceBase,
@@ -50,16 +55,6 @@ const Preflights = defineDoc<{
 	version: 1,
 	scope: "session",
 	initial: () => ({ reports: {}, requests: {} }),
-	checkpointWhen: () => true,
-});
-const Promotions = defineDoc<{
-	records: Record<string, string>;
-	requests: Record<string, string>;
-}>({
-	kind: "v2.environment-definition-promotions",
-	version: 1,
-	scope: "session",
-	initial: () => ({ records: {}, requests: {} }),
 	checkpointWhen: () => true,
 });
 type Preflight = (
@@ -342,106 +337,31 @@ export class DefinitionDrafts {
 			background,
 		);
 	}
-	/** Bounded historical index only; never observes the live destination. */
+	/** Historical reads remain behind the same private-state/authenticated boundary. */
 	async promotions() {
 		privateState(this.config);
-		const doc = await this.engine().snapshot(Promotions, background);
-		return Object.values(doc?.records ?? {})
-			.map((raw) => {
-				const { id, draftId, revision, digest, outcome, observedAt, ordinal } =
-					stored<{
-						id: string;
-						draftId: string;
-						revision: number;
-						digest: string;
-						outcome: "written" | "unchanged";
-						observedAt: string;
-						ordinal: number;
-					}>(raw);
-				return { id, draftId, revision, digest, outcome, observedAt, ordinal };
-			})
-			.sort((a, b) => b.ordinal - a.ordinal);
+		return promotionIndex(await this.engine().snapshot(Promotions, background));
 	}
 	async promotion(id: string) {
 		privateState(this.config);
-		if (!/^promotion-[a-f0-9]{64}$/.test(id))
-			throw new Error("Invalid promotion record ID");
-		const doc = await this.engine().snapshot(Promotions, background),
-			raw = doc?.records[id];
-		if (!raw) throw new Error("Unknown promotion record");
-		return stored<unknown>(raw);
+		return readPromotion(
+			await this.engine().snapshot(Promotions, background),
+			id,
+		);
 	}
-	/** Single explicit developer action: exact staged content to live configuration. */
 	async promote(body: Record<string, unknown>) {
 		privateState(this.config);
-		if (
-			Object.keys(body).some(
-				(key) =>
-					!["requestId", "id", "revision", "digest", "approve"].includes(key),
-			)
-		)
-			throw new Error("Unsupported promotion field");
-		const requestId = text(body.requestId, "promotion request ID", 128),
-			id = text(body.id, "draft ID", 80),
-			contentDigest = text(body.digest, "draft digest", 64),
-			approve = text(body.approve, "approved content digest", 64);
-		this.id(id);
-		if (
-			!/^[a-f0-9]{64}$/.test(contentDigest) ||
-			!/^[a-f0-9]{64}$/.test(approve) ||
-			!Number.isSafeInteger(body.revision) ||
-			Number(body.revision) < 1
-		)
-			throw new Error("Promotion requires exact revision and content digests");
-		// Validate even an historical replay before looking up its receipt. Keeping
-		// the request hash unchanged preserves prior exact, valid retry identities.
-		if (approve !== contentDigest)
-			throw new Error("Approval must equal the exact requested content digest");
-		const request = digest(
-				JSON.stringify({ id, revision: body.revision, digest: contentDigest }),
-			),
-			key = digest(requestId);
+		const intent = promotionRequest(body);
 		return this.engine().commit(async (tx) => {
 			const records = await tx.doc(Promotions),
-				recorded = records.requests[key];
-			if (recorded) {
-				const receipt = stored<{ request: string; id: string }>(recorded);
-				if (receipt.request !== request)
-					throw new Error("Promotion request ID reused for different input");
-				const raw = records.records[receipt.id];
-				if (!raw) throw new Error("Private promotion receipt is unavailable");
-				return stored<unknown>(raw);
-			}
-			if (Object.keys(records.records).length >= 64)
-				throw new Error(
-					"Private promotion history capacity reached; automatic pruning is unsupported",
-				);
-			const drafts = await tx.doc(DraftState),
-				raw = drafts.drafts[id];
-			if (!raw) throw new Error("Unknown definition draft");
-			const draft = parseDraft(raw);
-			if (draft.revision !== body.revision || draft.digest !== contentDigest)
-				throw new Error("Draft changed; load current before promotion");
-			const result = promoteDefinition(this.config, draft, approve),
-				record = {
-					...result,
-					id: `promotion-${key}`,
-					draftId: id,
-					revision: draft.revision,
-					digest: draft.digest,
-					destination: "environments.json",
-					sourceFilesWritten: false,
-					repositoriesChanged: false,
-					runtimeChecked: false,
-					reloaded: false,
-					observedAt: new Date().toISOString(),
-					ordinal: Object.keys(records.records).length + 1,
-					message:
-						"Historical promotion outcome only, not current live-file state. Written outcomes used an exclusive temp file, fsync and same-directory rename after checking the recorded base; unchanged outcomes wrote nothing. No source/repository files, processes, containers or leases were changed. No runtime validation or reload. Exact replay performs no new destination observation or write.",
-				};
-			records.records[record.id] = JSON.stringify(record);
-			records.requests[key] = JSON.stringify({ request, id: record.id });
-			return record;
+				replay = replayPromotion(records, intent);
+			if (replay) return replay;
+			return recordPromotion(
+				this.config,
+				records,
+				await tx.doc(DraftState),
+				intent,
+			);
 		}, background);
 	}
 	private id(value: string) {

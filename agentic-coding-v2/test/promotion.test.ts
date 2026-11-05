@@ -329,6 +329,12 @@ test("exact approved staged content is promoted atomically under a destination f
 		).toEqual(promoted);
 		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
 		expect(fs.existsSync(lock)).toBe(false);
+		expect(
+			await (
+				await promote("first", created.id, 1, created.digest, created.digest)
+			).json(),
+		).toEqual(promoted);
+		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
 	} finally {
 		host.stop();
 	}
