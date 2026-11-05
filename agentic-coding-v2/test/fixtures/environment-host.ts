@@ -16,6 +16,8 @@ const input = JSON.parse(fs.readFileSync(process.argv[2] ?? "", "utf8")) as {
 	config: Config;
 	invocation: Invocation;
 	readyFile: string;
+	apps?: string[];
+	lifetime?: "independent-roots-v1";
 	target?: string;
 	runtime?: string;
 	http?: { startedFile: string };
@@ -29,7 +31,8 @@ models.setProvider(fake.provider);
 fake.setResponses([
 	fauxAssistantMessage(
 		fauxToolCall("env_start", {
-			apps: ["api"],
+			apps: input.apps ?? ["api"],
+			...(input.lifetime ? { lifetime: input.lifetime } : {}),
 			...(input.runtime ? { runtime: input.runtime } : {}),
 			target: input.target ?? "serve",
 		}),
@@ -145,7 +148,14 @@ for (let attempt = 0; attempt < 1000; attempt++) {
 						review.state === "pending",
 				))
 	) {
-		fs.writeFileSync(`${input.readyFile}.tmp`, JSON.stringify({ id, run }));
+		fs.writeFileSync(
+			`${input.readyFile}.tmp`,
+			JSON.stringify({
+				id,
+				run,
+				runs: state.environments.runs.filter((entry) => entry.owner === id),
+			}),
+		);
 		fs.renameSync(`${input.readyFile}.tmp`, input.readyFile);
 		while (true) await Bun.sleep(1000);
 	}
