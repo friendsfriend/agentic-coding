@@ -677,6 +677,132 @@ test("native container approvals select profiles/providers, fence ownership, red
 	).not.toContain(secret);
 }, 20000);
 
+test("container logs use the engine's own line timestamps for since without exposing the prefix", async () => {
+	const { app, config, fake, invocation } = await fixture(false, configure);
+	const state = readEngine(config);
+	state.logLines = [
+		{ at: "2000-01-01T00:00:00.000000001Z", text: "old [x] first" },
+		{ at: "2000-01-02T00:00:00.000000002Z", text: "old [x] second" },
+		{ at: "2999-12-31T23:59:59.999999999Z", text: "new [x] third" },
+	];
+	fs.writeFileSync(engine(config), JSON.stringify(state));
+	const observations: Array<{
+		runs: Array<{
+			output: string;
+			framing: string;
+			timeSelection: {
+				basis: string | null;
+				availability: string;
+				excludedOlderLines: number;
+			};
+		}>;
+	}> = [];
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("env_logs", {
+			app: "api",
+			grep: "[x]",
+			since: "2500-01-01T00:00:00Z",
+		}),
+		(messages) => {
+			for (const message of messages.messages) {
+				if (message.role !== "toolResult" || message.toolName !== "env_logs")
+					continue;
+				for (const part of message.content)
+					if (part.type === "text") observations.push(JSON.parse(part.text));
+			}
+			return fauxAssistantMessage("Done");
+		},
+	]);
+	const task = await app.startTask({
+		...invocation,
+		requestId: "container-provider-time",
+	});
+	await approve(app, task);
+	await app.harness.waitForTask(task as TaskId, context);
+	expect(observations).toHaveLength(1);
+	const run = observations[0]?.runs[0];
+	// The retained buffer drops the engine prefix and keeps only the newer line.
+	expect(run?.output).toBe("new [x] third\n");
+	expect(run?.timeSelection).toMatchObject({
+		basis: "provider-event-time-completed-lines",
+		availability: "available",
+		// Both fixture log lines and the engine client's own streamed line predate it.
+		excludedOlderLines: 3,
+	});
+	expect(run?.framing).toBe("runtime-buffer-order-provider-event-time");
+	expect(JSON.stringify(observations)).not.toContain("2999-");
+	expect(
+		readEngine(config).history.some(
+			(args) => args.includes("logs") && args.includes("--timestamps"),
+		),
+	).toBe(true);
+}, 20000);
+
+test("Compose service logs use each owned container's event time and drop timing when clipped", async () => {
+	for (const scenario of ["timed", "clipped"] as const) {
+		const { app, config, fake, invocation } = await fixture(
+			false,
+			configureCompose,
+		);
+		const state = readEngine(config);
+		state.logLines =
+			scenario === "timed"
+				? [
+						{ at: "2000-01-01T00:00:00.000000001Z", text: "old [x] first" },
+						{ at: "2000-01-02T00:00:00.000000002Z", text: "old [x] second" },
+						{ at: "2999-12-31T23:59:59.999999999Z", text: "new [x] third" },
+					]
+				: Array.from({ length: 2400 }, (_, index) => ({
+						at: "2999-12-31T23:59:59.999999999Z",
+						text: `line ${index} ${"x".repeat((index % 97) + 1)}`,
+					}));
+		fs.writeFileSync(engine(config), JSON.stringify(state));
+		await composeFile(
+			invocation.repository,
+			scenario === "timed"
+				? stackYaml
+				: "services:\n  web:\n    image: fixture:latest\n    command: [serve]\n    volumes:\n      - type: bind\n        source: .\n        target: /workspace\n",
+		);
+		fake.setResponses([call("env_start", { apps: ["api"] })]);
+		const task = await app.startTask({
+			...invocation,
+			requestId: `compose-service-${scenario}`,
+		});
+		await approve(app, task);
+		await eventually(
+			() => app.environments.snapshot(),
+			(snapshot) => snapshot.runs.some((run) => run.ready === true),
+		);
+		const observed = await app.environments.selectedLogs("api", task, {
+			service: "web",
+			grep: scenario === "timed" ? "[x]" : "line",
+			since: scenario === "timed" ? "2500-01-01T00:00:00Z" : undefined,
+		});
+		const run = observed.runs[0];
+		if (scenario === "timed") {
+			expect(run?.output).toBe("new [x] third\n");
+			expect(run?.timeSelection).toMatchObject({
+				basis: "provider-event-time-completed-lines",
+				availability: "available",
+				excludedOlderLines: 3,
+			});
+			expect(run?.framing).toBe("exact-service-buffer-provider-event-time");
+			expect(JSON.stringify(observed)).not.toContain("2999-");
+		} else {
+			// A clipped suffix no longer lines up with per-line receipts.
+			expect(run?.sourceTruncated).toBe(true);
+			expect(run?.timeSelection).toMatchObject({
+				basis: null,
+				availability: "not-captured",
+			});
+			expect(run?.output.length).toBeGreaterThan(0);
+		}
+		await app.cancel(task);
+		await app.harness.waitForTask(task as TaskId, context);
+	}
+}, 30000);
+
 test("metadata-only availability skips a missing client without probing engines or silently replacing declared defaults", async () => {
 	const { app, config, fake, invocation } = await fixture(false, (config) => {
 		configure(config);

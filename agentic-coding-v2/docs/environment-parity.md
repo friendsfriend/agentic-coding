@@ -475,3 +475,19 @@ The public scenarios cover a byte-identical unowned directory across host reopen
 Verification: **109 tests / 1522 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify objective/verified **82.9**, overall **20.7**, strict **20.0**; only the 20 unassessed subjective dimensions remain queued.
 
 **Scope change:** this work is the **backend migration only**. Interface work — including adapting the existing terminal UI and its pi-durable session experience to these concepts — is tracked separately and is not part of backend completion. The web pages committed earlier in this effort are not the intended target interface and will not be extended further here.
+
+## Provider event time for owned container and Compose service logs
+
+Container log capture now asks Docker/Podman for per-line timestamps (`logs --follow --timestamps --tail 200 <id>`) and keeps that event time instead of substituting host receipt time. The runtime prefix is parsed only at the start of a completed line and stripped from retained output, so model-visible text is unchanged. A provider-timed capture records `observedAt` per completed line; host receipt time is still recorded but is not used for `since` filtering under that basis.
+
+`since` therefore filters by the runtime's own event time for owned containers and for exact Compose service buffers, still before grep and tail. A line whose prefix is missing or unparseable stays untimed: it is never selected by `since` and never borrows a neighbouring line's event time. Aggregate Compose output keeps "not chronological" framing and no timing, because headers and multiple service buffers are interleaved. Kubernetes client diagnostics remain undated.
+
+Clipped service buffers no longer shift event times onto different text. A kept tail must begin on a completed-line boundary and the surviving receipts must account for exactly the retained characters; otherwise the capture reports `not-captured` with no basis rather than a plausible but misaligned time window. A container's timing is also withheld whenever a failure suffix follows the follower output, because that text is not a timed completed line.
+
+New public scenarios cover: `--timestamps` being requested and the prefix being absent from returned output; only the line newer than the requested instant surviving, with older lines counted as excluded; Compose exact-service captures exposing provider event time with aggregate framing unchanged; and a deliberately clipped single-service capture explicitly losing timing while still returning output. Existing shell host-receipt timing, spoofed in-text dates and unsupported-source behaviour are unchanged.
+
+Limits: this is not exactly-once or lossless log history, not a clock-skew guarantee, and not proof against a runtime that emits malformed or duplicate prefixes. Timestamps come from the engine's own clock, which may differ from this host's. Only the newest retained 2048 completed records/64k characters are covered, a crash can lose later observations, and no live engine smoke test was possible here — verification uses the disposable fixture engine.
+
+Verification: **111 tests / 1535 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify objective/verified **83.0**, overall **20.8**, strict **20.0**; only unassessed subjective dimensions remain queued.
+
+**Next backend step:** Compose depth — shared Podman networks, completion/restart dependency conditions and health overrides — starting with the refusals that keep unsupported fields explicit.

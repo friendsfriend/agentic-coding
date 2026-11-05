@@ -38,6 +38,8 @@ export type EngineState = {
 	inspectDelayMs?: number;
 	startDelayMs?: number;
 	initialHealth?: "missing" | "unhealthy";
+	/** Owned-container log lines with the engine's own timestamp per line. */
+	logLines?: Array<{ at: string; text: string }>;
 };
 export const readEngineFile = (file: string) =>
 	JSON.parse(fs.readFileSync(file, "utf8")) as EngineState;
@@ -236,6 +238,12 @@ export function serveContainerFixture(file: string) {
 								break;
 							}
 							case "logs":
+								for (const line of state.logLines ?? [])
+									print(
+										args.includes("--timestamps")
+											? `${line.at} ${line.text}`
+											: line.text,
+									);
 								follow = args.includes("--follow");
 								if (follow) {
 									const pid = Number(request.headers.get("X-Fixture-PID"));

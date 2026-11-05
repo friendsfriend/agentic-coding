@@ -1,6 +1,7 @@
 import { containerPlans, verifyCompose } from "./compose-config.ts";
 import { ComposeNetwork } from "./compose-network.ts";
 import { ContainerProcess } from "./container.ts";
+import { clampedCapture } from "./log-timing.ts";
 import type { Plan } from "./model.ts";
 import type { EnvironmentProcess, Exit } from "./process.ts";
 
@@ -59,15 +60,7 @@ export class ComposeProcess implements EnvironmentProcess {
 			this.children.map((child, index) => {
 				const id = this.plan.composePlan?.services[index]?.id;
 				if (!id) throw new Error("Compose service log identity is missing");
-				const raw = child.logs,
-					truncated = raw.length >= 64000 || raw.length > cap;
-				let output = raw;
-				if (truncated) {
-					const suffix = raw.slice(-cap),
-						boundary = suffix.indexOf("\n");
-					output = boundary < 0 ? "" : suffix.slice(boundary + 1);
-				}
-				return [id, { output, truncated }];
+				return [id, clampedCapture(child.logs, cap, child.logTiming)];
 			}),
 		);
 	}

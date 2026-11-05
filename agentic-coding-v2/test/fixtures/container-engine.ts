@@ -32,8 +32,15 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr)
 	process.stderr.write(`${result.stderr} ${process.env.SERVICE_TOKEN ?? ""}\n`);
 if (result.follow) {
-	if (process.env.LOG_LINE) console.log(process.env.LOG_LINE);
-	console.log(`service log ${process.env.SERVICE_TOKEN ?? ""}`);
+	// A real engine prefixes each streamed line with its own timestamp on request.
+	const stream = (line: string) =>
+		console.log(
+			args.includes("--timestamps")
+				? `${new Date().toISOString()} ${line}`
+				: line,
+		);
+	if (process.env.LOG_LINE) stream(process.env.LOG_LINE);
+	stream(`service log ${process.env.SERVICE_TOKEN ?? ""}`);
 	// Bound orphaned fixture clients to this disposable engine, even after a host SIGKILL.
 	setInterval(async () => {
 		try {

@@ -1,11 +1,21 @@
 import type { TelemetryReader } from "./model.ts";
 export type Exit = { code: number | null; signal: string | null };
 export type LogTiming = {
-	basis: "host-receipt-completed-lines";
-	entries: Array<{ receivedAt: number; characters: number }>;
+	basis: "host-receipt-completed-lines" | "provider-event-time-completed-lines";
+	/** `observedAt` is the runtime's own timestamp for that completed line; a
+	 * provider-timed capture without it is invalid rather than host-substituted. */
+	entries: Array<{
+		receivedAt: number;
+		observedAt?: string;
+		characters: number;
+	}>;
 	truncated: boolean;
 };
-export type ServiceLog = { output: string; truncated: boolean };
+export type ServiceLog = {
+	output: string;
+	truncated: boolean;
+	timing?: LogTiming;
+};
 export type RuntimeStatus = {
 	runtime: "docker" | "podman" | "kubernetes";
 	kind?: "container" | "network" | "pod";

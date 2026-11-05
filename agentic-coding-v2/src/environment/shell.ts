@@ -6,6 +6,17 @@ import { contained } from "../git.ts";
 import { authentication } from "./http-options.ts";
 import type { Plan } from "./model.ts";
 import type { Exit, LogTiming } from "./process.ts";
+
+/** One leading Docker/Podman log timestamp; anything else is not guessed. */
+function runtimeTimestamp(line: string) {
+	const match =
+		/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})) (.*)$/.exec(
+			line,
+		);
+	if (!match) return undefined;
+	return { line: match[2] ?? "", at: match[1] };
+}
+
 import type { TelemetryCollector } from "./telemetry.ts";
 
 export type { Exit } from "./process.ts";
@@ -91,6 +102,7 @@ export class ShellProcess {
 	private timedEntries: LogTiming["entries"] = [];
 	private timedCharacters = 0;
 	private timingTruncated = false;
+	private providerTimed = false;
 	private readyObserved = false;
 	private exit: Exit | null = null;
 	private cleanupUncertain = false;
@@ -109,6 +121,9 @@ export class ShellProcess {
 			executable: string;
 			args: string[];
 			captureStdout?: (chunk: string) => void;
+			/** The runtime prefixes each line with its own timestamp; strip it and
+			 * keep that event time instead of substituting host receipt time. */
+			runtimeTimestamps?: boolean;
 			privateOutput?: boolean;
 			input?: string;
 		},
@@ -130,6 +145,7 @@ export class ShellProcess {
 		this.telemetry = capture?.collector;
 		this.queryCredentials = queryCredentials;
 		this.redact = redact;
+		this.providerTimed = invocation?.runtimeTimestamps === true;
 		this.authorization = authorization;
 		const cwd = contained(
 			plan.workspace,
@@ -163,12 +179,13 @@ export class ShellProcess {
 			});
 			this.child.stdin?.end(invocation.input);
 		}
-		const append = (line: string) => {
+		const append = (line: string, observedAt?: string) => {
 			const text = `${redact(line)}\n`;
 			this.output = `${this.output}${text}`.slice(-64000);
 			this.timedEntries.push({
 				receivedAt: Date.now(),
 				characters: text.length,
+				...(observedAt ? { observedAt } : {}),
 			});
 			this.timedCharacters += text.length;
 			while (this.timedCharacters > 64000 || this.timedEntries.length > 2048) {
@@ -199,8 +216,16 @@ export class ShellProcess {
 				const lines = `${pending}${chunk}`.split("\n");
 				pending = lines.pop() ?? "";
 				for (const line of lines) {
+					const stamped = invocation?.runtimeTimestamps
+						? runtimeTimestamp(line)
+						: undefined;
 					if (!dropping)
-						append(line.length > 8192 ? "[oversize log line omitted]" : line);
+						append(
+							(stamped?.line ?? line).length > 8192
+								? "[oversize log line omitted]"
+								: (stamped?.line ?? line),
+							stamped?.at,
+						);
 					dropping = false;
 				}
 				if (pending.length > 8192) {
@@ -244,7 +269,9 @@ export class ShellProcess {
 	}
 	get logTiming(): LogTiming {
 		return {
-			basis: "host-receipt-completed-lines",
+			basis: this.providerTimed
+				? "provider-event-time-completed-lines"
+				: "host-receipt-completed-lines",
 			entries: this.timedEntries.map((entry) => ({ ...entry })),
 			truncated: this.timingTruncated,
 		};

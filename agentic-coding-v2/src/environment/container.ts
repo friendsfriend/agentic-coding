@@ -6,7 +6,7 @@ import { contained } from "../git.ts";
 import { EnvironmentCommands } from "./command.ts";
 import { inspectContainer, type Observation } from "./container-observation.ts";
 import type { Plan } from "./model.ts";
-import type { RuntimeStatus } from "./process.ts";
+import type { LogTiming, RuntimeStatus } from "./process.ts";
 import { type Exit, ShellProcess } from "./shell.ts";
 
 const hostLabel = "dev.agentic-coding.v2.host",
@@ -84,6 +84,11 @@ export class ContainerProcess {
 		return `${this.commands.logs}${this.follower?.logs ?? ""}${this.failure ? `\n${this.failure}\n` : ""}`.slice(
 			-64000,
 		);
+	}
+	/** Only when the retained buffer is the follower's own text plus an untimed
+	 * CLI prefix: a failure suffix would break completed-line alignment. */
+	get logTiming(): LogTiming | undefined {
+		return this.follower && !this.failure ? this.follower.logTiming : undefined;
 	}
 	get runtimeStatus(): RuntimeStatus | undefined {
 		// An image build has an exit receipt/artifact tag, not a container's health or lifecycle.
@@ -274,7 +279,16 @@ export class ContainerProcess {
 			this.configDir,
 			{
 				executable: this.plan.runtime,
-				args: [...this.prefix, "logs", "--follow", "--tail", "200", created.id],
+				args: [
+					...this.prefix,
+					"logs",
+					"--follow",
+					"--timestamps",
+					"--tail",
+					"200",
+					created.id,
+				],
+				runtimeTimestamps: true,
 			},
 		);
 		if (!(await this.follower.spawned))

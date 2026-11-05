@@ -1,4 +1,11 @@
 import { logSince, timedLines } from "./log-timing.ts";
+import type { LogTiming } from "./process.ts";
+
+/** Docker/Podman line timestamps are the only provider event time exposed here. */
+function providerTimed(timing: LogTiming | undefined) {
+	return timing?.basis === "provider-event-time-completed-lines";
+}
+
 import type { EnvironmentRun } from "./state.ts";
 export type LogOptions = {
 	grep?: string;
@@ -37,7 +44,7 @@ function logSource(run: LogRun, service?: string) {
 		return { ...empty, availability: "not-captured" };
 	return {
 		output: capture.output,
-		timing: undefined,
+		timing: capture.timing,
 		sourceTruncated: capture.truncated,
 		availability: "available",
 	};
@@ -120,12 +127,16 @@ export function logView(
 				sourceTruncated,
 				timeSelection: filtered.timeSelection,
 				framing: options.service
-					? "exact-service-buffer-not-event-time"
+					? providerTimed(timing)
+						? "exact-service-buffer-provider-event-time"
+						: "exact-service-buffer-not-event-time"
 					: run.plan.runtime === "compose"
 						? "aggregate-service-buffers-not-chronological"
 						: run.plan.runtime === "kubernetes"
 							? "client-diagnostics-only-not-pod-logs"
-							: "runtime-buffer-order-not-event-time",
+							: providerTimed(timing)
+								? "runtime-buffer-order-provider-event-time"
+								: "runtime-buffer-order-not-event-time",
 				output: returned.length ? `${returned.join("\n")}\n` : "",
 				selection: {
 					matchedRetainedLines: matches.length,
