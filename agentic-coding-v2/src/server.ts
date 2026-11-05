@@ -20,6 +20,9 @@ import promotionAttempts from "./web/definition-promotion-attempts.js" with {
 	type: "text",
 };
 import dom from "./web/dom.js" with { type: "text" };
+import databaseHistory from "./web/environment-database-history.js" with {
+	type: "text",
+};
 import diagnostics from "./web/environment-diagnostics.js" with {
 	type: "text",
 };
@@ -142,6 +145,10 @@ export function serve(app: Runtime, port = 0) {
 		[
 			"/definition-discovery.js",
 			{ content: discovery, type: "text/javascript" },
+		],
+		[
+			"/environment-database-history.js",
+			{ content: databaseHistory, type: "text/javascript" },
 		],
 		[
 			"/environment-telemetry-view.js",
@@ -332,6 +339,32 @@ export function serve(app: Runtime, port = 0) {
 						(await app.environments.selectedLogs(project, undefined, options))
 							.runs,
 					);
+				}
+				if (
+					request.method === "GET" &&
+					url.pathname === "/api/environments/database-history"
+				) {
+					if (
+						[...url.searchParams.keys()].some(
+							(key) =>
+								!["run", "operation"].includes(key) ||
+								url.searchParams.getAll(key).length !== 1,
+						)
+					)
+						throw new Error("Unknown or repeated SQL history query parameter");
+					const run = text(
+							url.searchParams.get("run"),
+							"database diagnostic run",
+							128,
+						),
+						operation = url.searchParams.has("operation")
+							? text(
+									url.searchParams.get("operation"),
+									"SQL diagnostic ID",
+									128,
+								)
+							: undefined;
+					return json(await app.environments.database.history(run, operation));
 				}
 				if (
 					request.method === "GET" &&

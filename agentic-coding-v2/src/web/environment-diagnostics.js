@@ -1,4 +1,5 @@
 import { button, element } from "/dom.js";
+import { addDatabaseHistory } from "/environment-database-history.js";
 import { renderNativeTelemetry } from "/environment-telemetry-view.js";
 
 function field(parent, label, options = {}) {
@@ -194,6 +195,8 @@ export function environmentDiagnostics(run, api, existing) {
 		root.setAttribute("aria-label", `${run.plan.app} diagnostics (${run.id})`);
 		addLogs(root, run, api);
 		if (run.plan.telemetry) addTelemetry(root, run, api);
+		if (run.plan.projectKind === "infrastructure" && run.plan.queryConnection)
+			addDatabaseHistory(root, run, api);
 	}
 	root.dataset.nativeReady = String(
 		run.state === "running" && run.ready === true,

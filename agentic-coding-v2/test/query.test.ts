@@ -4,6 +4,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
+import { serve } from "../src/server.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import {
 	disposablePassword,
@@ -117,6 +118,61 @@ test("approved held SQL is read-only, precise, bounded and frozen-secret redacte
 	expect(JSON.stringify(state.queryOperations)).not.toContain(
 		"fixture_secrets",
 	);
+	const run = state.runs.find((run) => run.plan.app === "store"),
+		host = serve(app);
+	if (!run) throw new Error("Disposable SQL infrastructure run missing");
+	try {
+		const base = new URL(host.url),
+			token = new URLSearchParams(base.hash.slice(1)).get("token"),
+			headers = { Authorization: `Bearer ${token}` },
+			route = new URL(
+				`/api/environments/database-history?run=${encodeURIComponent(run.id)}`,
+				base,
+			),
+			get = (url: URL) => fetch(url, { headers });
+		expect((await fetch(route)).status).toBe(401);
+		expect((await get(new URL(`${route}&run=${run.id}`))).status).toBe(400);
+		expect((await get(new URL(`${route}&sql=SELECT+1`))).status).toBe(400);
+		expect(
+			(
+				await get(
+					new URL("/api/environments/database-history?run=unknown", base),
+				)
+			).status,
+		).toBe(400);
+		const history = await (await get(route)).json();
+		expect(history).toHaveLength(5);
+		expect(history[0].observedAt).toBe(last.observedAt);
+		expect(JSON.stringify(history)).not.toContain("fixture_secrets");
+		const detail = new URL(route);
+		detail.searchParams.set("operation", history.at(-1).id);
+		const record = await (await get(detail)).json();
+		expect(record.result).toMatchObject({
+			rows: first.rows,
+			rollback: "confirmed",
+			readOnly: true,
+		});
+		expect(JSON.stringify(record)).not.toContain(disposablePassword);
+		expect(JSON.stringify(record)).not.toContain("DISPOSABLE_SQL_PASSWORD");
+		detail.searchParams.set(
+			"operation",
+			history.find((entry: { state: string }) => entry.state === "issued").id,
+		);
+		expect(await (await get(detail)).json()).toMatchObject({
+			state: "issued",
+			result: null,
+		});
+		detail.searchParams.set("operation", "query-unknown");
+		expect((await get(detail)).status).toBe(400);
+		// App-run IDs cannot substitute for the recorded infrastructure run.
+		const appRun = state.runs.find((run) => run.plan.app === "api");
+		if (!appRun) throw new Error("Disposable SQL application run missing");
+		detail.searchParams.set("run", appRun.id);
+		expect((await get(detail)).status).toBe(400);
+		expect(fs.readFileSync(probes, "utf8").trim().split("\n")).toHaveLength(5);
+	} finally {
+		host.stop();
+	}
 }, 30000);
 
 test("SQL refuses certificate-IP mismatch, TLS downgrade and changed approved CA before dispatch", async () => {
