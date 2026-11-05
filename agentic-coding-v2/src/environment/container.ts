@@ -308,7 +308,9 @@ export class ContainerProcess {
 		);
 		if (!(await this.follower.spawned))
 			throw new Error("Container log follower could not start");
-		if (this.plan.action !== "run") {
+		// A declared one-shot run has no long-lived readiness: its exit receipt is
+		// the result, exactly like a build/test action.
+		if (this.plan.action !== "run" || this.spec.completion) {
 			const receipt = (await this.command(["wait", created.id], true)).trim();
 			const code = Number(receipt);
 			if (!/^\d{1,3}$/.test(receipt) || code > 255)

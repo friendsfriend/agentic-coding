@@ -38,6 +38,8 @@ export type EngineState = {
 	inspectDelayMs?: number;
 	startDelayMs?: number;
 	initialHealth?: "missing" | "unhealthy";
+	/** Exit code reported by the synthetic one-shot `wait` receipt. */
+	completionExit?: number;
 	/** Owned-container log lines with the engine's own timestamp per line. */
 	logLines?: Array<{ at: string; text: string }>;
 };
@@ -260,8 +262,8 @@ export function serveContainerFixture(file: string) {
 									break;
 								}
 								found.State.Running = false;
-								found.State.ExitCode = 9;
-								print("9");
+								found.State.ExitCode = state.completionExit ?? 9;
+								print(String(state.completionExit ?? 9));
 								break;
 							}
 							case "stop": {

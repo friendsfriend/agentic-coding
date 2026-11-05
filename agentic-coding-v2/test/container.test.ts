@@ -352,7 +352,8 @@ test("Compose unsupported effects are refused, and daemon loss quarantines the c
 		]);
 		const task = await app.startTask(invocation);
 		await app.harness.waitForTask(task as TaskId, context);
-		expect(transcript).toContain("Unsupported Compose field");
+		// The restart policy has its own refusal; both name the unsupported field.
+		expect(transcript).toContain("Unsupported Compose");
 		expect(readEngine(config).history).toHaveLength(0);
 	}
 	const { app, config, fake, invocation } = await fixture(
@@ -427,6 +428,57 @@ test("Compose health overrides reach the engine and unsupported forms are refuse
 			expect(readEngine(config).history).toHaveLength(0);
 	}
 }, 20000);
+
+test("a Compose completion prerequisite must exit successfully before its dependent starts", async () => {
+	const yaml =
+		"services:\n  migrate:\n    image: fixture:latest\n    restart: no\n    command: [serve]\n    volumes:\n      - type: bind\n        source: .\n        target: /workspace\n  web:\n    image: fixture:latest\n    command: [serve]\n    depends_on:\n      migrate:\n        condition: service_completed_successfully\n";
+	for (const exitCode of [0, 3]) {
+		const { app, config, fake, invocation } = await fixture(
+			false,
+			configureCompose,
+		);
+		const state = readEngine(config);
+		state.completionExit = exitCode;
+		fs.writeFileSync(engine(config), JSON.stringify(state));
+		await composeFile(invocation.repository, yaml);
+		fake.setResponses([
+			call("env_start", { apps: ["api"] }),
+			exitCode === 0
+				? call("request_review", { path: ".", title: "Hold migrated stack" })
+				: fauxAssistantMessage("Prerequisite did not complete"),
+		]);
+		const task = await app.startTask({
+			...invocation,
+			requestId: `compose-completion-${exitCode}`,
+		});
+		if (exitCode === 0) {
+			await approve(app, task);
+			await pendingReview(app, task, "Hold migrated stack");
+			const runs = (await app.environments.snapshot()).runs;
+			expect(runs[0]?.ready).toBe(true);
+			expect(
+				Object.values(readEngine(config).containers).filter(
+					(container) => container.State.Running,
+				),
+			).toHaveLength(1);
+			await app.cancel(task);
+			await app.harness.waitForTask(task as TaskId, context);
+			expect(Object.keys(readEngine(config).containers)).toHaveLength(0);
+			continue;
+		}
+		await approve(app, task);
+		await app.harness.waitForTask(task as TaskId, context);
+		const state2 = readEngine(config);
+		// The dependent was never created after its prerequisite exited nonzero.
+		expect(state2.history.some((args) => args.includes("acv2-api-web-"))).toBe(
+			false,
+		);
+		expect(Object.keys(state2.containers)).toHaveLength(0);
+		const run = (await app.environments.snapshot()).runs[0];
+		expect(run?.ready).not.toBe(true);
+		expect(run?.state).toBe("exited");
+	}
+}, 25000);
 
 test("Compose shared networks refuse foreign occupancy, copied-label replacement, foreign attachments and lost creation receipts", async () => {
 	for (const variant of ["foreign", "replacement", "attachment", "receipt"]) {

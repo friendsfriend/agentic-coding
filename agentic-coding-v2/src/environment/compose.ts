@@ -77,7 +77,17 @@ export class ComposeProcess implements EnvironmentProcess {
 	}
 	private async start() {
 		verifyCompose(this.plan);
-		const deadline = Date.now() + this.plan.timeoutMs;
+		const completion = new Set(
+				(this.plan.composePlan?.services ?? []).flatMap((service) =>
+					service.dependsOn
+						.filter(
+							(dependency) =>
+								dependency.condition === "service_completed_successfully",
+						)
+						.map((dependency) => dependency.id),
+				),
+			),
+			deadline = Date.now() + this.plan.timeoutMs;
 		await this.network?.start(deadline - Date.now(), this.controller.signal);
 		for (const [index, plan] of containerPlans(this.plan).entries()) {
 			this.controller.signal.throwIfAborted();
@@ -100,6 +110,16 @@ export class ComposeProcess implements EnvironmentProcess {
 					: undefined,
 			);
 			this.children.push(child);
+			if (completion.has(alias ?? "")) {
+				// A prerequisite's own exit is a startup decision, not stack shutdown.
+				await child.wait(this.controller.signal);
+				const code = child.outcome?.code;
+				if (code !== 0)
+					throw new Error(
+						"Compose prerequisite did not complete successfully; dependents were not started",
+					);
+				continue;
+			}
 			void child.done
 				.then(() => this.stop())
 				.catch(() => {

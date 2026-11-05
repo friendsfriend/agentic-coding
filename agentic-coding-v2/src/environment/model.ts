@@ -34,7 +34,10 @@ export type ComposeDefinition = {
 };
 export type ComposeDependency = {
 	id: string;
-	condition: "service_started" | "service_healthy";
+	condition:
+		| "service_started"
+		| "service_healthy"
+		| "service_completed_successfully";
 };
 export type ComposePlan = {
 	digest: string;

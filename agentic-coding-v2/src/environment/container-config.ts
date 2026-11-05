@@ -21,6 +21,8 @@ export type ContainerTarget = {
 	}[];
 	mounts: { source: string; target: string; readOnly: boolean }[];
 	readiness: "running" | "healthy";
+	/** A run target expected to terminate on its own; readiness becomes its exit. */
+	completion?: boolean;
 	dockerfile: string;
 	context: string;
 	buildArgs: string[];
@@ -118,6 +120,7 @@ export function readContainer(raw: unknown): ContainerTarget {
 		"context",
 		"buildArgs",
 		"health",
+		"completion",
 	]);
 	const socket = readLocalSocket(data.socket);
 	const image = text(data.image, "container image", 512);
@@ -144,6 +147,8 @@ export function readContainer(raw: unknown): ContainerTarget {
 	)
 		throw new Error("Invalid container ports/mounts");
 	const health = readHealth(data.health);
+	if (data.completion !== undefined && typeof data.completion !== "boolean")
+		throw new Error("Container completion must be a boolean");
 	const readiness = data.readiness ?? "running";
 	if (readiness !== "running" && readiness !== "healthy")
 		throw new Error("Invalid container readiness");
@@ -157,6 +162,7 @@ export function readContainer(raw: unknown): ContainerTarget {
 			: { entrypoint: text(data.entrypoint, "container entrypoint", 4096) }),
 		buildArgs,
 		...(health ? { health } : {}),
+		...(data.completion === true ? { completion: true } : {}),
 		readiness,
 		dockerfile: relative(data.dockerfile, "Dockerfile", "Dockerfile"),
 		context: relative(data.context, "build context", "."),

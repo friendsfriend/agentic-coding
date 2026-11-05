@@ -31,7 +31,11 @@ function dependencies(raw: unknown): Dependency[] {
 		const settings = object(value);
 		keys(settings, ["condition"]);
 		const condition = settings.condition ?? "service_started";
-		if (condition !== "service_started" && condition !== "service_healthy")
+		if (
+			condition !== "service_started" &&
+			condition !== "service_healthy" &&
+			condition !== "service_completed_successfully"
+		)
 			throw new Error("Unsupported Compose dependency condition");
 		return { id, condition };
 	});
@@ -113,10 +117,16 @@ function orderServices(
 		active.add(id);
 		for (const dependency of service.dependsOn) {
 			visit(dependency.id);
+			const prerequisite = byId.get(dependency.id);
 			if (dependency.condition === "service_healthy") {
-				const prerequisite = byId.get(dependency.id);
 				if (!prerequisite) throw new Error("Missing Compose prerequisite");
 				prerequisite.container.readiness = "healthy";
+			}
+			// A completion prerequisite must terminate successfully before its
+			// dependent starts; it has no long-lived readiness of its own.
+			if (dependency.condition === "service_completed_successfully") {
+				if (!prerequisite) throw new Error("Missing Compose prerequisite");
+				prerequisite.container.completion = true;
 			}
 		}
 		active.delete(id);
@@ -236,6 +246,7 @@ export function compileComposeSource(
 					"volumes",
 					"depends_on",
 					"healthcheck",
+					"restart",
 				]);
 				const environment = Object.fromEntries(
 					Object.entries(object(service.environment ?? {})).map(
@@ -260,6 +271,12 @@ export function compileComposeSource(
 				const ports = service.ports ?? [];
 				if (!Array.isArray(ports) || ports.length > 64)
 					throw new Error("Invalid Compose ports");
+				// Only the default no-restart policy is equivalent to this adapter's
+				// one-creation lifetime; anything else would invent a restart owner.
+				if (service.restart !== undefined && service.restart !== "no")
+					throw new Error(
+						"Unsupported Compose restart policy; declare restart: no or omit it",
+					);
 				const serviceHealth = healthcheck(service.healthcheck);
 				const container = readContainer({
 					socket: definition.socket,

@@ -503,3 +503,17 @@ The public scenario starts a stack whose web service declares `[CMD-SHELL, 'curl
 Verification: **112 tests / 1540 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify objective/verified **83.0**, overall **20.7**, strict **20.0**.
 
 **Next backend step:** Compose dependency depth — `service_completed_successfully` for one-shot prerequisites, and explicit refusal or support decisions for restart policies — before attempting shared Podman networking.
+
+## Compose completion prerequisites and restart policy decisions
+
+`depends_on` now accepts `condition: service_completed_successfully`. The prerequisite is compiled as a declared one-shot run: it is created, started, and awaited through its own exit receipt instead of being polled for long-lived readiness, and it is not treated as a stack-wide shutdown when it exits. Its dependent starts only after a zero exit. A nonzero exit fails startup with "Compose prerequisite did not complete successfully; dependents were not started", so the dependent is never created and normal reverse rollback applies to whatever was already created.
+
+A one-shot therefore reports its exit code rather than readiness, which is the same semantic the build/test path already used. Native container definitions can declare the same behaviour with `completion: true` on a run target.
+
+Restart policies are an explicit decision rather than silent support: `restart: no` is accepted because it matches this adapter's single-creation lifetime, and any other policy (`always`, `on-failure`, `unless-stopped`) is refused with "Unsupported Compose restart policy; declare restart: no or omit it". No restart owner, backoff loop, restart counter or crash-restart reconciliation is invented.
+
+New public scenarios cover a `restart: no` one-shot prerequisite with a zero exit where the stack becomes ready with exactly one long-lived service, and the same stack with a nonzero exit where the dependent's container is never created, the stack does not become ready and everything created is released. Limits: the exit receipt comes from the engine's own `wait` result, this is not supervision or exactly-once completion, health is still only what the engine reports, and verification is fixture-only with no live engine or Podman shared networking.
+
+Verification: **113 tests / 1547 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify strict **20.0**, objective **83.0**, all subjective dimensions still unassessed.
+
+**Next backend step:** Kubernetes depth — Pod log collection with the same provider-time discipline and explicit unsupported-source reporting, before Helm or port-forward work.
