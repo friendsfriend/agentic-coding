@@ -472,3 +472,138 @@ test("a retained staged tree is owned by its digest, inspectable, and released b
 		host.stop();
 	}
 });
+test("a retained tree is disclosed by metadata and released by its digest without deleting its draft", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.chmodSync(config.stateDir, 0o700);
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+	});
+	const host = serve(app);
+	const token = new URLSearchParams(new URL(host.url).hash.slice(1)).get(
+			"token",
+		),
+		api = (route: string, body?: unknown) =>
+			fetch(new URL(route, host.url), {
+				method: body === undefined ? "GET" : "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+				body: body === undefined ? undefined : JSON.stringify(body),
+			}),
+		trees = path.join(config.stateDir, "native", "staging", "trees");
+	try {
+		const repository = config.repositories[0] ?? "",
+			created = await (
+				await api("/api/environments/drafts", {
+					requestId: "create",
+					content: JSON.stringify({
+						version: 1,
+						projects: [
+							{
+								id: "api",
+								kind: "app",
+								repository,
+								targets: [
+									{
+										id: "stack",
+										action: "run",
+										runtime: "compose",
+										compose: {
+											file: "compose.yaml",
+											provider: "docker",
+											socket: path.join(config.stateDir, "absent.sock"),
+										},
+									},
+								],
+							},
+						],
+					}),
+				})
+			).json(),
+			staged = await (
+				await api("/api/environments/drafts/source", {
+					requestId: "stage",
+					id: created.id,
+					revision: 1,
+					app: "api",
+					target: "stack",
+					content: "services:\n  api:\n    image: inspect:latest\n",
+				})
+			).json(),
+			tree = await (
+				await api("/api/environments/drafts/preflight", {
+					requestId: "retain",
+					id: created.id,
+					revision: staged.revision,
+					digest: staged.digest,
+					materializeStagedTree: true,
+					retainStagedTree: true,
+				})
+			).json();
+		const listed = await (await api("/api/environments/drafts/trees")).json();
+		expect(listed.unowned).toEqual([]);
+		expect(listed.trees).toEqual([
+			{
+				draftId: created.id,
+				revision: staged.revision,
+				digest: staged.digest,
+				name: tree.treeDigest,
+				treeDigest: tree.treeDigest,
+				fileCount: 2,
+				bytes: expect.any(Number),
+				retainedAt: expect.any(String),
+				present: true,
+			},
+		]);
+		// Nothing is disclosed that would read the tree or its source text.
+		expect(JSON.stringify(listed)).not.toContain("inspect:latest");
+		const release = (requestId: string, name: string) =>
+			api("/api/environments/drafts/tree/release", { requestId, name });
+		expect((await release("unknown", "a".repeat(64))).status).toBe(400);
+		const released = await (await release("release", tree.treeDigest)).json();
+		expect(released).toEqual({
+			name: tree.treeDigest,
+			released: true,
+			owner: created.id,
+			revision: staged.revision,
+		});
+		expect(fs.readdirSync(trees)).toEqual([]);
+		// The exact request replays its historical outcome and dispatches nothing.
+		expect(await (await release("release", tree.treeDigest)).json()).toEqual(
+			released,
+		);
+		const after = await (await api("/api/environments/drafts/trees")).json();
+		expect(after.trees).toEqual([]);
+		expect(after.unowned).toEqual([]);
+		// The draft survives with its revision and still-promotable identity.
+		const draft = await (
+			await api(`/api/environments/drafts?id=${created.id}`)
+		).json();
+		expect(draft.revision).toBe(staged.revision);
+		const promoted = await (
+			await api("/api/environments/drafts/promote", {
+				requestId: "promote",
+				id: created.id,
+				revision: staged.revision,
+				digest: staged.digest,
+				approve: staged.digest,
+			})
+		).json();
+		expect(promoted.outcome).toBe("written");
+		expect(promoted.stagedTree.treeRetained).toBe(false);
+		// A directory no record owns is disclosed and can still be released.
+		fs.mkdirSync(path.join(trees, "b".repeat(64)), { mode: 0o700 });
+		expect(
+			(await (await api("/api/environments/drafts/trees")).json()).unowned,
+		).toEqual(["b".repeat(64)]);
+		expect(await (await release("orphan", "b".repeat(64))).json()).toEqual({
+			name: "b".repeat(64),
+			released: true,
+			owner: null,
+			revision: null,
+		});
+		expect(fs.readdirSync(trees)).toEqual([]);
+	} finally {
+		host.stop();
+	}
+});

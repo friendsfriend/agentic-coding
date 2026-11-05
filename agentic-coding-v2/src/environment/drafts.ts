@@ -8,10 +8,12 @@ import { inspectStagedCandidate } from "./definition-candidate.ts";
 import {
 	type Base,
 	captureSourceBase,
+	clearRetainedTree,
 	type Draft,
 	type DraftData,
 	type Receipt,
 	recordStagedTree,
+	releaseTreeRequest,
 	removeDraft,
 	removeSource,
 	type SourceDraft,
@@ -46,6 +48,7 @@ import { inspectComposeSource } from "./definition-source-check.ts";
 import {
 	assembleStagedTree,
 	releaseStagedTree,
+	retainedStagedTrees,
 	stagedTreeIdentity,
 } from "./definition-staged-tree.ts";
 import { within } from "./path-within.ts";
@@ -385,6 +388,97 @@ export class DefinitionDrafts {
 		// Deletion is committed first; only then is the draft's own tree released.
 		if (removed.retained) releaseStagedTree(this.config, removed.retained);
 		return removed.result;
+	}
+	/** Retained trees are disclosed by digest and metadata; contents stay withheld. */
+	async trees() {
+		privateState(this.config);
+		const snapshot = await this.engine().snapshot(DraftState, background),
+			drafts: Readonly<DraftData> = snapshot ?? { drafts: {}, receipts: {} },
+			present = new Set(retainedStagedTrees(this.config)),
+			owned = Object.values(drafts.trees ?? {})
+				.map((raw) => stored<{ retained?: { name: string } }>(raw))
+				.flatMap((receipt) =>
+					receipt.retained ? [receipt.retained.name] : [],
+				),
+			records = Object.entries(drafts.trees ?? {}).flatMap(([id, raw]) => {
+				const receipt = stored<{
+					retained?: { name: string; retainedAt: string };
+					revision: number;
+					digest: string;
+					treeDigest: string;
+					fileCount: number;
+					bytes: number;
+				}>(raw);
+				return receipt.retained
+					? [
+							{
+								draftId: id,
+								revision: receipt.revision,
+								digest: receipt.digest,
+								name: receipt.retained.name,
+								treeDigest: receipt.treeDigest,
+								fileCount: receipt.fileCount,
+								bytes: receipt.bytes,
+								retainedAt: receipt.retained.retainedAt,
+								present: present.has(receipt.retained.name),
+							},
+						]
+					: [];
+			});
+		return {
+			trees: records,
+			// Present directories no record owns are disclosed, never deleted here.
+			unowned: [...present].filter((name) => !owned.includes(name)),
+			authority:
+				"Retention metadata only. A retained tree is inspection history: it grants no source identity, base freshness, runtime readiness, review approval or publication authority, and promotion still requires the recorded digest.",
+		};
+	}
+	/** Explicit digest-addressed release of one retained tree. */
+	async releaseTree(body: Record<string, unknown>) {
+		privateState(this.config);
+		const { name, request, key } = releaseTreeRequest(body),
+			recorded: Readonly<DraftData> = (await this.engine().snapshot(
+				DraftState,
+				background,
+			)) ?? {
+				drafts: {},
+				receipts: {},
+			},
+			previous = recorded.receipts[key];
+		if (previous) {
+			const receipt = stored<{ request: string; result: unknown }>(previous);
+			if (receipt.request !== request)
+				throw new Error("Release request ID reused for different input");
+			return receipt.result;
+		}
+		const owned = Object.values(recorded.trees ?? {}).some(
+			(raw) =>
+				stored<{ retained?: { name: string } }>(raw).retained?.name === name,
+		);
+		if (!owned && !retainedStagedTrees(this.config).includes(name))
+			throw new Error(
+				"Unknown retained tree; release requires a recorded or present digest",
+			);
+		const released = releaseStagedTree(this.config, name).released;
+		return this.engine().commit(async (tx) => {
+			const drafts = await tx.doc(DraftState),
+				retry = drafts.receipts[key];
+			if (retry) {
+				const receipt = stored<{ request: string; result: unknown }>(retry);
+				if (receipt.request !== request)
+					throw new Error("Release request ID reused for different input");
+				return receipt.result;
+			}
+			const owner = clearRetainedTree(drafts, name),
+				result = {
+					name,
+					released,
+					owner: owner?.draftId ?? null,
+					revision: owner?.revision ?? null,
+				};
+			drafts.receipts[key] = JSON.stringify({ request, result });
+			return result;
+		}, background);
 	}
 	/** Historical reads remain behind the same private-state/authenticated boundary. */
 	async promotions() {

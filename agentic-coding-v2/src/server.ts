@@ -262,6 +262,16 @@ export function serve(app: Runtime, port = 0) {
 				}
 				if (
 					request.method === "GET" &&
+					url.pathname === "/api/environments/drafts/trees"
+				) {
+					if (url.searchParams.size)
+						throw new Error(
+							"Retained tree metadata does not accept query parameters",
+						);
+					return json(await app.environments.drafts.trees());
+				}
+				if (
+					request.method === "GET" &&
 					url.pathname === "/api/environments/drafts/preflights"
 				) {
 					if (url.searchParams.size)
@@ -420,6 +430,13 @@ export function serve(app: Runtime, port = 0) {
 					if (url.searchParams.size)
 						throw new Error("Source removal does not accept query parameters");
 					return json(await app.environments.drafts.removeSource(body));
+				}
+				if (url.pathname === "/api/environments/drafts/tree/release") {
+					if (url.searchParams.size)
+						throw new Error(
+							"Retained tree release does not accept query parameters",
+						);
+					return json(await app.environments.drafts.releaseTree(body));
 				}
 				if (url.pathname === "/api/environments/drafts/remove") {
 					if (url.searchParams.size)

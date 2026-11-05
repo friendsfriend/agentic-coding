@@ -41,6 +41,8 @@ export type StagedTreeReceipt = {
 	bytes: number;
 	observedAt: string;
 	retained?: { name: string; retainedAt: string };
+	releasedAt?: string;
+	releaseAuthority?: string;
 	authority: string;
 };
 export type DraftData = {
@@ -404,6 +406,8 @@ export function removeDraft(doc: DraftData, body: Record<string, unknown>) {
 	if (receipt) return receipt;
 	currentDraft(doc, id, Number(body.revision));
 	delete doc.drafts[id];
+	// A removed draft no longer owns a retention record or its directory.
+	delete doc.trees?.[id];
 	const result = { id, removed: true as const };
 	doc.receipts[key] = JSON.stringify({ request, result });
 	return result;
@@ -444,6 +448,38 @@ export function recordStagedTree(
 			"A recorded tree identity for one draft revision: digest-only, plus the name of a retained private tree when one was kept. It proves neither current source content, runtime readiness, review approval nor publication authority, and the retained directory is inspectable history, not an execution or publication input.",
 	} satisfies StagedTreeReceipt);
 	return draft.id;
+}
+/** Explicit digest-addressed release: the caller performs the filesystem step. */
+export function releaseTreeRequest(body: Record<string, unknown>) {
+	if (Object.keys(body).some((key) => !["requestId", "name"].includes(key)))
+		throw new Error("Unsupported retained-tree release field");
+	const name = text(body.name, "retained tree digest", 64),
+		requestId = text(body.requestId, "release request ID", 128);
+	if (!/^[a-f0-9]{64}$/.test(name))
+		throw new Error(
+			"Retained tree release is addressed by the recorded tree digest",
+		);
+	const request = digest(
+		JSON.stringify({ kind: "release-retained-tree", name }),
+	);
+	return { name, request, key: digest(requestId) };
+}
+/** Drop one retention claim by its exact digest; no other record is touched. */
+export function clearRetainedTree(doc: DraftData, name: string) {
+	for (const [id, raw] of Object.entries(doc.trees ?? {})) {
+		const receipt = stored<StagedTreeReceipt>(raw);
+		if (receipt.retained?.name !== name) continue;
+		const { retained: _released, ...rest } = receipt;
+		doc.trees ??= {};
+		doc.trees[id] = JSON.stringify({
+			...rest,
+			releasedAt: new Date().toISOString(),
+			releaseAuthority:
+				"The retained directory was released explicitly by its own recorded digest; the identity of the tree that was verified remains recorded.",
+		} satisfies StagedTreeReceipt);
+		return { draftId: id, revision: receipt.revision };
+	}
+	return null;
 }
 export function stagedTreeReceipt(doc: DraftData, id: string) {
 	const raw = doc.trees?.[id];
