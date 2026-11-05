@@ -192,6 +192,7 @@ export class DefinitionDrafts {
 		} catch {
 			/* Unavailable is not unchanged. */
 		}
+		const tree = stagedTreeReceipt(doc ?? {}, id);
 		return {
 			...draft,
 			preflightReports,
@@ -201,6 +202,28 @@ export class DefinitionDrafts {
 				file,
 			})),
 			schema: schema(this.config, draft),
+			stagedTree: tree
+				? {
+						revision: tree.revision,
+						digest: tree.digest,
+						treeDigest: tree.treeDigest,
+						fileCount: tree.fileCount,
+						bytes: tree.bytes,
+						observedAt: tree.observedAt,
+						// A recorded identity for another revision cannot promote.
+						current:
+							tree.revision === draft.revision && tree.digest === draft.digest,
+						retained: tree.retained
+							? {
+									name: tree.retained.name,
+									retainedAt: tree.retained.retainedAt,
+									present: retainedStagedTrees(this.config).includes(
+										tree.retained.name,
+									),
+								}
+							: null,
+					}
+				: null,
 			baseMatches,
 			destination: destinationError
 				? { state: "unavailable" as const, digest: null }

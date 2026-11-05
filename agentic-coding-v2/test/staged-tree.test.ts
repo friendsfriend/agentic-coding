@@ -607,3 +607,110 @@ test("a retained tree is disclosed by metadata and released by its digest withou
 		host.stop();
 	}
 });
+test("a draft read discloses whether its recorded tree identity is current and retained", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.chmodSync(config.stateDir, 0o700);
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+	});
+	const host = serve(app);
+	const token = new URLSearchParams(new URL(host.url).hash.slice(1)).get(
+			"token",
+		),
+		api = (route: string, body?: unknown) =>
+			fetch(new URL(route, host.url), {
+				method: body === undefined ? "GET" : "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+				body: body === undefined ? undefined : JSON.stringify(body),
+			}),
+		read = async () =>
+			(
+				await api(
+					`/api/environments/drafts?id=${encodeURIComponent(created.id)}`,
+				)
+			).json();
+	let created: { id: string };
+	try {
+		const repository = config.repositories[0] ?? "";
+		created = await (
+			await api("/api/environments/drafts", {
+				requestId: "create",
+				content: JSON.stringify({
+					version: 1,
+					projects: [
+						{
+							id: "api",
+							kind: "app",
+							repository,
+							targets: [
+								{
+									id: "stack",
+									action: "run",
+									runtime: "compose",
+									compose: {
+										file: "compose.yaml",
+										provider: "docker",
+										socket: path.join(config.stateDir, "absent.sock"),
+									},
+								},
+							],
+						},
+					],
+				}),
+			})
+		).json();
+		expect((await read()).stagedTree).toBe(null);
+		const staged = await (
+			await api("/api/environments/drafts/source", {
+				requestId: "stage",
+				id: created.id,
+				revision: 1,
+				app: "api",
+				target: "stack",
+				content: "services:\n  api:\n    image: read:latest\n",
+			})
+		).json();
+		await api("/api/environments/drafts/preflight", {
+			requestId: "retain",
+			id: created.id,
+			revision: staged.revision,
+			digest: staged.digest,
+			materializeStagedTree: true,
+			retainStagedTree: true,
+		});
+		const current = await read();
+		expect(current.stagedTree).toEqual({
+			revision: staged.revision,
+			digest: staged.digest,
+			treeDigest: current.stagedTree.treeDigest,
+			fileCount: 2,
+			bytes: expect.any(Number),
+			observedAt: expect.any(String),
+			current: true,
+			retained: {
+				name: current.stagedTree.treeDigest,
+				retainedAt: expect.any(String),
+				present: true,
+			},
+		});
+		// An edit makes the recorded identity visible as stale rather than absent.
+		const edited = await (
+			await api("/api/environments/drafts/source", {
+				requestId: "restage",
+				id: created.id,
+				revision: staged.revision,
+				app: "api",
+				target: "stack",
+				content: "services:\n  api:\n    image: read:other\n",
+			})
+		).json();
+		const stale = await read();
+		expect(stale.revision).toBe(edited.revision);
+		expect(stale.stagedTree.current).toBe(false);
+		expect(stale.stagedTree.digest).toBe(staged.digest);
+	} finally {
+		host.stop();
+	}
+});
