@@ -695,3 +695,110 @@ test("a shared lifetime attaches a later acquisition to the live prerequisite ge
 	expect(stops.indexOf("worker")).toBeLessThan(stops.indexOf("cache"));
 	expect(stops.indexOf("cache")).toBeLessThan(stops.indexOf("base"));
 }, 30000);
+
+test("losing a shared prerequisite invalidates the roots of every acquisition that declared it", async () => {
+	const { app, config, fake, invocation } = await fixture(false, referenced);
+	fake.setResponses([
+		call("env_start", { apps: ["api"], lifetime: "shared-prerequisites-v1" }),
+		call("env_start", {
+			apps: ["worker"],
+			lifetime: "shared-prerequisites-v1",
+		}),
+		call("request_review", { path: ".", title: "Both acquisitions live" }),
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	await approve(app, owner, "Environment run: worker");
+	await pendingReview(app, owner, "Both acquisitions live");
+	const held = await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.filter((run) => run.state === "running").length === 4,
+	);
+	const cache = held.runs.find((run) => run.plan.app === "cache");
+	// An external engine loss of the generation both acquisitions attached to.
+	process.kill(-(cache?.pid ?? 0), "SIGTERM");
+	await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.every((run) => run.state === "exited"),
+	);
+	const stops = fs
+		.readFileSync(path.join(config.configDir, "stops"), "utf8")
+		.trim()
+		.split("\n");
+	// Both roots, from different acquisitions, were released before base.
+	expect(stops[0]).toBe("cache");
+	expect(stops.slice(1, 3).sort()).toEqual(["api", "worker"]);
+	expect(stops[3]).toBe("base");
+}, 30000);
+
+test("a shared lifetime refuses a duplicate live root and an unrelated held lifetime", async () => {
+	let duplicate: string[] = [],
+		mixed: string[] = [];
+	const first = await fixture(false, referenced);
+	first.fake.setResponses([
+		call("env_start", { apps: ["api"], lifetime: "shared-prerequisites-v1" }),
+		call("env_start", {
+			apps: ["api", "worker"],
+			lifetime: "shared-prerequisites-v1",
+		}),
+		async (context) => {
+			duplicate = context.messages
+				.filter(
+					(message) =>
+						message.role === "toolResult" && message.toolName === "env_start",
+				)
+				.map((message) =>
+					(message as unknown as { content: { text?: string }[] }).content
+						.map((block) => block.text ?? "")
+						.join(""),
+				);
+			return fauxAssistantMessage("Duplicate refused", { stopReason: "stop" });
+		},
+	]);
+	const owner = await first.app.startTask(first.invocation);
+	await approve(first.app, owner);
+	await approve(first.app, owner, "Environment run: api, worker");
+	await eventually(
+		() => first.app.environments.snapshot(),
+		(state) => state.runs.filter((run) => run.state === "running").length === 3,
+	);
+	await eventually(
+		async () => duplicate.length,
+		(count) => count === 2,
+	);
+	// The held root is not started again, and no second copy of it appears.
+	expect(duplicate[1]).toContain(
+		"A live root generation of api is already held",
+	);
+
+	const second = await fixture(false, referenced);
+	second.fake.setResponses([
+		call("env_start", { apps: ["worker"] }),
+		call("env_start", { apps: ["api"], lifetime: "shared-prerequisites-v1" }),
+		async (context) => {
+			mixed = context.messages
+				.filter(
+					(message) =>
+						message.role === "toolResult" && message.toolName === "env_start",
+				)
+				.map((message) =>
+					(
+						message as unknown as {
+							content: Array<{ text?: string }>;
+						}
+					).content
+						.map((block) => block.text ?? "")
+						.join(""),
+				);
+			return fauxAssistantMessage("Mixed refused", { stopReason: "stop" });
+		},
+	]);
+	const other = await second.app.startTask(second.invocation);
+	await approve(second.app, other);
+	await approve(second.app, other, "Environment run: api");
+	await eventually(
+		async () => mixed.length,
+		(count) => count === 2,
+	);
+	expect(mixed[1]).toContain("lifetimes are not combined across acquisitions");
+}, 30000);

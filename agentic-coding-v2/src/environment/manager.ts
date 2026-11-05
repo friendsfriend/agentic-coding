@@ -756,19 +756,28 @@ export class Environments {
 				// starting a second copy; the generation itself must still be the
 				// original live handle at this point.
 				if (attached.has(plan.app)) {
-					const shared = (await this.records()).filter(
-						(run) =>
-							run.owner === owner.id &&
-							run.plan.app === plan.app &&
-							run.plan.projectKind === plan.projectKind &&
-							run.state === "running" &&
-							run.ready === true &&
-							run.cleanupRetention === undefined,
-					);
-					if (shared.length !== 1)
-						throw new Error(
-							"Shared prerequisite generation closed before this acquisition completed; no second copy was started",
+					// Revalidate inside the same native transaction that admits the
+					// acquisition's own roots, so a stop latch recorded before this
+					// point refuses the attach and one recorded after it is serialized
+					// behind the admitted roots' own reference.
+					await this.store.commit(async (tx) => {
+						const doc = await tx.doc(EnvironmentState);
+						this.check(owner.id, signal, batch);
+						const shared = values<EnvironmentRun>(doc.runs).filter(
+							(run) =>
+								run.owner === owner.id &&
+								run.plan.app === plan.app &&
+								run.plan.projectKind === plan.projectKind &&
+								run.batch !== batch &&
+								run.state === "running" &&
+								run.ready === true &&
+								run.cleanupRetention === undefined,
 						);
+						if (shared.length !== 1)
+							throw new Error(
+								"Shared prerequisite generation closed before this acquisition completed; no second copy was started",
+							);
+					}, background);
 					continue;
 				}
 				const id = `${batch}:${plan.app}`;
