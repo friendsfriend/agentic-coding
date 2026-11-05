@@ -58,6 +58,7 @@ function referenced(config: Config, port?: number, release?: string) {
 			projects: [
 				project("api", "app", ["cache"], port),
 				project("worker", "app", ["cache"]),
+				project("edge", "app", ["cache"]),
 				project("cache", "infrastructure", ["base"]),
 				project("base", "infrastructure"),
 			],
@@ -801,4 +802,52 @@ test("a shared lifetime refuses a duplicate live root and an unrelated held life
 		(count) => count === 2,
 	);
 	expect(mixed[1]).toContain("lifetimes are not combined across acquisitions");
+}, 30000);
+
+test("several acquisitions attach to one shared generation and release it with the last of them", async () => {
+	const { app, config, fake, invocation } = await fixture(false, referenced);
+	fake.setResponses([
+		call("env_start", { apps: ["api"], lifetime: "shared-prerequisites-v1" }),
+		call("env_start", {
+			apps: ["worker"],
+			lifetime: "shared-prerequisites-v1",
+		}),
+		call("env_start", { apps: ["edge"], lifetime: "shared-prerequisites-v1" }),
+		call("request_review", { path: ".", title: "Three shared acquisitions" }),
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	await approve(app, owner, "Environment run: worker");
+	await approve(app, owner, "Environment run: edge");
+	await pendingReview(app, owner, "Three shared acquisitions");
+	await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.filter((run) => run.state === "running").length === 5,
+	);
+	// One generation of each prerequisite, however many acquisitions attach.
+	for (const id of ["api", "worker", "edge", "cache", "base"])
+		expect(
+			fs
+				.readFileSync(path.join(config.configDir, `${id}-starts`), "utf8")
+				.trim()
+				.split("\n"),
+		).toHaveLength(1);
+	const stops = () =>
+		fs
+			.readFileSync(path.join(config.configDir, "stops"), "utf8")
+			.trim()
+			.split("\n");
+	// The prerequisite outlives the first two roots and closes with the last one.
+	await app.environments.stopOnce("stop-shared-api", owner, ["api"]);
+	expect(stops()).toEqual(["api"]);
+	await app.environments.stopOnce("stop-shared-worker", owner, ["worker"]);
+	expect(stops()).toEqual(["api", "worker"]);
+	await app.environments.stopOnce("stop-shared-edge", owner, ["edge"]);
+	await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.every((run) => run.state === "exited"),
+	);
+	const order = stops();
+	expect(order.slice(0, 3).sort()).toEqual(["api", "edge", "worker"]);
+	expect(order.slice(3)).toEqual(["cache", "base"]);
 }, 30000);
