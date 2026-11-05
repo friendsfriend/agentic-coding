@@ -213,19 +213,21 @@ function verifyRetained(
 	}
 	return verify(root, files);
 }
-/** Move one verified tree into the retained root under its own digest. */
+/** Move one verified tree into the retained root under its digest. An existing
+ * directory needs this draft's recorded claim AND fresh byte/layout verification;
+ * equal bytes without ownership are never adopted, including after a crash. */
 function retainStagedTree(
 	config: Config,
 	assembled: string,
 	identity: StagedTreeIdentity,
 	files: { relative: string; content: string }[],
+	ownedName: string | undefined,
 ) {
 	const treeDigest = identity.treeDigest;
 	if (!/^[a-f0-9]{64}$/.test(treeDigest))
 		throw new Error("Retained trees are addressed by their verified digest");
 	const root = retainedRoot(config),
 		destination = path.join(root, treeDigest);
-	if (within(root, assembled) && assembled === destination) return destination;
 	let existing = false;
 	try {
 		fs.lstatSync(destination);
@@ -234,6 +236,10 @@ function retainStagedTree(
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	if (existing) {
+		if (ownedName !== treeDigest)
+			throw new Error(
+				"Unowned retained tree cannot be adopted; inspect metadata and explicitly release its digest first",
+			);
 		if (
 			JSON.stringify(verifyRetained(destination, files)) !==
 			JSON.stringify(identity.entries)
@@ -289,7 +295,7 @@ export function retainedStagedTrees(config: Config) {
 export function assembleStagedTree(
 	config: Config,
 	draft: Draft,
-	options?: { retain?: boolean },
+	options?: { retain?: boolean; ownedName?: string },
 ) {
 	const candidate = inspectStagedCandidate(config, draft);
 	if (!candidate.accepted)
@@ -322,7 +328,7 @@ export function assembleStagedTree(
 		if (JSON.stringify(entries) !== JSON.stringify(identity.entries))
 			throw new Error("Staged tree content changed during verification");
 		if (options?.retain) {
-			retainStagedTree(config, root, identity, files);
+			retainStagedTree(config, root, identity, files, options.ownedName);
 			retained = true;
 		}
 		return {

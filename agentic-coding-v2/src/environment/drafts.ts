@@ -352,6 +352,7 @@ export class DefinitionDrafts {
 						throw new Error(
 							"No established source base; explicit capture/acceptance required",
 						);
+					const ownedName = stagedTreeReceipt(drafts, id)?.retained?.name;
 					if (retain) {
 						const name = stagedTreeIdentity(draft).treeDigest;
 						for (const otherId of Object.keys(drafts.trees ?? {})) {
@@ -363,12 +364,19 @@ export class DefinitionDrafts {
 									"Retained tree is owned by another draft; cross-draft retention sharing is unsupported",
 								);
 						}
+						if (
+							ownedName !== name &&
+							retainedStagedTrees(this.config).includes(name)
+						)
+							throw new Error(
+								"Unowned retained tree cannot be adopted; inspect metadata and explicitly release its digest first",
+							);
 					}
 					const report: Preflight = {
 						...(candidate
 							? inspectStagedCandidate(this.config, draft)
 							: tree
-								? assembleStagedTree(this.config, draft, { retain })
+								? assembleStagedTree(this.config, draft, { retain, ownedName })
 								: (comparison ??
 									(selection
 										? inspectComposeSource(

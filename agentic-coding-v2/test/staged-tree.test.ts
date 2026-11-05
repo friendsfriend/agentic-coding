@@ -448,6 +448,12 @@ test("a retained staged tree is owned by its digest, inspectable, and released b
 		expect(
 			fs.existsSync(path.join(config.configDir, "environments.json")),
 		).toBe(false);
+		// Same-owner reuse still re-verifies bytes instead of refusing all existing trees.
+		const refreshed = await (
+			await assemble("retain-owned-refresh", staged.revision, staged.digest)
+		).json();
+		expect(refreshed.accepted).toBe(true);
+		expect(refreshed.treeDigest).toBe(first.treeDigest);
 		// Equal bytes do not give a different draft ownership of this directory.
 		const duplicate = await (
 			await api("/api/environments/drafts", {
@@ -615,6 +621,11 @@ test("a retained tree is disclosed by metadata and released by its digest withou
 		]);
 		// Nothing is disclosed that would read the tree or its source text.
 		expect(JSON.stringify(listed)).not.toContain("inspect:latest");
+		// A byte-identical directory without a durable claim must not be adopted.
+		const orphanCopy = path.join(config.stateDir, "unowned-tree-copy");
+		fs.cpSync(path.join(trees, tree.treeDigest), orphanCopy, {
+			recursive: true,
+		});
 		const release = (requestId: string, name: string) =>
 			api("/api/environments/drafts/tree/release", { requestId, name });
 		expect((await release("unknown", "a".repeat(64))).status).toBe(400);
@@ -625,6 +636,70 @@ test("a retained tree is disclosed by metadata and released by its digest withou
 			owner: created.id,
 			revision: staged.revision,
 		});
+		expect(fs.readdirSync(trees)).toEqual([]);
+		fs.renameSync(orphanCopy, path.join(trees, tree.treeDigest));
+		await reopen();
+		const orphanMetadata = await (
+			await api("/api/environments/drafts/trees")
+		).json();
+		expect(orphanMetadata.trees).toEqual([]);
+		expect(orphanMetadata.unowned).toEqual([tree.treeDigest]);
+		expect(JSON.stringify(orphanMetadata)).not.toContain("inspect:latest");
+		const retainOrphan = (requestId: string) =>
+			api("/api/environments/drafts/preflight", {
+				requestId,
+				id: created.id,
+				revision: staged.revision,
+				digest: staged.digest,
+				materializeStagedTree: true,
+				retainStagedTree: true,
+			});
+		const refusedOrphan = await retainOrphan("retain-unowned");
+		expect(refusedOrphan.status).toBe(400);
+		expect(await refusedOrphan.text()).toContain("cannot be adopted");
+		expect((await retainOrphan("retain-unowned")).status).toBe(400);
+		expect((await retainOrphan("fresh-retain-unowned")).status).toBe(400);
+		const unclaimedDraft = await (
+			await api(`/api/environments/drafts?id=${created.id}`)
+		).json();
+		expect(unclaimedDraft.stagedTree.retained).toBeNull();
+		expect(unclaimedDraft.stagedTree.current).toBe(true);
+		const ephemeralWithOrphan = await (
+			await api("/api/environments/drafts/preflight", {
+				requestId: "ephemeral-with-orphan",
+				id: created.id,
+				revision: staged.revision,
+				digest: staged.digest,
+				materializeStagedTree: true,
+			})
+		).json();
+		expect(ephemeralWithOrphan.accepted).toBe(true);
+		expect(ephemeralWithOrphan.treeRetained).toBe(false);
+		expect(fs.existsSync(path.join(trees, tree.treeDigest))).toBe(true);
+		// Even a successful historical retention preflight cannot backfill ownership.
+		expect(
+			await (
+				await api("/api/environments/drafts/preflight", {
+					requestId: "retain",
+					id: created.id,
+					revision: staged.revision,
+					digest: staged.digest,
+					materializeStagedTree: true,
+					retainStagedTree: true,
+				})
+			).json(),
+		).toEqual(tree);
+		expect(
+			(await (await api("/api/environments/drafts/trees")).json()).trees,
+		).toEqual([]);
+		expect(await (await release("release", tree.treeDigest)).json()).toEqual(
+			released,
+		);
+		expect(fs.existsSync(path.join(trees, tree.treeDigest))).toBe(true);
+		expect(
+			(await (await release("release-unowned-copy", tree.treeDigest)).json())
+				.owner,
+		).toBeNull();
 		expect(fs.readdirSync(trees)).toEqual([]);
 		// The exact request replays its historical outcome and dispatches nothing.
 		expect(await (await release("release", tree.treeDigest)).json()).toEqual(
@@ -942,6 +1017,41 @@ test("a draft read discloses whether its recorded tree identity is current and r
 		expect((await supersede("failed-supersession")).status).toBe(400);
 		expect((await supersede("fresh-supersession")).status).toBe(400);
 		expect(fs.existsSync(held)).toBe(true);
+		// The new directory was created before the failed old-tree deletion. Its name
+		// and exact bytes cannot turn that failed preflight into a retention claim.
+		expect(history.unowned).toHaveLength(1);
+		const orphanName = history.unowned[0],
+			pending = history.cleanupAttempts.find(
+				(entry: { status: string }) => entry.status === "pending",
+			);
+		expect(
+			(
+				await api("/api/environments/drafts/tree-cleanup/acknowledge", {
+					requestId: "ack-supersession",
+					id: pending.id,
+					revision: pending.revision,
+					acknowledge: true,
+				})
+			).status,
+		).toBe(200);
+		const unownedRetry = await supersede("fresh-after-supersession-ack");
+		expect(unownedRetry.status).toBe(400);
+		expect(await unownedRetry.text()).toContain("cannot be adopted");
+		expect((await read()).stagedTree.current).toBe(false);
+		const orphanReleased = await (
+			await api("/api/environments/drafts/tree/release", {
+				requestId: "release-supersession-orphan",
+				name: orphanName,
+			})
+		).json();
+		expect(orphanReleased.owner).toBeNull();
+		expect(fs.existsSync(held)).toBe(true);
+		const recovered = await (
+			await supersede("supersession-after-explicit-release")
+		).json();
+		expect(recovered.accepted).toBe(true);
+		expect((await read()).stagedTree.current).toBe(true);
+		expect(fs.existsSync(held)).toBe(false);
 	} finally {
 		host.stop();
 	}
