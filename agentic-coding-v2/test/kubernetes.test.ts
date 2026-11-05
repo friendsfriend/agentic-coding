@@ -17,12 +17,15 @@ afterEach(cleanup);
 const client = `import fs from "node:fs";
 if(process.env.FIXTURE_CALLS)fs.appendFileSync(process.env.FIXTURE_CALLS,JSON.stringify({parent:process.ppid})+"\\n");
 const file=process.env.FIXTURE_STATE,s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{pods:{},serial:0,gate:process.env.FIXTURE_GATE!=="closed"};
-const args=process.argv.slice(2),method=args.find(v=>["get","create","delete"].includes(v)),uri=args[args.indexOf("--raw")+1],url=new URL(uri,"https://127.0.0.1"),name=url.pathname.split("/").at(-1);
+const args=process.argv.slice(2);
+if(args.includes("logs")){const lines=JSON.parse(process.env.FIXTURE_LOG_LINES??"[]");for(const line of lines)console.log(args.includes("--timestamps")?line.at+" "+line.text:line.text);if(args.includes("--follow"))setInterval(()=>{},1000);process.exitCode=0;}
+else{
+const method=args.find(v=>["get","create","delete"].includes(v)),uri=args[args.indexOf("--raw")+1],url=new URL(uri,"https://127.0.0.1"),name=url.pathname.split("/").at(-1);
 console.error("private-api-output");let result;
 if(method==="get"){const filter=url.searchParams.get("fieldSelector");if(!filter?.startsWith("metadata.name="))process.exit(2);const pod=s.pods[filter.slice("metadata.name=".length)];if(pod&&s.gate===false)pod.status.conditions=[{type:"Ready",status:"False"}];result={kind:"PodList",items:pod?[pod]:[]};}
 else{const body=JSON.parse(fs.readFileSync(0,"utf8"));if(method==="create"){const name=body.metadata.name;if(s.pods[name])process.exit(1);body.metadata.uid="11111111-2222-3333-4444-"+String(++s.serial).padStart(12,"0");body.metadata.resourceVersion=String(s.serial);body.status={phase:process.env.FIXTURE_UNREADY==="yes"?"Failed":"Running",conditions:[{type:"Ready",status:process.env.FIXTURE_UNREADY==="yes"?"False":"True"}],containerStatuses:process.env.FIXTURE_UNREADY==="yes"?[{name:"app",state:{terminated:{exitCode:7}}}]:[]};body.metadata.annotations={private:"private-api-output"};s.pods[name]=body;result=body;}
 else if(method==="delete"){const pod=s.pods[name];if(!pod||body.preconditions?.uid!==pod.metadata.uid||body.preconditions?.resourceVersion!==pod.metadata.resourceVersion)process.exit(1);delete s.pods[name];result={kind:"Status",status:"Success"};}else process.exit(2);}
-if(method!=="get")fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify(result));`;
+if(method!=="get")fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify(result));}`;
 test("explicit bare pods acquire only after approval, reach API readiness, clean up owned UIDs and preserve replacements", async () => {
 	for (const scenario of ["ready", "replacement", "unready"]) {
 		const { app, config, fake, invocation } = await fixture(false, (config) => {
@@ -389,3 +392,83 @@ test("killed Pod hosts retain only diagnostic UIDs and quarantine occupancy with
 		}
 	}
 }, 15000);
+
+test("a single owned replica exposes its pod log buffer with the pod's own timestamps", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		configureLocalCluster(config, client, {
+			FIXTURE_STATE: path.join(config.configDir, "pods.json"),
+			FIXTURE_LOG_LINES: JSON.stringify([
+				{ at: "2000-01-01T00:00:00.000000001Z", text: "old [x] first" },
+				{ at: "2000-01-02T00:00:00.000000002Z", text: "old [x] second" },
+				{ at: "2999-12-31T23:59:59.999999999Z", text: "new [x] third" },
+			]),
+		});
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify({
+				version: 1,
+				projects: [
+					{
+						id: "api",
+						kind: "app",
+						repository: config.repositories[0],
+						targets: [
+							{
+								id: "pods",
+								action: "run",
+								runtime: "kubernetes",
+								timeoutMs: 5000,
+								kubernetes: {
+									cluster: "local",
+									namespace: "fixtures",
+									image: "fixture/app:v1",
+									replicas: 1,
+									readinessProbe: {
+										httpGet: { path: "/ready", port: 8080 },
+										periodSeconds: 1,
+									},
+								},
+							},
+						],
+					},
+				],
+			}),
+		);
+	});
+	fake.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("env_start", { apps: ["api"], runtime: "kubernetes" }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall("request_review", { path: ".", title: "Hold pod" }),
+			{ stopReason: "toolUse" },
+		),
+	]);
+	const task = await app.startTask({ ...invocation, requestId: "pod-logs" });
+	await approve(app, task);
+	await pendingReview(app, task, "Hold pod");
+	await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs[0]?.ready === true,
+	);
+	const observed = await app.environments.selectedLogs("api", task, {
+		grep: "[x]",
+		since: "2500-01-01T00:00:00Z",
+	});
+	const run = observed.runs[0];
+	expect(run?.output).toBe("new [x] third\n");
+	expect(run?.timeSelection).toMatchObject({
+		basis: "provider-event-time-completed-lines",
+		availability: "available",
+	});
+	expect(run?.framing).toBe("single-pod-buffer-provider-event-time");
+	expect(JSON.stringify(observed)).not.toContain("2999-");
+	await app.cancel(task);
+	await app.harness.waitForTask(task as TaskId, context);
+	const pods = JSON.parse(
+		fs.readFileSync(path.join(config.configDir, "pods.json"), "utf8"),
+	);
+	expect(Object.keys(pods.pods)).toHaveLength(0);
+	expect((await app.environments.snapshot()).runs[0]?.state).toBe("exited");
+}, 20000);

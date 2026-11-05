@@ -133,7 +133,9 @@ export function logView(
 					: run.plan.runtime === "compose"
 						? "aggregate-service-buffers-not-chronological"
 						: run.plan.runtime === "kubernetes"
-							? "client-diagnostics-only-not-pod-logs"
+							? providerTimed(timing)
+								? "single-pod-buffer-provider-event-time"
+								: "client-diagnostics-only-not-pod-logs"
 							: providerTimed(timing)
 								? "runtime-buffer-order-provider-event-time"
 								: "runtime-buffer-order-not-event-time",

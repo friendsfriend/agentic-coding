@@ -517,3 +517,15 @@ New public scenarios cover a `restart: no` one-shot prerequisite with a zero exi
 Verification: **113 tests / 1547 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify strict **20.0**, objective **83.0**, all subjective dimensions still unassessed.
 
 **Next backend step:** Kubernetes depth — Pod log collection with the same provider-time discipline and explicit unsupported-source reporting, before Helm or port-forward work.
+
+## Single-replica Kubernetes pod log capture
+
+A Kubernetes run with exactly one owned replica now starts one bounded pod log follower after every replica is ready: `kubectl logs --follow --timestamps --tail 200 -n <namespace> <name>` over the same private kubeconfig and argv prefix as the control client. The pod's own per-line timestamp is parsed and stripped, so retained text is the application's and `since` filters by the pod's event time rather than this host's receipt time. `env_logs` reports framing `single-pod-buffer-provider-event-time` and a provider timing basis.
+
+Multi-replica runs keep the explicit refusal: several pod buffers are not merged, because doing so would invent a chronology this adapter cannot verify, and the retained text stays the client-diagnostics explanation. A follower is only a log reader — it never becomes a health, readiness or ownership signal, its failure does not grant or remove authority, and stopping the run joins follower shutdown into normal cleanup, marking cleanup uncertain if that fails. The follower starts after readiness, so it cannot mask a pod that never became ready.
+
+The public scenario starts a one-replica pod run against the disposable client, reads its buffer through the same retained-log path, and asserts only the line newer than the requested instant survives with the pod timestamp absent from output, the provider basis and single-pod framing, and that cancellation deletes the pod and releases the run while the follower is joined. Limits: this is not Kubernetes log aggregation, rotation handling, `--previous`/multi-container log selection, provider retention or a crash-recovery log claim; the follower is a local CLI process whose stream can be lost, and verification is fixture-only with no live cluster.
+
+Verification: **114 tests / 1553 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify objective/verified **83.0**, overall **20.7**, strict **20.0**.
+
+**Next backend step:** Kubernetes depth continues with managed port forwards for an owned pod, reusing the same live-UID precondition and explicit-refusal discipline; Helm remains refused until then.

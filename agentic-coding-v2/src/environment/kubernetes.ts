@@ -2,7 +2,7 @@ import { type Config, digest, object } from "../config.ts";
 import { openClusterClient } from "./cluster.ts";
 import type { Plan } from "./model.ts";
 import type { EnvironmentProcess, Exit, RuntimeStatus } from "./process.ts";
-import { processEnvironment } from "./shell.ts";
+import { processEnvironment, type ShellProcess } from "./shell.ts";
 
 const hostLabel = "dev.agentic-coding.v2.host",
 	runLabel = "dev.agentic-coding.v2.run";
@@ -45,6 +45,7 @@ export class KubernetesProcess implements EnvironmentProcess {
 	private host: string;
 	private run: string;
 	private names: string[];
+	private followers = new Map<string, ShellProcess>();
 	constructor(
 		private config: Config,
 		private plan: Plan,
@@ -84,10 +85,21 @@ export class KubernetesProcess implements EnvironmentProcess {
 	get outcome() {
 		return this.result;
 	}
+	/** Pod log buffers are only exposed for a single owned replica: merging
+	 * several pods would invent a chronology this adapter cannot verify. */
 	get logs() {
+		if (this.failure) return `${this.failure}\n`;
+		const follower =
+			this.followers.size === 1 ? [...this.followers.values()][0] : undefined;
+		if (follower) return follower.logs;
+		return "Kubernetes pod logs are not exported for this run: capture is limited to one owned replica, and no merge of several pod buffers is invented.\n";
+	}
+	get logTiming() {
 		return this.failure
-			? `${this.failure}\n`
-			: "Kubernetes pod logs are not exported by this adapter: name-based log reads do not provide UID preconditions.\n";
+			? undefined
+			: this.followers.size === 1
+				? [...this.followers.values()][0]?.logTiming
+				: undefined;
 	}
 	get cleanupFailed() {
 		return (
@@ -322,6 +334,8 @@ export class KubernetesProcess implements EnvironmentProcess {
 			}
 			this.created.set(name, pod.uid);
 		}
+		// Log capture starts only after every replica is ready, so a follower never
+		// becomes an independent health or adoption signal.
 		// Create every replica before waiting: a pod's readiness may depend on peers.
 		for (const name of this.names) {
 			for (;;) {
@@ -340,6 +354,12 @@ export class KubernetesProcess implements EnvironmentProcess {
 				if (observed.ready) break;
 				await Bun.sleep(Math.min(100, remaining()));
 			}
+		}
+		if (this.names.length === 1 && this.client) {
+			const name = this.names[0];
+			if (!name) throw new Error("Kubernetes pod identity is missing");
+			const follower = this.client.follow(this.target.namespace, name);
+			if (await follower.spawned) this.followers.set(name, follower);
 		}
 	}
 	private async monitor() {
@@ -395,6 +415,14 @@ export class KubernetesProcess implements EnvironmentProcess {
 	async stop() {
 		this.stopping ??= (async () => {
 			this.controller.abort();
+			for (const follower of this.followers.values())
+				try {
+					await follower.stop();
+					if (follower.cleanupFailed) this.uncertain = true;
+				} catch {
+					this.uncertain = true;
+				}
+			this.followers.clear();
 			await this.starting?.catch(() => {});
 			await this.monitoring?.catch(() => {});
 			const remaining = budget(15000),

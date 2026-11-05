@@ -6,6 +6,7 @@ import type { TaskInfo } from "../state.ts";
 import type { Cluster, ClusterInspection } from "./cluster-types.ts";
 import { EnvironmentCommands } from "./command.ts";
 import type { Plan } from "./model.ts";
+import { ShellProcess } from "./shell.ts";
 
 function keys(data: Record<string, unknown>, allowed: string[]) {
 	if (Object.keys(data).some((key) => !allowed.includes(key)))
@@ -289,6 +290,28 @@ export function openClusterClient(
 		);
 		return {
 			commands,
+			/** One bounded, timestamped pod log follower; never a control channel. */
+			follow: (namespace: string, name: string) =>
+				new ShellProcess({ ...plan, timeoutMs: 7200000 }, config.configDir, {
+					executable: "kubectl",
+					args: [
+						"--kubeconfig",
+						file,
+						"--context",
+						inspection.cluster.context,
+						"--server",
+						inspection.server,
+						"logs",
+						"--follow",
+						"--timestamps",
+						"--tail",
+						"200",
+						"--namespace",
+						namespace,
+						name,
+					],
+					runtimeTimestamps: true,
+				}),
 			close: () => {
 				if (!commands.cleanupFailed)
 					fs.rmSync(scratch, { recursive: true, force: true });
