@@ -31,6 +31,9 @@ import telemetryView from "./web/environment-telemetry-view.js" with {
 	type: "text",
 };
 import html from "./web/index.html" with { type: "text" };
+import recordedDiagnostic from "./web/recorded-diagnostic.js" with {
+	type: "text",
+};
 import css from "./web/style.css" with { type: "text" };
 
 function equalSecret(actual: string, expected: string): boolean {
@@ -145,6 +148,10 @@ export function serve(app: Runtime, port = 0) {
 		[
 			"/definition-discovery.js",
 			{ content: discovery, type: "text/javascript" },
+		],
+		[
+			"/recorded-diagnostic.js",
+			{ content: recordedDiagnostic, type: "text/javascript" },
 		],
 		[
 			"/environment-database-history.js",
@@ -342,7 +349,10 @@ export function serve(app: Runtime, port = 0) {
 				}
 				if (
 					request.method === "GET" &&
-					url.pathname === "/api/environments/database-history"
+					[
+						"/api/environments/database-history",
+						"/api/environments/http-history",
+					].includes(url.pathname)
 				) {
 					if (
 						[...url.searchParams.keys()].some(
@@ -351,20 +361,17 @@ export function serve(app: Runtime, port = 0) {
 								url.searchParams.getAll(key).length !== 1,
 						)
 					)
-						throw new Error("Unknown or repeated SQL history query parameter");
-					const run = text(
-							url.searchParams.get("run"),
-							"database diagnostic run",
-							128,
-						),
+						throw new Error(
+							"Unknown or repeated diagnostic history query parameter",
+						);
+					const run = text(url.searchParams.get("run"), "diagnostic run", 128),
 						operation = url.searchParams.has("operation")
-							? text(
-									url.searchParams.get("operation"),
-									"SQL diagnostic ID",
-									128,
-								)
+							? text(url.searchParams.get("operation"), "diagnostic ID", 128)
 							: undefined;
-					return json(await app.environments.database.history(run, operation));
+					const diagnostics = url.pathname.endsWith("/http-history")
+						? app.environments.http
+						: app.environments.database;
+					return json(await diagnostics.history(run, operation));
 				}
 				if (
 					request.method === "GET" &&

@@ -1,6 +1,7 @@
 import { button, element } from "/dom.js";
 import { addDatabaseHistory } from "/environment-database-history.js";
 import { renderNativeTelemetry } from "/environment-telemetry-view.js";
+import { recordedDiagnostic } from "/recorded-diagnostic.js";
 
 function field(parent, label, options = {}) {
 	const wrapper = element("label", `${label} `),
@@ -195,6 +196,16 @@ export function environmentDiagnostics(run, api, existing) {
 		root.setAttribute("aria-label", `${run.plan.app} diagnostics (${run.id})`);
 		addLogs(root, run, api);
 		if (run.plan.telemetry) addTelemetry(root, run, api);
+		if (Object.keys(run.plan.endpoints ?? {}).length)
+			recordedDiagnostic(root, run, api, {
+				kind: "HTTP",
+				title: "Recorded HTTP diagnostics (no request)",
+				route: "/api/environments/http-history",
+				description:
+					"Read-only historical responses/issuances for this exact run. No endpoint connection or request is made. Original approved request bodies/headers, URLs and credential references are withheld; any displayed response URL/body is recorded and redacted. Live requests still require the owning native task’s separate exact approval.",
+				uncertain:
+					"Issued without a completed response: dispatch and server-side effects are unconfirmed. Never resend from history; inspect effects independently before any fresh exact approval.",
+			});
 		if (run.plan.projectKind === "infrastructure" && run.plan.queryConnection)
 			addDatabaseHistory(root, run, api);
 	}

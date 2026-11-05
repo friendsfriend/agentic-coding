@@ -4,6 +4,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
+import { serve } from "../src/server.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
@@ -180,4 +181,57 @@ test("held local endpoint GETs require exact approval, redact frozen secrets, bo
 	const run = (await app.environments.snapshot()).runs[0];
 	expect(run?.state).toBe("exited");
 	expect(run?.endpoints).toEqual({});
+	if (!run) throw new Error("Disposable HTTP run missing");
+	const host = serve(app),
+		priorRequests = fs.readFileSync(log, "utf8");
+	try {
+		const base = new URL(host.url),
+			token = new URLSearchParams(base.hash.slice(1)).get("token"),
+			headers = { Authorization: `Bearer ${token}` },
+			route = new URL(
+				`/api/environments/http-history?run=${encodeURIComponent(run.id)}`,
+				base,
+			),
+			get = (url: URL) => fetch(url, { headers });
+		expect((await fetch(route)).status).toBe(401);
+		expect((await get(new URL(`${route}&run=${run.id}`))).status).toBe(400);
+		expect((await get(new URL(`${route}&path=/hello`))).status).toBe(400);
+		expect(
+			(await get(new URL("/api/environments/http-history?run=unknown", base)))
+				.status,
+		).toBe(400);
+		const history = await (await get(route)).json();
+		expect(history).toHaveLength(4);
+		expect(history[0]).toMatchObject({
+			run: run.id,
+			owner: task,
+			state: "issued",
+			method: "GET",
+			endpoint: "web",
+		});
+		expect(JSON.stringify(history)).not.toContain("/hello");
+		const detail = new URL(route);
+		detail.searchParams.set("operation", history[0].id);
+		expect(await (await get(detail)).json()).toMatchObject({
+			state: "issued",
+			result: null,
+		});
+		detail.searchParams.set("operation", history.at(-1).id);
+		const recorded = await (await get(detail)).json();
+		expect(recorded).toMatchObject({
+			state: "completed",
+			result: { status: 200, body: "hello [REDACTED]" },
+		});
+		expect(JSON.stringify(recorded)).not.toContain(
+			"fixture-original-sensitive-token",
+		);
+		expect(JSON.stringify(recorded)).not.toContain("hidden=");
+		expect(JSON.stringify(recorded)).not.toContain("HTTP_SECRET");
+		detail.searchParams.set("operation", "http-unknown");
+		expect((await get(detail)).status).toBe(400);
+		expect(await (await get(route)).json()).toEqual(history);
+		expect(fs.readFileSync(log, "utf8")).toBe(priorRequests);
+	} finally {
+		host.stop();
+	}
 }, 20000);

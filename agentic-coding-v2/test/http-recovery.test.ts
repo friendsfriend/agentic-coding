@@ -4,6 +4,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
+import { serve } from "../src/server.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup, apps } = createFixtures();
@@ -127,6 +128,30 @@ test("SIGKILL after HTTP write dispatch retains uncertain issuance and native re
 				endpoints: {},
 			});
 			expect(transcript).toContain("will not be resent");
+			const historyHost = serve(restored);
+			try {
+				const base = new URL(historyHost.url),
+					token = new URLSearchParams(base.hash.slice(1)).get("token"),
+					query = new URLSearchParams({
+						run: snapshot.runs[0].id,
+						operation: snapshot.httpOperations[0].id,
+					}),
+					response = await fetch(
+						new URL(`/api/environments/http-history?${query}`, base),
+						{ headers: { Authorization: `Bearer ${token}` } },
+					);
+				expect(response.status).toBe(200);
+				const record = await response.json();
+				expect(record).toMatchObject({
+					state: "issued",
+					method: "POST",
+					result: null,
+				});
+				expect(JSON.stringify(record)).not.toContain("mutate-once");
+				expect(requests).toBe(1);
+			} finally {
+				historyHost.stop();
+			}
 			expect(requests).toBe(1);
 			await expect(
 				restored.environments.stopOnce("refuse-http-crash-adoption", ready.id, [

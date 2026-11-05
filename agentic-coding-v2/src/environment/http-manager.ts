@@ -21,6 +21,51 @@ export class HeldHttp {
 		private config: Config,
 		private authority: LiveEnvironmentAuthority,
 	) {}
+	/** Developer history only: never prepares an endpoint or restores a lease.
+	 * Approved request bodies/headers, URLs and secret references are withheld. */
+	async history(runId: string, operation?: string) {
+		const run = (await this.authority.records()).find(
+			(item) =>
+				item.id === runId && Object.keys(item.plan.endpoints ?? {}).length > 0,
+		);
+		if (!run) throw new Error("Unknown HTTP diagnostic run");
+		const doc = await this.authority
+				.store()
+				.snapshot(EnvironmentState, background),
+			entries = Object.entries(doc?.httpOperations ?? {})
+				.map(([id, raw]) => ({ id, receipt: decode<HttpReceipt>(raw) }))
+				.filter(
+					({ receipt }) =>
+						receipt.owner === run.owner &&
+						receipt.approved.run === run.id &&
+						receipt.approved.app === run.plan.app,
+				)
+				.slice(-200);
+		const summary = ({ id, receipt }: (typeof entries)[number]) => ({
+			id,
+			owner: receipt.owner,
+			run: run.id,
+			app: run.plan.app,
+			endpoint: receipt.approved.endpoint,
+			method: receipt.approved.http?.method ?? "GET",
+			state: receipt.state,
+			inputDigest: receipt.inputDigest,
+			issuedAt: receipt.issuedAt,
+			observedAt: receipt.result?.observedAt ?? null,
+			authority:
+				"Historical HTTP diagnostic only: no new request, connection or lease. Issued is pending or uncertain, not proof of dispatch, server-side effects or response. Never automatically resend.",
+		});
+		if (operation === undefined) return entries.toReversed().map(summary);
+		const found = entries.find((entry) => entry.id === operation);
+		if (!found) throw new Error("Unknown HTTP diagnostic for this exact run");
+		return {
+			...summary(found),
+			result:
+				found.receipt.state === "completed"
+					? (found.receipt.result ?? null)
+					: null,
+		};
+	}
 	private async endpointRun(
 		owner: TaskInfo,
 		app: string,
