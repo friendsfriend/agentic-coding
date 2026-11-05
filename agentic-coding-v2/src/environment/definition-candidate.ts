@@ -128,7 +128,10 @@ function checkTarget(
 		draft.content,
 		project.id,
 		target.id,
-		source,
+		{
+			...source,
+			files: auxiliarySources(draft, project.repository),
+		},
 	);
 	return {
 		...row,
@@ -142,6 +145,15 @@ function checkTarget(
 				}
 			: {}),
 	};
+}
+/** Staged auxiliary text, keyed by its saved relative path, for this repository. */
+function auxiliarySources(draft: Draft, repository: string) {
+	const entries = (draft.sources ?? []).filter(
+		(source) => source.auxiliary === true && source.repository === repository,
+	);
+	return entries.length
+		? Object.fromEntries(entries.map((source) => [source.file, source.content]))
+		: undefined;
 }
 /** Exact saved-input binding, not a plan, isolated tree or publication grant. */
 export function inspectStagedCandidate(config: Config, draft: Draft) {

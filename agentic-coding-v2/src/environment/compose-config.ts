@@ -167,6 +167,7 @@ function readEnvFile(
 	workspace: string,
 	raw: unknown,
 	live: boolean,
+	auxiliary?: Record<string, string>,
 ): { values: Record<string, string>; digest: string; file: string } {
 	const selected = Array.isArray(raw)
 		? raw.length === 1 && typeof raw[0] === "string"
@@ -187,10 +188,16 @@ function readEnvFile(
 		throw new Error(
 			"Compose env_file requires a bounded relative public path with no dotfiles",
 		);
-	if (!live)
+	const defined = auxiliary?.[selected];
+	if (defined === undefined && !live)
 		throw new Error(
-			"Compose env_file requires an approval-time read and is unsupported for offline captured inspection",
+			"Compose env_file requires a staged auxiliary source or an approval-time read; offline inspection will not guess",
 		);
+	if (defined !== undefined)
+		return {
+			...parseEnvFile(Buffer.from(defined, "utf8"), selected),
+			file: selected,
+		};
 	const file = contained(workspace, selected),
 		fd = fs.openSync(
 			file,
@@ -210,29 +217,40 @@ function readEnvFile(
 			size += count;
 		}
 		if (size > 65536) throw new Error("Compose env_file exceeds 64 KiB");
-		const bytes = buffer.subarray(0, size),
-			body = new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-			values: Record<string, string> = {};
-		for (const line of body.split("\n")) {
-			const trimmed = line.trim();
-			if (!trimmed || trimmed.startsWith("#")) continue;
-			const split = trimmed.indexOf("=");
-			if (split < 1)
-				throw new Error("Compose env_file lines require KEY=value");
-			const key = trimmed.slice(0, split),
-				value = trimmed.slice(split + 1);
-			if (values[key] !== undefined)
-				throw new Error("Compose env_file must not repeat a key");
-			values[key] = value;
-		}
 		return {
-			values,
+			...parseEnvFile(buffer.subarray(0, size), path.relative(workspace, file)),
 			file: path.relative(workspace, file),
-			digest: digest(bytes.toString("base64")),
 		};
 	} finally {
 		fs.closeSync(fd);
 	}
+}
+/** One declared environment file body, from staged bytes or a live read. */
+function parseEnvFile(bytes: Buffer, name: string) {
+	if (bytes.length > 65536) throw new Error("Compose env_file exceeds 64 KiB");
+	const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+		values: Record<string, string> = {};
+	for (const line of body.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("#")) continue;
+		const split = trimmed.indexOf("=");
+		if (split < 1) throw new Error("Compose env_file lines require KEY=value");
+		const key = trimmed.slice(0, split),
+			value = trimmed.slice(split + 1);
+		if (
+			!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ||
+			["WORKSPACE", "CONFIG_DIR"].includes(key) ||
+			value.includes("\0") ||
+			value.length > 16000
+		)
+			throw new Error(
+				"Compose env_file entries must be plain public values of bounded length",
+			);
+		if (values[key] !== undefined)
+			throw new Error("Compose env_file must not repeat a key");
+		values[key] = value;
+	}
+	return { values, digest: digest(bytes.toString("base64")), name };
 }
 function source(workspace: string, definition: ComposeDefinition) {
 	const file = contained(workspace, definition.file);
@@ -277,6 +295,7 @@ export function compileComposeSource(
 	definition: ComposeDefinition,
 	input: { source: string; contentDigest: string },
 	readEnvFiles = false,
+	auxiliary?: Record<string, string>,
 ): ComposePlan {
 	const file = contained(workspace, definition.file);
 	if (input.source.includes("${"))
@@ -327,7 +346,7 @@ export function compileComposeSource(
 				const envFile =
 					service.env_file === undefined
 						? undefined
-						: readEnvFile(workspace, service.env_file, readEnvFiles);
+						: readEnvFile(workspace, service.env_file, readEnvFiles, auxiliary);
 				// env_file values are the base; an explicit literal in the service
 				// environment wins, and neither may take over the runtime's own paths.
 				const environment = Object.fromEntries(

@@ -219,41 +219,62 @@ test("private staged Compose edits advance draft revision, parse saved bytes not
 		expect(await (await api.post(checkBody, checkRoute)).json()).toEqual(
 			accepted,
 		);
-		// A declared env_file cannot be honoured from captured text: it needs an
-		// approval-time read, so offline inspection refuses it instead of guessing.
+		// A declared env_file is honoured only from a staged auxiliary source: the
+		// staged bytes are the input, so no live file is read and no value leaks.
 		const envDraft = await (
 				await api.post({ requestId: "env-create", content: content() })
 			).json(),
-			envStaged = await (
-				await api.post(
-					{
-						requestId: "env-stage",
-						id: envDraft.id,
-						revision: 1,
-						app: "api",
-						target: "stack",
-						content:
-							"services:\n  api:\n    image: fixture:latest\n    env_file: conf/app.env\n",
-					},
+			envSource =
+				"services:\n  api:\n    image: fixture:latest\n    env_file: conf/app.env\n    environment:\n      MODE: inline\n",
+			stageEnv = (body: Record<string, unknown>) =>
+				api.post(
+					{ id: envDraft.id, app: "api", target: "stack", ...body },
 					sourceRoute,
-				)
+				),
+			firstStaged = await (
+				await stageEnv({
+					requestId: "env-compose",
+					revision: 1,
+					content: envSource,
+				})
 			).json(),
-			envCheck = await (
-				await api.post(
-					{
-						requestId: "env-check",
-						id: envDraft.id,
-						revision: envStaged.revision,
-						digest: envStaged.digest,
-						app: "api",
-						target: "stack",
-						useStagedSource: true,
-					},
-					checkRoute,
-				)
-			).json();
-		expect(envCheck.accepted).toBe(false);
-		expect(JSON.stringify(envCheck)).not.toContain("app.env");
+			checkEnv = async (revision: number, digestValue: string) =>
+				await (
+					await api.post(
+						{
+							requestId: `env-check-${revision}`,
+							id: envDraft.id,
+							revision,
+							digest: digestValue,
+							app: "api",
+							target: "stack",
+							useStagedSource: true,
+						},
+						checkRoute,
+					)
+				).json(),
+			withoutAuxiliary = await checkEnv(
+				firstStaged.revision,
+				firstStaged.digest,
+			);
+		expect(withoutAuxiliary.accepted).toBe(false);
+		expect(JSON.stringify(withoutAuxiliary)).not.toContain("app.env");
+		const withAuxiliary = await (
+			await stageEnv({
+				requestId: "env-auxiliary",
+				revision: firstStaged.revision,
+				file: "conf/app.env",
+				auxiliary: true,
+				content: "MODE=from-file\nTOKEN=staged-only\n",
+			})
+		).json();
+		const acceptedEnv = await checkEnv(
+			withAuxiliary.revision,
+			withAuxiliary.digest,
+		);
+		expect(acceptedEnv.accepted).toBe(true);
+		expect(JSON.stringify(acceptedEnv)).not.toContain("staged-only");
+		expect(JSON.stringify(acceptedEnv)).not.toContain("app.env");
 	} finally {
 		host.stop();
 	}

@@ -325,7 +325,9 @@ export class DefinitionDrafts {
 						draft.digest !== contentDigest
 					)
 						throw new Error("Draft changed; load current before preflight");
-					let staged: SourceDraft | undefined;
+					let staged:
+						| (SourceDraft & { files?: Record<string, string> })
+						| undefined;
 					if ((stagedSource || compareBase) && selection) {
 						const binding = sourceBinding(
 							this.config,
@@ -342,6 +344,19 @@ export class DefinitionDrafts {
 							throw new Error(
 								"No saved source matches this exact current target binding",
 							);
+						// Stage bytes only: an auxiliary file never falls back to a live read.
+						const auxiliary = (draft.sources ?? []).filter(
+							(source) =>
+								source.auxiliary === true &&
+								source.repository === binding.repository,
+						);
+						if (auxiliary.length)
+							staged = {
+								...staged,
+								files: Object.fromEntries(
+									auxiliary.map((source) => [source.file, source.content]),
+								),
+							};
 					}
 					const comparison =
 						compareBase && selection && staged && staged.base !== "unobserved"

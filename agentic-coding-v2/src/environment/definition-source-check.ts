@@ -112,7 +112,11 @@ export function inspectComposeSource(
 	content: string,
 	app: string,
 	targetId: string,
-	staged?: { content: string; digest: string },
+	staged?: {
+		content: string;
+		digest: string;
+		files?: Record<string, string>;
+	},
 ) {
 	const scope = {
 		repositoryDigest: digest(JSON.stringify(config.repositories)),
@@ -148,7 +152,13 @@ export function inspectComposeSource(
 			contentDigest: captured.contentDigest,
 			bytes: captured.bytes,
 		};
-		const plan = compileComposeSource(project.repository, definition, captured);
+		const plan = compileComposeSource(
+			project.repository,
+			definition,
+			captured,
+			false,
+			staged?.files,
+		);
 		return {
 			...scope,
 			accepted: true as const,
