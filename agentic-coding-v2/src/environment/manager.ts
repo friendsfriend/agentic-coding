@@ -36,7 +36,11 @@ import {
 	referenceGraphHistory,
 	refreshReferenceGraphs,
 } from "./reference-journal.ts";
-import { referenceScope, requireScopeLive } from "./reference-scope.ts";
+import {
+	referenceScope,
+	requireScopeLive,
+	requiringRoot,
+} from "./reference-scope.ts";
 import { runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
 import {
@@ -525,9 +529,19 @@ export class Environments {
 		services = false,
 		kind?: Plan["projectKind"],
 	) {
-		if (owner !== undefined) this.idle.touch(owner, app);
+		const all = await this.records();
+		if (owner !== undefined) {
+			// A prerequisite read belongs to its single live requiring root.
+			const selected = all.find(
+				(run) =>
+					run.owner === owner && run.plan.app === app && holdsResource(run),
+			);
+			const requirer = selected ? requiringRoot(selected, all) : undefined;
+			if (requirer) this.idle.touchRun(owner, requirer.id);
+			else this.idle.touch(owner, app);
+		}
 		return recentRuns(
-			(await this.records()).filter(
+			all.filter(
 				(run) =>
 					run.plan.app === app &&
 					(owner === undefined || run.owner === owner) &&
@@ -569,7 +583,8 @@ export class Environments {
 		// Referenced runs disclose and revalidate their exact generation closure.
 		const root = referenceScope(run, members);
 		if (root) requireScopeLive(root, members, this.live);
-		if (owner !== undefined) this.idle.touchRun(owner, run.id);
+		const requirer = requiringRoot(run, members);
+		if (owner !== undefined) this.idle.touchRun(owner, requirer?.id ?? run.id);
 		const query = await process.telemetry.query(options);
 		return root ? { ...query, root } : query;
 	}

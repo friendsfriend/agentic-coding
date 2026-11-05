@@ -40,6 +40,28 @@ export function referenceScope(
 			.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
 	};
 }
+/** A referenced prerequisite has no activity clock of its own: a diagnostic on
+ * it belongs to the one live root that declares it. Ambiguity is refused rather
+ * than silently selecting a root or renewing every dependent. */
+export function requiringRoot(
+	run: EnvironmentRun,
+	members: readonly EnvironmentRun[],
+): EnvironmentRun | undefined {
+	if (!referencedRoot(run.plan) || run.plan.projectKind === "app")
+		return undefined;
+	const live = members.filter(
+		(member) =>
+			member.owner === run.owner &&
+			member.state === "running" &&
+			member.plan.projectKind === "app" &&
+			referencedRoot(member.plan) &&
+			(member.plan.requires ?? []).includes(run.plan.app),
+	);
+	if (live.length === 1) return live[0];
+	throw new Error(
+		"Referenced prerequisite diagnostics must name exactly one live requiring root; ambiguity is refused rather than renewing every dependent",
+	);
+}
 /** Closing generations are an admission fence for diagnostics: every approved
  * generation must still be the original live ready handle without retention or
  * uncertain cleanup, and no other run may substitute for it. */

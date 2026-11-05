@@ -11,7 +11,7 @@ afterEach(cleanup);
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 /** Two app roots sharing a two-level shell prerequisite chain. */
-function referenced(config: Config, port?: number) {
+function referenced(config: Config, port?: number, release?: string) {
 	fs.mkdirSync(config.configDir);
 	const node = (source: string) =>
 		`${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`;
@@ -39,7 +39,7 @@ function referenced(config: Config, port?: number) {
 						}
 					: {}),
 				command: node(
-					`const fs=require('node:fs');fs.appendFileSync(process.env.STARTS,${JSON.stringify(`${id}\n`)});process.on('SIGTERM',()=>{fs.appendFileSync(process.env.STOPS,${JSON.stringify(`${id}\n`)});process.exit(0)})${port ? `;Bun.serve({hostname:'127.0.0.1',port:${port},fetch(){fs.appendFileSync(process.env.REQUESTS,${JSON.stringify(`${id}\n`)});return new Response('referenced-ok')}})` : ""};console.log('READY');setInterval(()=>{},1000)`,
+					`const fs=require('node:fs');fs.appendFileSync(process.env.STARTS,${JSON.stringify(`${id}\n`)});process.on('SIGTERM',()=>{fs.appendFileSync(process.env.STOPS,${JSON.stringify(`${id}\n`)});process.exit(0)})${port ? `;Bun.serve({hostname:'127.0.0.1',port:${port},async fetch(){fs.appendFileSync(process.env.REQUESTS,${JSON.stringify(`${id}\n`)});${release ? `await new Promise(done=>{const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);done()}},5)});` : ""}return new Response('referenced-ok')}})` : ""};console.log('READY');setInterval(()=>{},1000)`,
 				),
 				environment: {
 					STARTS: path.join(config.configDir, `${id}-starts`),
@@ -269,4 +269,173 @@ test("referenced diagnostics name their exact root generation and prerequisite c
 	expect(receipts[2]).toContain(
 		"Endpoint requires this task's live ready shell app",
 	);
+}, 20000);
+
+test("a referenced root with an operation in flight does not expire, and expiry of the last root releases its prerequisites", async () => {
+	const release = path.join(
+			process.env.TMPDIR ?? "/tmp",
+			`ac-v2-release-${process.pid}-${Date.now()}`,
+		),
+		probe = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("unused"),
+		}),
+		port = probe.port;
+	probe.stop(true);
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		referenced(config, port, release);
+		fs.writeFileSync(
+			path.join(config.configDir, "config.json"),
+			JSON.stringify({ environment: { instances: { idle_ttl_minutes: 1 } } }),
+		);
+	});
+	let receipts: string[] = [];
+	fake.setResponses([
+		call("env_start", {
+			apps: ["api", "worker"],
+			lifetime: "referenced-roots-v1",
+		}),
+		call("env_http_request", { app: "api", endpoint: "web" }),
+		(messages) => {
+			receipts = messages.messages
+				.filter(
+					(message) =>
+						message.role === "toolResult" &&
+						message.toolName === "env_http_request",
+				)
+				.map((message) =>
+					(
+						message as unknown as {
+							content: Array<{ type: string; text?: string }>;
+						}
+					).content
+						.map((block) => block.text ?? "")
+						.join(""),
+				);
+			return fauxAssistantMessage("Referenced expiry finished", {
+				stopReason: "stop",
+			});
+		},
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	const before = Date.now();
+	await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.filter((run) => run.state === "running").length === 4,
+	);
+	await app.tick(before);
+	const boundary = await pendingReview(app, owner, "Endpoint GET: api/web");
+	expect(boundary.snapshot).toContain('"root"');
+	await approve(app, owner, "Endpoint GET: api/web");
+	const dispatch = path.join(config.configDir, "requests");
+	await eventually(
+		async () => fs.existsSync(dispatch),
+		(seen) => seen,
+	);
+	// The in-flight operation protects its requiring root; the idle root expires.
+	await app.tick(before + 61_000);
+	const afterExpiry = await eventually(
+		() => app.environments.snapshot(),
+		(state) =>
+			state.runs.some(
+				(run) => run.plan.app === "worker" && run.state === "exited",
+			),
+	);
+	const running = afterExpiry.runs.filter((run) => run.state === "running");
+	// The shared prerequisite stays retained by the surviving root.
+	expect(running.map((run) => run.plan.app).sort()).toEqual([
+		"api",
+		"base",
+		"cache",
+	]);
+	expect(
+		afterExpiry.runs.find((run) => run.plan.app === "api")?.idle.protection,
+	).toBe("operation-in-flight");
+	fs.writeFileSync(release, "go");
+	await eventually(
+		async () => receipts.length,
+		(count) => count === 1,
+	);
+	expect(receipts[0]).toContain("referenced-ok");
+	// Expiring the last root releases the retained prerequisite closure.
+	await app.tick(before + 130_000);
+	await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.every((run) => run.state === "exited"),
+	);
+	const stops = fs
+		.readFileSync(path.join(config.configDir, "stops"), "utf8")
+		.trim()
+		.split("\n");
+	expect(stops).toEqual(["worker", "api", "cache", "base"]);
+}, 30000);
+
+test("a shared prerequisite diagnostic is refused while ambiguous and renews its single requiring root", async () => {
+	const { app, fake, invocation } = await fixture(false, (config) => {
+		referenced(config);
+		fs.writeFileSync(
+			path.join(config.configDir, "config.json"),
+			JSON.stringify({ environment: { instances: { idle_ttl_minutes: 1 } } }),
+		);
+	});
+	const activity = async (name: string) =>
+		(await app.environments.snapshot()).runs.find(
+			(run) => run.plan.app === name,
+		)?.idle.lastActivityAt ?? null;
+	let receipts: string[] = [],
+		before = 0,
+		after = 0,
+		prerequisite: unknown = "unread";
+	const step = (tool: string, arguments_: Parameters<typeof fauxToolCall>[1]) =>
+		fauxAssistantMessage(fauxToolCall(tool, arguments_), {
+			stopReason: "toolUse",
+		});
+	fake.setResponses([
+		step("env_start", {
+			apps: ["api", "worker"],
+			lifetime: "referenced-roots-v1",
+		}),
+		async () => {
+			before = (await activity("api")) ?? 0;
+			return step("env_logs", { app: "cache" });
+		},
+		() => step("env_stop", { apps: ["worker"] }),
+		() => step("env_logs", { app: "cache" }),
+		async (context) => {
+			receipts = context.messages
+				.filter(
+					(message) =>
+						message.role === "toolResult" && message.toolName === "env_logs",
+				)
+				.map((message) =>
+					(
+						message as unknown as {
+							content: Array<{ type: string; text?: string }>;
+						}
+					).content
+						.map((block) => block.text ?? "")
+						.join(""),
+				);
+			after = (await activity("api")) ?? 0;
+			prerequisite = await activity("cache");
+			return fauxAssistantMessage("Prerequisite diagnostic finished", {
+				stopReason: "stop",
+			});
+		},
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	await eventually(
+		async () => receipts.length,
+		(count) => count === 2,
+	);
+	// Two live roots declare the prerequisite, so no single requiring root exists.
+	expect(receipts[0]).toContain("exactly one live requiring root");
+	// With one requirer left the read succeeds and renews that root's own clock.
+	expect(before).toBeGreaterThan(0);
+	expect(after).toBeGreaterThan(before);
+	// A prerequisite carries no activity clock of its own.
+	expect(prerequisite).toBeNull();
 }, 20000);
