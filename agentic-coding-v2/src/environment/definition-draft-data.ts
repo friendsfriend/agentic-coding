@@ -7,6 +7,8 @@ import type { StagedTreeIdentity } from "./definition-staged-tree.ts";
 export type SourceDraft = {
 	repository: string;
 	file: string;
+	/** An extra file the staged stack needs, bound to an already-staged target. */
+	auxiliary?: boolean;
 	content: string;
 	digest: string;
 	base: "unobserved" | SourceBase;
@@ -64,6 +66,24 @@ export function stored<T>(value: string): T {
 /** Stable private saved-source identity, independent of JSON target selection. */
 export const sourceBindingDigest = (repository: string, file: string) =>
 	digest(JSON.stringify({ repository, file }));
+/** A bounded relative public path: no dotfiles, traversal, absolute paths or
+ * deep trees, so an auxiliary file cannot become a private-config back door. */
+export function auxiliaryPath(raw: unknown) {
+	const value = text(raw, "auxiliary source path", 200),
+		parts = value.split("/");
+	if (
+		parts.length < 1 ||
+		parts.length > 3 ||
+		parts.some(
+			(part) =>
+				!/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/.test(part) || part === "..",
+		)
+	)
+		throw new Error(
+			"Auxiliary sources require a bounded relative public path with no dotfiles",
+		);
+	return value;
+}
 export function sourceBinding(
 	config: Config,
 	content: string,
@@ -98,9 +118,16 @@ export function stageSource(
 	if (
 		Object.keys(body).some(
 			(key) =>
-				!["requestId", "id", "revision", "app", "target", "content"].includes(
-					key,
-				),
+				![
+					"requestId",
+					"id",
+					"revision",
+					"app",
+					"target",
+					"content",
+					"auxiliary",
+					"file",
+				].includes(key),
 		)
 	)
 		throw new Error("Unsupported staged source field");
@@ -121,6 +148,14 @@ export function stageSource(
 		throw new Error(
 			"Exact current revision and UTF8 source text of at most 64 KiB required",
 		);
+	const auxiliary = body.auxiliary === true;
+	if (body.auxiliary !== undefined && typeof body.auxiliary !== "boolean")
+		throw new Error("Auxiliary source selection must be a boolean");
+	const auxiliaryFile = auxiliary ? auxiliaryPath(body.file) : undefined;
+	if (!auxiliary && body.file !== undefined)
+		throw new Error(
+			"An explicit source file is only accepted for an auxiliary source",
+		);
 	const request = digest(
 			JSON.stringify({
 				kind: "staged-compose-source",
@@ -129,6 +164,8 @@ export function stageSource(
 				app,
 				target,
 				content,
+				auxiliary,
+				file: auxiliaryFile ?? null,
 			}),
 		),
 		key = digest(requestId),
@@ -148,7 +185,28 @@ export function stageSource(
 		throw new Error(
 			"Draft revision conflict; load current before saving source",
 		);
-	const binding = sourceBinding(config, previous.content, app, target),
+	const declared = sourceBinding(config, previous.content, app, target);
+	if (auxiliaryFile === declared.file)
+		throw new Error(
+			"An auxiliary source cannot replace the target's declared Compose file",
+		);
+	// An auxiliary file belongs to a target that is already staged: it never
+	// invents a target, and it never displaces the declared Compose file.
+	if (
+		auxiliaryFile &&
+		!previous.sources?.some(
+			(source) =>
+				!source.auxiliary &&
+				source.repository === declared.repository &&
+				source.file === declared.file,
+		)
+	)
+		throw new Error(
+			"Stage the target's declared Compose file before staging an auxiliary source",
+		);
+	const binding = auxiliaryFile
+			? { repository: declared.repository, file: auxiliaryFile }
+			: declared,
 		original = previous.sources?.find(
 			(source) =>
 				source.repository === binding.repository &&
@@ -164,6 +222,7 @@ export function stageSource(
 		content,
 		digest: digest(content),
 		base: original?.base ?? "unobserved",
+		...(auxiliaryFile ? { auxiliary: true as const } : {}),
 	});
 	if (
 		sources.length > 4 ||

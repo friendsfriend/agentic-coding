@@ -216,11 +216,14 @@ export class DefinitionDrafts {
 		return {
 			...draft,
 			preflightReports,
-			sourceBindings: (draft.sources ?? []).map(({ repository, file }) => ({
-				bindingDigest: sourceBindingDigest(repository, file),
-				repository,
-				file,
-			})),
+			sourceBindings: (draft.sources ?? []).map(
+				({ repository, file, auxiliary }) => ({
+					bindingDigest: sourceBindingDigest(repository, file),
+					repository,
+					file,
+					auxiliary: auxiliary === true,
+				}),
+			),
 			schema: schema(this.config, draft),
 			stagedTree: tree
 				? {

@@ -532,6 +532,159 @@ test("a retained staged tree is owned by its digest, inspectable, and released b
 		host.stop();
 	}
 });
+test("an auxiliary source is bound to a staged target, digested in the tree and never a private path", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.chmodSync(config.stateDir, 0o700);
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+	});
+	const host = serve(app);
+	const token = new URLSearchParams(new URL(host.url).hash.slice(1)).get(
+			"token",
+		),
+		api = (route: string, body?: unknown) =>
+			fetch(new URL(route, host.url), {
+				method: body === undefined ? "GET" : "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+				body: body === undefined ? undefined : JSON.stringify(body),
+			});
+	try {
+		const repository = config.repositories[0] ?? "",
+			created = await (
+				await api("/api/environments/drafts", {
+					requestId: "create",
+					content: JSON.stringify({
+						version: 1,
+						projects: [
+							{
+								id: "api",
+								kind: "app",
+								repository,
+								targets: [
+									{
+										id: "stack",
+										action: "run",
+										runtime: "compose",
+										compose: {
+											file: "compose.yaml",
+											provider: "docker",
+											socket: path.join(config.stateDir, "absent.sock"),
+										},
+									},
+								],
+							},
+						],
+					}),
+				})
+			).json(),
+			stage = (body: Record<string, unknown>) =>
+				api("/api/environments/drafts/source", {
+					requestId: `stage-${String(body.file ?? "compose")}`,
+					id: created.id,
+					revision: body.revision,
+					app: "api",
+					target: "stack",
+					...body,
+				}),
+			compose = "services:\n  api:\n    image: aux:latest\n";
+		// An auxiliary file cannot arrive before the target's own source.
+		const early = await stage({
+			revision: created.revision,
+			file: "conf/app.ini",
+			auxiliary: true,
+			content: "mode=fast\n",
+		});
+		expect(early.status).toBe(400);
+		expect(await early.text()).toContain("before staging an auxiliary source");
+		const staged = await (
+			await stage({ revision: created.revision, content: compose })
+		).json();
+		const auxiliary = await (
+			await stage({
+				revision: staged.revision,
+				file: "conf/app.ini",
+				auxiliary: true,
+				content: "mode=fast\n",
+			})
+		).json();
+		for (const file of [
+			"../escape.ini",
+			".env",
+			"conf/.hidden",
+			"a/b/c/d.ini",
+		]) {
+			expect(
+				(
+					await stage({
+						revision: auxiliary.revision,
+						file,
+						auxiliary: true,
+						content: "x\n",
+					})
+				).status,
+			).toBe(400);
+		}
+		expect(
+			(
+				await stage({
+					revision: auxiliary.revision,
+					file: "compose.yaml",
+					auxiliary: true,
+					content: "x\n",
+				})
+			).status,
+		).toBe(400);
+		const read = await (
+			await api(`/api/environments/drafts?id=${created.id}`)
+		).json();
+		expect(read.sourceBindings).toEqual([
+			{
+				bindingDigest: expect.any(String),
+				repository,
+				file: "compose.yaml",
+				auxiliary: false,
+			},
+			{
+				bindingDigest: expect.any(String),
+				repository,
+				file: "conf/app.ini",
+				auxiliary: true,
+			},
+		]);
+		const tree = await (
+			await api("/api/environments/drafts/preflight", {
+				requestId: "aux-tree",
+				id: created.id,
+				revision: read.revision,
+				digest: read.digest,
+				materializeStagedTree: true,
+			})
+		).json();
+		expect(tree.accepted).toBe(true);
+		expect(tree.fileCount).toBe(3);
+		expect(tree.treeRetained).toBe(false);
+		// The auxiliary binding is removable by digest without touching the target.
+		const removed = await (
+			await api("/api/environments/drafts/source/remove", {
+				requestId: "remove-aux",
+				id: created.id,
+				revision: read.revision,
+				bindingDigest: read.sourceBindings[1].bindingDigest,
+			})
+		).json();
+		expect(removed.revision).toBe(read.revision + 1);
+		const after = await (
+			await api(`/api/environments/drafts?id=${created.id}`)
+		).json();
+		expect(
+			after.sourceBindings.map((binding: { file: string }) => binding.file),
+		).toEqual(["compose.yaml"]);
+	} finally {
+		host.stop();
+	}
+});
 test("a retained tree is disclosed by metadata and released by its digest without deleting its draft", async () => {
 	const { app, config, open } = await fixture(true, (config) => {
 		fs.chmodSync(config.stateDir, 0o700);

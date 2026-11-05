@@ -1,6 +1,7 @@
 import { type Config, digest } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
 import {
+	auxiliaryPath,
 	sourceBindingDigest as binding,
 	type Draft,
 	type SourceDraft,
@@ -49,7 +50,9 @@ function baseIdentity(base: SourceDraft["base"]) {
 }
 function sourceManifest(source: SourceDraft) {
 	if (
-		publicComposePath(source.file) !== source.file ||
+		(source.auxiliary === true
+			? auxiliaryPath(source.file) !== source.file
+			: publicComposePath(source.file) !== source.file) ||
 		Buffer.byteLength(source.content) > sourceByteLimit ||
 		Buffer.from(source.content).toString("utf8") !== source.content ||
 		digest(source.content) !== source.digest
@@ -59,6 +62,9 @@ function sourceManifest(source: SourceDraft) {
 		bindingDigest: binding(source.repository, source.file),
 		sourceDigest: source.digest,
 		baseDigest: baseIdentity(source.base),
+		// An auxiliary file is bound to a staged target rather than to a Compose
+		// file, so it is recorded explicitly instead of looking like an orphan.
+		auxiliary: source.auxiliary === true,
 	};
 }
 function candidateInputs(config: Config, draft: Draft) {
@@ -162,6 +168,7 @@ export function inspectStagedCandidate(config: Config, draft: Draft) {
 				),
 			);
 		const orphanBindings = manifest.sourceBindings
+				.filter((source) => !source.auxiliary)
 				.filter((source) => !used.has(source.bindingDigest))
 				.map((source) => source.bindingDigest),
 			accepted =
