@@ -15,10 +15,11 @@ afterEach(cleanup);
 // Minimal Kubernetes HTTP/CLI boundary: bounded PodList, Pod creation and
 // UID-preconditioned deletion. No scheduler, container or cluster simulation.
 const client = `import fs from "node:fs";
-if(process.env.FIXTURE_CALLS)fs.appendFileSync(process.env.FIXTURE_CALLS,JSON.stringify({parent:process.ppid})+"\\n");
+if(process.env.FIXTURE_CALLS)fs.appendFileSync(process.env.FIXTURE_CALLS,JSON.stringify({parent:process.ppid,forward:process.argv.slice(2).includes("port-forward")})+"\\n");
 const file=process.env.FIXTURE_STATE,s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{pods:{},serial:0,gate:process.env.FIXTURE_GATE!=="closed"};
 const args=process.argv.slice(2);
-if(args.includes("logs")){const lines=JSON.parse(process.env.FIXTURE_LOG_LINES??"[]");for(const line of lines)console.log(args.includes("--timestamps")?line.at+" "+line.text:line.text);if(args.includes("--follow"))setInterval(()=>{},1000);process.exitCode=0;}
+if(args.includes("port-forward")){setInterval(()=>{},1000);}
+else if(args.includes("logs")){const lines=JSON.parse(process.env.FIXTURE_LOG_LINES??"[]");for(const line of lines)console.log(args.includes("--timestamps")?line.at+" "+line.text:line.text);if(args.includes("--follow"))setInterval(()=>{},1000);process.exitCode=0;}
 else{
 const method=args.find(v=>["get","create","delete"].includes(v)),uri=args[args.indexOf("--raw")+1],url=new URL(uri,"https://127.0.0.1"),name=url.pathname.split("/").at(-1);
 console.error("private-api-output");let result;
@@ -464,6 +465,115 @@ test("a single owned replica exposes its pod log buffer with the pod's own times
 	});
 	expect(run?.framing).toBe("single-pod-buffer-provider-event-time");
 	expect(JSON.stringify(observed)).not.toContain("2999-");
+	await app.cancel(task);
+	await app.harness.waitForTask(task as TaskId, context);
+	const pods = JSON.parse(
+		fs.readFileSync(path.join(config.configDir, "pods.json"), "utf8"),
+	);
+	expect(Object.keys(pods.pods)).toHaveLength(0);
+	expect((await app.environments.snapshot()).runs[0]?.state).toBe("exited");
+}, 20000);
+
+test("a port forward with several replicas is refused instead of choosing a pod", async () => {
+	await expect(
+		fixture(false, (config) => {
+			configureLocalCluster(config, client, {
+				FIXTURE_STATE: path.join(config.configDir, "pods.json"),
+			});
+			fs.writeFileSync(
+				path.join(config.configDir, "environments.json"),
+				JSON.stringify({
+					version: 1,
+					projects: [
+						{
+							id: "api",
+							kind: "app",
+							repository: config.repositories[0],
+							targets: [
+								{
+									id: "pods",
+									action: "run",
+									runtime: "kubernetes",
+									kubernetes: {
+										cluster: "local",
+										namespace: "fixtures",
+										image: "fixture/app:v1",
+										replicas: 2,
+										portForwards: [{ local: 18080, remote: 8080 }],
+									},
+								},
+							],
+						},
+					],
+				}),
+			);
+		}),
+	).rejects.toThrow("exactly one replica");
+});
+
+test("a declared port forward is loopback-only and joined into cancellation cleanup", async () => {
+	const calls = (config: { configDir: string }) =>
+		fs
+			.readFileSync(path.join(config.configDir, "client-calls.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		configureLocalCluster(config, client, {
+			FIXTURE_STATE: path.join(config.configDir, "pods.json"),
+			FIXTURE_LOG_LINES: "[]",
+			FIXTURE_CALLS: path.join(config.configDir, "client-calls.jsonl"),
+		});
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify({
+				version: 1,
+				projects: [
+					{
+						id: "api",
+						kind: "app",
+						repository: config.repositories[0],
+						targets: [
+							{
+								id: "pods",
+								action: "run",
+								runtime: "kubernetes",
+								timeoutMs: 5000,
+								kubernetes: {
+									cluster: "local",
+									namespace: "fixtures",
+									image: "fixture/app:v1",
+									replicas: 1,
+									portForwards: [{ local: 18080, remote: 8080 }],
+								},
+							},
+						],
+					},
+				],
+			}),
+		);
+	});
+	fake.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("env_start", { apps: ["api"], runtime: "kubernetes" }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall("request_review", { path: ".", title: "Hold forward" }),
+			{ stopReason: "toolUse" },
+		),
+	]);
+	const task = await app.startTask({ ...invocation, requestId: "pod-forward" });
+	await approve(app, task);
+	await pendingReview(app, task, "Hold forward");
+	await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs[0]?.ready === true,
+	);
+	const forwarded = calls(config).filter((call) => call.forward === true);
+	expect(forwarded).toHaveLength(1);
+	// A forward is not readiness or endpoint authority for the run.
+	expect((await app.environments.snapshot()).runs[0]?.ready).toBe(true);
 	await app.cancel(task);
 	await app.harness.waitForTask(task as TaskId, context);
 	const pods = JSON.parse(

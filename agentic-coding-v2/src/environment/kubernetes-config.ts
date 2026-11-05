@@ -8,6 +8,8 @@ export type KubernetesTarget = {
 	args: string[];
 	replicas: number;
 	readinessProbe?: ReadinessProbe;
+	/** Declared loopback-only pod port forwards; never a readiness signal. */
+	portForwards?: { local: number; remote: number }[];
 };
 export function readKubernetes(raw: unknown): KubernetesTarget {
 	const data = object(raw);
@@ -22,6 +24,7 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 					"args",
 					"replicas",
 					"readinessProbe",
+					"portForwards",
 				].includes(key),
 		)
 	)
@@ -46,13 +49,20 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 			throw new Error("Kubernetes commands require bounded argv arrays");
 		return value.map((part) => text(part, "Kubernetes argv", 16000));
 	};
-	const replicas = data.replicas ?? 1;
+	const forwards = readPortForwards(data.portForwards),
+		replicas = data.replicas ?? 1;
 	if (
 		!Number.isSafeInteger(replicas) ||
 		Number(replicas) < 1 ||
 		Number(replicas) > 16
 	)
 		throw new Error("Kubernetes bare pod replicas must be from 1 to 16");
+	// A forward targets one pod; several replicas would need a selection the
+	// operator never approved.
+	if (Number(replicas) > 1 && forwards.length)
+		throw new Error(
+			"Kubernetes port forwards require exactly one replica: a pod is not chosen implicitly",
+		);
 	return {
 		cluster,
 		namespace,
@@ -60,8 +70,38 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 		command: argv(data.command),
 		args: argv(data.args),
 		replicas: Number(replicas),
+		portForwards: forwards,
 		...(data.readinessProbe === undefined
 			? {}
 			: { readinessProbe: readReadinessProbe(data.readinessProbe) }),
 	};
+}
+
+/** Loopback-only forwards with unique local ports: no bind address, DNS or
+ * allocation is inferred, and a duplicate local port is refused. */
+function readPortForwards(raw: unknown) {
+	if (raw === undefined) return [];
+	if (!Array.isArray(raw) || raw.length < 1 || raw.length > 8)
+		throw new Error("Kubernetes port forwards require 1–8 declared entries");
+	const forwards = raw.map((entry) => {
+		const value = object(entry);
+		if (Object.keys(value).some((key) => !["local", "remote"].includes(key)))
+			throw new Error("Unsupported Kubernetes port forward field");
+		const port = (key: string) => {
+			const selected = value[key];
+			if (
+				!Number.isSafeInteger(selected) ||
+				Number(selected) < 1 ||
+				Number(selected) > 65535
+			)
+				throw new Error("Kubernetes port forward ports must be 1–65535");
+			return Number(selected);
+		};
+		return { local: port("local"), remote: port("remote") };
+	});
+	if (
+		new Set(forwards.map((forward) => forward.local)).size !== forwards.length
+	)
+		throw new Error("Kubernetes port forwards require distinct local ports");
+	return forwards;
 }

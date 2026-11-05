@@ -46,6 +46,7 @@ export class KubernetesProcess implements EnvironmentProcess {
 	private run: string;
 	private names: string[];
 	private followers = new Map<string, ShellProcess>();
+	private forwards = new Map<string, ShellProcess>();
 	constructor(
 		private config: Config,
 		private plan: Plan,
@@ -356,6 +357,21 @@ export class KubernetesProcess implements EnvironmentProcess {
 			}
 		}
 		if (this.names.length === 1 && this.client) {
+			const target = this.names[0];
+			if (!target) throw new Error("Kubernetes pod identity is missing");
+			for (const forward of this.target.portForwards ?? []) {
+				const process = this.client.forward(
+					this.target.namespace,
+					target,
+					forward.local,
+					forward.remote,
+				);
+				if (!(await process.spawned))
+					throw new Error("Kubernetes port forward could not start");
+				this.forwards.set(`${forward.local}:${forward.remote}`, process);
+			}
+		}
+		if (this.names.length === 1 && this.client) {
 			const name = this.names[0];
 			if (!name) throw new Error("Kubernetes pod identity is missing");
 			const follower = this.client.follow(this.target.namespace, name);
@@ -415,6 +431,14 @@ export class KubernetesProcess implements EnvironmentProcess {
 	async stop() {
 		this.stopping ??= (async () => {
 			this.controller.abort();
+			for (const forward of this.forwards.values())
+				try {
+					await forward.stop();
+					if (forward.cleanupFailed) this.uncertain = true;
+				} catch {
+					this.uncertain = true;
+				}
+			this.forwards.clear();
 			for (const follower of this.followers.values())
 				try {
 					await follower.stop();

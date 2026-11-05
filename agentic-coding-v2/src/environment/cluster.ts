@@ -290,6 +290,32 @@ export function openClusterClient(
 		);
 		return {
 			commands,
+			/** One declared loopback port forward to an owned pod; a local client
+			 * process, never a readiness, ownership or endpoint authority. */
+			forward: (
+				namespace: string,
+				name: string,
+				local: number,
+				remote: number,
+			) =>
+				new ShellProcess({ ...plan, timeoutMs: 7200000 }, config.configDir, {
+					executable: "kubectl",
+					args: [
+						"--kubeconfig",
+						file,
+						"--context",
+						inspection.cluster.context,
+						"--server",
+						inspection.server,
+						"port-forward",
+						"--address",
+						"127.0.0.1",
+						"--namespace",
+						namespace,
+						`pod/${name}`,
+						`${local}:${remote}`,
+					],
+				}),
 			/** One bounded, timestamped pod log follower; never a control channel. */
 			follow: (namespace: string, name: string) =>
 				new ShellProcess({ ...plan, timeoutMs: 7200000 }, config.configDir, {

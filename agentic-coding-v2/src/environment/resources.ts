@@ -26,6 +26,11 @@ function ports(plan: Plan) {
 					address: url.hostname.replace(/^\[|\]$/g, ""),
 				};
 			})),
+		...(service.kubernetes?.portForwards ?? []).map((forward) => ({
+			host: forward.local,
+			protocol: "tcp",
+			address: "127.0.0.1",
+		})),
 		...(service.queryConnection
 			? [
 					{

@@ -529,3 +529,17 @@ The public scenario starts a one-replica pod run against the disposable client, 
 Verification: **114 tests / 1553 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify objective/verified **83.0**, overall **20.7**, strict **20.0**.
 
 **Next backend step:** Kubernetes depth continues with managed port forwards for an owned pod, reusing the same live-UID precondition and explicit-refusal discipline; Helm remains refused until then.
+
+## Declared Kubernetes port forwards
+
+A single-replica Kubernetes target may declare up to eight `portForwards`, each `{local, remote}` with 1–65535 ports and distinct local ports. Declaring forwards with more than one replica is refused when the configuration is read: a forward targets one pod, and choosing among replicas implicitly would be an approval the operator never gave.
+
+A declared forward starts only after every replica is ready, as a local `kubectl port-forward --address 127.0.0.1 -n <namespace> pod/<name> <local>:<remote>` client process over the same private kubeconfig and argv prefix as the control client. The bind address is fixed to loopback; no allocation, DNS name, wildcard bind or external exposure is invented. Declared local ports participate in the existing native port-conflict admission, so two runs cannot silently claim the same local port.
+
+A forward is not readiness, ownership, endpoint or publication authority: the run's readiness remains the pod observation, the forward grants no `env_http_request` endpoint, and a forward failure does not adopt or release anything. Stopping the run closes every forward alongside the log follower and marks cleanup uncertain if that fails.
+
+The public scenarios assert that a multi-replica declaration is refused while reading the configuration, and that a single-replica declaration starts exactly one loopback forward, does not become the run's readiness, and is joined into cancellation cleanup with the pod deleted and the run released. Limits: this is not a health-checked tunnel (the client's own "Forwarding from …" output is not parsed, so a listening port is not proof of connectivity), not a service/Helm forward, and not verified against a live cluster.
+
+Verification: **116 tests / 1558 assertions / 42 files**, Biome **154 files**, full type-check, build and compiled CLI help pass; legacy boundaries **71 / 278** and type-check pass. Desloppify objective/verified **82.8**, overall **20.7**, strict **19.9**; the 20 subjective dimensions remain unassessed.
+
+**Next backend step:** authoring depth — auxiliary multi-file staging for a Compose target so a stack's extra config files are digested, assembled and retained with the same ownership and cleanup fences.
