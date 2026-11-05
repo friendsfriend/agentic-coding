@@ -35,6 +35,8 @@ export type EngineState = {
 	replaceWithCopiedLabels?: boolean;
 	buildExit?: number;
 	buildDelayMs?: number;
+	inspectDelayMs?: number;
+	startDelayMs?: number;
 	initialHealth?: "missing" | "unhealthy";
 };
 export const readEngineFile = (file: string) =>
@@ -291,6 +293,10 @@ export function serveContainerFixture(file: string) {
 					fs.writeFileSync(file, JSON.stringify(state));
 					if (args[0] === "build" && state.buildDelayMs)
 						await Bun.sleep(state.buildDelayMs);
+					if (args[0] === "inspect" && state.inspectDelayMs)
+						await Bun.sleep(state.inspectDelayMs);
+					if (args[0] === "start" && state.startDelayMs)
+						await Bun.sleep(state.startDelayMs);
 					return Response.json({ stdout, stderr, follow, exit });
 				},
 			});

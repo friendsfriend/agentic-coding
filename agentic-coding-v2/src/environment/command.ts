@@ -18,6 +18,10 @@ export class EnvironmentCommands {
 	get logs() {
 		return `${this.output}${this.current?.logs ?? ""}`.slice(-64000);
 	}
+	private note(message: string) {
+		// Fixed diagnostic text only: never argv, private output, paths or secrets.
+		this.output = `${this.output}\n${message}\n`.slice(-64000);
+	}
 	async run(
 		args: string[],
 		options: {
@@ -56,7 +60,12 @@ export class EnvironmentCommands {
 		this.current = child;
 		try {
 			const exit = await child.wait(options.signal);
-			if (options.effect && exit.signal) this.uncertainEffect = true;
+			if (options.effect && exit.signal) {
+				this.uncertainEffect = true;
+				this.note(
+					"Mutating environment CLI exited by signal; remote effects remain uncertain even if later cleanup observes absence.",
+				);
+			}
 			if (child.cleanupFailed)
 				throw new Error("CLI process cleanup is uncertain");
 			if (oversize)
@@ -65,6 +74,11 @@ export class EnvironmentCommands {
 		} catch {
 			// An interrupted mutating client is not proof of remote cancellation.
 			if (options.effect) this.uncertainEffect = true;
+			this.note(
+				options.effect
+					? "Mutating environment CLI failed or was interrupted; remote effects remain uncertain even if later cleanup observes absence."
+					: "Non-mutating environment CLI failed or was interrupted; this does not confirm resource absence.",
+			);
 			throw new Error(
 				"Environment CLI command failed or was interrupted; inspect redacted logs",
 			);
@@ -73,8 +87,16 @@ export class EnvironmentCommands {
 				await child.stop();
 			} catch {
 				this.cleanupFailed = true;
+				this.note(
+					"Environment CLI local stop did not settle; the resource remains quarantined.",
+				);
 			}
-			if (child.cleanupFailed) this.cleanupFailed = true;
+			if (child.cleanupFailed) {
+				this.cleanupFailed = true;
+				this.note(
+					"Environment CLI local process-group cleanup could not be confirmed; the resource remains quarantined.",
+				);
+			}
 			this.output = `${this.output}${child.logs}`.slice(-64000);
 			this.current = null;
 		}
@@ -92,6 +114,11 @@ export class EnvironmentCommands {
 		const result = await this.run(args, options);
 		if (result.exit.code !== 0 || result.exit.signal) {
 			if (options.effect) this.uncertainEffect = true;
+			this.note(
+				options.effect
+					? "Mutating environment CLI returned failure; remote effects remain uncertain even if later cleanup observes absence."
+					: "Non-mutating environment CLI returned failure; this does not confirm resource absence.",
+			);
 			throw new Error(
 				"Environment CLI returned failure; inspect redacted logs",
 			);

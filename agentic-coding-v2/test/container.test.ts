@@ -501,7 +501,12 @@ test("Podman Compose requires explicit isolated mode rather than inventing netwo
 }, 15000);
 
 test("Compose web can discover its ready worker, and an unavailable prerequisite never yields a ready stack", async () => {
-	for (const available of [true, false]) {
+	for (const scenario of [
+		"ready",
+		"missing-health",
+		"lost-start-response",
+	] as const) {
+		const available = scenario === "ready";
 		const { app, config, fake, invocation } = await fixture(false, (config) => {
 			configureCompose(config);
 			const file = path.join(config.configDir, "environments.json"),
@@ -510,7 +515,11 @@ test("Compose web can discover its ready worker, and an unavailable prerequisite
 			fs.writeFileSync(file, JSON.stringify(data));
 			const state = readEngine(config);
 			state.workloadPrerequisite = "healthy";
-			if (!available) state.initialHealth = "missing";
+			if (scenario === "missing-health") {
+				state.initialHealth = "missing";
+				state.inspectDelayMs = 100;
+			}
+			if (scenario === "lost-start-response") state.startDelayMs = 3000;
 			fs.writeFileSync(engine(config), JSON.stringify(state));
 		});
 		await composeFile(
@@ -543,13 +552,35 @@ test("Compose web can discover its ready worker, and an unavailable prerequisite
 		}
 		await app.harness.waitForTask(task as TaskId, context);
 		const state = readEngine(config),
-			run = (await app.environments.snapshot()).runs[0];
+			run = (await app.environments.logs("api", task, true))[0];
 		if (!available) expect(run?.ready).not.toBe(true);
 		expect(Object.keys(state.containers)).toHaveLength(0);
 		expect(Object.keys(state.networks ?? {})).toHaveLength(0);
-		expect(run?.state).toBe("exited");
+		expect(
+			run?.state,
+			JSON.stringify({
+				scenario,
+				error: run?.error,
+				runtimeStatuses: run?.runtimeStatuses,
+				serviceLogs: run?.serviceLogs,
+				output: run?.output,
+			}),
+		).toBe(scenario === "lost-start-response" ? "interrupted" : "exited");
+		if (scenario === "lost-start-response") {
+			expect(run?.output).toContain(
+				"Mutating environment CLI failed or was interrupted; remote effects remain uncertain",
+			);
+			expect(run?.output).not.toContain(secret);
+			expect(
+				run?.runtimeStatuses?.every((status) => status.state === "absent"),
+			).toBe(true);
+			await expect(
+				app.environments.stopOnce("refuse-uncertain-compose", task, ["api"]),
+			).rejects.toThrow();
+			expect(readEngine(config).history).toEqual(state.history);
+		}
 	}
-}, 15000);
+}, 20000);
 
 test("native container approvals select profiles/providers, fence ownership, redact streams and return actual build/test receipts", async () => {
 	const { app, config, fake, invocation } = await fixture(false, configure);
