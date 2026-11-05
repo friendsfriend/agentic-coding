@@ -196,14 +196,24 @@ test("referenced diagnostics name their exact root generation and prerequisite c
 	const { app, config, fake, invocation } = await fixture(false, (config) =>
 		referenced(config, port),
 	);
-	let receipts: string[] = [];
+	let receipts: string[] = [],
+		observed = 0,
+		heldApi = "",
+		startedAt = 0;
+	const activity = async (id: string) =>
+		(await app.environments.snapshot()).runs.find((run) => run.id === id)?.idle
+			.lastActivityAt ?? 0;
 	fake.setResponses([
 		call("env_start", {
 			apps: ["api", "worker"],
 			lifetime: "referenced-roots-v1",
 		}),
 		call("env_http_request", { app: "api", endpoint: "web" }),
-		call("otel_query", { app: "api", mode: "traces" }),
+		async () => {
+			// The completed request renewed only the root it belonged to.
+			observed = await activity(heldApi);
+			return call("otel_query", { app: "api", mode: "traces" });
+		},
 		call("env_stop", { apps: ["api"] }),
 		call("env_http_request", { app: "api", endpoint: "web" }),
 		(messages) => {
@@ -237,6 +247,8 @@ test("referenced diagnostics name their exact root generation and prerequisite c
 		held.runs.find((run) => run.plan.app === name)?.id ?? "";
 	const api = id("api"),
 		resources = [id("base"), id("cache")].sort();
+	heldApi = api;
+	startedAt = held.runs.find((run) => run.id === api)?.idle.lastActivityAt ?? 0;
 	// The approved operation discloses the exact generation closure it binds.
 	const boundary = await pendingReview(app, owner, "Endpoint GET: api/web");
 	expect(boundary.snapshot).toContain('"root"');
@@ -265,6 +277,9 @@ test("referenced diagnostics name their exact root generation and prerequisite c
 	};
 	expect(telemetry.source).toBe("native-run-otlp-http-json");
 	expect(telemetry.root).toEqual({ run: api, resources });
+	// The completed request renewed its requiring root's own activity clock.
+	expect(startedAt).toBeGreaterThan(0);
+	expect(observed).toBeGreaterThan(startedAt);
 	// A stopped root admits no diagnostic and no substitute generation.
 	expect(receipts[2]).toContain(
 		"Endpoint requires this task's live ready shell app",
@@ -439,3 +454,80 @@ test("a shared prerequisite diagnostic is refused while ambiguous and renews its
 	// A prerequisite carries no activity clock of its own.
 	expect(prerequisite).toBeNull();
 }, 20000);
+
+test("a later acquisition is decided against the held closure and is admitted only after every generation exited", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		referenced(config);
+		fs.writeFileSync(
+			path.join(config.configDir, "config.json"),
+			JSON.stringify({ environment: { instances: { idle_ttl_minutes: 1 } } }),
+		);
+	});
+	let receipts: string[] = [],
+		before = 0,
+		running: string[] = [],
+		stops = "";
+	const step = (tool: string, arguments_: Parameters<typeof fauxToolCall>[1]) =>
+		fauxAssistantMessage(fauxToolCall(tool, arguments_), {
+			stopReason: "toolUse",
+		});
+	fake.setResponses([
+		step("env_start", {
+			apps: ["api", "worker"],
+			lifetime: "referenced-roots-v1",
+		}),
+		step("env_start", { apps: ["worker"], lifetime: "referenced-roots-v1" }),
+		async () => {
+			// Every held generation is still running, so the closure keeps the fence.
+			before = Date.now();
+			await app.tick(before + 61_000);
+			return step("env_start", {
+				apps: ["worker"],
+				lifetime: "referenced-roots-v1",
+			});
+		},
+		async (context) => {
+			receipts = context.messages
+				.filter(
+					(message) =>
+						message.role === "toolResult" && message.toolName === "env_start",
+				)
+				.map((message) =>
+					(
+						message as unknown as {
+							content: Array<{ type: string; text?: string }>;
+						}
+					).content
+						.map((block) => block.text ?? "")
+						.join(""),
+				);
+			running = (await app.environments.snapshot()).runs
+				.filter((run) => run.state === "running")
+				.map((run) => run.plan.app)
+				.sort();
+			stops = fs.readFileSync(path.join(config.configDir, "stops"), "utf8");
+			return fauxAssistantMessage("Referenced fence finished", {
+				stopReason: "stop",
+			});
+		},
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	// A second acquisition while both roots and their prerequisites are held.
+	await approve(app, owner, "Environment run: worker");
+	// After expiry the whole closure exited, so a fresh acquisition is admitted.
+	await approve(app, owner, "Environment run: worker");
+	await eventually(
+		async () => receipts.length,
+		(count) => count === 3,
+	);
+	// The first acquisition succeeded; the second was refused while the closure
+	// was still held, and the third was admitted once every generation exited.
+	expect(receipts[0]).not.toContain("<harness>");
+	expect(receipts[1]).toContain(
+		"every held root and prerequisite generation must be released or expire first",
+	);
+	expect(receipts[2]).not.toContain("<harness>");
+	expect(running).toEqual(["base", "cache", "worker"]);
+	expect(stops.indexOf("cache")).toBeLessThan(stops.indexOf("base"));
+}, 30000);

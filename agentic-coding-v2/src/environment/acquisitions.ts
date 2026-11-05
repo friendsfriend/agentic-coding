@@ -290,10 +290,16 @@ export class Acquisitions {
 							admission.request !== request
 						)
 							throw new Error("Acquisition is no longer waiting");
-						const held = active.filter((run) => run.plan.action === "run");
-						if (held.some((run) => run.owner === owner.id))
+						const held = active.filter((run) => run.plan.action === "run"),
+							mine = held.filter((run) => run.owner === owner.id);
+						// Any non-exited generation still holds the fence, including one
+						// closing behind a stop or an expiry, so a later acquisition is
+						// decided against the closure rather than the batch receipt.
+						if (mine.length)
 							throw new Error(
-								"Release your existing app batch before acquiring another; interrupted runs need operator inspection",
+								mine.some((run) => run.state === "interrupted")
+									? "Release your existing app batch before acquiring another; interrupted runs need operator inspection"
+									: "Release your existing app batch before acquiring another; every held root and prerequisite generation must be released or expire first",
 							);
 						if (
 							values<WaitReceipt>(doc.waits)

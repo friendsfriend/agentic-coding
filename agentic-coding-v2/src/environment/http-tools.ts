@@ -167,14 +167,15 @@ export function createHttpTools(
 				);
 				if (review.state !== "approved" || review.snapshot !== snapshot)
 					throw new Error("Exact current endpoint GET was not approved");
-				return environmentResult(
-					await manager.http.request(
-						owner,
-						request,
-						context.abortSignal,
-						issuance,
-					),
+				const response = await manager.http.request(
+					owner,
+					request,
+					context.abortSignal,
+					issuance,
 				);
+				// A completed diagnostic renews the clock of the root it belongs to.
+				manager.idle.touchRun(owner.id, request.root?.run ?? request.run);
+				return environmentResult(response);
 			},
 		}),
 	];
