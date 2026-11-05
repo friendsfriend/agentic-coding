@@ -140,7 +140,16 @@ test("approved held SQL is read-only, precise, bounded and frozen-secret redacte
 				)
 			).status,
 		).toBe(400);
-		const history = await (await get(route)).json();
+		const window = await (await get(route)).json(),
+			history = window.records;
+		expect(window).toMatchObject({
+			total: history.length,
+			returned: history.length,
+			omitted: 0,
+			limit: 200,
+			scope: "exact-run",
+			order: "newest-issuance-first",
+		});
 		expect(history).toHaveLength(5);
 		expect(history[0].observedAt).toBe(last.observedAt);
 		expect(JSON.stringify(history)).not.toContain("fixture_secrets");

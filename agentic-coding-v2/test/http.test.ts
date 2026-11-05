@@ -200,7 +200,16 @@ test("held local endpoint GETs require exact approval, redact frozen secrets, bo
 			(await get(new URL("/api/environments/http-history?run=unknown", base)))
 				.status,
 		).toBe(400);
-		const history = await (await get(route)).json();
+		const window = await (await get(route)).json(),
+			history = window.records;
+		expect(window).toMatchObject({
+			total: history.length,
+			returned: history.length,
+			omitted: 0,
+			limit: 200,
+			scope: "exact-run",
+			order: "newest-issuance-first",
+		});
 		expect(history).toHaveLength(4);
 		expect(history[0]).toMatchObject({
 			run: run.id,
@@ -229,7 +238,7 @@ test("held local endpoint GETs require exact approval, redact frozen secrets, bo
 		expect(JSON.stringify(recorded)).not.toContain("HTTP_SECRET");
 		detail.searchParams.set("operation", "http-unknown");
 		expect((await get(detail)).status).toBe(400);
-		expect(await (await get(route)).json()).toEqual(history);
+		expect(await (await get(route)).json()).toEqual(window);
 		expect(fs.readFileSync(log, "utf8")).toBe(priorRequests);
 	} finally {
 		host.stop();

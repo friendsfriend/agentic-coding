@@ -3,6 +3,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
+import { diagnosticHistory } from "./diagnostic-history.ts";
 import { type EndpointRequest, endpointUrl } from "./endpoint.ts";
 import { loadEndpointCa, prepareEndpointCa } from "./endpoint-ca.ts";
 import { endpointRequest } from "./http.ts";
@@ -30,41 +31,20 @@ export class HeldHttp {
 		);
 		if (!run) throw new Error("Unknown HTTP diagnostic run");
 		const doc = await this.authority
-				.store()
-				.snapshot(EnvironmentState, background),
-			entries = Object.entries(doc?.httpOperations ?? {})
-				.map(([id, raw]) => ({ id, receipt: decode<HttpReceipt>(raw) }))
-				.filter(
-					({ receipt }) =>
-						receipt.owner === run.owner &&
-						receipt.approved.run === run.id &&
-						receipt.approved.app === run.plan.app,
-				)
-				.slice(-200);
-		const summary = ({ id, receipt }: (typeof entries)[number]) => ({
-			id,
-			owner: receipt.owner,
-			run: run.id,
-			app: run.plan.app,
-			endpoint: receipt.approved.endpoint,
-			method: receipt.approved.http?.method ?? "GET",
-			state: receipt.state,
-			inputDigest: receipt.inputDigest,
-			issuedAt: receipt.issuedAt,
-			observedAt: receipt.result?.observedAt ?? null,
-			authority:
-				"Historical HTTP diagnostic only: no new request, connection or lease. Issued is pending or uncertain, not proof of dispatch, server-side effects or response. Never automatically resend.",
-		});
-		if (operation === undefined) return entries.toReversed().map(summary);
-		const found = entries.find((entry) => entry.id === operation);
-		if (!found) throw new Error("Unknown HTTP diagnostic for this exact run");
-		return {
-			...summary(found),
-			result:
-				found.receipt.state === "completed"
-					? (found.receipt.result ?? null)
-					: null,
-		};
+			.store()
+			.snapshot(EnvironmentState, background);
+		return diagnosticHistory<HttpReceipt>(
+			doc?.httpOperations,
+			run,
+			operation,
+			"HTTP",
+			(receipt) => receipt.approved.app === run.plan.app,
+			(receipt) => ({
+				app: run.plan.app,
+				endpoint: receipt.approved.endpoint,
+				method: receipt.approved.http?.method ?? "GET",
+			}),
+		);
 	}
 	private async endpointRun(
 		owner: TaskInfo,

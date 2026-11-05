@@ -3,6 +3,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import { type Config, digest } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
+import { diagnosticHistory } from "./diagnostic-history.ts";
 import {
 	type EndpointCa,
 	loadEndpointCa,
@@ -69,40 +70,16 @@ export class DatabaseDiagnostics {
 		);
 		if (!run) throw new Error("Unknown database diagnostic run");
 		const doc = await this.authority
-				.store()
-				.snapshot(EnvironmentState, background),
-			entries = Object.entries(doc?.queryOperations ?? {})
-				.map(([id, raw]) => ({ id, receipt: decode<QueryReceipt>(raw) }))
-				.filter(
-					({ receipt }) =>
-						receipt.owner === run.owner &&
-						receipt.approved.run === run.id &&
-						receipt.approved.input.infra === run.plan.app,
-				)
-				.slice(-200);
-		const summary = ({ id, receipt }: (typeof entries)[number]) => ({
-			id,
-			owner: receipt.owner,
-			run: run.id,
-			infra: run.plan.app,
-			app: receipt.approved.app,
-			state: receipt.state,
-			inputDigest: receipt.inputDigest,
-			issuedAt: receipt.issuedAt,
-			observedAt: receipt.result?.observedAt ?? null,
-			authority:
-				"Historical SQL diagnostic only: no new query, connection or lease. Issued is pending or uncertain, not proof of execution, rollback or success.",
-		});
-		if (operation === undefined) return entries.toReversed().map(summary);
-		const found = entries.find((entry) => entry.id === operation);
-		if (!found) throw new Error("Unknown SQL diagnostic for this exact run");
-		return {
-			...summary(found),
-			result:
-				found.receipt.state === "completed"
-					? (found.receipt.result ?? null)
-					: null,
-		};
+			.store()
+			.snapshot(EnvironmentState, background);
+		return diagnosticHistory<QueryReceipt>(
+			doc?.queryOperations,
+			run,
+			operation,
+			"SQL",
+			(receipt) => receipt.approved.input.infra === run.plan.app,
+			(receipt) => ({ infra: run.plan.app, app: receipt.approved.app }),
+		);
 	}
 	private async held(owner: TaskInfo, infra: string, signal?: AbortSignal) {
 		this.authority.check(owner.id, signal);
