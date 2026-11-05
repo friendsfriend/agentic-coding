@@ -17,6 +17,7 @@ import {
 	type SourceDraft,
 	sourceBinding,
 	sourceBindingDigest,
+	stagedTreeReceipt,
 	stageSource,
 	stored,
 } from "./definition-draft-data.ts";
@@ -44,6 +45,7 @@ import {
 import { inspectComposeSource } from "./definition-source-check.ts";
 import {
 	assembleStagedTree,
+	releaseStagedTree,
 	stagedTreeIdentity,
 } from "./definition-staged-tree.ts";
 import { within } from "./path-within.ts";
@@ -239,6 +241,7 @@ export class DefinitionDrafts {
 			compareBase,
 			stagedSource,
 			selection,
+			retain,
 			request,
 			key,
 		} = preflightRequest(body);
@@ -297,7 +300,7 @@ export class DefinitionDrafts {
 				...(candidate
 					? inspectStagedCandidate(this.config, draft)
 					: tree
-						? assembleStagedTree(this.config, draft)
+						? assembleStagedTree(this.config, draft, { retain })
 						: (comparison ??
 							(selection
 								? inspectComposeSource(
@@ -321,13 +324,22 @@ export class DefinitionDrafts {
 			// A verified tree becomes a durable digest-only identity for this exact
 			// revision, so promotion can require it without retaining the tree.
 			if (tree && "accepted" in report && report.accepted) {
-				const assembled = report as { candidateDigest: string };
+				const assembled = report as {
+						candidateDigest: string;
+						treeDigest: string;
+					},
+					previous = stagedTreeReceipt(drafts, id),
+					retained = retain ? { name: assembled.treeDigest } : undefined;
 				recordStagedTree(
 					drafts,
 					draft,
 					stagedTreeIdentity(draft),
 					assembled.candidateDigest,
+					retained,
 				);
+				// The superseded tree is released only by its own recorded digest.
+				if (previous?.retained && previous.retained.name !== retained?.name)
+					releaseStagedTree(this.config, previous.retained.name);
 			}
 			reports.reports[report.id] = JSON.stringify(report);
 			reports.requests[key] = JSON.stringify({ request, id: report.id });
@@ -364,10 +376,15 @@ export class DefinitionDrafts {
 	}
 	async removeDraft(body: Record<string, unknown>) {
 		privateState(this.config);
-		return this.engine().commit(
-			async (tx) => removeDraft(await tx.doc(DraftState), body),
-			background,
-		);
+		const removed = await this.engine().commit(async (tx) => {
+			const drafts = await tx.doc(DraftState),
+				receipt = stagedTreeReceipt(drafts, String(body.id ?? "")),
+				result = removeDraft(drafts, body);
+			return { result, retained: receipt?.retained?.name ?? null };
+		}, background);
+		// Deletion is committed first; only then is the draft's own tree released.
+		if (removed.retained) releaseStagedTree(this.config, removed.retained);
+		return removed.result;
 	}
 	/** Historical reads remain behind the same private-state/authenticated boundary. */
 	async promotions() {

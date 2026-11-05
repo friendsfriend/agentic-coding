@@ -354,3 +354,121 @@ test("promotion of a draft with staged sources requires the verified tree identi
 		host.stop();
 	}
 });
+test("a retained staged tree is owned by its digest, inspectable, and released by supersession or draft deletion", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.chmodSync(config.stateDir, 0o700);
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+	});
+	const host = serve(app);
+	const token = new URLSearchParams(new URL(host.url).hash.slice(1)).get(
+			"token",
+		),
+		api = (route: string, body?: unknown) =>
+			fetch(new URL(route, host.url), {
+				method: body === undefined ? "GET" : "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+				body: body === undefined ? undefined : JSON.stringify(body),
+			}),
+		trees = path.join(config.stateDir, "native", "staging", "trees");
+	try {
+		const repository = config.repositories[0] ?? "",
+			created = await (
+				await api("/api/environments/drafts", {
+					requestId: "create",
+					content: JSON.stringify({
+						version: 1,
+						projects: [
+							{
+								id: "api",
+								kind: "app",
+								repository,
+								targets: [
+									{
+										id: "stack",
+										action: "run",
+										runtime: "compose",
+										compose: {
+											file: "compose.yaml",
+											provider: "docker",
+											socket: path.join(config.stateDir, "absent.sock"),
+										},
+									},
+								],
+							},
+						],
+					}),
+				})
+			).json(),
+			stage = (requestId: string, revision: number, content: string) =>
+				api("/api/environments/drafts/source", {
+					requestId,
+					id: created.id,
+					revision,
+					app: "api",
+					target: "stack",
+					content,
+				}).then((response) => response.json()),
+			assemble = (requestId: string, revision: number, digest: string) =>
+				api("/api/environments/drafts/preflight", {
+					requestId,
+					id: created.id,
+					revision,
+					digest,
+					materializeStagedTree: true,
+					retainStagedTree: true,
+				});
+		const content = "services:\n  api:\n    image: retained:latest\n",
+			staged = await stage("stage", 1, content);
+		// Retaining is a tree-mode option only.
+		const refused = await api("/api/environments/drafts/preflight", {
+			requestId: "retain-candidate",
+			id: created.id,
+			revision: staged.revision,
+			digest: staged.digest,
+			validateStagedCandidate: true,
+			retainStagedTree: true,
+		});
+		expect(refused.status).toBe(400);
+		const first = await (
+			await assemble("retain-1", staged.revision, staged.digest)
+		).json();
+		expect(first.treeRetained).toBe(true);
+		const retained = path.join(trees, first.treeDigest);
+		expect(fs.lstatSync(retained).isDirectory()).toBe(true);
+		expect(fs.statSync(retained).mode & 0o777).toBe(0o700);
+		const written = path.join(retained, "environments.json");
+		expect(fs.statSync(written).mode & 0o777).toBe(0o400);
+		expect(fs.readFileSync(path.join(retained, "compose.yaml"), "utf8")).toBe(
+			content,
+		);
+		// The retained directory is inspection history, not a promotion input.
+		expect(
+			fs.existsSync(path.join(config.configDir, "environments.json")),
+		).toBe(false);
+		// A superseding verified tree replaces it by digest.
+		const edited = await stage(
+			"restage",
+			staged.revision,
+			content.replace("retained:latest", "retained:next"),
+		);
+		const second = await (
+			await assemble("retain-2", edited.revision, edited.digest)
+		).json();
+		expect(second.treeDigest).not.toBe(first.treeDigest);
+		expect(fs.existsSync(retained)).toBe(false);
+		expect(fs.readdirSync(trees)).toEqual([second.treeDigest]);
+		// Draft deletion releases the tree it owns and nothing else.
+		const removed = await api("/api/environments/drafts/remove", {
+			requestId: "remove",
+			id: created.id,
+			revision: edited.revision,
+		});
+		expect(removed.status).toBe(200);
+		expect(fs.readdirSync(trees)).toEqual([]);
+	} finally {
+		host.stop();
+	}
+});

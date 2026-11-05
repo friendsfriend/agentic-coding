@@ -171,8 +171,83 @@ const scope = {
 	publicationAllowed: false as const,
 	executionAllowed: false as const,
 };
-/** Ephemeral private tree from saved text only: assembled, verified, discarded. */
-export function assembleStagedTree(config: Config, draft: Draft) {
+/** Retained trees live in one bounded private directory, addressed by digest. */
+function retainedRoot(config: Config) {
+	const base = stagingRoot(config),
+		root = path.join(base, "trees");
+	fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+	const created = fs.lstatSync(root);
+	if (
+		!created.isDirectory() ||
+		created.isSymbolicLink() ||
+		(created.mode & 0o077) !== 0
+	)
+		throw new Error("Retained tree root is not an ordinary private directory");
+	return root;
+}
+/** Move one verified tree into the retained root under its own digest. */
+export function retainStagedTree(
+	config: Config,
+	assembled: string,
+	treeDigest: string,
+) {
+	if (!/^[a-f0-9]{64}$/.test(treeDigest))
+		throw new Error("Retained trees are addressed by their verified digest");
+	const root = retainedRoot(config),
+		destination = path.join(root, treeDigest);
+	if (within(root, assembled) && assembled === destination) return destination;
+	if (fs.existsSync(destination)) {
+		// The identical identity is already retained; keep that tree.
+		discard(assembled);
+		return destination;
+	}
+	try {
+		fs.renameSync(assembled, destination);
+	} catch {
+		throw new Error(
+			"Retained tree could not be moved; the assembled tree was discarded",
+		);
+	}
+	return destination;
+}
+/** Delete exactly one retained tree by its recorded digest; nothing is inferred. */
+export function releaseStagedTree(config: Config, name: string) {
+	if (!/^[a-f0-9]{64}$/.test(name))
+		throw new Error("Retained tree release requires the recorded digest");
+	const root = retainedRoot(config),
+		destination = path.join(root, name);
+	if (!within(root, destination) || destination === root)
+		throw new Error("Retained tree path escapes its root");
+	let stat: fs.Stats;
+	try {
+		stat = fs.lstatSync(destination);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			return { name, released: false as const };
+		throw new Error("Retained tree is unavailable");
+	}
+	if (!stat.isDirectory() || stat.isSymbolicLink())
+		throw new Error("Retained tree is not an ordinary directory");
+	discard(destination);
+	return { name, released: true as const };
+}
+/** Names only: inspection never reads retained tree content. */
+export function retainedStagedTrees(config: Config) {
+	const root = retainedRoot(config);
+	return fs
+		.readdirSync(root, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+		.map((entry) => entry.name)
+		.filter((name) => /^[a-f0-9]{64}$/.test(name))
+		.sort();
+}
+/** Ephemeral or retained private tree from saved text only: assembled, verified,
+ * and either kept under its digest or discarded. */
+export function assembleStagedTree(
+	config: Config,
+	draft: Draft,
+	options?: { retain?: boolean },
+) {
 	const candidate = inspectStagedCandidate(config, draft);
 	if (!candidate.accepted)
 		return {
@@ -188,7 +263,8 @@ export function assembleStagedTree(config: Config, draft: Draft) {
 			message:
 				"No isolated tree assembled: the saved candidate is incomplete, unsupported, orphaned or refused. Save/complete every declared Compose target and re-check the candidate first. No files, source text or parser errors retained.",
 		};
-	let root: string | undefined;
+	let root: string | undefined,
+		retained = false;
 	try {
 		const files = stagedFiles(draft),
 			identity = stagedTreeIdentity(draft),
@@ -202,15 +278,20 @@ export function assembleStagedTree(config: Config, draft: Draft) {
 		// The written tree must be exactly the identity promotion will require.
 		if (JSON.stringify(entries) !== JSON.stringify(identity.entries))
 			throw new Error("Staged tree content changed during verification");
+		if (options?.retain) {
+			retainStagedTree(config, root, identity.treeDigest);
+			retained = true;
+		}
 		return {
 			...scope,
 			accepted: true,
 			isolatedTreeChecked: true as const,
-			treeRetained: false as const,
+			treeRetained: options?.retain === true,
 			candidateDigest: candidate.candidateDigest,
 			...identity,
-			message:
-				"Ephemeral isolated tree assembled from saved JSON and staged source text in a private state directory outside every authorized repository, mode-pinned, re-read and digest-verified, then discarded. Paths, source text, services, commands and values are withheld as path digests, content digests and byte counts. No repository write, live source/bind read, base refresh, runtime call, review or publication; tree identity is neither readiness nor promotion authority.",
+			message: options?.retain
+				? "Isolated tree assembled from saved JSON and staged source text in a private state directory outside every authorized repository, mode-pinned, re-read and digest-verified, then retained under its own digest for inspection. Paths, source text, services, commands and values are withheld as path digests, content digests and byte counts. The retained tree grants no repository write, live source/bind read, base refresh, runtime call, review or publication authority, and promotion still requires the recorded digest identity rather than the directory. It is released by a superseding verified tree, draft deletion or explicit digest-addressed release."
+				: "Ephemeral isolated tree assembled from saved JSON and staged source text in a private state directory outside every authorized repository, mode-pinned, re-read and digest-verified, then discarded. Paths, source text, services, commands and values are withheld as path digests, content digests and byte counts. No repository write, live source/bind read, base refresh, runtime call, review or publication; tree identity is neither readiness nor promotion authority.",
 		};
 	} catch {
 		return {
@@ -227,6 +308,6 @@ export function assembleStagedTree(config: Config, draft: Draft) {
 				"No isolated tree verified: non-private/unavailable staging root, colliding/unsupported path, unwritable tree or content mismatch. Any partial tree was discarded; paths, source text and filesystem errors withheld. No repository write, runtime call or publication.",
 		};
 	} finally {
-		if (root) discard(root);
+		if (root && !retained) discard(root);
 	}
 }

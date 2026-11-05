@@ -21,6 +21,7 @@ function preflightMode(body: Record<string, unknown>) {
 		"app",
 		"target",
 		...modes,
+		"retainStagedTree",
 	];
 	if (Object.keys(body).some((key) => !allowed.includes(key)))
 		throw new Error("Unsupported preflight field");
@@ -30,6 +31,13 @@ function preflightMode(body: Record<string, unknown>) {
 			"Choose exactly one explicit true preflight mode; source modes cannot be combined",
 		);
 	const mode = active[0];
+	if (
+		body.retainStagedTree !== undefined &&
+		(mode !== "materializeStagedTree" || body.retainStagedTree !== true)
+	)
+		throw new Error(
+			"Retaining a staged tree requires the explicit tree mode set to true",
+		);
 	if (
 		(!mode || !(selectedModes as readonly (typeof mode)[]).includes(mode)) &&
 		(body.app !== undefined || body.target !== undefined)
@@ -72,7 +80,12 @@ export function preflightRequest(body: Record<string, unknown>) {
 						...binding,
 						...(candidate
 							? { validateStagedCandidate: true }
-							: { materializeStagedTree: true }),
+							: {
+									materializeStagedTree: true,
+									...(body.retainStagedTree === true
+										? { retainStagedTree: true }
+										: {}),
+								}),
 					}
 				: selection
 					? { ...binding, ...selection }
@@ -84,6 +97,7 @@ export function preflightRequest(body: Record<string, unknown>) {
 		contentDigest,
 		candidate,
 		tree,
+		retain: body.retainStagedTree === true,
 		compareBase: mode === "compareSourceBase",
 		stagedSource: mode === "useStagedSource",
 		selection,

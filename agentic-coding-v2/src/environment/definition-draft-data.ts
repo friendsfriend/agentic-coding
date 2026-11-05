@@ -40,6 +40,7 @@ export type StagedTreeReceipt = {
 	fileCount: number;
 	bytes: number;
 	observedAt: string;
+	retained?: { name: string; retainedAt: string };
 	authority: string;
 };
 export type DraftData = {
@@ -415,6 +416,7 @@ export function recordStagedTree(
 	draft: Draft,
 	identity: StagedTreeIdentity,
 	candidateDigest: string,
+	retained?: { name: string },
 ) {
 	if (Object.keys(doc.trees ?? {}).length >= 64 && !doc.trees?.[draft.id])
 		throw new Error(
@@ -430,8 +432,16 @@ export function recordStagedTree(
 		fileCount: identity.fileCount,
 		bytes: identity.bytes,
 		observedAt: new Date().toISOString(),
+		...(retained
+			? {
+					retained: {
+						name: retained.name,
+						retainedAt: new Date().toISOString(),
+					},
+				}
+			: {}),
 		authority:
-			"Historical digest-only tree identity for one draft revision. It proves neither current source content, runtime readiness, review approval nor publication authority, and it is not a retained tree.",
+			"A recorded tree identity for one draft revision: digest-only, plus the name of a retained private tree when one was kept. It proves neither current source content, runtime readiness, review approval nor publication authority, and the retained directory is inspectable history, not an execution or publication input.",
 	} satisfies StagedTreeReceipt);
 	return draft.id;
 }
