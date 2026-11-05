@@ -499,6 +499,20 @@ test("a retained staged tree is owned by its digest, inspectable, and released b
 		expect(second.treeDigest).not.toBe(first.treeDigest);
 		expect(fs.existsSync(retained)).toBe(false);
 		expect(fs.readdirSync(trees)).toEqual([second.treeDigest]);
+		const cleanupHistory = await (
+			await api("/api/environments/drafts/trees")
+		).json();
+		expect(cleanupHistory.cleanupAttempts).toContainEqual({
+			id: expect.any(String),
+			name: first.treeDigest,
+			kind: "supersede",
+			status: "completed",
+			startedAt: expect.any(String),
+		});
+		expect(
+			await (await assemble("retain-2", edited.revision, edited.digest)).json(),
+		).toEqual(second);
+		expect(fs.readdirSync(trees)).toEqual([second.treeDigest]);
 		// Draft deletion releases the tree it owns and nothing else.
 		const removed = await api("/api/environments/drafts/remove", {
 			requestId: "remove",
@@ -803,6 +817,44 @@ test("a draft read discloses whether its recorded tree identity is current and r
 		expect(stale.revision).toBe(edited.revision);
 		expect(stale.stagedTree.current).toBe(false);
 		expect(stale.stagedTree.digest).toBe(staged.digest);
+		// Supersession must journal uncertainty before deleting the old tree.
+		const held = path.join(
+				config.stateDir,
+				"native",
+				"staging",
+				"trees",
+				current.stagedTree.treeDigest,
+			),
+			parked = path.join(config.stateDir, "old-tree");
+		fs.renameSync(held, parked);
+		fs.symlinkSync(parked, held);
+		const supersede = (requestId: string) =>
+			api("/api/environments/drafts/preflight", {
+				requestId,
+				id: created.id,
+				revision: edited.revision,
+				digest: edited.digest,
+				materializeStagedTree: true,
+				retainStagedTree: true,
+			});
+		expect((await supersede("failed-supersession")).status).toBe(400);
+		const history = await (await api("/api/environments/drafts/trees")).json();
+		expect(history.cleanupAttempts).toContainEqual({
+			id: expect.any(String),
+			name: current.stagedTree.treeDigest,
+			kind: "supersede",
+			status: "pending",
+			startedAt: expect.any(String),
+		});
+		expect((await read()).stagedTree).toEqual({
+			...stale.stagedTree,
+			retained: { ...stale.stagedTree.retained, present: false },
+		});
+		fs.unlinkSync(held);
+		fs.renameSync(parked, held);
+		expect((await supersede("failed-supersession")).status).toBe(400);
+		expect((await supersede("fresh-supersession")).status).toBe(400);
+		expect(fs.existsSync(held)).toBe(true);
 	} finally {
 		host.stop();
 	}

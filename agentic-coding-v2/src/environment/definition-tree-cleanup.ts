@@ -4,7 +4,7 @@ import { type DraftData, stored } from "./definition-draft-data.ts";
 export type TreeCleanup = {
 	request: string;
 	name: string | null;
-	kind: "release" | "delete-draft";
+	kind: "release" | "delete-draft" | "supersede";
 	status: "pending" | "completed";
 	startedAt: string;
 	result?: string;

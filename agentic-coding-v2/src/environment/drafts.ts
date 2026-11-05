@@ -279,7 +279,7 @@ export class DefinitionDrafts {
 			request,
 			key,
 		} = preflightRequest(body);
-		return this.engine().commit(async (tx) => {
+		const prepared = await this.engine().commit(async (tx) => {
 			const reports = await tx.doc(Preflights),
 				recorded = reports.requests[key];
 			if (recorded) {
@@ -288,7 +288,7 @@ export class DefinitionDrafts {
 					throw new Error("Preflight request ID reused for different input");
 				const raw = reports.reports[receipt.id];
 				if (!raw) throw new Error("Private preflight receipt is unavailable");
-				return stored<Preflight>(raw);
+				return { report: stored<Preflight>(raw), cleanup: null };
 			}
 			if (Object.keys(reports.reports).length >= 64)
 				throw new Error(
@@ -377,6 +377,26 @@ export class DefinitionDrafts {
 					},
 					previous = stagedTreeReceipt(drafts, id),
 					retained = retain ? { name: assembled.treeDigest } : undefined;
+				if (previous?.retained && previous.retained.name !== retained?.name) {
+					const cleanupKey = digest(`preflight-supersession:${key}`);
+					beginTreeCleanup(
+						drafts,
+						cleanupKey,
+						request,
+						"supersede",
+						previous.retained.name,
+					);
+					return {
+						report,
+						cleanup: {
+							key: cleanupKey,
+							name: previous.retained.name,
+							draft,
+							candidateDigest: assembled.candidateDigest,
+							retained,
+						},
+					};
+				}
 				recordStagedTree(
 					drafts,
 					draft,
@@ -384,12 +404,47 @@ export class DefinitionDrafts {
 					assembled.candidateDigest,
 					retained,
 				);
-				// The superseded tree is released only by its own recorded digest.
-				if (previous?.retained && previous.retained.name !== retained?.name)
-					releaseStagedTree(this.config, previous.retained.name);
 			}
 			reports.reports[report.id] = JSON.stringify(report);
 			reports.requests[key] = JSON.stringify({ request, id: report.id });
+			return { report, cleanup: null };
+		}, background);
+		const cleanup = prepared.cleanup;
+		if (!cleanup) return prepared.report;
+		// Admission is durably closed before deleting the superseded directory.
+		releaseStagedTree(this.config, cleanup.name);
+		return this.engine().commit(async (tx) => {
+			const drafts = await tx.doc(DraftState),
+				reports = await tx.doc(Preflights),
+				raw = drafts.drafts[id];
+			if (!raw)
+				throw new Error("Draft disappeared during retained-tree cleanup");
+			const current = parseDraft(raw);
+			if (
+				current.revision !== cleanup.draft.revision ||
+				current.digest !== cleanup.draft.digest
+			)
+				throw new Error(
+					"Draft changed during retained-tree cleanup; outcome requires inspection",
+				);
+			if (Object.keys(reports.reports).length >= 64)
+				throw new Error(
+					"Private preflight capacity reached; cleanup outcome requires inspection",
+				);
+			recordStagedTree(
+				drafts,
+				current,
+				stagedTreeIdentity(current),
+				cleanup.candidateDigest,
+				cleanup.retained,
+			);
+			const report = {
+				...prepared.report,
+				ordinal: Object.keys(reports.reports).length + 1,
+			};
+			reports.reports[report.id] = JSON.stringify(report);
+			reports.requests[key] = JSON.stringify({ request, id: report.id });
+			finishTreeCleanup(drafts, cleanup.key, { preflightId: report.id });
 			return report;
 		}, background);
 	}
