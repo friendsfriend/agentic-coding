@@ -1,4 +1,5 @@
 import { button, element } from "/dom.js";
+import { renderNativeTelemetry } from "/environment-telemetry-view.js";
 
 function field(parent, label, options = {}) {
 	const wrapper = element("label", `${label} `),
@@ -120,6 +121,7 @@ function addTelemetry(root, run, api) {
 			"meta",
 		),
 	);
+	const exploration = element("div", null, "environment-telemetry-exploration");
 	const queryButton = button("View native trace summaries", async () => {
 		queryButton.disabled = true;
 		queryButton.dataset.pending = "true";
@@ -140,6 +142,23 @@ function addTelemetry(root, run, api) {
 				if (text.value) query.set("text", text.value);
 			}
 			const observation = await api(`/api/environments/telemetry?${query}`);
+			renderNativeTelemetry(
+				exploration,
+				observation,
+				(traceId, selectedMode) => {
+					if (
+						root.dataset.nativeReady !== "true" ||
+						queryButton.dataset.pending === "true"
+					)
+						return;
+					trace.value = traceId;
+					mode.value = selectedMode;
+					update();
+					queryButton.click();
+				},
+			);
+			for (const control of exploration.querySelectorAll("button"))
+				control.disabled = root.dataset.nativeReady !== "true";
 			pre(panel, "environment-telemetry").textContent = JSON.stringify(
 				{ query: Object.fromEntries(query), observation },
 				null,
@@ -166,7 +185,7 @@ function addTelemetry(root, run, api) {
 	mode.onchange = update;
 	trace.oninput = update;
 	update();
-	panel.append(queryButton);
+	panel.append(queryButton, exploration);
 }
 /** Retain the actual form and output nodes across live run revisions. */
 export function environmentDiagnostics(run, api, existing) {
@@ -179,7 +198,9 @@ export function environmentDiagnostics(run, api, existing) {
 	root.dataset.nativeReady = String(
 		run.state === "running" && run.ready === true,
 	);
-	for (const button of root.querySelectorAll("button[data-native-query]"))
+	for (const button of root.querySelectorAll(
+		"button[data-native-query], .environment-telemetry-exploration button",
+	))
 		button.disabled =
 			root.dataset.nativeReady !== "true" || button.dataset.pending === "true";
 	return root;

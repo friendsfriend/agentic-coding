@@ -24,6 +24,9 @@ import diagnostics from "./web/environment-diagnostics.js" with {
 	type: "text",
 };
 import lifecycle from "./web/environment-lifecycle.js" with { type: "text" };
+import telemetryView from "./web/environment-telemetry-view.js" with {
+	type: "text",
+};
 import html from "./web/index.html" with { type: "text" };
 import css from "./web/style.css" with { type: "text" };
 
@@ -139,6 +142,10 @@ export function serve(app: Runtime, port = 0) {
 		[
 			"/definition-discovery.js",
 			{ content: discovery, type: "text/javascript" },
+		],
+		[
+			"/environment-telemetry-view.js",
+			{ content: telemetryView, type: "text/javascript" },
 		],
 		[
 			"/environment-lifecycle.js",
