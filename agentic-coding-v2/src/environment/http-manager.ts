@@ -17,6 +17,11 @@ import {
 	httpDigest,
 	replayHttp,
 } from "./http-receipts.ts";
+import {
+	type ReferenceScope,
+	referenceScope,
+	requireScopeLive,
+} from "./reference-scope.ts";
 import { ShellProcess } from "./shell.ts";
 import { EnvironmentState } from "./state.ts";
 
@@ -59,13 +64,13 @@ export class HeldHttp {
 			throw new Error(
 				"Endpoint diagnostics require a workspace-write native task and separate approval",
 			);
-		const runs = (await this.authority.records()).filter(
-			(run) =>
-				run.owner === owner.id &&
-				run.plan.app === app &&
-				run.state === "running" &&
-				run.ready === true,
-		);
+		const members = (await this.authority.records()).filter(
+				(run) => run.owner === owner.id,
+			),
+			runs = members.filter(
+				(run) =>
+					run.plan.app === app && run.state === "running" && run.ready === true,
+			);
 		const run = runs.length === 1 ? runs[0] : undefined,
 			process = run ? this.authority.live.get(run.id) : undefined;
 		if (
@@ -79,7 +84,17 @@ export class HeldHttp {
 				"Endpoint requires this task's live ready shell app; saved receipts grant no network authority",
 			);
 		this.authority.check(owner.id, signal, run.batch, run);
-		return { run, process };
+		const root = referenceScope(run, members);
+		if (root) requireScopeLive(root, members, this.authority.live);
+		return { run, process, root };
+	}
+	/** Revalidates the approved descriptor at dispatch and publication: a
+	 * changed or closing prerequisite generation is never substituted. */
+	private scopeOf(approved: EndpointRequest, root: ReferenceScope | undefined) {
+		if (JSON.stringify(approved.root ?? null) !== JSON.stringify(root ?? null))
+			throw new Error(
+				"Approved endpoint root or prerequisite generation changed; no request sent",
+			);
 	}
 	async prepare(
 		owner: TaskInfo,
@@ -89,7 +104,7 @@ export class HeldHttp {
 		signal?: AbortSignal,
 		http?: HttpOptions,
 	): Promise<EndpointRequest> {
-		const { run } = await this.endpointRun(owner, app, signal),
+		const { run, root } = await this.endpointRun(owner, app, signal),
 			base = run.plan.endpoints?.[endpoint];
 		if (!base || !Object.hasOwn(run.plan.endpoints ?? {}, endpoint))
 			throw new Error("Choose a declared endpoint of the held app");
@@ -111,6 +126,7 @@ export class HeldHttp {
 			app,
 			endpoint,
 			url: endpointUrl(base, path),
+			...(root ? { root } : {}),
 			...(options ? { http: options } : {}),
 			...(auth ? { authentication: auth } : {}),
 			...(ref ? { ca: prepareEndpointCa(this.config.configDir, ref) } : {}),
@@ -140,12 +156,13 @@ export class HeldHttp {
 		signal?: AbortSignal,
 		issuance?: { id: string; input: HttpInput },
 	) {
-		const { run, process } = await this.endpointRun(
+		const { run, process, root } = await this.endpointRun(
 				owner,
 				approved.app,
 				signal,
 			),
 			base = run.plan.endpoints?.[approved.endpoint];
+		this.scopeOf(approved, root);
 		if (
 			run.id !== approved.run ||
 			!base ||
@@ -257,6 +274,7 @@ export class HeldHttp {
 				run: run.id,
 				app: approved.app,
 				endpoint: approved.endpoint,
+				...(root ? { root } : {}),
 				observedAt: Date.now(),
 				...(approved.ca ? { caDigest: approved.ca.digest } : {}),
 			};

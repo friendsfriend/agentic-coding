@@ -11,7 +11,7 @@ afterEach(cleanup);
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 /** Two app roots sharing a two-level shell prerequisite chain. */
-function referenced(config: Config) {
+function referenced(config: Config, port?: number) {
 	fs.mkdirSync(config.configDir);
 	const node = (source: string) =>
 		`${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`;
@@ -19,6 +19,7 @@ function referenced(config: Config) {
 		id: string,
 		kind: "app" | "infrastructure",
 		requires?: string[],
+		port?: number,
 	) => ({
 		id,
 		kind,
@@ -31,12 +32,19 @@ function referenced(config: Config) {
 				runtime: "shell",
 				timeoutMs: 10000,
 				readyText: "READY",
+				...(port
+					? {
+							telemetry: { protocol: "otlp-http-json", listen: "127.0.0.1:0" },
+							endpoints: { web: `http://127.0.0.1:${port}` },
+						}
+					: {}),
 				command: node(
-					`const fs=require('node:fs');fs.appendFileSync(process.env.STARTS,${JSON.stringify(`${id}\n`)});process.on('SIGTERM',()=>{fs.appendFileSync(process.env.STOPS,${JSON.stringify(`${id}\n`)});process.exit(0)});console.log('READY');setInterval(()=>{},1000)`,
+					`const fs=require('node:fs');fs.appendFileSync(process.env.STARTS,${JSON.stringify(`${id}\n`)});process.on('SIGTERM',()=>{fs.appendFileSync(process.env.STOPS,${JSON.stringify(`${id}\n`)});process.exit(0)})${port ? `;Bun.serve({hostname:'127.0.0.1',port:${port},fetch(){fs.appendFileSync(process.env.REQUESTS,${JSON.stringify(`${id}\n`)});return new Response('referenced-ok')}})` : ""};console.log('READY');setInterval(()=>{},1000)`,
 				),
 				environment: {
 					STARTS: path.join(config.configDir, `${id}-starts`),
 					STOPS: path.join(config.configDir, "stops"),
+					REQUESTS: path.join(config.configDir, "requests"),
 				},
 			},
 		],
@@ -46,7 +54,7 @@ function referenced(config: Config) {
 		JSON.stringify({
 			version: 1,
 			projects: [
-				project("api", "app", ["cache"]),
+				project("api", "app", ["cache"], port),
 				project("worker", "app", ["cache"]),
 				project("cache", "infrastructure", ["base"]),
 				project("base", "infrastructure"),
@@ -176,3 +184,89 @@ test("losing a live prerequisite releases every root that declared it, dependent
 	expect(stops.slice(1, 3).sort()).toEqual(["api", "worker"]);
 	expect(stops[3]).toBe("base");
 });
+
+test("referenced diagnostics name their exact root generation and prerequisite closure", async () => {
+	const probe = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: () => new Response("unused"),
+	});
+	const port = probe.port;
+	probe.stop(true);
+	const { app, config, fake, invocation } = await fixture(false, (config) =>
+		referenced(config, port),
+	);
+	let receipts: string[] = [];
+	fake.setResponses([
+		call("env_start", {
+			apps: ["api", "worker"],
+			lifetime: "referenced-roots-v1",
+		}),
+		call("env_http_request", { app: "api", endpoint: "web" }),
+		call("otel_query", { app: "api", mode: "traces" }),
+		call("env_stop", { apps: ["api"] }),
+		call("env_http_request", { app: "api", endpoint: "web" }),
+		(messages) => {
+			receipts = messages.messages
+				.filter(
+					(message) =>
+						message.role === "toolResult" &&
+						["env_http_request", "otel_query"].includes(message.toolName ?? ""),
+				)
+				.map((message) =>
+					(
+						message as unknown as {
+							content: Array<{ type: string; text?: string }>;
+						}
+					).content
+						.map((block) => block.text ?? "")
+						.join(""),
+				);
+			return fauxAssistantMessage("Referenced diagnostics finished", {
+				stopReason: "stop",
+			});
+		},
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	const held = await eventually(
+		() => app.environments.snapshot(),
+		(state) => state.runs.filter((run) => run.state === "running").length === 4,
+	);
+	const id = (name: string) =>
+		held.runs.find((run) => run.plan.app === name)?.id ?? "";
+	const api = id("api"),
+		resources = [id("base"), id("cache")].sort();
+	// The approved operation discloses the exact generation closure it binds.
+	const boundary = await pendingReview(app, owner, "Endpoint GET: api/web");
+	expect(boundary.snapshot).toContain('"root"');
+	for (const generation of [api, ...resources])
+		expect(boundary.snapshot).toContain(generation);
+	await approve(app, owner, "Endpoint GET: api/web");
+	await eventually(
+		async () => receipts.length,
+		(count) => count === 3,
+	);
+	// The endpoint answered only for this root generation, never a sibling.
+	expect(
+		fs.readFileSync(path.join(config.configDir, "requests"), "utf8").trim(),
+	).toBe("api");
+	const answer = JSON.parse(receipts[0] ?? "{}") as {
+		body: string;
+		run: string;
+		root: { run: string; resources: string[] };
+	};
+	expect(answer.body).toBe("referenced-ok");
+	expect(answer.run).toBe(api);
+	expect(answer.root).toEqual({ run: api, resources });
+	const telemetry = JSON.parse(receipts[1] ?? "{}") as {
+		source: string;
+		root: { run: string; resources: string[] };
+	};
+	expect(telemetry.source).toBe("native-run-otlp-http-json");
+	expect(telemetry.root).toEqual({ run: api, resources });
+	// A stopped root admits no diagnostic and no substitute generation.
+	expect(receipts[2]).toContain(
+		"Endpoint requires this task's live ready shell app",
+	);
+}, 20000);

@@ -1,6 +1,7 @@
 import { object, text } from "../config.ts";
 import type { EndpointCa } from "./endpoint-ca.ts";
 import type { EndpointAuth, HttpOptions } from "./http-options.ts";
+import type { ReferenceScope } from "./reference-scope.ts";
 export type EndpointRequest = {
 	run: string;
 	app: string;
@@ -9,6 +10,8 @@ export type EndpointRequest = {
 	ca?: EndpointCa;
 	http?: HttpOptions;
 	authentication?: EndpointAuth;
+	/** Referenced-lifetime only: exact root generation and its prerequisites. */
+	root?: ReferenceScope;
 };
 export function localEndpoint(raw: string) {
 	const url = new URL(raw);

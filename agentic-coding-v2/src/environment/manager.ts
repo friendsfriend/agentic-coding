@@ -36,6 +36,7 @@ import {
 	referenceGraphHistory,
 	refreshReferenceGraphs,
 } from "./reference-journal.ts";
+import { referenceScope, requireScopeLive } from "./reference-scope.ts";
 import { runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
 import {
@@ -549,23 +550,28 @@ export class Environments {
 		options: TelemetryOptions,
 		expectedRun?: string,
 	) {
-		const run = (await this.records()).find(
-			(record) =>
-				record.plan.app === app &&
-				(owner === undefined || record.owner === owner) &&
-				(expectedRun === undefined || record.id === expectedRun) &&
-				record.state === "running" &&
-				record.ready === true &&
-				holdsResource(record),
-		);
+		const members = await this.records(),
+			run = members.find(
+				(record) =>
+					record.plan.app === app &&
+					(owner === undefined || record.owner === owner) &&
+					(expectedRun === undefined || record.id === expectedRun) &&
+					record.state === "running" &&
+					record.ready === true &&
+					holdsResource(record),
+			);
 		const process = run ? this.live.get(run.id) : undefined;
 		if (!run || !process?.telemetry || process.outcome || process.cleanupFailed)
 			throw new Error(
 				"No owned live ready native telemetry run is held for this app",
 			);
 		this.check(run.owner, undefined, run.batch, run.id);
+		// Referenced runs disclose and revalidate their exact generation closure.
+		const root = referenceScope(run, members);
+		if (root) requireScopeLive(root, members, this.live);
 		if (owner !== undefined) this.idle.touchRun(owner, run.id);
-		return process.telemetry.query(options);
+		const query = await process.telemetry.query(options);
+		return root ? { ...query, root } : query;
 	}
 	async selectedLogs(
 		app: string,
