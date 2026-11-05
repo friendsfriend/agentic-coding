@@ -3,15 +3,17 @@ import { type Config, digest, text } from "../config.ts";
 import { type Draft, type DraftData, stored } from "./definition-draft-data.ts";
 import { promoteDefinition } from "./definition-promotion.ts";
 
-type PromotionData = {
+export type PromotionData = {
 	records: Record<string, string>;
 	requests: Record<string, string>;
+	attempts?: Record<string, string>;
+	acknowledgements?: Record<string, string>;
 };
 export const Promotions = defineDoc<PromotionData>({
 	kind: "v2.environment-definition-promotions",
 	version: 1,
 	scope: "session",
-	initial: () => ({ records: {}, requests: {} }),
+	initial: () => ({ records: {}, requests: {}, attempts: {} }),
 	checkpointWhen: () => true,
 });
 
@@ -95,6 +97,7 @@ export function recordPromotion(
 	records: PromotionData,
 	drafts: DraftData,
 	intent: ReturnType<typeof promotionRequest>,
+	onWrite: () => void,
 ) {
 	if (Object.keys(records.records).length >= 64)
 		throw new Error(
@@ -106,7 +109,7 @@ export function recordPromotion(
 	const draft = stored<Draft>(raw);
 	if (draft.revision !== revision || draft.digest !== contentDigest)
 		throw new Error("Draft changed; load current before promotion");
-	const result = promoteDefinition(config, draft, approve),
+	const result = promoteDefinition(config, draft, approve, onWrite),
 		record = {
 			...result,
 			id: `promotion-${key}`,

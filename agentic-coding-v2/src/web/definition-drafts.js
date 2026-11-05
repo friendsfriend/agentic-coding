@@ -1,4 +1,5 @@
 import { definitionHistory } from "./definition-history.js";
+import { promotionAttemptControls } from "./definition-promotion-attempts.js";
 import { button, element } from "./dom.js";
 
 export function definitionDrafts(request) {
@@ -740,6 +741,9 @@ export function definitionDrafts(request) {
 		promote,
 		loadReport,
 		removeStagedDraft,
+		...promotionAttemptControls(request, busy, status, () => {
+			pendingPromotion = null;
+		}),
 		...promotionHistory,
 		...preflightHistory,
 		status,

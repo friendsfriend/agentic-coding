@@ -335,6 +335,34 @@ test("exact approved staged content is promoted atomically under a destination f
 			).json(),
 		).toEqual(promoted);
 		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
+		const attemptsRoute = "/api/environments/drafts/promotion-attempts";
+		expect((await fetch(new URL(attemptsRoute, host.url))).status).toBe(401);
+		expect((await api(`${attemptsRoute}?id=ignored`)).status).toBe(400);
+		const attempts = await (await api(attemptsRoute)).json();
+		expect(
+			attempts.filter(
+				(entry: { status: string }) => entry.status === "pending",
+			),
+		).toHaveLength(0);
+		expect(
+			attempts.find((entry: { id: string }) => entry.id === promoted.id).status,
+		).toBe("completed");
+		expect(
+			attempts.some(
+				(entry: { status: string }) => entry.status === "failed-before-write",
+			),
+		).toBe(true);
+		expect(
+			(
+				await api(`${attemptsRoute}/acknowledge`, {
+					requestId: "bad-ack",
+					id: promoted.id,
+					acknowledge: true,
+				})
+			).status,
+		).toBe(400);
+		expect(await (await api(attemptsRoute)).json()).toEqual(attempts);
+		expect(fs.readFileSync(live, "utf8")).toContain('"v3"');
 	} finally {
 		host.stop();
 	}

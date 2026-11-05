@@ -22,6 +22,12 @@ import { inspectDefinition } from "./definition-preflight.ts";
 import { preflightRequest } from "./definition-preflight-request.ts";
 import { inspectDestination } from "./definition-promotion.ts";
 import {
+	acknowledgePromotion,
+	beginPromotion,
+	finishPromotion,
+	promotionAttempts,
+} from "./definition-promotion-attempts.ts";
+import {
 	Promotions,
 	promotionIndex,
 	promotionRequest,
@@ -133,6 +139,7 @@ function schema(config: Config, draft: Draft) {
 /** Private native documents are staged data, never reviews, runnable targets or
  * restored execution authority. No content is included in environment snapshots. */
 export class DefinitionDrafts {
+	private activePromotions = new Set<string>();
 	constructor(
 		private config: Config,
 		private engine: () => Harness,
@@ -361,20 +368,78 @@ export class DefinitionDrafts {
 			id,
 		);
 	}
+	async attempts() {
+		privateState(this.config);
+		return promotionAttempts(
+			await this.engine().snapshot(Promotions, background),
+		);
+	}
+	async acknowledgeAttempt(body: Record<string, unknown>) {
+		privateState(this.config);
+		return this.engine().commit(
+			async (tx) =>
+				acknowledgePromotion(
+					await tx.doc(Promotions),
+					body,
+					this.activePromotions,
+				),
+			background,
+		);
+	}
 	async promote(body: Record<string, unknown>) {
 		privateState(this.config);
 		const intent = promotionRequest(body);
-		return this.engine().commit(async (tx) => {
-			const records = await tx.doc(Promotions),
-				replay = replayPromotion(records, intent);
+		if (this.activePromotions.has(intent.key))
+			throw new Error("This promotion request is still active");
+		this.activePromotions.add(intent.key);
+		let markerCommitted = false,
+			writeStarted = false;
+		try {
+			// This commit must finish durably before any publication effect starts.
+			const replay = await this.engine().commit(async (tx) => {
+				const records = await tx.doc(Promotions),
+					recorded = replayPromotion(records, intent);
+				if (recorded) return recorded;
+				beginPromotion(records, intent);
+				return null;
+			}, background);
 			if (replay) return replay;
-			return recordPromotion(
-				this.config,
-				records,
-				await tx.doc(DraftState),
-				intent,
-			);
-		}, background);
+			markerCommitted = true;
+			return await this.engine().commit(async (tx) => {
+				const records = await tx.doc(Promotions);
+				// Check pending state before effects. This tentative transition and the
+				// receipt become durable together only when this transaction commits.
+				finishPromotion(records, intent.key, "completed");
+				const record = recordPromotion(
+					this.config,
+					records,
+					await tx.doc(DraftState),
+					intent,
+					() => {
+						writeStarted = true;
+					},
+				);
+				return record;
+			}, background);
+		} catch (error) {
+			// Only known pre-rename failures are safe to retire automatically.
+			// Otherwise the committed pending marker survives, even if a file write
+			// succeeded but its native receipt failed to persist.
+			if (markerCommitted && !writeStarted) {
+				await this.engine().commit(
+					async (tx) =>
+						finishPromotion(
+							await tx.doc(Promotions),
+							intent.key,
+							"failed-before-write",
+						),
+					background,
+				);
+			}
+			throw error;
+		} finally {
+			this.activePromotions.delete(intent.key);
+		}
 	}
 	private id(value: string) {
 		if (!/^draft-[a-f0-9]{64}$/.test(value))

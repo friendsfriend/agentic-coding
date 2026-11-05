@@ -183,7 +183,12 @@ function payload(config: Config, draft: Draft) {
 	return { bytes: Buffer.from(content, "utf8"), projects, targets };
 }
 /** Atomic same-directory replace: exclusive temp file, fsync, rename, re-read. */
-function replace(destination: string, bytes: Buffer, staged: string) {
+function replace(
+	destination: string,
+	bytes: Buffer,
+	staged: string,
+	onWrite: () => void,
+) {
 	const directory = path.dirname(destination),
 		temp = path.join(
 			directory,
@@ -209,6 +214,7 @@ function replace(destination: string, bytes: Buffer, staged: string) {
 	}
 	fs.closeSync(fd);
 	try {
+		onWrite();
 		fs.renameSync(temp, destination);
 	} catch (error) {
 		fs.rmSync(temp, { force: true });
@@ -231,6 +237,7 @@ export function promoteDefinition(
 	config: Config,
 	draft: Draft,
 	approval: string,
+	onWrite: () => void,
 ) {
 	if (approval !== draft.digest)
 		throw new Error(
@@ -262,7 +269,7 @@ export function promoteDefinition(
 				"Live destination changed since this draft's recorded base; start or reload a draft to stage against the current configuration",
 			);
 		sameDirectory(config, pinned.directoryDigest);
-		replace(destination, bytes, draft.digest);
+		replace(destination, bytes, draft.digest, onWrite);
 		const after = inspectDestination(canonical);
 		sameDirectory(config, pinned.directoryDigest);
 		if (after.state !== "regular" || after.digest !== draft.digest)

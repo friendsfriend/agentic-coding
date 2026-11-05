@@ -16,6 +16,9 @@ import drafts from "./web/definition-drafts.js" with { type: "text" };
 import definitionHistory from "./web/definition-history.js" with {
 	type: "text",
 };
+import promotionAttempts from "./web/definition-promotion-attempts.js" with {
+	type: "text",
+};
 import dom from "./web/dom.js" with { type: "text" };
 import diagnostics from "./web/environment-diagnostics.js" with {
 	type: "text",
@@ -128,6 +131,10 @@ export function serve(app: Runtime, port = 0) {
 		[
 			"/definition-history.js",
 			{ content: definitionHistory, type: "text/javascript" },
+		],
+		[
+			"/definition-promotion-attempts.js",
+			{ content: promotionAttempts, type: "text/javascript" },
 		],
 		[
 			"/definition-discovery.js",
@@ -259,6 +266,14 @@ export function serve(app: Runtime, port = 0) {
 				}
 				if (
 					request.method === "GET" &&
+					url.pathname === "/api/environments/drafts/promotion-attempts"
+				) {
+					if (url.searchParams.size)
+						throw new Error("Attempt history does not accept query parameters");
+					return json(await app.environments.drafts.attempts());
+				}
+				if (
+					request.method === "GET" &&
 					url.pathname === "/api/environments/drafts/promotions"
 				) {
 					if (url.searchParams.size)
@@ -360,6 +375,16 @@ export function serve(app: Runtime, port = 0) {
 					if (url.searchParams.size)
 						throw new Error("Draft removal does not accept query parameters");
 					return json(await app.environments.drafts.removeDraft(body));
+				}
+				if (
+					url.pathname ===
+					"/api/environments/drafts/promotion-attempts/acknowledge"
+				) {
+					if (url.searchParams.size)
+						throw new Error(
+							"Attempt acknowledgement does not accept query parameters",
+						);
+					return json(await app.environments.drafts.acknowledgeAttempt(body));
 				}
 				if (url.pathname === "/api/environments/drafts/promote") {
 					if (url.searchParams.size)
