@@ -161,6 +161,79 @@ export function readCompose(raw: unknown): ComposeDefinition {
 		network: data.network ?? "shared",
 	};
 }
+/** One declared environment file. Values are literal and only read on a live
+ * approval path: captured offline inspection cannot honour them. */
+function readEnvFile(
+	workspace: string,
+	raw: unknown,
+	live: boolean,
+): { values: Record<string, string>; digest: string; file: string } {
+	const selected = Array.isArray(raw)
+		? raw.length === 1 && typeof raw[0] === "string"
+			? raw[0]
+			: undefined
+		: raw;
+	if (typeof selected !== "string")
+		throw new Error(
+			"Compose env_file requires exactly one declared relative path",
+		);
+	const parts = selected.split("/");
+	if (
+		!selected ||
+		selected.length > 200 ||
+		parts.length > 3 ||
+		parts.some((part) => !/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/.test(part))
+	)
+		throw new Error(
+			"Compose env_file requires a bounded relative public path with no dotfiles",
+		);
+	if (!live)
+		throw new Error(
+			"Compose env_file requires an approval-time read and is unsupported for offline captured inspection",
+		);
+	const file = contained(workspace, selected),
+		fd = fs.openSync(
+			file,
+			fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+		);
+	try {
+		const stat = fs.fstatSync(fd);
+		if (!stat.isFile() || stat.size > 65536)
+			throw new Error(
+				"Compose env_file must be a regular file of at most 64 KiB",
+			);
+		const buffer = Buffer.alloc(65537);
+		let size = 0;
+		while (size < buffer.length) {
+			const count = fs.readSync(fd, buffer, size, buffer.length - size, null);
+			if (!count) break;
+			size += count;
+		}
+		if (size > 65536) throw new Error("Compose env_file exceeds 64 KiB");
+		const bytes = buffer.subarray(0, size),
+			body = new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+			values: Record<string, string> = {};
+		for (const line of body.split("\n")) {
+			const trimmed = line.trim();
+			if (!trimmed || trimmed.startsWith("#")) continue;
+			const split = trimmed.indexOf("=");
+			if (split < 1)
+				throw new Error("Compose env_file lines require KEY=value");
+			const key = trimmed.slice(0, split),
+				value = trimmed.slice(split + 1);
+			if (values[key] !== undefined)
+				throw new Error("Compose env_file must not repeat a key");
+			values[key] = value;
+		}
+		return {
+			values,
+			file: path.relative(workspace, file),
+			digest: digest(bytes.toString("base64")),
+		};
+	} finally {
+		fs.closeSync(fd);
+	}
+}
 function source(workspace: string, definition: ComposeDefinition) {
 	const file = contained(workspace, definition.file);
 	const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
@@ -194,6 +267,7 @@ export function compileCompose(
 		workspace,
 		definition,
 		source(workspace, definition),
+		true,
 	);
 }
 /** Parse already captured source without reopening it. This creates data only,
@@ -202,6 +276,7 @@ export function compileComposeSource(
 	workspace: string,
 	definition: ComposeDefinition,
 	input: { source: string; contentDigest: string },
+	readEnvFiles = false,
 ): ComposePlan {
 	const file = contained(workspace, definition.file);
 	if (input.source.includes("${"))
@@ -247,23 +322,31 @@ export function compileComposeSource(
 					"depends_on",
 					"healthcheck",
 					"restart",
+					"env_file",
 				]);
+				const envFile =
+					service.env_file === undefined
+						? undefined
+						: readEnvFile(workspace, service.env_file, readEnvFiles);
+				// env_file values are the base; an explicit literal in the service
+				// environment wins, and neither may take over the runtime's own paths.
 				const environment = Object.fromEntries(
-					Object.entries(object(service.environment ?? {})).map(
-						([key, value]) => {
-							if (
-								!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ||
-								["WORKSPACE", "CONFIG_DIR"].includes(key) ||
-								typeof value !== "string" ||
-								value.includes("\0") ||
-								value.length > 16000
-							)
-								throw new Error(
-									"Compose environment requires explicit public string literals",
-								);
-							return [key, value];
-						},
-					),
+					Object.entries({
+						...(envFile?.values ?? {}),
+						...object(service.environment ?? {}),
+					}).map(([key, value]) => {
+						if (
+							!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ||
+							["WORKSPACE", "CONFIG_DIR"].includes(key) ||
+							typeof value !== "string" ||
+							value.includes("\0") ||
+							value.length > 16000
+						)
+							throw new Error(
+								"Compose environment requires explicit public string literals",
+							);
+						return [key, value];
+					}),
 				);
 				const volumes = service.volumes ?? [];
 				if (!Array.isArray(volumes) || volumes.length > 64)
@@ -329,6 +412,17 @@ export function verifyCompose(plan: Plan) {
 		throw new Error(
 			"Compose source changed after approval; obtain a new exact plan approval",
 		);
+	// A declared environment file is bound to the approval by its own digest.
+	for (const service of plan.composePlan.services) {
+		if (!service.envFile || !service.envFileDigest) continue;
+		if (
+			readEnvFile(plan.workspace, service.envFile, true).digest !==
+			service.envFileDigest
+		)
+			throw new Error(
+				"Compose env_file changed after approval; obtain a new exact plan approval",
+			);
+	}
 }
 export function containerPlans(plan: Plan): Plan[] {
 	const definition = plan.compose;

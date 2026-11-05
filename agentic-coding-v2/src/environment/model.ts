@@ -45,6 +45,8 @@ export type ComposePlan = {
 		id: string;
 		container: ContainerTarget;
 		environment: Record<string, string>;
+		envFile?: string;
+		envFileDigest?: string;
 		dependsOn: ComposeDependency[];
 	}[];
 };

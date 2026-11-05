@@ -219,6 +219,41 @@ test("private staged Compose edits advance draft revision, parse saved bytes not
 		expect(await (await api.post(checkBody, checkRoute)).json()).toEqual(
 			accepted,
 		);
+		// A declared env_file cannot be honoured from captured text: it needs an
+		// approval-time read, so offline inspection refuses it instead of guessing.
+		const envDraft = await (
+				await api.post({ requestId: "env-create", content: content() })
+			).json(),
+			envStaged = await (
+				await api.post(
+					{
+						requestId: "env-stage",
+						id: envDraft.id,
+						revision: 1,
+						app: "api",
+						target: "stack",
+						content:
+							"services:\n  api:\n    image: fixture:latest\n    env_file: conf/app.env\n",
+					},
+					sourceRoute,
+				)
+			).json(),
+			envCheck = await (
+				await api.post(
+					{
+						requestId: "env-check",
+						id: envDraft.id,
+						revision: envStaged.revision,
+						digest: envStaged.digest,
+						app: "api",
+						target: "stack",
+						useStagedSource: true,
+					},
+					checkRoute,
+				)
+			).json();
+		expect(envCheck.accepted).toBe(false);
+		expect(JSON.stringify(envCheck)).not.toContain("app.env");
 	} finally {
 		host.stop();
 	}
