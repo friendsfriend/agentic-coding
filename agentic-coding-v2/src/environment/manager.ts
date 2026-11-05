@@ -5,6 +5,7 @@ import { decode, type TaskInfo, values } from "../state.ts";
 import { Acquisitions } from "./acquisitions.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
 import { loadProjects, projectView } from "./catalog.ts";
+import { CleanupUncertain, cleanupSchedule } from "./cleanup.ts";
 import { inspectCluster, loadClusters, prepareCluster } from "./cluster.ts";
 import type { ClusterInspection } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
@@ -72,6 +73,10 @@ export class Environments {
 		{ owner: number; batch: string; runId?: string }
 	>();
 	private stopped = new Set<string>();
+	private stopOperations = new Map<
+		string,
+		{ request: string; operation: Promise<string[]> }
+	>();
 	private stoppedRoots = new Set<string>();
 	private dependencyCleanup = new Map<number, Promise<void>>();
 	constructor(private config: Config) {
@@ -587,6 +592,7 @@ export class Environments {
 				| "error"
 				| "runtimeStatus"
 				| "runtimeStatuses"
+				| "cleanupRetention"
 			>
 		>,
 	) {
@@ -810,24 +816,16 @@ export class Environments {
 					this.idle.trackRoot(owner.id, `${batch}:${plan.app}`, plan.app);
 			return result;
 		} catch {
-			this.stopped.add(batch);
-			for (const plan of [...plans].reverse()) {
-				const id = `${batch}:${plan.app}`,
-					process = this.live.get(id);
-				if (process) await this.stopLive(id, process);
-				else
-					await this.store.commit(async (tx) => {
-						const doc = await tx.doc(EnvironmentState),
-							run = decode<EnvironmentRun>(doc.runs[id]);
-						if (run.state === "reserved")
-							doc.runs[id] = JSON.stringify({
-								...run,
-								state: "exited",
-								revision: run.revision + 1,
-							});
-						refreshReferenceGraphs(doc, batch);
-					}, background);
-				await this.update(id, {
+			const selected = (await this.records()).filter(
+				(run) => run.batch === batch && run.owner === owner.id,
+			);
+			this.latchStop(selected, [batch]);
+			await this.cleanupTargets(selected, [batch]);
+			for (const run of (await this.records()).filter(
+				(run) => run.batch === batch && run.owner === owner.id,
+			)) {
+				if (run.cleanupRetention || run.state === "interrupted") continue;
+				await this.update(run.id, {
 					error: running
 						? "Batch startup failed or was interrupted; inspect each run's exit and cleanup status."
 						: "Action timed out, failed to start, or was interrupted; inspect the exit status and redacted output.",
@@ -932,6 +930,22 @@ export class Environments {
 		return !process.cleanupFailed;
 	}
 	async stopOnce(id: string, owner: number, apps?: string[]) {
+		const request = JSON.stringify({ owner, apps: apps ?? null }),
+			previous = this.stopOperations.get(id);
+		if (previous) {
+			if (previous.request !== request)
+				throw new Error("Stop request identity mismatch");
+			return previous.operation;
+		}
+		const operation = this.performStopOnce(id, owner, apps);
+		this.stopOperations.set(id, { request, operation });
+		try {
+			return await operation;
+		} finally {
+			this.stopOperations.delete(id);
+		}
+	}
+	private async performStopOnce(id: string, owner: number, apps?: string[]) {
 		const receipt = await this.store.commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState),
 				previous = doc.stops[id];
@@ -1000,12 +1014,25 @@ export class Environments {
 			doc.stops[id] = JSON.stringify(saved);
 			return saved;
 		}, background);
+		if (receipt.cleanupUncertain) throw new CleanupUncertain();
 		if (receipt.done) return receipt.runs;
-		await this.stopTargets(
-			(await this.records()).filter((run) => receipt.runs.includes(run.id)),
-			receipt.batches,
-			false,
-		);
+		try {
+			await this.stopTargets(
+				(await this.records()).filter((run) => receipt.runs.includes(run.id)),
+				receipt.batches,
+				false,
+			);
+		} catch (error) {
+			if (error instanceof CleanupUncertain)
+				await this.store.commit(async (tx) => {
+					(await tx.doc(EnvironmentState)).stops[id] = JSON.stringify({
+						...receipt,
+						done: true,
+						cleanupUncertain: true,
+					});
+				}, background);
+			throw error;
+		}
 		await this.store.commit(async (tx) => {
 			(await tx.doc(EnvironmentState)).stops[id] = JSON.stringify({
 				...receipt,
@@ -1031,15 +1058,7 @@ export class Environments {
 				"Cannot stop a saved PID. Operator inspection is required",
 			);
 		this.latchStop(selected, batches);
-		let uncertain = false;
-		for (const run of [...selected].reverse()) {
-			if (run.state === "interrupted" || run.state === "exited") continue;
-			const process = this.live.get(run.id);
-			if (process) {
-				await this.update(run.id, { state: "stopping" });
-				if (!(await this.stopLive(run.id, process))) uncertain = true;
-			} else await this.update(run.id, { state: "exited" });
-		}
+		const uncertain = await this.cleanupTargets(selected, batches);
 		await Promise.allSettled(
 			[...this.pending]
 				.filter(
@@ -1064,10 +1083,83 @@ export class Environments {
 					});
 			}
 		}, background);
-		if (uncertain && !preserveUnknown)
-			throw new Error(
-				"Cleanup remains uncertain; operator inspection required",
+		if (uncertain && !preserveUnknown) throw new CleanupUncertain();
+	}
+	/** Call only after admission is latched closed. Never wait for the startup
+	 * operation here: its own rollback uses this same cleanup barrier. */
+	private async cleanupTargets(selected: EnvironmentRun[], batches: string[]) {
+		await Promise.allSettled(
+			[...this.pending]
+				.filter(
+					([, entry]) =>
+						entry.runId &&
+						(batches.includes(entry.batch) ||
+							selected.some((run) => run.id === entry.runId)),
+				)
+				.map(([operation]) => operation),
+		);
+		let schedule: ReturnType<typeof cleanupSchedule>;
+		try {
+			schedule = cleanupSchedule(
+				await this.records(),
+				selected.map((run) => run.id),
 			);
+		} catch {
+			for (const run of selected)
+				await this.update(run.id, {
+					state: "interrupted",
+					error:
+						"Cleanup dependency generations cannot be established; no cleanup was dispatched. Operator inspection required.",
+				});
+			return true;
+		}
+		let uncertain = false;
+		for (const target of schedule.order) {
+			const current = await this.records(),
+				run = current.find((run) => run.id === target.id);
+			if (!run) {
+				uncertain = true;
+				continue;
+			}
+			if (run.state === "exited") continue;
+			if (run.state === "interrupted") {
+				uncertain = true;
+				continue;
+			}
+			const blockedBy = schedule.blockedBy(run.id, current);
+			if (blockedBy.length) {
+				await this.update(run.id, {
+					state: "stopping",
+					cleanupRetention: { blockedBy },
+					error:
+						"Prerequisite cleanup retained until all dependent generations are confirmed released; no stop dispatched for this generation.",
+				});
+				uncertain = true;
+				continue;
+			}
+			const process = this.live.get(run.id);
+			if (process) {
+				await this.update(run.id, {
+					state: "stopping",
+					cleanupRetention: undefined,
+					...(run.cleanupRetention ? { error: null } : {}),
+				});
+				if (!(await this.stopLive(run.id, process))) uncertain = true;
+			} else if (
+				run.state === "reserved" ||
+				(run.state === "stopping" && run.pid === null && run.ready === null)
+			) {
+				await this.update(run.id, { state: "exited" });
+			} else {
+				await this.update(run.id, {
+					state: "interrupted",
+					error:
+						"Original live cleanup authority is unavailable; operator inspection required. No saved process identity was used.",
+				});
+				uncertain = true;
+			}
+		}
+		return uncertain;
 	}
 	async releaseOwner(owner: number) {
 		this.idle.forget(owner);
@@ -1110,6 +1202,16 @@ export class Environments {
 			const run = decode<EnvironmentRun>(raw);
 			if (run.state !== "interrupted" || run.revision !== revision)
 				throw new Error("Stale environment inspection");
+			const runs = values<EnvironmentRun>(doc.runs),
+				schedule = cleanupSchedule(runs, [id]);
+			if (schedule.blockedBy(id, runs).length)
+				throw new Error(
+					"Dependent generations must be inspected and released before their prerequisites",
+				);
+			if (this.live.has(id))
+				throw new Error(
+					"Original live generation remains held; cleanup must be confirmed before inspection can release it",
+				);
 			doc.runs[id] = JSON.stringify({
 				...run,
 				state: "exited",
@@ -1129,8 +1231,12 @@ export class Environments {
 	private async closeOnce() {
 		this.closed = true;
 		this.acquisitions.notify();
-		for (const [id, process] of [...this.live].reverse())
-			await this.stopLive(id, process);
+		const selected = (await this.records()).filter(holdsResource);
+		await this.stopTargets(
+			selected,
+			[...new Set(selected.map((run) => run.batch))],
+			true,
+		);
 		await Promise.allSettled([...this.pending.keys()]);
 		await Promise.allSettled([...this.dependencyCleanup.values()]);
 		this.acquisitions.clear();

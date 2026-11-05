@@ -861,10 +861,18 @@ test("missing and unhealthy engine health never become readiness, and startup fa
 		await app.harness.waitForTask(task as TaskId, context);
 		const run = (await app.environments.snapshot()).runs[0];
 		expect(run?.ready).not.toBe(true);
-		expect(run?.state).toBe("exited");
+		const logs = JSON.stringify(await app.environments.logs("api", task));
+		expect(
+			run?.state,
+			JSON.stringify({
+				initialHealth,
+				error: run?.error,
+				status: run?.runtimeStatus,
+				logs,
+			}),
+		).toBe("exited");
 		expect(run?.runtimeStatus?.state).toBe("absent");
 		expect(Object.keys(readEngine(config).containers)).toHaveLength(0);
-		const logs = JSON.stringify(await app.environments.logs("api", task));
 		expect(logs).toContain(
 			initialHealth === "missing" ? "timed out" : "unhealthy",
 		);
@@ -1123,3 +1131,263 @@ test("killed container and Compose hosts never adopt saved IDs or invoke an engi
 		}
 	}
 }, 35000);
+
+function configureRetention(config: Config, containerDependencies = false) {
+	configure(config);
+	const file = path.join(config.configDir, "environments.json"),
+		definition = JSON.parse(fs.readFileSync(file, "utf8")),
+		api = definition.projects[0],
+		target = api.targets[0];
+	api.requires = ["cache", "base"];
+	definition.projects = [
+		api,
+		...[
+			{ id: "base", kind: "infrastructure", requires: [] },
+			{ id: "cache", kind: "infrastructure", requires: ["base"] },
+			{ id: "scratch", kind: "infrastructure", requires: [] },
+			{ id: "console", kind: "app", requires: ["scratch"] },
+		].map((project) => ({
+			...project,
+			repository: config.repositories[0],
+			targets: [
+				containerDependencies
+					? {
+							...target,
+							container: {
+								...target.container,
+								name: `fixture-${project.id}`,
+								ports: [],
+							},
+						}
+					: {
+							id: "serve",
+							action: "run",
+							runtime: "shell",
+							readyText: "READY",
+							command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("const fs=require('node:fs');fs.writeFileSync(process.env.MARKER,'ready');process.on('SIGTERM',()=>{fs.appendFileSync(process.env.ORDER,process.env.NODE+'\\n');fs.rmSync(process.env.MARKER,{force:true});process.exit(0)});console.log('READY');setInterval(()=>fs.appendFileSync(process.env.MARKER,'.'),20)")}`,
+							environment: {
+								NODE: project.id,
+								MARKER: path.join(config.configDir, `${project.id}-live`),
+								ORDER: path.join(config.configDir, "cleanup-order"),
+							},
+						},
+			],
+		})),
+	];
+	fs.writeFileSync(file, JSON.stringify(definition));
+}
+
+test("uncertain dependent cleanup retains its transitive prerequisites through shutdown; only a fresh stop after inspection can release original live generations", async () => {
+	const { app, config, fake, invocation } = await fixture(
+		false,
+		configureRetention,
+	);
+	fake.setResponses([
+		call("env_start", { apps: ["api", "console"] }),
+		call("request_review", { path: ".", title: "Hold retained cleanup" }),
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	await pendingReview(app, owner, "Hold retained cleanup");
+	const state = readEngine(config);
+	state.replaceAfterStop = true;
+	fs.writeFileSync(engine(config), JSON.stringify(state));
+	const attempts = await Promise.allSettled([
+		app.environments.stopOnce("uncertain-stop", owner, ["api"]),
+		app.environments.stopOnce("uncertain-stop", owner, ["api"]),
+	]);
+	for (const attempt of attempts) {
+		expect(attempt.status).toBe("rejected");
+		if (attempt.status !== "rejected")
+			throw new Error("Uncertain stop reported success");
+		expect(String(attempt.reason)).toContain("Cleanup remains uncertain");
+	}
+	const retained = await app.environments.snapshot(),
+		root = retained.runs.find((run) => run.plan.app === "api");
+	if (!root) throw new Error("Missing uncertain root");
+	expect(root.state).toBe("interrupted");
+	for (const name of ["cache", "base"]) {
+		const resource = retained.runs.find((run) => run.plan.app === name);
+		expect(resource?.state).toBe("stopping");
+		expect(resource?.cleanupRetention?.blockedBy).toContain(root.id);
+		expect(resource?.endpoints).toEqual({});
+	}
+	expect(
+		retained.runs
+			.filter((run) => ["console", "scratch"].includes(run.plan.app))
+			.every((run) => run.state === "exited"),
+	).toBe(true);
+	const order = fs.readFileSync(
+		path.join(config.configDir, "cleanup-order"),
+		"utf8",
+	);
+	expect(order.indexOf("console")).toBeLessThan(order.indexOf("scratch"));
+	expect(order).not.toContain("cache");
+	expect(order).not.toContain("base");
+	await app.environments.close();
+	for (const name of ["cache", "base"]) {
+		const marker = path.join(config.configDir, `${name}-live`),
+			before = fs.readFileSync(marker, "utf8").length;
+		await eventually(
+			async () => fs.readFileSync(marker, "utf8").length,
+			(length) => length > before,
+		);
+	}
+	// Only this disposable fixture's operator removes the ambiguous backend object.
+	const inspected = readEngine(config);
+	inspected.containers = {};
+	inspected.replaceAfterStop = false;
+	fs.writeFileSync(engine(config), JSON.stringify(inspected));
+	await app.environments.acknowledge(root.id, root.revision);
+	await expect(
+		app.environments.stopOnce("uncertain-stop", owner, ["api"]),
+	).rejects.toThrow("Cleanup remains uncertain");
+	expect(fs.existsSync(path.join(config.configDir, "base-live"))).toBe(true);
+	await app.environments.stopOnce("fresh-retained-stop", owner, ["base"]);
+	const final = await app.environments.snapshot();
+	expect(final.runs.every((run) => run.state === "exited")).toBe(true);
+	const complete = fs.readFileSync(
+		path.join(config.configDir, "cleanup-order"),
+		"utf8",
+	);
+	expect(complete.indexOf("cache")).toBeLessThan(complete.indexOf("base"));
+	expect(fs.existsSync(path.join(config.configDir, "base-live"))).toBe(false);
+	await app.cancel(owner);
+}, 20000);
+
+test("lost dependent ownership retains prerequisites across reopen and inspection cannot release them ahead of dependent generations", async () => {
+	const { app, open, config, fake, invocation } = await fixture(
+		true,
+		(config) => configureRetention(config, true),
+	);
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", {
+			path: ".",
+			title: "Hold dependency ownership loss",
+		}),
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	await pendingReview(app, owner, "Hold dependency ownership loss");
+	const state = readEngine(config),
+		root = Object.values(state.containers).find(
+			(container) => container.Name === "/v2-fixture",
+		);
+	if (!root) throw new Error("Missing disposable root container");
+	root.Config.Labels = { foreign: "replacement" };
+	fs.writeFileSync(engine(config), JSON.stringify(state));
+	await eventually(
+		() => app.environments.snapshot(),
+		(snapshot) =>
+			snapshot.runs.some(
+				(run) => run.plan.app === "api" && run.state === "interrupted",
+			) &&
+			snapshot.runs
+				.filter((run) => run.plan.app !== "api")
+				.every((run) => run.state === "stopping"),
+	);
+	await app.close();
+	const before = readEngine(config).containers;
+	expect(
+		Object.values(before)
+			.filter((container) => container.Name !== "/v2-fixture")
+			.every((container) => container.State.Running),
+	).toBe(true);
+	const restored = await open(),
+		recovered = await restored.environments.snapshot(),
+		byName = (name: string) => {
+			const run = recovered.runs.find((run) => run.plan.app === name);
+			if (!run) throw new Error("Missing quarantined generation");
+			return run;
+		};
+	expect(
+		recovered.runs.every(
+			(run) => run.state === "interrupted" && !run.canRevoke,
+		),
+	).toBe(true);
+	await expect(
+		restored.environments.acknowledge(
+			byName("base").id,
+			byName("base").revision,
+		),
+	).rejects.toThrow("Dependent generations");
+	await expect(
+		restored.environments.stopOnce("refuse-retained-adoption", owner, ["base"]),
+	).rejects.toThrow("saved PID");
+	expect(readEngine(config).containers).toEqual(before);
+	// This isolated synthetic backend has no real containers. The fixture owner
+	// performs manual cleanup before recording revision-bound inspection.
+	const manual = readEngine(config);
+	manual.containers = {};
+	fs.writeFileSync(engine(config), JSON.stringify(manual));
+	await restored.environments.acknowledge(
+		byName("api").id,
+		byName("api").revision,
+	);
+	await expect(
+		restored.environments.acknowledge(
+			byName("base").id,
+			byName("base").revision,
+		),
+	).rejects.toThrow("Dependent generations");
+	await restored.environments.acknowledge(
+		byName("cache").id,
+		byName("cache").revision,
+	);
+	await restored.environments.acknowledge(
+		byName("base").id,
+		byName("base").revision,
+	);
+	expect(
+		(await restored.environments.snapshot()).runs.every(
+			(run) => run.state === "exited",
+		),
+	).toBe(true);
+	expect(readEngine(config).containers).toEqual({});
+	await restored.cancel(owner);
+}, 20000);
+
+test("uncertain startup rollback retains already-started prerequisites instead of releasing them beneath its failed dependent", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		configureRetention(config);
+		const state = readEngine(config);
+		state.initialHealth = "unhealthy";
+		state.replaceAfterStop = true;
+		fs.writeFileSync(engine(config), JSON.stringify(state));
+	});
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", { path: ".", title: "Hold uncertain rollback" }),
+	]);
+	const owner = await app.startTask(invocation);
+	await approve(app, owner);
+	await pendingReview(app, owner, "Hold uncertain rollback");
+	const snapshot = await app.environments.snapshot(),
+		root = snapshot.runs.find((run) => run.plan.app === "api");
+	if (!root) throw new Error("Missing failed startup generation");
+	expect(root.state).toBe("interrupted");
+	expect(
+		snapshot.runs
+			.filter((run) => run.plan.app !== "api")
+			.every(
+				(run) =>
+					run.state === "stopping" &&
+					run.cleanupRetention?.blockedBy.includes(root.id),
+			),
+	).toBe(true);
+	expect(fs.existsSync(path.join(config.configDir, "cleanup-order"))).toBe(
+		false,
+	);
+	const manual = readEngine(config);
+	manual.containers = {};
+	fs.writeFileSync(engine(config), JSON.stringify(manual));
+	await app.environments.acknowledge(root.id, root.revision);
+	await app.environments.stopOnce("settle-rollback-prerequisites", owner);
+	expect(
+		(await app.environments.snapshot()).runs.every(
+			(run) => run.state === "exited",
+		),
+	).toBe(true);
+	await app.cancel(owner);
+}, 20000);

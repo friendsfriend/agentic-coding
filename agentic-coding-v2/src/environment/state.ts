@@ -33,6 +33,7 @@ export type StopReceipt = {
 	runs: string[];
 	batches: string[];
 	done: boolean;
+	cleanupUncertain?: boolean;
 	idle?: IdleReap;
 };
 export type EnvironmentRun = {
@@ -56,5 +57,6 @@ export type EnvironmentRun = {
 	runtimeStatuses?: RuntimeStatus[];
 	inspection?: { confirmedAt: number; revision: number };
 	idleReap?: IdleReap;
+	cleanupRetention?: { blockedBy: string[] };
 };
 export const holdsResource = (run: EnvironmentRun) => run.state !== "exited";

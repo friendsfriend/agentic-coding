@@ -170,7 +170,18 @@ test("SIGKILL preserves uncertain SQL issuance and reopen never replays it or ad
 		).rejects.toThrow();
 		// These two disposable wrappers already reported their own reaping above.
 		// Trusted operator inspection records observations, never a saved-ID stop.
-		for (const run of snapshot.runs)
+		const infrastructure = snapshot.runs.find(
+			(run) => run.plan.app === "store",
+		);
+		if (!infrastructure)
+			throw new Error("Missing quarantined SQL infrastructure");
+		await expect(
+			restored.environments.acknowledge(
+				infrastructure.id,
+				infrastructure.revision,
+			),
+		).rejects.toThrow("Dependent generations");
+		for (const run of [...snapshot.runs].reverse())
 			await restored.environments.acknowledge(run.id, run.revision);
 		const settled = (await restored.environments.snapshot()).referenceGraphs[0];
 		expect(settled?.observation).toBe("settled-observed");
