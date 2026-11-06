@@ -4,17 +4,30 @@ import { type DraftData, stored } from "./definition-draft-data.ts";
 export type TreeCleanup = {
 	request: string;
 	name: string | null;
-	kind: "release" | "delete-draft" | "supersede";
+	kind: "release" | "delete-draft" | "supersede" | "assemble";
+	assembly?: {
+		draftId: string;
+		draftRevision: number;
+		contentDigest: string;
+		treeDigest: string;
+		previousName: string | null;
+		retain: boolean;
+		temporaryName: string;
+	};
 	status: "pending" | "completed" | "acknowledged";
 	revision?: number;
 	startedAt: string;
 	result?: string;
 };
 /** A pending marker is uncertainty, not permission to repeat a deletion. */
-export function assertNoTreeCleanup(doc: Readonly<DraftData> | undefined) {
+export function assertNoTreeCleanup(
+	doc: Readonly<DraftData> | undefined,
+	admittedKey?: string,
+) {
 	if (
-		Object.values(doc?.treeCleanups ?? {}).some(
-			(raw) => stored<TreeCleanup>(raw).status === "pending",
+		Object.entries(doc?.treeCleanups ?? {}).some(
+			([key, raw]) =>
+				key !== admittedKey && stored<TreeCleanup>(raw).status === "pending",
 		)
 	)
 		throw new Error(
@@ -43,6 +56,7 @@ export function beginTreeCleanup(
 	request: string,
 	kind: TreeCleanup["kind"],
 	name: string | null,
+	assembly?: TreeCleanup["assembly"],
 ) {
 	assertNoTreeCleanup(doc);
 	if (doc.treeCleanups?.[key])
@@ -59,6 +73,7 @@ export function beginTreeCleanup(
 		kind,
 		name,
 		status: "pending",
+		...(assembly ? { assembly } : {}),
 		revision: 1,
 		startedAt: new Date().toISOString(),
 	} satisfies TreeCleanup);
@@ -83,13 +98,14 @@ export function finishTreeCleanup(
 }
 export function treeCleanupHistory(doc: Readonly<DraftData> | undefined) {
 	return Object.entries(doc?.treeCleanups ?? {}).map(([key, raw]) => {
-		const { name, kind, status, startedAt, revision } =
+		const { name, kind, status, startedAt, revision, assembly } =
 			stored<TreeCleanup>(raw);
 		return {
 			id: `tree-cleanup-${key}`,
 			name,
 			kind,
 			status,
+			...(assembly ? { assembly } : {}),
 			startedAt,
 			revision: revision ?? (status === "pending" ? 1 : 2),
 		};

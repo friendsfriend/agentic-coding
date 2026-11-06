@@ -157,14 +157,18 @@ function schema(config: Config, draft: Draft) {
 export class DefinitionDrafts {
 	private activePromotions = new Set<string>();
 	private activeTreeCleanups = new Set<string>();
-	private async withTreeCleanup<T>(key: string, action: () => Promise<T>) {
-		if (this.activeTreeCleanups.has(key))
+	private async withTreeCleanup<T>(
+		key: string | string[],
+		action: () => Promise<T>,
+	) {
+		const keys = typeof key === "string" ? [key] : key;
+		if (keys.some((entry) => this.activeTreeCleanups.has(entry)))
 			throw new Error("This cleanup request is still active");
-		this.activeTreeCleanups.add(key);
+		for (const entry of keys) this.activeTreeCleanups.add(entry);
 		try {
 			return await action();
 		} finally {
-			this.activeTreeCleanups.delete(key);
+			for (const entry of keys) this.activeTreeCleanups.delete(entry);
 		}
 	}
 	constructor(
@@ -294,9 +298,69 @@ export class DefinitionDrafts {
 			request,
 			key,
 		} = preflightRequest(body);
+		const assemblyKey = digest(`preflight-assembly:${key}`);
 		return this.withTreeCleanup(
-			digest(`preflight-supersession:${key}`),
+			[digest(`preflight-supersession:${key}`), assemblyKey],
 			async () => {
+				// Durable admission precedes every materialization/rename. Neither a
+				// saved intent nor acknowledgement is authority to replay its effects.
+				const admitted =
+					tree &&
+					(await this.engine().commit(async (tx) => {
+						const reports = await tx.doc(Preflights);
+						if (reports.requests[key]) return false;
+						if (Object.keys(reports.reports).length >= 64)
+							throw new Error("Private preflight capacity reached");
+						const drafts = await tx.doc(DraftState),
+							raw = drafts.drafts[id];
+						if (!raw) throw new Error("Unknown definition draft");
+						assertNoTreeCleanup(drafts);
+						const draft = parseDraft(raw);
+						if (
+							draft.revision !== body.revision ||
+							draft.digest !== contentDigest
+						)
+							throw new Error("Draft changed; load current before preflight");
+						const identity = stagedTreeIdentity(draft),
+							ownedName = stagedTreeReceipt(drafts, id)?.retained?.name;
+						if (retain) {
+							if (
+								Object.keys(drafts.trees ?? {}).some(
+									(otherId) =>
+										otherId !== id &&
+										stagedTreeReceipt(drafts, otherId)?.retained?.name ===
+											identity.treeDigest,
+								)
+							)
+								throw new Error(
+									"Retained tree is owned by another draft; cross-draft retention sharing is unsupported",
+								);
+							if (
+								ownedName !== identity.treeDigest &&
+								retainedStagedTrees(this.config).includes(identity.treeDigest)
+							)
+								throw new Error(
+									"Unowned retained tree cannot be adopted; inspect metadata and explicitly release its digest first",
+								);
+						}
+						beginTreeCleanup(
+							drafts,
+							assemblyKey,
+							request,
+							"assemble",
+							retain ? identity.treeDigest : null,
+							{
+								draftId: id,
+								draftRevision: draft.revision,
+								contentDigest,
+								treeDigest: identity.treeDigest,
+								previousName: ownedName ?? null,
+								retain,
+								temporaryName: `tree-${assemblyKey}`,
+							},
+						);
+						return true;
+					}, background));
 				const prepared = await this.engine().commit(async (tx) => {
 					const reports = await tx.doc(Preflights),
 						recorded = reports.requests[key];
@@ -319,7 +383,8 @@ export class DefinitionDrafts {
 						raw = drafts.drafts[id];
 					if (!raw) throw new Error("Unknown definition draft");
 					const draft = parseDraft(raw);
-					if (tree) assertNoTreeCleanup(drafts);
+					if (tree)
+						assertNoTreeCleanup(drafts, admitted ? assemblyKey : undefined);
 					if (
 						draft.revision !== body.revision ||
 						draft.digest !== contentDigest
@@ -394,7 +459,11 @@ export class DefinitionDrafts {
 						...(candidate
 							? inspectStagedCandidate(this.config, draft)
 							: tree
-								? assembleStagedTree(this.config, draft, { retain, ownedName })
+								? assembleStagedTree(this.config, draft, {
+										retain,
+										ownedName,
+										temporaryKey: assemblyKey,
+									})
 								: (comparison ??
 									(selection
 										? inspectComposeSource(
@@ -415,6 +484,11 @@ export class DefinitionDrafts {
 						authority:
 							"Historical preflight data only. No saved report restores source identity, readiness, execution, review approval or promotion authority; sources may already have changed.",
 					};
+					if (admitted)
+						finishTreeCleanup(drafts, assemblyKey, {
+							preflightId: report.id,
+							accepted: "accepted" in report && report.accepted,
+						});
 					// A verified tree becomes a durable digest-only identity for this exact
 					// revision, so promotion can require it without retaining the tree.
 					if (tree && "accepted" in report && report.accepted) {

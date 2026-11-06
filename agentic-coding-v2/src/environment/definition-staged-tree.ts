@@ -295,7 +295,7 @@ export function retainedStagedTrees(config: Config) {
 export function assembleStagedTree(
 	config: Config,
 	draft: Draft,
-	options?: { retain?: boolean; ownedName?: string },
+	options?: { retain?: boolean; ownedName?: string; temporaryKey?: string },
 ) {
 	const candidate = inspectStagedCandidate(config, draft);
 	if (!candidate.accepted)
@@ -318,7 +318,14 @@ export function assembleStagedTree(
 		const files = stagedFiles(draft),
 			identity = stagedTreeIdentity(draft),
 			base = stagingRoot(config);
-		root = fs.mkdtempSync(path.join(base, "tree-"));
+		if (options?.temporaryKey) {
+			if (!/^[a-f0-9]{64}$/.test(options.temporaryKey))
+				throw new Error("Invalid assembly identity");
+			const temporary = path.join(base, `tree-${options.temporaryKey}`);
+			// An existing directory is never adopted or discarded by this attempt.
+			fs.mkdirSync(temporary, { mode: 0o700 });
+			root = temporary;
+		} else root = fs.mkdtempSync(path.join(base, "tree-"));
 		if (!within(base, root) || root === base)
 			throw new Error("Staging directory left the private staging root");
 		for (const file of files) write(root, file.relative, file.content);
