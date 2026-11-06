@@ -119,6 +119,38 @@ export class Acquisitions {
 		}
 		return attached;
 	}
+	async recoveryContext(owner: TaskInfo, batch: string, apps: string[]) {
+		this.authority.check(owner.id);
+		const state = await this.authority
+			.store()
+			.snapshot(EnvironmentState, background);
+		const raw = state?.waits?.[batch];
+		if (!raw) throw new Error("Unknown interrupted acquisition");
+		const receipt = decode<WaitReceipt>(raw);
+		if (
+			owner.policy !== "workspace-write" ||
+			receipt.owner !== owner.id ||
+			!receipt.retained ||
+			receipt.state !== "interrupted" ||
+			receipt.plans.some((plan) => plan.workspace !== owner.workspace) ||
+			this.waiters.some((waiter) => waiter.batch === batch)
+		)
+			throw new Error(
+				"Recovery requires this native owner's interrupted retained wait, never a live queue entry",
+			);
+		const previous = JSON.parse(receipt.request) as { apps?: unknown };
+		if (JSON.stringify(previous.apps) !== JSON.stringify(apps))
+			throw new Error(
+				"Recovery must explicitly select the original requested apps; changed selection requires an unrelated fresh acquisition",
+			);
+		return {
+			acquisition: batch,
+			ordinal: receipt.ordinal,
+			revision: receipt.revision,
+			policy:
+				"Fresh current-plan approval and a new queue entry; no restored position, resource adoption or execution authority",
+		};
+	}
 	async recordedWait(
 		pollId: string,
 		owner: number,

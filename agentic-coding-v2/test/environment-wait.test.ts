@@ -283,6 +283,36 @@ test("host reopen keeps retained queue history diagnostic and never restores app
 			.trim()
 			.split("\n"),
 	).toHaveLength(1);
+	fake.setResponses([
+		call("env_start", { apps: ["api"], recoverAcquisition: acquisition }),
+		call("request_review", {
+			path: ".",
+			title: "Recovered with fresh approval",
+		}),
+	]);
+	await approve(reopened, queued, "No adoption");
+	const freshReview = await pendingReview(reopened, queued);
+	expect(freshReview.snapshot).toContain(acquisition);
+	expect(freshReview.snapshot).toContain("no restored position");
+	expect(
+		fs
+			.readFileSync(path.join(config.configDir, "order"), "utf8")
+			.trim()
+			.split("\n"),
+	).toHaveLength(1);
+	await approve(reopened, queued);
+	await pendingReview(reopened, queued, "Recovered with fresh approval");
+	expect(
+		fs
+			.readFileSync(path.join(config.configDir, "order"), "utf8")
+			.trim()
+			.split("\n"),
+	).toHaveLength(2);
+	expect(
+		(await reopened.environments.snapshot()).waits.find(
+			(wait) => wait.batch === acquisition,
+		),
+	).toMatchObject({ state: "interrupted", live: false });
 	await reopened.cancel(queued);
 	await reopened.cancel(holder);
 }, 15000);
