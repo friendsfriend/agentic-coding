@@ -59,9 +59,42 @@ test("authenticated discovery and the home tool return bounded untrusted hints w
 		expect(report.source).toEqual({
 			repository: repo,
 			root: repo,
+			directory: ".",
 			kind: "developer-checkout",
 		});
 		expect(report.configuration.written).toBe(false);
+		const nested = path.join(repo, "apps", "web");
+		fs.mkdirSync(nested, { recursive: true });
+		fs.writeFileSync(path.join(nested, "package.json"), source);
+		const nestedResponse = await get(`${route}&directory=apps/web`);
+		expect(nestedResponse.status).toBe(200);
+		const nestedReport = await nestedResponse.json();
+		expect(nestedReport.source).toMatchObject({
+			root: nested,
+			directory: "apps/web",
+		});
+		expect(nestedReport.suggestions).toEqual(report.suggestions);
+		expect(JSON.stringify(nestedReport)).not.toContain(marker);
+		fs.symlinkSync(config.configDir, path.join(repo, "linked"));
+		fs.symlinkSync(nested, path.join(repo, "apps", "alias"));
+		for (const directory of [
+			"../escape",
+			".git",
+			"apps/.private",
+			"/tmp",
+			"apps/alias",
+			"linked",
+			"a/b/c/d/e",
+			"apps/web/../web",
+		]) {
+			expect(
+				(await get(`${route}&directory=${encodeURIComponent(directory)}`))
+					.status,
+			).toBe(400);
+		}
+		expect(
+			(await get(`${route}&directory=apps/web&directory=apps/web`)).status,
+		).toBe(400);
 		expect(
 			report.suggestions.find((s: { script: string }) => s.script === "dev"),
 		).toMatchObject({ invocation: ["bun", "run", "dev"], trusted: false });
@@ -182,7 +215,12 @@ test("read-only skill discovery uses its captured worktree and refuses another c
 			scripts: { "test:captured": "echo fixture" },
 		}),
 	);
-	await git(repo, ["add", "package.json"]);
+	fs.mkdirSync(path.join(repo, "apps", "nested"), { recursive: true });
+	fs.copyFileSync(
+		path.join(repo, "package.json"),
+		path.join(repo, "apps", "nested", "package.json"),
+	);
+	await git(repo, ["add", "package.json", "apps/nested/package.json"]);
 	await git(repo, ["commit", "-m", "discovery fixture"]);
 	fs.writeFileSync(
 		path.join(repo, "package.json"),
@@ -199,6 +237,18 @@ test("read-only skill discovery uses its captured worktree and refuses another c
 			expect(messages).toContain("native-task-workspace");
 			expect(messages).toContain("test:captured");
 			expect(messages).not.toContain("dev:dirty");
+			return fauxAssistantMessage(
+				fauxToolCall("env_discover", {
+					repository: repo,
+					directory: "apps/nested",
+				}),
+				{ stopReason: "toolUse" },
+			);
+		},
+		(transcript) => {
+			const messages = JSON.stringify(transcript.messages);
+			expect(messages).toContain("apps/nested");
+			expect(messages).toContain("test:captured");
 			return call(config.repositories[1] ?? "");
 		},
 		(transcript) => {

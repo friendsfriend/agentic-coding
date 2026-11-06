@@ -116,6 +116,7 @@ export function discoverDefinitions(
 	config: Config,
 	repository: string,
 	owner?: TaskInfo,
+	directory = ".",
 ) {
 	if (
 		!config.repositories.includes(repository) ||
@@ -124,9 +125,29 @@ export function discoverDefinitions(
 		throw new Error(
 			"Discovery requires an explicitly authorized repository; skill tasks may inspect only their own repository",
 		);
-	const root = owner?.workspace ?? repository;
+	const base = owner?.workspace ?? repository;
+	if (
+		directory !== "." &&
+		(typeof directory !== "string" ||
+			directory.length > 200 ||
+			directory.split("/").length > 4 ||
+			directory
+				.split("/")
+				.some((part) => !/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/.test(part)))
+	)
+		throw new Error(
+			"Discovery directory requires at most four public relative path segments, without traversal or dotfiles",
+		);
+	const root = directory === "." ? base : path.join(base, directory);
 	let initialRoot: fs.Stats;
 	try {
+		rootIdentity(base);
+		let parent = base;
+		if (directory !== ".")
+			for (const segment of directory.split("/")) {
+				parent = path.join(parent, segment);
+				rootIdentity(parent);
+			}
 		initialRoot = rootIdentity(root);
 	} catch {
 		throw new Error("Discovery source is unavailable or changed");
@@ -252,6 +273,7 @@ export function discoverDefinitions(
 		source: {
 			repository,
 			root,
+			directory,
 			kind: owner ? "native-task-workspace" : "developer-checkout",
 		},
 		configuration: {
@@ -260,7 +282,7 @@ export function discoverDefinitions(
 			written: false,
 		},
 		coverage:
-			"Root-only fixed manifest/lock/container/build-file names. Only package.json contents are read; no scripts are executed, and script bodies are withheld. Private .env/provider files are never inspected. Symlinks and other file contents are not followed/read. Nested/custom layouts, profiles, services, ports, readiness and compatibility are not inferred. Metadata may change immediately after observation; digests are observations, not approved validation or promotion authority. Not an OS sandbox.",
+			"Fixed manifest/lock/container/build-file names in one explicitly selected directory (root by default). Only package.json contents are read; no scripts are executed, and script bodies are withheld. Private .env/provider files are never inspected. Symlinks and other file contents are not followed/read. No recursive traversal or automatic nested-layout inference. Profiles, services, ports, readiness and compatibility are not inferred. Metadata may change immediately after observation; digests are observations, not approved validation or promotion authority. Not an OS sandbox.",
 		evidence,
 		packageManager: manager,
 		suggestions,

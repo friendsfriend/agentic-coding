@@ -146,8 +146,8 @@ export class Environments {
 		this.http = new HeldHttp(config, authority);
 		this.database = new DatabaseDiagnostics(config, authority);
 	}
-	discover(repository: string, owner?: TaskInfo) {
-		return discoverDefinitions(this.config, repository, owner);
+	discover(repository: string, owner?: TaskInfo, directory = ".") {
+		return discoverDefinitions(this.config, repository, owner, directory);
 	}
 	prepareCluster(owner: TaskInfo, id: string) {
 		const cluster = this.clusters.find((item) => item.id === id);

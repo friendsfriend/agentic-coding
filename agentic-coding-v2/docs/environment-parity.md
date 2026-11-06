@@ -619,3 +619,11 @@ Verification: 123 tests / 1610 assertions, all passing; Biome, type-check and bu
 The public reopen scenario additionally attempts recovery while the original retained wait is still live (refused, original wait stays waiting/live), recovery by a different native task after restart (refused), and recovery with a changed requested app list (refused before current-plan approval). The original owner can still recover afterward with fresh approval; process-count assertions verify that no refusal starts a process. These cover live-state, owner/workspace and app-selection boundaries through native tools, without editing saved state. Because the foreign task also has a different workspace, this does not independently isolate a same-owner/workspace-mismatch case.
 
 Verification: 123 tests / 1614 assertions, all passing; Biome, type-check and build pass. No production or UI changes.
+
+## Explicit nested definition discovery
+
+The authenticated discovery endpoint and native `env_discover` tool accept an optional `directory` inside the authorized repository (or the skill task's own captured workspace). Root remains the default. The directory is explicit, at most four bounded public relative segments; dotfiles, traversal, absolute paths and symlink components are refused. Each component must be a canonical real directory. The existing bounded fixed-name metadata inspection and package.json-only content reader run in that directory. Reports identify the selected root/directory; hints remain untrusted and do not author configuration or execute scripts. No recursive enumeration, workspace-glob expansion or automatic project selection is introduced.
+
+Public coverage selects apps/web through the authenticated route, observes equivalent bounded hints with private script bodies withheld, refuses traversal/private/absolute/deep/link paths and duplicate directory parameters, and selects apps/nested through a read-only native task against its captured worktree. Cross-repository skill inspection remains refused. Identity checks detect ordinary replacement; this is not an OS filesystem sandbox. Automatic nested discovery and custom manifest names remain gaps rather than inferred support.
+
+Verification: 123 tests / 1629 assertions, all passing; Biome, type-check and build pass. No web/TUI implementation changes.

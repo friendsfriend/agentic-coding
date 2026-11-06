@@ -245,7 +245,10 @@ export function serve(app: Runtime, port = 0) {
 				) {
 					if (
 						url.searchParams.getAll("repository").length !== 1 ||
-						[...url.searchParams.keys()].some((key) => key !== "repository")
+						url.searchParams.getAll("directory").length > 1 ||
+						[...url.searchParams.keys()].some(
+							(key) => !["repository", "directory"].includes(key),
+						)
 					)
 						throw new Error(
 							"Discovery requires exactly one repository query parameter",
@@ -257,6 +260,8 @@ export function serve(app: Runtime, port = 0) {
 								"discovery repository",
 								4096,
 							),
+							undefined,
+							url.searchParams.get("directory") ?? ".",
 						),
 					);
 				}
