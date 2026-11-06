@@ -1,5 +1,7 @@
 # Environment parity ledger
 
+**Current open-work index:** [Backend acceptance checkpoint](backend-acceptance.md). This ledger is chronological; early status tables and historical “next” notes are superseded by later entries, not a current completion checklist.
+
 Reference: the previous host's `docs/agent-environments.md`, `docs/environment-runtime-port.md`, `docs/devenv/cross-runtime-endpoints.md`, agent environment tools, action/default-target resolver, runtime owners and dependency leases. This is a capability ledger, not a claim that implementation or fixture success proves live-runtime parity.
 
 The v2 implementation remains independent. No legacy runtime imports, storage adoption, production deployment, automatic host restart, container takeover, saved-PID cleanup, workflow graph or evidence subsystem is authorized by this work. Task ownership replaces workflow ownership. Profiles remain model selection, not permission.
@@ -647,3 +649,11 @@ The public auxiliary-source scenario now retains the verified tree instead of st
 This supersedes the earlier missing retention/removal proof for nested auxiliary files. It does not explain or claim to fix the historical ENOTEMPTY incident, prove arbitrary concurrent mutation safety, or close creation/move-before-marker crash reconciliation. No runtime, provider, credentials or model calls were used.
 
 Verification: 123 tests / 1656 assertions, all passing; Biome, type-check and build pass. No production or UI changes.
+
+## Consolidated backend acceptance and refreshed gates
+
+`docs/backend-acceptance.md` is now the current open-work index, distinguishing supported subsets from unfinished acceptance, with the retained-tree pre-effect intent gap as the next safety milestone. Inspection confirms assembly/move happens before the transaction commits ownership or supersession cleanup markers. The checkpoint specifies intent/effect/completion separation and fail-closed interrupted recovery; it does not claim that gap is implemented or fixed.
+
+Refreshed gates: zero-diagnostic Biome (154 files), native type-check/build/compiled CLI help, legacy boundaries (71 tests / 278 assertions) and legacy type-check pass. Desloppify: overall 20.7, objective/verified 82.9, strict 19.9; subjective dimensions remain unassessed and the three allowed exclusions are unchanged. Initial full native run had 122 pass / 1 fail: missing/unhealthy-container cleanup observed unknown rather than absent. An unchanged focused rerun passed, then an unchanged full repeat passed (123 tests / 1656 assertions). This is an unresolved intermittent cleanup-observation failure, not a fixed timeout or a weakened assertion. Legacy full-suite baseline/TEST-005 remains open.
+
+Documentation/checkpoint increment only; no provider/model/credential calls, UI changes or production implementation changes.
