@@ -68,6 +68,9 @@ export type Target = {
 	environment: Record<string, string>;
 	secretRefs: Record<string, string>;
 	endpoints?: Record<string, string>;
+	/** Explicit Compose diagnostic selectors, never inferred from ports/order. */
+	endpointServices?: Record<string, string>;
+	queryService?: string;
 	endpointCaRefs?: Record<string, string>;
 	endpointAuthRefs?: Record<string, EndpointAuth>;
 	queryConnection?: QueryConnection;

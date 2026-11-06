@@ -3,6 +3,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import { type Config, digest } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
+import { ComposeProcess } from "./compose.ts";
 import { ContainerProcess } from "./container.ts";
 import { declaredInfrastructure } from "./dependencies.ts";
 import {
@@ -30,6 +31,7 @@ type QueryRequest = {
 	app: string;
 	root?: { run: string; resources: string[] };
 	connection: QueryConnection;
+	service?: string;
 	ca?: EndpointCa;
 };
 export type QueryReceipt = {
@@ -42,6 +44,7 @@ export type QueryReceipt = {
 		run: string;
 		infra: string;
 		app: string;
+		service?: string;
 		root?: QueryRequest["root"];
 		observedAt: number;
 	};
@@ -88,6 +91,9 @@ export class DatabaseDiagnostics {
 			(receipt) => receipt.approved.input.infra === run.plan.app,
 			(receipt) => ({
 				infra: run.plan.app,
+				...(receipt.approved.service
+					? { service: receipt.approved.service }
+					: {}),
 				app: receipt.approved.app,
 				...(receipt.approved.root
 					? { rootRun: receipt.approved.root.run }
@@ -118,19 +124,31 @@ export class DatabaseDiagnostics {
 					run.ready === true,
 			),
 			run = matching.length === 1 ? matching[0] : undefined,
-			process = run ? this.authority.live.get(run.id) : undefined;
+			handle = run ? this.authority.live.get(run.id) : undefined;
+		const service = run?.plan.queryService;
+		const process =
+			handle instanceof ComposeProcess && service
+				? await handle.diagnosticService(service, signal)
+				: handle;
 		if (
 			!run ||
 			!(
 				process instanceof ShellProcess || process instanceof ContainerProcess
 			) ||
-			!run.plan.queryConnection
+			!run.plan.queryConnection ||
+			handle?.closing ||
+			process.closing ||
+			handle?.outcome ||
+			handle?.cleanupFailed
 		)
 			throw new Error(
 				"SQL requires this task's live ready shell or container infrastructure with a declared query connection; receipts grant no authority",
 			);
 		if (process instanceof ContainerProcess) {
-			const observed = await process.refresh(signal);
+			const observed =
+				handle instanceof ComposeProcess
+					? process.runtimeStatus
+					: await process.refresh(signal);
 			if (
 				observed?.health !== "healthy" ||
 				observed.owned !== true ||
@@ -146,6 +164,7 @@ export class DatabaseDiagnostics {
 				return (
 					item.state === "running" &&
 					live &&
+					!live.closing &&
 					!live.outcome &&
 					!live.cleanupFailed
 				);
@@ -201,6 +220,7 @@ export class DatabaseDiagnostics {
 						},
 			run,
 			process,
+			service,
 			app,
 			members: members.map((item) => ({
 				run: item,
@@ -214,7 +234,7 @@ export class DatabaseDiagnostics {
 		signal?: AbortSignal,
 	): Promise<QueryRequest> {
 		queryInput(input.infra, input.sql, input.limit, input.schema, input.app);
-		const { run, app, root } = await this.held(
+		const { run, app, root, service } = await this.held(
 				owner,
 				input.infra,
 				signal,
@@ -228,6 +248,7 @@ export class DatabaseDiagnostics {
 			app: app.plan.app,
 			...(root ? { root } : {}),
 			connection,
+			...(service ? { service } : {}),
 			...(connection.caRef
 				? { ca: prepareEndpointCa(this.config.configDir, connection.caRef) }
 				: {}),
@@ -266,6 +287,7 @@ export class DatabaseDiagnostics {
 			{ run, process, app } = held;
 		if (
 			run.id !== approved.run ||
+			held.service !== approved.service ||
 			app.plan.app !== approved.app ||
 			JSON.stringify(held.root) !== JSON.stringify(approved.root) ||
 			JSON.stringify(run.plan.queryConnection) !==
@@ -290,6 +312,7 @@ export class DatabaseDiagnostics {
 					if (
 						!member.process ||
 						this.authority.live.get(member.run.id) !== member.process ||
+						member.process.closing ||
 						member.process.outcome ||
 						member.process.cleanupFailed
 					)
@@ -345,6 +368,7 @@ export class DatabaseDiagnostics {
 				...result,
 				run: run.id,
 				infra: approved.input.infra,
+				...(held.service ? { service: held.service } : {}),
 				app: app.plan.app,
 				...(held.root ? { root: held.root } : {}),
 				observedAt: Date.now(),

@@ -36,6 +36,8 @@ export interface EnvironmentProcess {
 	readonly logTiming?: LogTiming;
 	readonly telemetry?: TelemetryReader;
 	readonly serviceLogs?: Record<string, ServiceLog>;
+	/** Synchronous revocation before remote/local cleanup has an outcome. */
+	readonly closing?: boolean;
 	readonly outcome: Exit | null;
 	readonly cleanupFailed: boolean;
 	readonly runtimeStatus?: RuntimeStatus;

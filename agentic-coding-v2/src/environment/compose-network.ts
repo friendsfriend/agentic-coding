@@ -2,6 +2,7 @@ import { digest, object } from "../config.ts";
 import { EnvironmentCommands } from "./command.ts";
 import type { Plan } from "./model.ts";
 import type { RuntimeStatus } from "./process.ts";
+import type { processEnvironment } from "./shell.ts";
 
 const hostLabel = "dev.agentic-coding.v2.host",
 	runLabel = "dev.agentic-coding.v2.run";
@@ -62,6 +63,7 @@ export class ComposeNetwork {
 		configDir: string,
 		stateDir: string,
 		private run: string,
+		startupEnvironment?: ReturnType<typeof processEnvironment>,
 	) {
 		if (plan.compose?.provider !== "docker")
 			throw new Error(
@@ -69,10 +71,13 @@ export class ComposeNetwork {
 			);
 		this.host = digest(stateDir);
 		this.name = `acv2-${plan.app}-${this.host.slice(0, 8)}-default`;
-		this.commands = new EnvironmentCommands(plan, configDir, "docker", [
-			"--host",
-			`unix://${plan.compose.socket}`,
-		]);
+		this.commands = new EnvironmentCommands(
+			plan,
+			configDir,
+			"docker",
+			["--host", `unix://${plan.compose.socket}`],
+			startupEnvironment,
+		);
 		this.observed = {
 			runtime: "docker",
 			kind: "network",

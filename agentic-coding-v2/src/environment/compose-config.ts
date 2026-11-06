@@ -12,6 +12,7 @@ import type {
 	ComposePlan,
 	ComposeDependency as Dependency,
 	Plan,
+	Target,
 } from "./model.ts";
 
 function keys(value: Record<string, unknown>, allowed: string[]) {
@@ -446,6 +447,56 @@ export function verifyCompose(plan: Plan) {
 			);
 	}
 }
+/** Freeze explicit diagnostics onto one service before approval. Neither service
+ * order nor a matching port may choose a service or a completion prerequisite. */
+export function bindComposeDiagnostics(
+	target: Target,
+	plan: ComposePlan,
+): ComposePlan {
+	const selected = new Set<string>();
+	const bind = (id: string | undefined, host: string, port: number) => {
+		const service = plan.services.find((entry) => entry.id === id);
+		if (
+			!service ||
+			service.container.completion ||
+			!service.container.ports.some(
+				(binding) =>
+					binding.address === host &&
+					binding.host === port &&
+					binding.protocol === "tcp",
+			)
+		)
+			throw new Error(
+				"Compose diagnostics require an explicit non-completion service with an exact declared TCP loopback publication",
+			);
+		selected.add(service.id);
+	};
+	for (const [name, value] of Object.entries(target.endpoints ?? {})) {
+		const url = new URL(value);
+		bind(
+			target.endpointServices?.[name],
+			url.hostname.replace(/^\[|\]$/g, ""),
+			Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+		);
+	}
+	if (target.queryConnection)
+		bind(
+			target.queryService,
+			target.queryConnection.host,
+			target.queryConnection.port,
+		);
+	return {
+		...plan,
+		services: plan.services.map((service) =>
+			selected.has(service.id)
+				? {
+						...service,
+						container: { ...service.container, readiness: "healthy" },
+					}
+				: service,
+		),
+	};
+}
 export function containerPlans(plan: Plan): Plan[] {
 	const definition = plan.compose;
 	if (!definition) return [plan];
@@ -454,6 +505,25 @@ export function containerPlans(plan: Plan): Plan[] {
 		...plan,
 		compose: undefined,
 		composePlan: undefined,
+		endpointServices: undefined,
+		queryService: undefined,
+		endpoints: Object.fromEntries(
+			Object.entries(plan.endpoints ?? {}).filter(
+				([name]) => plan.endpointServices?.[name] === service.id,
+			),
+		),
+		endpointCaRefs: Object.fromEntries(
+			Object.entries(plan.endpointCaRefs ?? {}).filter(
+				([name]) => plan.endpointServices?.[name] === service.id,
+			),
+		),
+		endpointAuthRefs: Object.fromEntries(
+			Object.entries(plan.endpointAuthRefs ?? {}).filter(
+				([name]) => plan.endpointServices?.[name] === service.id,
+			),
+		),
+		queryConnection:
+			plan.queryService === service.id ? plan.queryConnection : undefined,
 		runtime: definition.provider,
 		app: `${plan.app}-${service.id}`,
 		container: service.container,

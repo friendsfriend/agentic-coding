@@ -6,6 +6,7 @@ export type EndpointRequest = {
 	run: string;
 	app: string;
 	endpoint: string;
+	service?: string;
 	url: string;
 	ca?: EndpointCa;
 	http?: HttpOptions;

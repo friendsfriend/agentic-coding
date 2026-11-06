@@ -49,6 +49,7 @@ export class ContainerProcess {
 		stateDir: string,
 		private run: string,
 		private network?: { id: string; aliases: string[] },
+		startupEnvironment?: ReturnType<typeof processEnvironment>,
 	) {
 		if (
 			network &&
@@ -59,7 +60,7 @@ export class ContainerProcess {
 		const spec = plan.container;
 		if (!spec || !(plan.runtime === "docker" || plan.runtime === "podman"))
 			throw new Error("Structured container configuration is required");
-		const frozen = processEnvironment(configDir, plan);
+		const frozen = startupEnvironment ?? processEnvironment(configDir, plan);
 		this.frozen = frozen;
 		this.queryCredentials = frozen.queryCredentials;
 		this.authorization = frozen.authorization;
@@ -106,6 +107,9 @@ export class ContainerProcess {
 	get runtimeStatus(): RuntimeStatus | undefined {
 		// An image build has an exit receipt/artifact tag, not a container's health or lifecycle.
 		return this.plan.action === "build" ? undefined : { ...this.observed };
+	}
+	get closing() {
+		return this.controller.signal.aborted;
 	}
 	get outcome() {
 		return this.result;

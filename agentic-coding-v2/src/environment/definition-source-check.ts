@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { type Config, digest } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
-import { compileComposeSource } from "./compose-config.ts";
+import {
+	bindComposeDiagnostics,
+	compileComposeSource,
+} from "./compose-config.ts";
 
 /** Deliberately narrow public-source convention. No private inputs, links,
  * hard links, arbitrary filenames, tree walk, subprocess or source publication. */
@@ -134,10 +137,10 @@ export function inspectComposeSource(
 		const project = validateProjects(config, JSON.parse(content)).find(
 			(project) => project.id === app,
 		);
-		const definition = project?.targets.find(
-			(target) => target.id === targetId,
-		)?.compose;
-		if (!project || !definition) throw new Error("No exact Compose target");
+		const target = project?.targets.find((target) => target.id === targetId);
+		const definition = target?.compose;
+		if (!project || !target || !definition)
+			throw new Error("No exact Compose target");
 		publicComposePath(definition.file);
 		if (staged && digest(staged.content) !== staged.digest)
 			throw new Error("Staged source digest mismatch");
@@ -152,12 +155,15 @@ export function inspectComposeSource(
 			contentDigest: captured.contentDigest,
 			bytes: captured.bytes,
 		};
-		const plan = compileComposeSource(
-			project.repository,
-			definition,
-			captured,
-			false,
-			staged?.files,
+		const plan = bindComposeDiagnostics(
+			target,
+			compileComposeSource(
+				project.repository,
+				definition,
+				captured,
+				false,
+				staged?.files,
+			),
 		);
 		return {
 			...scope,

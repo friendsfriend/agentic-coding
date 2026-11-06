@@ -281,6 +281,9 @@ export class ShellProcess {
 			truncated: this.timingTruncated,
 		};
 	}
+	get closing() {
+		return this.stopping !== null;
+	}
 	get outcome() {
 		return this.exit;
 	}

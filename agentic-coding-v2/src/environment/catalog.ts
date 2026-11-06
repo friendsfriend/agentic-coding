@@ -4,7 +4,11 @@ import { type Config, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
 import { targetAvailability } from "./availability.ts";
-import { compileCompose, readCompose } from "./compose-config.ts";
+import {
+	bindComposeDiagnostics,
+	compileCompose,
+	readCompose,
+} from "./compose-config.ts";
 import { readContainer } from "./container-config.ts";
 import { expandDependencies, validateDependencies } from "./dependencies.ts";
 import { readEndpoints } from "./endpoint.ts";
@@ -68,6 +72,8 @@ function readTarget(raw: unknown): Target {
 		"compose",
 		"kubernetes",
 		"endpoints",
+		"endpointServices",
+		"queryService",
 		"endpointCaRefs",
 		"endpointAuthRefs",
 		"queryConnection",
@@ -115,7 +121,8 @@ function readTarget(raw: unknown): Target {
 			!(
 				data.runtime === "shell" ||
 				data.runtime === "docker" ||
-				data.runtime === "podman"
+				data.runtime === "podman" ||
+				data.runtime === "compose"
 			))
 	)
 		throw new Error(
@@ -126,7 +133,7 @@ function readTarget(raw: unknown): Target {
 		(data.action !== "run" ||
 			!(data.runtime === "shell"
 				? Boolean(data.readyText)
-				: data.runtime === "docker" || data.runtime === "podman"))
+				: ["docker", "podman", "compose"].includes(String(data.runtime))))
 	)
 		throw new Error(
 			"Query connections require a shell run with explicit readiness or a health-ready container run",
@@ -196,7 +203,7 @@ function readTarget(raw: unknown): Target {
 	if (path.isAbsolute(cwd))
 		throw new Error("Environment cwd must be relative to the task workspace");
 	const queryConnection = readQueryConnection(data.queryConnection, secretRefs);
-	if (queryConnection && data.runtime !== "shell") {
+	if (queryConnection && container) {
 		if (
 			container?.readiness !== "healthy" ||
 			!container.ports.some(
@@ -212,6 +219,36 @@ function readTarget(raw: unknown): Target {
 	}
 	const endpoints = readEndpoints(data.endpoints),
 		endpointCaRefs = readEndpointCaRefs(data.endpointCaRefs, endpoints);
+	let endpointServices: Record<string, string> | undefined;
+	let queryService: string | undefined;
+	if (data.endpointServices !== undefined || data.queryService !== undefined) {
+		if (data.runtime !== "compose")
+			throw new Error("Service selectors require a Compose run target");
+	}
+	if (data.runtime === "compose") {
+		const bindings = object(data.endpointServices ?? {});
+		if (
+			Object.keys(bindings).length !== Object.keys(endpoints).length ||
+			Object.entries(bindings).some(
+				([name, id]) =>
+					!Object.hasOwn(endpoints, name) ||
+					typeof id !== "string" ||
+					!/^[a-z][a-z0-9-]{0,62}$/.test(id),
+			)
+		)
+			throw new Error(
+				"Every Compose endpoint requires one explicit service selector",
+			);
+		endpointServices = bindings as Record<string, string>;
+		if (queryConnection) {
+			queryService = text(data.queryService, "Compose query service", 63);
+			if (!/^[a-z][a-z0-9-]{0,62}$/.test(queryService))
+				throw new Error("Invalid Compose query service selector");
+		} else if (data.queryService !== undefined)
+			throw new Error(
+				"Compose query service requires a declared query connection",
+			);
+	}
 	// A container endpoint is reachable only through an exact published loopback
 	// port and health readiness; the declaration never becomes observation.
 	if (Object.keys(endpoints).length > 0 && container) {
@@ -240,6 +277,8 @@ function readTarget(raw: unknown): Target {
 		id: identifier(data.id),
 		...(telemetry ? { telemetry } : {}),
 		...(data.endpoints === undefined ? {} : { endpoints }),
+		...(endpointServices ? { endpointServices } : {}),
+		...(queryService ? { queryService } : {}),
 		...(data.endpointCaRefs === undefined ? {} : { endpointCaRefs }),
 		...(data.endpointAuthRefs === undefined
 			? {}
@@ -449,7 +488,10 @@ export function resolvePlans(
 				"Environment cwd must be an existing task workspace directory",
 			);
 		const composePlan = chosen.compose
-			? compileCompose(owner.workspace, chosen.compose)
+			? bindComposeDiagnostics(
+					chosen,
+					compileCompose(owner.workspace, chosen.compose),
+				)
 			: undefined;
 		if (
 			composePlan?.services.some((service) =>

@@ -3,6 +3,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
+import { ComposeProcess } from "./compose.ts";
 import { ContainerProcess } from "./container.ts";
 import {
 	type DiagnosticSelection,
@@ -52,6 +53,9 @@ export class HeldHttp {
 			(receipt) => ({
 				app: run.plan.app,
 				endpoint: receipt.approved.endpoint,
+				...(receipt.approved.service
+					? { service: receipt.approved.service }
+					: {}),
 				method: receipt.approved.http?.method ?? "GET",
 			}),
 		);
@@ -59,12 +63,17 @@ export class HeldHttp {
 	/** The frozen declaration must bind the endpoint to an exact loopback
 	 * publication. Separate live observation checks health/creation identity;
 	 * neither a declaration nor an engine fixture proves actual networking. */
-	private endpointAdmission(run: Plan, base: string) {
+	private endpointAdmission(run: Plan, base: string, endpoint: string) {
 		if (run.runtime === "shell") return;
 		const url = new URL(base);
+		const container =
+			run.container ??
+			run.composePlan?.services.find(
+				(service) => service.id === run.endpointServices?.[endpoint],
+			)?.container;
 		if (
-			run.container?.readiness !== "healthy" ||
-			!run.container.ports.some(
+			container?.readiness !== "healthy" ||
+			!container.ports.some(
 				(port) =>
 					port.protocol === "tcp" &&
 					port.host ===
@@ -80,6 +89,7 @@ export class HeldHttp {
 	private async endpointRun(
 		owner: TaskInfo,
 		app: string,
+		endpoint: string,
 		signal?: AbortSignal,
 	) {
 		this.authority.check(owner.id, signal);
@@ -95,16 +105,27 @@ export class HeldHttp {
 					run.plan.app === app && run.state === "running" && run.ready === true,
 			);
 		const run = runs.length === 1 ? runs[0] : undefined,
-			process = run ? this.authority.live.get(run.id) : undefined;
+			handle = run ? this.authority.live.get(run.id) : undefined;
+		const service = run?.plan.endpointServices?.[endpoint];
+		const process =
+			handle instanceof ComposeProcess && service
+				? await handle.diagnosticService(service, signal)
+				: handle;
 		const observed =
 			process instanceof ContainerProcess
-				? await process.refresh(signal)
+				? handle instanceof ComposeProcess
+					? process.runtimeStatus
+					: await process.refresh(signal)
 				: undefined;
 		if (
 			!run ||
 			(!(process instanceof ShellProcess) &&
 				!(process instanceof ContainerProcess)) ||
 			!process ||
+			handle?.closing ||
+			handle?.outcome ||
+			handle?.cleanupFailed ||
+			process.closing ||
 			process.outcome ||
 			process.cleanupFailed ||
 			run.plan.workspace !== owner.workspace ||
@@ -119,7 +140,7 @@ export class HeldHttp {
 		this.authority.check(owner.id, signal, run.batch, run);
 		const root = referenceScope(run, members);
 		if (root) requireScopeLive(root, members, this.authority.live);
-		return { run, process, root };
+		return { run, process, handle, root, service };
 	}
 	/** Revalidates the approved descriptor at dispatch and publication: a
 	 * changed or closing prerequisite generation is never substituted. */
@@ -137,11 +158,16 @@ export class HeldHttp {
 		signal?: AbortSignal,
 		http?: HttpOptions,
 	): Promise<EndpointRequest> {
-		const { run, root } = await this.endpointRun(owner, app, signal),
+		const { run, root, service } = await this.endpointRun(
+				owner,
+				app,
+				endpoint,
+				signal,
+			),
 			base = run.plan.endpoints?.[endpoint];
 		if (!base || !Object.hasOwn(run.plan.endpoints ?? {}, endpoint))
 			throw new Error("Choose a declared endpoint of the held app");
-		this.endpointAdmission(run.plan, base);
+		this.endpointAdmission(run.plan, base, endpoint);
 		const ref = Object.hasOwn(run.plan.endpointCaRefs ?? {}, endpoint)
 			? run.plan.endpointCaRefs?.[endpoint]
 			: undefined;
@@ -159,6 +185,7 @@ export class HeldHttp {
 			run: run.id,
 			app,
 			endpoint,
+			...(service ? { service } : {}),
 			url: endpointUrl(base, path),
 			...(root ? { root } : {}),
 			...(options ? { http: options } : {}),
@@ -190,16 +217,18 @@ export class HeldHttp {
 		signal?: AbortSignal,
 		issuance?: { id: string; input: HttpInput },
 	) {
-		const { run, process, root } = await this.endpointRun(
+		const { run, process, handle, root, service } = await this.endpointRun(
 				owner,
 				approved.app,
+				approved.endpoint,
 				signal,
 			),
 			base = run.plan.endpoints?.[approved.endpoint];
 		this.scopeOf(approved, root);
-		if (base) this.endpointAdmission(run.plan, base);
+		if (base) this.endpointAdmission(run.plan, base, approved.endpoint);
 		if (
 			run.id !== approved.run ||
+			service !== approved.service ||
 			!base ||
 			!Object.hasOwn(run.plan.endpoints ?? {}, approved.endpoint) ||
 			(Object.hasOwn(run.plan.endpointCaRefs ?? {}, approved.endpoint)
@@ -268,7 +297,12 @@ export class HeldHttp {
 				if (previous) return replayHttp(previous, owner.id, issuance.input);
 			}
 			this.authority.check(owner.id, signal, run.batch, run);
-			if (process.outcome || process.cleanupFailed)
+			if (
+				handle?.closing ||
+				process.closing ||
+				process.outcome ||
+				process.cleanupFailed
+			)
 				throw new Error("Endpoint app is closing; no request sent");
 			const result = await endpointRequest(
 					approved.url,
@@ -278,7 +312,12 @@ export class HeldHttp {
 					ca,
 					authorization,
 					async () => {
-						const current = await this.endpointRun(owner, approved.app, signal);
+						const current = await this.endpointRun(
+							owner,
+							approved.app,
+							approved.endpoint,
+							signal,
+						);
 						if (current.run.id !== run.id || current.process !== process)
 							throw new Error("Endpoint ownership changed");
 						return approved.ca
@@ -290,16 +329,27 @@ export class HeldHttp {
 						if (
 							process.outcome ||
 							process.cleanupFailed ||
-							this.authority.live.get(run.id) !== process
+							handle?.closing ||
+							process.closing ||
+							handle?.outcome ||
+							handle?.cleanupFailed ||
+							this.authority.live.get(run.id) !== handle
 						)
 							throw new Error("Endpoint app is closing; no request sent");
 					},
 				),
-				current = await this.endpointRun(owner, approved.app, signal);
+				current = await this.endpointRun(
+					owner,
+					approved.app,
+					approved.endpoint,
+					signal,
+				);
 			this.authority.check(owner.id, signal, run.batch, run);
 			if (
 				current.run.id !== run.id ||
 				current.process !== process ||
+				handle?.closing ||
+				process.closing ||
 				process.outcome ||
 				process.cleanupFailed
 			)
@@ -309,6 +359,7 @@ export class HeldHttp {
 				run: run.id,
 				app: approved.app,
 				endpoint: approved.endpoint,
+				...(service ? { service } : {}),
 				...(root ? { root } : {}),
 				observedAt: Date.now(),
 				...(approved.ca ? { caDigest: approved.ca.digest } : {}),
@@ -324,7 +375,11 @@ export class HeldHttp {
 					if (
 						process.outcome ||
 						process.cleanupFailed ||
-						this.authority.live.get(run.id) !== process
+						handle?.closing ||
+						process.closing ||
+						handle?.outcome ||
+						handle?.cleanupFailed ||
+						this.authority.live.get(run.id) !== handle
 					)
 						throw new Error("Endpoint app ended; response discarded");
 					const raw = doc.httpOperations?.[issuance.id];

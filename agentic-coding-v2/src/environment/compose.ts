@@ -4,6 +4,7 @@ import { ContainerProcess } from "./container.ts";
 import { clampedCapture } from "./log-timing.ts";
 import type { Plan } from "./model.ts";
 import type { EnvironmentProcess, Exit } from "./process.ts";
+import { processEnvironment } from "./shell.ts";
 
 /** A Compose file is compiled to independent, receipt-fenced creations, never
  * `compose up/down`: project labels cannot prove which resources we created. */
@@ -18,22 +19,29 @@ export class ComposeProcess implements EnvironmentProcess {
 	private result: Exit | null = null;
 	private failedCleanup = false;
 	private network: ComposeNetwork | null = null;
+	private frozen: ReturnType<typeof processEnvironment>;
+	private observing: Promise<void> = Promise.resolve();
 	constructor(
 		private plan: Plan,
 		private configDir: string,
 		private stateDir: string,
 		private run: string,
 	) {
+		this.frozen = processEnvironment(configDir, plan);
 		if (plan.compose?.network !== "isolated")
 			this.network = new ComposeNetwork(
 				plan,
 				configDir,
 				stateDir,
 				`${run}:network`,
+				this.frozen,
 			);
 		this.done = new Promise((resolve) => {
 			this.complete = resolve;
 		});
+	}
+	get closing() {
+		return this.controller.signal.aborted;
 	}
 	get outcome() {
 		return this.result;
@@ -75,6 +83,84 @@ export class ComposeProcess implements EnvironmentProcess {
 			.join("\n")
 			.slice(-64000);
 	}
+	/** A service remains authority only inside this original live stack. Check
+	 * all non-completion children and the owned network; never borrow a sibling
+	 * credential or adopt a copied-label replacement. Queue cancellation covers
+	 * the whole observation window, not a fresh budget per queued service. */
+	async diagnosticService(id: string, signal?: AbortSignal) {
+		const bounded = AbortSignal.any([
+			this.controller.signal,
+			AbortSignal.timeout(2000),
+			...(signal ? [signal] : []),
+		]);
+		const operation = this.observing.then(async () => {
+			bounded.throwIfAborted();
+			const services = this.plan.composePlan?.services ?? [];
+			const index = services.findIndex((service) => service.id === id);
+			const selected = this.children[index];
+			if (
+				this.result ||
+				this.cleanupFailed ||
+				this.children.length !== services.length ||
+				!selected ||
+				services[index]?.container.completion
+			)
+				throw new Error(
+					"Compose diagnostics require the exact original live non-completion service",
+				);
+			await this.network?.attachment(2000, bounded);
+			const observations = await Promise.allSettled(
+				this.children.map(async (child, position) => {
+					const service = services[position];
+					if (service?.container.completion) {
+						if (child.outcome?.code !== 0 || child.cleanupFailed)
+							throw new Error(
+								"Compose completion prerequisite no longer has a confirmed successful receipt",
+							);
+						return;
+					}
+					const observed = await child.refresh(bounded);
+					if (
+						child.closing ||
+						child.outcome ||
+						child.cleanupFailed ||
+						observed?.owned !== true ||
+						observed.state !== "running" ||
+						((position === index ||
+							service?.container.readiness === "healthy") &&
+							observed.health !== "healthy")
+					)
+						throw new Error(
+							"Compose diagnostics require original owned running services and fresh selected-service health",
+						);
+				}),
+			);
+			bounded.throwIfAborted();
+			for (const observation of observations)
+				if (observation.status === "rejected") throw observation.reason;
+			if (this.result || this.cleanupFailed)
+				throw new Error("Compose stack is closing");
+			return selected;
+		});
+		this.observing = operation.then(
+			() => {},
+			() => {},
+		);
+		let abort = () => {};
+		const interrupted = new Promise<never>((_resolve, reject) => {
+			abort = () =>
+				reject(
+					new Error("Compose diagnostic observation interrupted or timed out"),
+				);
+			bounded.addEventListener("abort", abort, { once: true });
+			if (bounded.aborted) abort();
+		});
+		try {
+			return await Promise.race([operation, interrupted]);
+		} finally {
+			bounded.removeEventListener("abort", abort);
+		}
+	}
 	private async start() {
 		verifyCompose(this.plan);
 		const completion = new Set(
@@ -108,6 +194,16 @@ export class ComposeProcess implements EnvironmentProcess {
 				attachment && alias
 					? { id: attachment.id, aliases: [alias] }
 					: undefined,
+				{
+					...this.frozen,
+					env: { ...this.frozen.env, ...plan.environment },
+					queryCredentials: () =>
+						plan.queryConnection ? this.frozen.queryCredentials() : undefined,
+					authorization: (endpoint) =>
+						Object.hasOwn(plan.endpoints ?? {}, endpoint)
+							? this.frozen.authorization(endpoint)
+							: undefined,
+				},
 			);
 			this.children.push(child);
 			if (completion.has(alias ?? "")) {
@@ -152,6 +248,7 @@ export class ComposeProcess implements EnvironmentProcess {
 			} catch {
 				/* Partial creation is still cleaned with live receipts only. */
 			}
+			await this.observing;
 			for (const child of [...this.children].reverse())
 				try {
 					await child.stop();
