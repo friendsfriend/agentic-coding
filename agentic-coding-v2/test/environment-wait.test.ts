@@ -233,7 +233,8 @@ test("host reopen keeps retained queue history diagnostic and never restores app
 	const holder = await app.startTask(invocation);
 	await approve(app, holder);
 	await pendingReview(app, holder, "Holder");
-	let acquisition = "";
+	let acquisition = "",
+		liveRefusal = "";
 	fake.setResponses([
 		call("env_start", { apps: ["api"], retainQueue: true, timeoutSec: 1 }),
 		(messages) => {
@@ -242,6 +243,18 @@ test("host reopen keeps retained queue history diagnostic and never restores app
 					for (const part of message.content)
 						if (part.type === "text")
 							acquisition = JSON.parse(part.text).acquisition;
+			return call("env_start", {
+				apps: ["api"],
+				recoverAcquisition: acquisition,
+			});
+		},
+		(messages) => {
+			liveRefusal = JSON.stringify(
+				messages.messages.filter(
+					(message) =>
+						message.role === "toolResult" && message.toolName === "env_start",
+				),
+			);
 			return call("request_review", {
 				path: ".",
 				title: "Queued before close",
@@ -254,6 +267,12 @@ test("host reopen keeps retained queue history diagnostic and never restores app
 	});
 	await approve(app, queued);
 	await pendingReview(app, queued, "Queued before close");
+	expect(liveRefusal).toContain("interrupted retained wait");
+	expect(
+		(await app.environments.snapshot()).waits.find(
+			(wait) => wait.batch === acquisition,
+		),
+	).toMatchObject({ state: "waiting", live: true });
 	await app.close();
 	let refusal = "";
 	fake.setResponses([
@@ -283,8 +302,47 @@ test("host reopen keeps retained queue history diagnostic and never restores app
 			.trim()
 			.split("\n"),
 	).toHaveLength(1);
+	let foreignRefusal = "",
+		selectionRefusal = "";
 	fake.setResponses([
 		call("env_start", { apps: ["api"], recoverAcquisition: acquisition }),
+		(messages) => {
+			foreignRefusal = JSON.stringify(
+				messages.messages.filter(
+					(message) =>
+						message.role === "toolResult" && message.toolName === "env_start",
+				),
+			);
+			return call("request_review", {
+				path: ".",
+				title: "Foreign recovery refused",
+			});
+		},
+	]);
+	const foreign = await reopened.startTask({
+		...invocation,
+		requestId: "foreign-recovery",
+	});
+	await pendingReview(reopened, foreign, "Foreign recovery refused");
+	expect(foreignRefusal).toContain("interrupted retained wait");
+	await reopened.cancel(foreign);
+	fake.setResponses([
+		call("env_start", {
+			apps: ["different-app"],
+			recoverAcquisition: acquisition,
+		}),
+		(messages) => {
+			selectionRefusal = JSON.stringify(
+				messages.messages.filter(
+					(message) =>
+						message.role === "toolResult" && message.toolName === "env_start",
+				),
+			);
+			return call("env_start", {
+				apps: ["api"],
+				recoverAcquisition: acquisition,
+			});
+		},
 		call("request_review", {
 			path: ".",
 			title: "Recovered with fresh approval",
@@ -292,6 +350,7 @@ test("host reopen keeps retained queue history diagnostic and never restores app
 	]);
 	await approve(reopened, queued, "No adoption");
 	const freshReview = await pendingReview(reopened, queued);
+	expect(selectionRefusal).toContain("original requested apps");
 	expect(freshReview.snapshot).toContain(acquisition);
 	expect(freshReview.snapshot).toContain("no restored position");
 	expect(

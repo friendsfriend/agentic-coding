@@ -613,3 +613,9 @@ Verification: 123 tests / 1605 assertions, all passing; Biome, type-check and bu
 The public reopen scenario first proves `env_wait` cannot restore authority, then explicitly recovers the old wait: no second process starts before fresh approval, the review names the old acquisition and no-position-restoration policy, and a new process starts only after approval. The historical wait remains interrupted/non-live. This is restart recovery through fresh approval, not automatic restart-stable FIFO continuation. Foreign-owner/workspace and changed-app selection are guarded, but dedicated negative scenarios remain to be added.
 
 Verification: 123 tests / 1610 assertions, all passing; Biome, type-check and build pass; legacy boundaries 71 / 278 and legacy type-check pass. No UI changes.
+
+### Recovery refusal scenarios
+
+The public reopen scenario additionally attempts recovery while the original retained wait is still live (refused, original wait stays waiting/live), recovery by a different native task after restart (refused), and recovery with a changed requested app list (refused before current-plan approval). The original owner can still recover afterward with fresh approval; process-count assertions verify that no refusal starts a process. These cover live-state, owner/workspace and app-selection boundaries through native tools, without editing saved state. Because the foreign task also has a different workspace, this does not independently isolate a same-owner/workspace-mismatch case.
+
+Verification: 123 tests / 1614 assertions, all passing; Biome, type-check and build pass. No production or UI changes.
