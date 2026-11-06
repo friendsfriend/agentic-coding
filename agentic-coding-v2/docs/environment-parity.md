@@ -627,3 +627,9 @@ The authenticated discovery endpoint and native `env_discover` tool accept an op
 Public coverage selects apps/web through the authenticated route, observes equivalent bounded hints with private script bodies withheld, refuses traversal/private/absolute/deep/link paths and duplicate directory parameters, and selects apps/nested through a read-only native task against its captured worktree. Cross-repository skill inspection remains refused. Identity checks detect ordinary replacement; this is not an OS filesystem sandbox. Automatic nested discovery and custom manifest names remain gaps rather than inferred support.
 
 Verification: 123 tests / 1629 assertions, all passing; Biome, type-check and build pass. No web/TUI implementation changes.
+
+## Staged source path collision fences
+
+Auxiliary staging now rejects replacement of any Compose target's declared file in the same repository, not just the selected target's file. Existing staged bindings cannot silently switch between auxiliary and Compose roles (explicit removal is required), and staged source file/directory prefixes cannot overlap. Public authenticated draft coverage rejects both prefix directions against an auxiliary binding and descendants of an already staged Compose file; a separate two-target draft proves an auxiliary write cannot occupy the second target's declared file and leaves draft revision/bindings unchanged. These are staging-time fences, not conflict-safe promotion or full filesystem crash reconciliation. Role-switch rejection has no dedicated public scenario yet.
+
+Verification: 123 tests / 1636 assertions, all passing; Biome, type-check and build pass. No UI, engine or live environment changes.

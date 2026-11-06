@@ -204,6 +204,21 @@ export function stageSource(
 		throw new Error(
 			"Stage the target's declared Compose file before staging an auxiliary source",
 		);
+	if (auxiliaryFile) {
+		const projects = validateProjects(config, JSON.parse(previous.content));
+		if (
+			projects.some(
+				(project) =>
+					project.repository === declared.repository &&
+					project.targets.some(
+						(candidate) => candidate.compose?.file === auxiliaryFile,
+					),
+			)
+		)
+			throw new Error(
+				"An auxiliary source cannot replace any declared Compose target file",
+			);
+	}
 	const binding = auxiliaryFile
 			? { repository: declared.repository, file: auxiliaryFile }
 			: declared,
@@ -217,6 +232,19 @@ export function stageSource(
 				source.repository !== binding.repository ||
 				source.file !== binding.file,
 		);
+	if (original && Boolean(original.auxiliary) !== Boolean(auxiliaryFile))
+		throw new Error(
+			"A staged source binding cannot change between auxiliary and Compose roles; remove it explicitly first",
+		);
+	if (
+		sources.some(
+			(source) =>
+				source.repository === binding.repository &&
+				(source.file.startsWith(`${binding.file}/`) ||
+					binding.file.startsWith(`${source.file}/`)),
+		)
+	)
+		throw new Error("Staged source file/directory paths must not overlap");
 	sources.push({
 		...binding,
 		content,

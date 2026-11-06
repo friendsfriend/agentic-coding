@@ -614,6 +614,9 @@ test("an auxiliary source is bound to a staged target, digested in the tree and 
 			".env",
 			"conf/.hidden",
 			"a/b/c/d.ini",
+			"conf",
+			"conf/app.ini/child",
+			"compose.yaml/child",
 		]) {
 			expect(
 				(
@@ -681,6 +684,48 @@ test("an auxiliary source is bound to a staged target, digested in the tree and 
 		expect(
 			after.sourceBindings.map((binding: { file: string }) => binding.file),
 		).toEqual(["compose.yaml"]);
+		const multiContent = JSON.parse(read.content);
+		multiContent.projects[0].targets.push({
+			...multiContent.projects[0].targets[0],
+			id: "second",
+			compose: {
+				...multiContent.projects[0].targets[0].compose,
+				file: "compose.other.yaml",
+			},
+		});
+		const multi = await (
+			await api("/api/environments/drafts", {
+				requestId: "multi-create",
+				content: JSON.stringify(multiContent),
+			})
+		).json();
+		const multiStage = await (
+			await api("/api/environments/drafts/source", {
+				requestId: "multi-compose",
+				id: multi.id,
+				revision: multi.revision,
+				app: "api",
+				target: "stack",
+				content: compose,
+			})
+		).json();
+		const collision = await api("/api/environments/drafts/source", {
+			requestId: "other-target-collision",
+			id: multi.id,
+			revision: multiStage.revision,
+			app: "api",
+			target: "stack",
+			auxiliary: true,
+			file: "compose.other.yaml",
+			content: "x\n",
+		});
+		expect(collision.status).toBe(400);
+		expect(await collision.text()).toContain("any declared Compose target");
+		const unchanged = await (
+			await api(`/api/environments/drafts?id=${multi.id}`)
+		).json();
+		expect(unchanged.revision).toBe(multiStage.revision);
+		expect(unchanged.sourceBindings).toHaveLength(1);
 	} finally {
 		host.stop();
 	}
