@@ -573,3 +573,7 @@ The private staging path now honours `env_file` from a **staged auxiliary source
 The public scenario stages `env_file: conf/app.env`, checks the draft **before** staging the auxiliary file (refused, path withheld), stages the auxiliary binding, and checks again (accepted) while asserting that neither the file's values nor its path appear in the report. That is the whole guarantee: staged bytes in, parsed identity out, no values disclosed, no silent live fallback.
 
 Remaining limits for this pair: the auxiliary binding must match the declared path exactly (no normalisation, no `..`, no dotfiles), a service may declare only one env file, values are literals only (no secret references in an env file), and the tree/promotion path still carries the file as plain source text like any other staged auxiliary — being an env file grants no privilege and no promotion authority.
+
+### Correction: retain env-file dispatch identity
+
+The earlier env-file dispatch claim was incomplete: compiled services did not retain `envFile` and `envFileDigest`, so verification skipped them. Services now carry both fields. A public task scenario mutates the workspace env file after the approval snapshot and proves that approval produces zero engine commands. Full verification: 118 tests / 1578 assertions, Biome, type-check and build pass. This corrects the previous claim; it does not establish live runtime parity.

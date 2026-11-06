@@ -291,6 +291,41 @@ test("Compose source changes and colliding service ports fail before any engine 
 	}
 }, 15000);
 
+test("Compose env_file changes after the approval snapshot prevent engine effects", async () => {
+	const { app, config, fake, invocation } = await fixture(
+		false,
+		configureCompose,
+	);
+	fs.writeFileSync(
+		path.join(invocation.repository, "settings.env"),
+		"MODE=original\n",
+	);
+	await git(invocation.repository, ["add", "settings.env"]);
+	await composeFile(
+		invocation.repository,
+		stackYaml.replace("  web:\n", "  web:\n    env_file: settings.env\n"),
+	);
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		fauxAssistantMessage("No changed environment effects"),
+	]);
+	const task = await app.startTask(invocation);
+	const review = await pendingReview(app, task);
+	const owner = JSON.parse(review.snapshot).plans[0];
+	fs.writeFileSync(
+		path.join(owner.workspace, "settings.env"),
+		"MODE=changed\n",
+	);
+	await approve(app, task);
+	await app.harness.waitForTask(task as TaskId, context);
+	expect(readEngine(config).history).toHaveLength(0);
+	expect(
+		(await app.environments.snapshot()).runs.every(
+			(run) => run.state === "exited",
+		),
+	).toBe(true);
+}, 15000);
+
 test("Compose partial startup rolls back live receipts but never stops an existing second service", async () => {
 	const { app, config, fake, invocation } = await fixture(
 		false,

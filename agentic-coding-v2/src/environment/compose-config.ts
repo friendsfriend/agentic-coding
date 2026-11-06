@@ -415,6 +415,9 @@ export function compileComposeSource(
 					id,
 					container,
 					environment,
+					...(envFile
+						? { envFile: envFile.file, envFileDigest: envFile.digest }
+						: {}),
 					dependsOn: dependencies(service.depends_on),
 				};
 			}),
