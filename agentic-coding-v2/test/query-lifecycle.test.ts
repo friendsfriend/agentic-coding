@@ -18,7 +18,7 @@ afterEach(cleanup);
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 
-test.each(["rotation", "cancellation"])(
+test.each(["rotation", "cancellation", "deadline", "write-function"])(
 	"container query handle lifecycle: %s",
 	async (variant) => {
 		const port = disposablePort();
@@ -100,7 +100,9 @@ test.each(["rotation", "cancellation"])(
 					sql:
 						variant === "rotation"
 							? "SELECT value FROM fixture_secrets"
-							: "SELECT pg_sleep(20) /* NATIVE_SQL_PROBE */",
+							: variant === "write-function"
+								? "SELECT fixture_write() /* NATIVE_SQL_PROBE */"
+								: "SELECT pg_sleep(20) /* NATIVE_SQL_PROBE */",
 				}),
 				(messages) => {
 					transcript = JSON.stringify(
@@ -120,8 +122,26 @@ test.each(["rotation", "cancellation"])(
 				path.join(config.configDir, ".env"),
 				"DISPOSABLE_SQL_USER=changed\nDISPOSABLE_SQL_PASSWORD=rotated\n",
 			);
+			const issuedAt = Date.now();
 			await approve(app, task, "Query store");
-			if (variant === "rotation") {
+			if (variant === "deadline" || variant === "write-function") {
+				await app.harness.waitForTask(task as TaskId, context);
+				expect(transcript).toContain('"isError":true');
+				expect(transcript).not.toContain(disposablePassword);
+				if (variant === "deadline") {
+					expect(Date.now() - issuedAt).toBeLessThan(15000);
+					expect(transcript).toContain("10 second deadline");
+				} else {
+					expect(transcript).toContain("25006");
+				}
+				const state = await app.environments.snapshot();
+				expect(state.queryOperations[0]?.state).toBe("issued");
+				expect(state.runs.every((run) => run.state === "exited")).toBe(true);
+				const engineState = JSON.parse(
+					fs.readFileSync(path.join(config.configDir, "engine.json"), "utf8"),
+				);
+				expect(Object.keys(engineState.containers)).toHaveLength(0);
+			} else if (variant === "rotation") {
 				await app.harness.waitForTask(task as TaskId, context);
 				expect(transcript).not.toContain(disposablePassword);
 				expect(transcript).toContain("[REDACTED]");

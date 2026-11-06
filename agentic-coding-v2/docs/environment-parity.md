@@ -599,3 +599,9 @@ The container-handle lifecycle scenario now also issues a marked 20-second SQL s
 Fixture teardown now directly execs its owned disposable server and SIGKILLs that process, avoiding a shell intermediary or a blocked PGlite sleep holding test teardown open. This is test-only lifecycle handling, not application recovery or runtime termination policy. The fake engine and external PGlite limitations above still apply.
 
 Verification: 121 tests / 1592 assertions, all passing; Biome, type-check and build pass. No production implementation or UI changes in this slice.
+
+### Container query deadline and database write fence
+
+Two additional native-task variants exercise the container-bound query path: a 20-second SQL sleep exceeds the total ten-second deadline without returning success (task completion is bounded below fifteen seconds after approval), and a SELECT invoking the fixture's write-performing function is rejected by the database with SQLSTATE 25006. Both leave issuance non-completed, settle the coupled runs, and leave no fake-engine containers. Rotation, cancellation, deadline and write-function variants all pass. These remain fake-engine/external-PGlite integration scenarios, not production authentication, actual container networking or general SQL sandbox proof.
+
+Verification: 123 tests / 1605 assertions, all passing; Biome, type-check and build pass. No production or UI changes.
