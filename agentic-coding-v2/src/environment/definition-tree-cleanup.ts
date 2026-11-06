@@ -4,7 +4,12 @@ import { type DraftData, stored } from "./definition-draft-data.ts";
 export type TreeCleanup = {
 	request: string;
 	name: string | null;
-	kind: "release" | "delete-draft" | "supersede" | "assemble";
+	kind:
+		| "release"
+		| "delete-draft"
+		| "supersede"
+		| "assemble"
+		| "temporary-release";
 	assembly?: {
 		draftId: string;
 		draftRevision: number;

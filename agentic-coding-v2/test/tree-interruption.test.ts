@@ -6,9 +6,13 @@ import { createFixtures } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
-test.each([false, true])(
-	"interrupted retained-tree creation is durable before effects (supersession=%s)",
-	async (supersession) => {
+test.each([
+	{ supersession: false, phase: "rename" },
+	{ supersession: true, phase: "rename" },
+	{ supersession: false, phase: "write" },
+])(
+	"interrupted tree creation and explicit recovery (%j)",
+	async ({ supersession, phase }) => {
 		const { app, config, open } = await fixture(true, (config) => {
 			fs.chmodSync(config.stateDir, 0o700);
 			fs.mkdirSync(config.configDir, { mode: 0o700 });
@@ -92,7 +96,7 @@ test.each([false, true])(
 			host.stop();
 			await app.close();
 			const input = path.join(config.stateDir, "tree-interruption.json");
-			fs.writeFileSync(input, JSON.stringify({ config, body }));
+			fs.writeFileSync(input, JSON.stringify({ config, body, phase }));
 			const child = Bun.spawn(
 				[
 					process.execPath,
@@ -127,8 +131,22 @@ test.each([false, true])(
 			});
 			const trees = path.join(config.stateDir, "native/staging/trees");
 			expect(fs.existsSync(path.join(trees, pending.assembly.treeDigest))).toBe(
-				true,
+				phase === "rename",
 			);
+			if (phase === "write") {
+				expect(pending.temporary.state).toBe("present");
+				expect(
+					(
+						await api("/api/environments/drafts/tree/temporary-release", {
+							requestId: "before-ack",
+							id: pending.id,
+							revision: pending.revision,
+							fingerprint: pending.temporary.fingerprint,
+							remove: true,
+						})
+					).status,
+				).toBe(400);
+			}
 			if (previousName)
 				expect(fs.existsSync(path.join(trees, previousName))).toBe(true);
 			const before = fs.readdirSync(trees).sort();
@@ -158,13 +176,84 @@ test.each([false, true])(
 				(await api("/api/environments/drafts/preflight", body)).status,
 			).toBe(400);
 			expect(fs.readdirSync(trees).sort()).toEqual(before);
-			const released = await (
-				await api("/api/environments/drafts/tree/release", {
-					requestId: "release-orphan",
-					name: pending.assembly.treeDigest,
-				})
-			).json();
-			expect(released).toMatchObject({ released: true, owner: null });
+			if (phase === "write") {
+				const temporary = path.join(
+						config.stateDir,
+						"native/staging",
+						pending.assembly.temporaryName,
+					),
+					parked = `${temporary}-parked`,
+					unrelated = path.join(
+						config.stateDir,
+						"native/staging",
+						`tree-${"b".repeat(64)}`,
+					);
+				fs.mkdirSync(unrelated, { mode: 0o700 });
+				const releaseBody = {
+					requestId: "temporary-cleanup",
+					id: pending.id,
+					revision: pending.revision + 1,
+					fingerprint: pending.temporary.fingerprint,
+					remove: true,
+				};
+				fs.renameSync(temporary, parked);
+				fs.symlinkSync(parked, temporary);
+				expect(
+					(
+						await api(
+							"/api/environments/drafts/tree/temporary-release",
+							releaseBody,
+						)
+					).status,
+				).toBe(400);
+				expect(fs.existsSync(path.join(parked, "environments.json"))).toBe(
+					true,
+				);
+				fs.unlinkSync(temporary);
+				fs.renameSync(parked, temporary);
+				expect(
+					(
+						await api(
+							"/api/environments/drafts/tree/temporary-release",
+							releaseBody,
+						)
+					).status,
+				).toBe(400);
+				const freshHistory = await (
+					await api("/api/environments/drafts/trees")
+				).json();
+				const freshObservation = freshHistory.cleanupAttempts.find(
+					(attempt: { id: string }) => attempt.id === pending.id,
+				).temporary;
+				const exact = {
+					...releaseBody,
+					fingerprint: freshObservation.fingerprint,
+				};
+				const response = await api(
+					"/api/environments/drafts/tree/temporary-release",
+					exact,
+				);
+				expect(response.status).toBe(200);
+				const removed = await response.json();
+				expect(removed.removed).toBe(true);
+				expect(fs.existsSync(temporary)).toBe(false);
+				fs.mkdirSync(temporary, { mode: 0o700 });
+				expect(
+					await (
+						await api("/api/environments/drafts/tree/temporary-release", exact)
+					).json(),
+				).toEqual(removed);
+				expect(fs.existsSync(temporary)).toBe(true);
+				expect(fs.existsSync(unrelated)).toBe(true);
+			} else {
+				const released = await (
+					await api("/api/environments/drafts/tree/release", {
+						requestId: "release-orphan",
+						name: pending.assembly.treeDigest,
+					})
+				).json();
+				expect(released).toMatchObject({ released: true, owner: null });
+			}
 			if (previousName)
 				expect(fs.existsSync(path.join(trees, previousName))).toBe(true);
 			const recovered = await (

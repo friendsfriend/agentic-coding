@@ -447,6 +447,15 @@ export function serve(app: Runtime, port = 0) {
 						await app.environments.drafts.acknowledgeTreeCleanup(body),
 					);
 				}
+				if (
+					url.pathname === "/api/environments/drafts/tree/temporary-release"
+				) {
+					if (url.searchParams.size)
+						throw new Error(
+							"Temporary tree release does not accept query parameters",
+						);
+					return json(await app.environments.drafts.releaseTemporaryTree(body));
+				}
 				if (url.pathname === "/api/environments/drafts/tree/release") {
 					if (url.searchParams.size)
 						throw new Error(

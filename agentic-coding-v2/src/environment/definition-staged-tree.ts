@@ -139,6 +139,9 @@ function discard(root: string) {
 	}
 	fs.rmSync(root, { recursive: true, force: true });
 }
+
+export { discard as discardStagedTree, stagingRoot };
+
 function contentDigest(content: string) {
 	return digest(Buffer.from(content).toString("base64"));
 }

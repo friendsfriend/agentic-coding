@@ -52,12 +52,17 @@ import {
 	stagedTreeIdentity,
 } from "./definition-staged-tree.ts";
 import {
+	releaseTemporaryTree,
+	temporaryTreeObservation,
+} from "./definition-temporary-tree.ts";
+import {
 	acknowledgeTreeCleanup,
 	assertNoTreeCleanup,
 	beginTreeCleanup,
 	cleanupReplay,
 	deletionIdentity,
 	finishTreeCleanup,
+	type TreeCleanup,
 	treeCleanupHistory,
 } from "./definition-tree-cleanup.ts";
 import { within } from "./path-within.ts";
@@ -675,7 +680,17 @@ export class DefinitionDrafts {
 			});
 		return {
 			trees: records,
-			cleanupAttempts: treeCleanupHistory(drafts),
+			cleanupAttempts: treeCleanupHistory(drafts).map((attempt) => ({
+				...attempt,
+				...(attempt.assembly
+					? {
+							temporary: temporaryTreeObservation(
+								this.config,
+								attempt.assembly.temporaryName,
+							),
+						}
+					: {}),
+			})),
 			// Present directories no record owns are disclosed, never deleted here.
 			unowned: [...present].filter((name) => !owned.includes(name)),
 			authority:
@@ -726,6 +741,86 @@ export class DefinitionDrafts {
 						revision: owner?.revision ?? null,
 					};
 				drafts.receipts[key] = JSON.stringify({ request, result });
+				finishTreeCleanup(drafts, key, result);
+				return result;
+			}, background);
+		});
+	}
+	/** Operator-only cleanup of one acknowledged interrupted assembly's temp tree. */
+	async releaseTemporaryTree(body: Record<string, unknown>) {
+		privateState(this.config);
+		if (
+			Object.keys(body).some(
+				(field) =>
+					!["requestId", "id", "revision", "fingerprint", "remove"].includes(
+						field,
+					),
+			) ||
+			body.remove !== true
+		)
+			throw new Error(
+				"Explicit temporary-tree removal confirmation required; unknown fields refused",
+			);
+		const id = text(body.id, "assembly attempt ID", 80),
+			fingerprint = text(body.fingerprint, "temporary tree fingerprint", 64),
+			requestId = text(body.requestId, "temporary release request ID", 128);
+		if (
+			!/^tree-cleanup-[a-f0-9]{64}$/.test(id) ||
+			!/^[a-f0-9]{64}$/.test(fingerprint) ||
+			!Number.isSafeInteger(body.revision) ||
+			Number(body.revision) < 1
+		)
+			throw new Error("Exact assembly ID, revision and fingerprint required");
+		const sourceKey = id.slice("tree-cleanup-".length),
+			key = digest(`temporary-release:${requestId}`),
+			request = digest(
+				JSON.stringify({
+					id,
+					revision: body.revision,
+					fingerprint,
+					remove: true,
+				}),
+			);
+		return this.withTreeCleanup([key, sourceKey], async () => {
+			const admission = await this.engine().commit(async (tx) => {
+				const drafts = await tx.doc(DraftState),
+					replay = cleanupReplay(drafts, key, request);
+				if (replay) return { replay: replay.result, name: null };
+				const raw = drafts.treeCleanups?.[sourceKey];
+				if (!raw) throw new Error("Unknown assembly attempt");
+				const attempt = stored<TreeCleanup>(raw);
+				if (
+					attempt.kind !== "assemble" ||
+					!attempt.assembly ||
+					attempt.status !== "acknowledged" ||
+					attempt.revision !== body.revision
+				)
+					throw new Error(
+						"Temporary cleanup requires the exact acknowledged interrupted assembly revision",
+					);
+				const name = attempt.assembly.temporaryName,
+					observed = temporaryTreeObservation(this.config, name);
+				if (
+					observed.state !== "present" ||
+					observed.fingerprint !== fingerprint
+				)
+					throw new Error(
+						"Temporary tree identity changed or is unavailable; inspect before cleanup",
+					);
+				beginTreeCleanup(drafts, key, request, "temporary-release", name);
+				return { name, replay: null };
+			}, background);
+			if (!admission.name) return admission.replay;
+			releaseTemporaryTree(this.config, admission.name, fingerprint);
+			return this.engine().commit(async (tx) => {
+				const drafts = await tx.doc(DraftState),
+					result = {
+						id,
+						name: admission.name,
+						removed: true,
+						authority:
+							"Only this observed temporary directory was removed; no execution, retention adoption or old-request retry authority restored",
+					};
 				finishTreeCleanup(drafts, key, result);
 				return result;
 			}, background);
