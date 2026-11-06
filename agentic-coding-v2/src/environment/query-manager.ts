@@ -3,6 +3,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import { type Config, digest } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
+import { ContainerProcess } from "./container.ts";
 import { declaredInfrastructure } from "./dependencies.ts";
 import {
 	type DiagnosticSelection,
@@ -118,9 +119,15 @@ export class DatabaseDiagnostics {
 			),
 			run = matching.length === 1 ? matching[0] : undefined,
 			process = run ? this.authority.live.get(run.id) : undefined;
-		if (!run || !(process instanceof ShellProcess) || !run.plan.queryConnection)
+		if (
+			!run ||
+			!(
+				process instanceof ShellProcess || process instanceof ContainerProcess
+			) ||
+			!run.plan.queryConnection
+		)
 			throw new Error(
-				"SQL requires this task's live ready shell infrastructure with a declared query connection; receipts grant no authority",
+				"SQL requires this task's live ready shell or container infrastructure with a declared query connection; receipts grant no authority",
 			);
 		const members = runs.filter((item) => item.batch === run.batch),
 			alive = (item: EnvironmentRun) => {

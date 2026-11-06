@@ -577,3 +577,11 @@ Remaining limits for this pair: the auxiliary binding must match the declared pa
 ### Correction: retain env-file dispatch identity
 
 The earlier env-file dispatch claim was incomplete: compiled services did not retain `envFile` and `envFileDigest`, so verification skipped them. Services now carry both fields. A public task scenario mutates the workspace env file after the approval snapshot and proves that approval produces zero engine commands. Full verification: 118 tests / 1578 assertions, Biome, type-check and build pass. This corrects the previous claim; it does not establish live runtime parity.
+
+## PostgreSQL binding on an owned container handle
+
+Docker/Podman infrastructure run targets may now declare a PostgreSQL query connection when readiness is `healthy` and an explicitly published TCP port matches the connection's numeric loopback address and host port exactly. Compose and Kubernetes query bindings remain refused. The live container handle freezes query credentials and their redactor at construction through the existing reference resolver. Query admission accepts only the actual owned live shell/container handle; the same held requiring-app closure, authenticated approval, read-only transaction, database identity, cancellation and cleanup checks remain in place. Receipts do not recreate authority.
+
+Public configuration coverage accepts the exact health/port binding and refuses running-only readiness, missing publication and mismatched host ports. Existing query and container scenarios remain green. This is backend binding support, not proof of a successful container-hosted database query: no live engine/database was invoked, and end-to-end container-query credential rotation/cancellation still needs dedicated coverage. Engine-command credential lifetime is unchanged by this slice. MySQL and Kubernetes bindings remain gaps.
+
+Verification: 119 tests / 1582 assertions; Biome, type-check, build; legacy boundaries 71 / 278 and legacy type-check pass.

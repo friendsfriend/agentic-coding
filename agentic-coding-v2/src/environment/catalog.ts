@@ -118,10 +118,13 @@ function readTarget(raw: unknown): Target {
 		);
 	if (
 		data.queryConnection !== undefined &&
-		(data.runtime !== "shell" || data.action !== "run" || !data.readyText)
+		(data.action !== "run" ||
+			!(data.runtime === "shell"
+				? Boolean(data.readyText)
+				: data.runtime === "docker" || data.runtime === "podman"))
 	)
 		throw new Error(
-			"Query connections require a shell run target with an explicit readiness marker",
+			"Query connections require a shell run with explicit readiness or a health-ready container run",
 		);
 	const container =
 		data.runtime === "shell" ||
@@ -188,6 +191,20 @@ function readTarget(raw: unknown): Target {
 	if (path.isAbsolute(cwd))
 		throw new Error("Environment cwd must be relative to the task workspace");
 	const queryConnection = readQueryConnection(data.queryConnection, secretRefs);
+	if (queryConnection && data.runtime !== "shell") {
+		if (
+			container?.readiness !== "healthy" ||
+			!container.ports.some(
+				(port) =>
+					port.host === queryConnection.port &&
+					port.address === queryConnection.host &&
+					port.protocol === "tcp",
+			)
+		)
+			throw new Error(
+				"Container query connections require healthy readiness and an exact published TCP loopback host/port",
+			);
+	}
 	const endpoints = readEndpoints(data.endpoints),
 		endpointCaRefs = readEndpointCaRefs(data.endpointCaRefs, endpoints);
 	return {

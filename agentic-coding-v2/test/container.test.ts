@@ -5,6 +5,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
 import { type Config, digest } from "../src/config.ts";
+import { validateProjects } from "../src/environment/catalog.ts";
 import type { EnvironmentRun } from "../src/environment/state.ts";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server.ts";
@@ -27,6 +28,50 @@ afterEach(async () => {
 const secret = "container-fixture-secret-only";
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
+test("container SQL bindings require health readiness and the exact published loopback port", async () => {
+	const { config, invocation } = await fixture(false, configure);
+	const target = {
+		id: "db",
+		action: "run",
+		runtime: "docker",
+		secretRefs: { USER: "DB_USER", PASSWORD: "DB_PASSWORD" },
+		container: {
+			socket: engines[engines.length - 1]?.socket,
+			image: "fixture:latest",
+			readiness: "healthy",
+			ports: [{ host: 12345, container: 5432, address: "127.0.0.1" }],
+		},
+		queryConnection: {
+			protocol: "postgres",
+			host: "127.0.0.1",
+			port: 12345,
+			database: "fixture",
+			usernameRef: "USER",
+			passwordRef: "PASSWORD",
+		},
+	};
+	const document = (value: unknown) => ({
+		version: 1,
+		projects: [
+			{
+				id: "database",
+				kind: "infrastructure",
+				repository: invocation.repository,
+				targets: [value],
+			},
+		],
+	});
+	expect(validateProjects(config, document(target))).toHaveLength(1);
+	for (const container of [
+		{ ...target.container, readiness: "running" },
+		{ ...target.container, ports: [] },
+		{ ...target.container, ports: [{ host: 12346, container: 5432 }] },
+	])
+		expect(() =>
+			validateProjects(config, document({ ...target, container })),
+		).toThrow("exact published TCP loopback");
+});
+
 function engine(config: Config) {
 	return path.join(config.configDir, "engine.json");
 }

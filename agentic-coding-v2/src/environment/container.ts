@@ -7,7 +7,7 @@ import { EnvironmentCommands } from "./command.ts";
 import { inspectContainer, type Observation } from "./container-observation.ts";
 import type { Plan } from "./model.ts";
 import type { LogTiming, RuntimeStatus } from "./process.ts";
-import { type Exit, ShellProcess } from "./shell.ts";
+import { type Exit, processEnvironment, ShellProcess } from "./shell.ts";
 
 const hostLabel = "dev.agentic-coding.v2.host",
 	runLabel = "dev.agentic-coding.v2.run";
@@ -16,6 +16,10 @@ const hostLabel = "dev.agentic-coding.v2.host",
 export class ContainerProcess {
 	readonly pid = null;
 	readonly done: Promise<Exit>;
+	readonly queryCredentials: () =>
+		| { username: string; password: string }
+		| undefined;
+	readonly redact: (value: string) => string;
 	private complete: (exit: Exit) => void = () => {};
 	private result: Exit | null = null;
 	private controller = new AbortController();
@@ -52,6 +56,9 @@ export class ContainerProcess {
 		const spec = plan.container;
 		if (!spec || !(plan.runtime === "docker" || plan.runtime === "podman"))
 			throw new Error("Structured container configuration is required");
+		const frozen = processEnvironment(configDir, plan);
+		this.queryCredentials = frozen.queryCredentials;
+		this.redact = frozen.redact;
 		this.spec = spec;
 		this.host = digest(stateDir);
 		this.name = spec.name ?? `acv2-${plan.app}-${this.host.slice(0, 8)}`;
