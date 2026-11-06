@@ -18,115 +18,150 @@ afterEach(cleanup);
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 
-test("container query handles keep frozen credentials and redaction after reference rotation", async () => {
-	const port = disposablePort();
-	let engine: ReturnType<typeof serveContainerFixture> | undefined;
-	const { app, config, fake, invocation } = await fixture(false, (config) => {
-		installPostgres(config, port);
-		const file = path.join(config.configDir, "environments.json");
-		const document = JSON.parse(fs.readFileSync(file, "utf8"));
-		// The real disposable protocol server is fixture-owned, not an application
-		// lease. The fake engine supplies container ownership/health observations.
-		fs.writeFileSync(
-			path.join(config.configDir, "database-command"),
-			document.projects[1].targets[0].command,
-		);
-		const bin = path.join(config.configDir, "bin");
-		fs.mkdirSync(bin);
-		fs.writeFileSync(
-			path.join(bin, "docker"),
-			`#!${process.execPath}\n${fs.readFileSync(path.join(import.meta.dir, "fixtures/container-engine.ts"), "utf8")}`,
-			{ mode: 0o700 },
-		);
-		const engineFile = path.join(config.configDir, "engine.json");
-		fs.writeFileSync(
-			engineFile,
-			JSON.stringify({ next: 1, containers: {}, history: [] }),
-		);
-		engine = serveContainerFixture(engineFile);
-		const target = document.projects[1].targets[0];
-		delete target.command;
-		delete target.readyText;
-		target.runtime = "docker";
-		target.container = {
-			socket: engine?.socket,
-			image: "fixture:latest",
-			command: ["serve"],
-			readiness: "healthy",
-			ports: [{ host: port, container: 5432, address: "127.0.0.1" }],
-		};
-		target.environment = {
-			PATH: `${path.join(config.configDir, "bin")}:${process.env.PATH ?? ""}`,
-			FIXTURE_ENGINE_SOCKET: engine?.socket,
-		};
-		fs.writeFileSync(file, JSON.stringify(document));
-	});
-	const server = Bun.spawn(
-		[
-			"/bin/sh",
-			"-c",
-			fs.readFileSync(path.join(config.configDir, "database-command"), "utf8"),
-		],
-		{
-			env: {
-				...process.env,
-				CONFIG_DIR: config.configDir,
-				PORT: String(port),
-				PGPASSWORD: disposablePassword,
+test.each(["rotation", "cancellation"])(
+	"container query handle lifecycle: %s",
+	async (variant) => {
+		const port = disposablePort();
+		let engine: ReturnType<typeof serveContainerFixture> | undefined;
+		const { app, config, fake, invocation } = await fixture(false, (config) => {
+			installPostgres(config, port);
+			const file = path.join(config.configDir, "environments.json");
+			const document = JSON.parse(fs.readFileSync(file, "utf8"));
+			// The real disposable protocol server is fixture-owned, not an application
+			// lease. The fake engine supplies container ownership/health observations.
+			fs.writeFileSync(
+				path.join(config.configDir, "database-command"),
+				document.projects[1].targets[0].command,
+			);
+			const bin = path.join(config.configDir, "bin");
+			fs.mkdirSync(bin);
+			fs.writeFileSync(
+				path.join(bin, "docker"),
+				`#!${process.execPath}\n${fs.readFileSync(path.join(import.meta.dir, "fixtures/container-engine.ts"), "utf8")}`,
+				{ mode: 0o700 },
+			);
+			const engineFile = path.join(config.configDir, "engine.json");
+			fs.writeFileSync(
+				engineFile,
+				JSON.stringify({ next: 1, containers: {}, history: [] }),
+			);
+			engine = serveContainerFixture(engineFile);
+			const target = document.projects[1].targets[0];
+			delete target.command;
+			delete target.readyText;
+			target.runtime = "docker";
+			target.container = {
+				socket: engine?.socket,
+				image: "fixture:latest",
+				command: ["serve"],
+				readiness: "healthy",
+				ports: [{ host: port, container: 5432, address: "127.0.0.1" }],
+			};
+			target.environment = {
+				PATH: `${path.join(config.configDir, "bin")}:${process.env.PATH ?? ""}`,
+				FIXTURE_ENGINE_SOCKET: engine?.socket,
+			};
+			fs.writeFileSync(file, JSON.stringify(document));
+		});
+		const server = Bun.spawn(
+			[
+				"/bin/sh",
+				"-c",
+				`exec ${fs.readFileSync(path.join(config.configDir, "database-command"), "utf8")}`,
+			],
+			{
+				env: {
+					...process.env,
+					CONFIG_DIR: config.configDir,
+					PORT: String(port),
+					PGPASSWORD: disposablePassword,
+				},
+				stdout: "pipe",
+				stderr: "pipe",
 			},
-			stdout: "pipe",
-			stderr: "pipe",
-		},
-	);
-	try {
-		const reader = server.stdout.getReader();
-		let output = "";
-		while (!output.includes("STORE_READY")) {
-			const part = await reader.read();
-			if (part.done)
-				throw new Error("Disposable database fixture exited before readiness");
-			output += new TextDecoder().decode(part.value);
-		}
-		reader.releaseLock();
-		let transcript = "";
-		fake.setResponses([
-			call("env_start", { apps: ["api"] }),
-			call("db_query", {
-				infra: "store",
-				sql: "SELECT value FROM fixture_secrets",
-			}),
-			(messages) => {
-				transcript = JSON.stringify(
-					messages.messages.filter(
-						(message) =>
-							message.role === "toolResult" && message.toolName === "db_query",
-					),
+		);
+		try {
+			const reader = server.stdout.getReader();
+			let output = "";
+			while (!output.includes("STORE_READY")) {
+				const part = await reader.read();
+				if (part.done)
+					throw new Error(
+						"Disposable database fixture exited before readiness",
+					);
+				output += new TextDecoder().decode(part.value);
+			}
+			reader.releaseLock();
+			let transcript = "";
+			fake.setResponses([
+				call("env_start", { apps: ["api"] }),
+				call("db_query", {
+					infra: "store",
+					sql:
+						variant === "rotation"
+							? "SELECT value FROM fixture_secrets"
+							: "SELECT pg_sleep(20) /* NATIVE_SQL_PROBE */",
+				}),
+				(messages) => {
+					transcript = JSON.stringify(
+						messages.messages.filter(
+							(message) =>
+								message.role === "toolResult" &&
+								message.toolName === "db_query",
+						),
+					);
+					return fauxAssistantMessage("Container query completed");
+				},
+			]);
+			const task = await app.startTask(invocation);
+			await approve(app, task);
+			await pendingReview(app, task, "Query store");
+			fs.writeFileSync(
+				path.join(config.configDir, ".env"),
+				"DISPOSABLE_SQL_USER=changed\nDISPOSABLE_SQL_PASSWORD=rotated\n",
+			);
+			await approve(app, task, "Query store");
+			if (variant === "rotation") {
+				await app.harness.waitForTask(task as TaskId, context);
+				expect(transcript).not.toContain(disposablePassword);
+				expect(transcript).toContain("[REDACTED]");
+				expect(
+					(await app.environments.snapshot()).queryOperations[0]?.state,
+				).toBe("completed");
+			} else {
+				await eventually(
+					async () => fs.existsSync(path.join(config.configDir, "sql-probes")),
+					Boolean,
 				);
-				return fauxAssistantMessage("Container query completed");
-			},
-		]);
-		const task = await app.startTask(invocation);
-		await approve(app, task);
-		await pendingReview(app, task, "Query store");
-		fs.writeFileSync(
-			path.join(config.configDir, ".env"),
-			"DISPOSABLE_SQL_USER=changed\nDISPOSABLE_SQL_PASSWORD=rotated\n",
-		);
-		await approve(app, task, "Query store");
-		await app.harness.waitForTask(task as TaskId, context);
-		expect(transcript).not.toContain(disposablePassword);
-		expect(transcript).toContain("[REDACTED]");
-		expect((await app.environments.snapshot()).queryOperations[0]?.state).toBe(
-			"completed",
-		);
-	} finally {
-		server.kill();
-		await server.exited;
-		await app.close();
-		apps.splice(apps.indexOf(app), 1);
-		await engine?.stop(true);
-	}
-}, 20000);
+				const before = await app.environments.snapshot();
+				expect(before.queryOperations[0]?.state).toBe("issued");
+				expect(before.runs.every((run) => run.state === "running")).toBe(true);
+				const started = Date.now();
+				await app.cancel(task);
+				expect(Date.now() - started).toBeLessThan(5000);
+				const after = await app.environments.snapshot();
+				expect(after.queryOperations[0]?.state).toBe("issued");
+				expect(after.runs.every((run) => run.state === "exited")).toBe(true);
+				expect(
+					fs
+						.readFileSync(path.join(config.configDir, "sql-probes"), "utf8")
+						.trim(),
+				).toBe("query");
+				const engineState = JSON.parse(
+					fs.readFileSync(path.join(config.configDir, "engine.json"), "utf8"),
+				);
+				expect(Object.keys(engineState.containers)).toHaveLength(0);
+			}
+		} finally {
+			server.kill("SIGKILL");
+			await server.exited;
+			await app.close();
+			apps.splice(apps.indexOf(app), 1);
+			await engine?.stop(true);
+		}
+	},
+	20000,
+);
 
 test("SQL total deadline closes its borrowed connection and publishes no success", async () => {
 	const port = disposablePort(),
