@@ -122,11 +122,12 @@ function readTarget(raw: unknown): Target {
 				data.runtime === "shell" ||
 				data.runtime === "docker" ||
 				data.runtime === "podman" ||
-				data.runtime === "compose"
+				data.runtime === "compose" ||
+				data.runtime === "kubernetes"
 			))
 	)
 		throw new Error(
-			"Named local endpoints require a shell or owned container run target",
+			"Named local endpoints require a shell, owned container or owned single-replica pod run target",
 		);
 	if (
 		data.queryConnection !== undefined &&
@@ -217,7 +218,17 @@ function readTarget(raw: unknown): Target {
 				"Container query connections require healthy readiness and an exact published TCP loopback host/port",
 			);
 	}
-	const endpoints = readEndpoints(data.endpoints),
+	const kubernetes =
+			data.runtime === "kubernetes"
+				? readKubernetes(data.kubernetes)
+				: undefined,
+		loopback = (url: URL) =>
+			url.hostname === "127.0.0.1" || url.hostname === "[::1]",
+		forwarded = (port: number) =>
+			kubernetes?.replicas === 1 &&
+			kubernetes.portForwards?.filter((forward) => forward.local === port)
+				.length === 1,
+		endpoints = readEndpoints(data.endpoints),
 		endpointCaRefs = readEndpointCaRefs(data.endpointCaRefs, endpoints);
 	let endpointServices: Record<string, string> | undefined;
 	let queryService: string | undefined;
@@ -273,6 +284,16 @@ function readTarget(raw: unknown): Target {
 				);
 		}
 	}
+	// A pod is reachable only through the one loopback forward this run starts;
+	// the declaration never becomes networking or ownership evidence.
+	for (const value of kubernetes ? Object.values(endpoints) : []) {
+		const url = new URL(value),
+			port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+		if (!loopback(url) || !forwarded(port))
+			throw new Error(
+				"Kubernetes endpoints require a single-replica target and exactly one declared loopback port forward on the endpoint's own port",
+			);
+	}
 	return {
 		id: identifier(data.id),
 		...(telemetry ? { telemetry } : {}),
@@ -292,9 +313,7 @@ function readTarget(raw: unknown): Target {
 		action: data.action as Action,
 		runtime: data.runtime,
 		...(container ? { container } : {}),
-		...(data.runtime === "kubernetes"
-			? { kubernetes: readKubernetes(data.kubernetes) }
-			: {}),
+		...(kubernetes ? { kubernetes } : {}),
 		...(data.runtime === "compose"
 			? { compose: readCompose(data.compose) }
 			: {}),

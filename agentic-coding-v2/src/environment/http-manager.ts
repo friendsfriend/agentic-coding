@@ -19,6 +19,7 @@ import {
 	httpDigest,
 	replayHttp,
 } from "./http-receipts.ts";
+import { KubernetesProcess } from "./kubernetes.ts";
 import type { Plan } from "./model.ts";
 import {
 	type ReferenceScope,
@@ -65,7 +66,21 @@ export class HeldHttp {
 	 * neither a declaration nor an engine fixture proves actual networking. */
 	private endpointAdmission(run: Plan, base: string, endpoint: string) {
 		if (run.runtime === "shell") return;
-		const url = new URL(base);
+		const url = new URL(base),
+			port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+		if (run.runtime === "kubernetes") {
+			// The declaration must name the exact loopback port forward this run
+			// starts; live ownership and readiness are observed separately.
+			if (
+				run.kubernetes?.replicas !== 1 ||
+				run.kubernetes.portForwards?.filter((forward) => forward.local === port)
+					.length !== 1
+			)
+				throw new Error(
+					"Endpoint on a Kubernetes target requires exactly one declared single-replica loopback port forward on the endpoint's own port",
+				);
+			return;
+		}
 		const container =
 			run.container ??
 			run.composePlan?.services.find(
@@ -111,16 +126,35 @@ export class HeldHttp {
 			handle instanceof ComposeProcess && service
 				? await handle.diagnosticService(service, signal)
 				: handle;
-		const observed =
-			process instanceof ContainerProcess
-				? handle instanceof ComposeProcess
-					? process.runtimeStatus
-					: await process.refresh(signal)
-				: undefined;
+		const url = run
+				? new URL(run.plan.endpoints?.[endpoint] ?? "http://")
+				: null,
+			forward = url
+				? run?.plan.kubernetes?.portForwards?.find(
+						(candidate) =>
+							candidate.local ===
+							Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+					)
+				: undefined,
+			// One fresh observation per dispatch: a container's own engine status or
+			// the owned pod with its declared forward, never a saved receipt.
+			containerStatus =
+				process instanceof ContainerProcess
+					? handle instanceof ComposeProcess
+						? process.runtimeStatus
+						: await process.refresh(signal)
+					: undefined,
+			pod =
+				process instanceof KubernetesProcess
+					? await process.diagnostic(signal)
+					: undefined,
+			forwardedLive =
+				pod && forward ? pod.forwarded(forward.local, forward.remote) : false;
 		if (
 			!run ||
 			(!(process instanceof ShellProcess) &&
-				!(process instanceof ContainerProcess)) ||
+				!(process instanceof ContainerProcess) &&
+				!(process instanceof KubernetesProcess)) ||
 			!process ||
 			handle?.closing ||
 			handle?.outcome ||
@@ -130,12 +164,18 @@ export class HeldHttp {
 			process.cleanupFailed ||
 			run.plan.workspace !== owner.workspace ||
 			(process instanceof ContainerProcess &&
-				(observed?.health !== "healthy" ||
-					observed.owned !== true ||
-					observed.state !== "running"))
+				(containerStatus?.health !== "healthy" ||
+					containerStatus.owned !== true ||
+					containerStatus.state !== "running")) ||
+			(process instanceof KubernetesProcess &&
+				(!pod ||
+					!forwardedLive ||
+					pod.status.health !== "healthy" ||
+					pod.status.owned !== true ||
+					pod.status.state !== "running"))
 		)
 			throw new Error(
-				"Endpoint requires this task's live ready shell app or health-ready owned container; saved receipts grant no network authority",
+				"Endpoint requires this task's live ready shell app, health-ready owned container or ready owned single-replica pod with its declared loopback port forward; saved receipts grant no network authority",
 			);
 		this.authority.check(owner.id, signal, run.batch, run);
 		const root = referenceScope(run, members);

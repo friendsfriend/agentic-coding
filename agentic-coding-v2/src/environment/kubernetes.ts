@@ -28,6 +28,11 @@ function budget(ms: number) {
  * Names/labels are insufficient authority; DELETE always carries the live UID receipt. */
 export class KubernetesProcess implements EnvironmentProcess {
 	readonly pid = null;
+	/** Frozen endpoint credentials and redaction for this approved plan. */
+	readonly authorization: ReturnType<
+		typeof processEnvironment
+	>["authorization"];
+	readonly redact: ReturnType<typeof processEnvironment>["redact"];
 	readonly done: Promise<Exit>;
 	private complete: ((exit: Exit) => void) | undefined;
 	private client: ReturnType<typeof openClusterClient> | null = null;
@@ -47,6 +52,10 @@ export class KubernetesProcess implements EnvironmentProcess {
 	private names: string[];
 	private followers = new Map<string, ShellProcess>();
 	private forwards = new Map<string, ShellProcess>();
+	private waiters: {
+		resolve: (pod: Pod) => void;
+		reject: (error: Error) => void;
+	}[] = [];
 	constructor(
 		private config: Config,
 		private plan: Plan,
@@ -56,6 +65,9 @@ export class KubernetesProcess implements EnvironmentProcess {
 			throw new Error(
 				"An approved explicit Kubernetes connection and bare pod plan are required",
 			);
+		const frozen = processEnvironment(config.configDir, plan);
+		this.authorization = frozen.authorization;
+		this.redact = frozen.redact;
 		this.host = digest(config.stateDir).slice(0, 32);
 		this.run = digest(run).slice(0, 32);
 		this.names = Array.from(
@@ -86,6 +98,9 @@ export class KubernetesProcess implements EnvironmentProcess {
 	get outcome() {
 		return this.result;
 	}
+	get closing() {
+		return this.stopping !== null;
+	}
 	/** Pod log buffers are only exposed for a single owned replica: merging
 	 * several pods would invent a chronology this adapter cannot verify. */
 	get logs() {
@@ -111,6 +126,66 @@ export class KubernetesProcess implements EnvironmentProcess {
 	}
 	get runtimeStatuses() {
 		return [...this.statuses.values()].map((value) => ({ ...value }));
+	}
+	/** One fresh read of the single owned replica behind a diagnostic: the live
+	 * pod UID/readiness plus whether the declared loopback forward for that port
+	 * is still its own running process. The read is performed by the single
+	 * observation loop, so a diagnostic never competes with it for the CLI. A
+	 * forward is a local client, never readiness, ownership or network proof. */
+	async diagnostic(signal?: AbortSignal) {
+		const name = this.names.length === 1 ? this.names[0] : undefined;
+		if (!name)
+			throw new Error(
+				"Kubernetes diagnostics require exactly one owned pod replica",
+			);
+		if (this.stopping || this.result)
+			throw new Error("Owned Kubernetes pod runtime is closing");
+		const pod = await new Promise<Pod>((resolve, reject) => {
+			const timer = setTimeout(
+					() =>
+						reject(
+							new Error("Kubernetes diagnostic observation did not complete"),
+						),
+					15000,
+				),
+				settle = () => {
+					clearTimeout(timer);
+					signal?.removeEventListener("abort", cancel);
+				},
+				cancel = () => {
+					settle();
+					reject(new Error("Kubernetes diagnostic observation was cancelled"));
+				};
+			signal?.addEventListener("abort", cancel, { once: true });
+			this.waiters.push({
+				resolve: (value) => {
+					settle();
+					resolve(value);
+				},
+				reject: (error) => {
+					settle();
+					reject(error);
+				},
+			});
+		});
+		this.owned(pod, name);
+		const status = this.statuses.get(name);
+		if (!status) throw new Error("Owned Kubernetes pod is not observed");
+		return {
+			status: { ...status },
+			/** Exactly the plan's declared forward, still running, not reopened. */
+			forwarded: (local: number, remote: number) => {
+				if (
+					!this.target.portForwards?.some(
+						(candidate) =>
+							candidate.local === local && candidate.remote === remote,
+					)
+				)
+					return false;
+				const forward = this.forwards.get(`${local}:${remote}`);
+				return forward !== undefined && !forward.closing && !forward.outcome;
+			},
+		};
 	}
 	private get target() {
 		if (!this.plan.kubernetes) throw new Error("Kubernetes target missing");
@@ -392,9 +467,14 @@ export class KubernetesProcess implements EnvironmentProcess {
 						void this.stop();
 						return;
 					}
+					for (const waiter of this.waiters.splice(0)) waiter.resolve(pod);
 				}
 			}
 		} catch {
+			for (const waiter of this.waiters.splice(0))
+				waiter.reject(
+					new Error("Kubernetes observation was lost; no diagnostic binding"),
+				);
 			if (!this.controller.signal.aborted) {
 				this.uncertain = true;
 				this.failure =
@@ -439,6 +519,8 @@ export class KubernetesProcess implements EnvironmentProcess {
 					this.uncertain = true;
 				}
 			this.forwards.clear();
+			for (const waiter of this.waiters.splice(0))
+				waiter.reject(new Error("Owned Kubernetes pod runtime is closing"));
 			for (const follower of this.followers.values())
 				try {
 					await follower.stop();
