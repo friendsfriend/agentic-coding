@@ -1,5 +1,5 @@
 import { declaredInfrastructure } from "./dependencies.ts";
-import { referencedRoot, sharedRoot } from "./lifetime.ts";
+import { referencedRoot, sameApprovedPlan, sharedRoot } from "./lifetime.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import type { EnvironmentRun } from "./state.ts";
 
@@ -36,12 +36,14 @@ export function referenceScope(
 					throw new Error(
 						"Referenced diagnostic prerequisite generation is unavailable",
 					);
-				// A shared lifetime reuses one live generation of its prerequisite.
+				// A shared lifetime reuses one live generation of its prerequisite, and
+				// only while it is still the generation this root's plan declared.
 				const shared = members.filter(
 					(item) =>
 						item.owner === root.owner &&
 						sharedRoot(item.plan) &&
 						item.plan.app === plan.app &&
+						sameApprovedPlan(item.plan, plan) &&
 						item.state === "running",
 				);
 				const only = shared[0];

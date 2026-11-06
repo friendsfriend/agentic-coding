@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { decode, type TaskInfo, values } from "../state.ts";
-import { sharedLifetime, sharedRoot } from "./lifetime.ts";
+import { sameApprovedPlan, sharedLifetime, sharedRoot } from "./lifetime.ts";
 import type { Plan } from "./model.ts";
 import { captureReferenceGraph } from "./reference-journal.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
@@ -114,6 +114,13 @@ export class Acquisitions {
 			)
 				throw new Error(
 					"Shared prerequisite generation is closing or unavailable; no attach and no second copy",
+				);
+			// The immutable approved description is the attachment identity: a
+			// prerequisite approved with a different command, image, publication,
+			// environment or endpoint is a different generation, not a reuse.
+			if (!sameApprovedPlan(only.plan, plan))
+				throw new Error(
+					`Shared prerequisite ${plan.app} generation was approved with a different plan; no attach and no second copy`,
 				);
 			attached.add(plan.app);
 		}

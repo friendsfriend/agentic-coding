@@ -27,6 +27,37 @@ export function sharedRoot(plan: Plan) {
 export function scopedRoot(plan: Plan) {
 	return plan.lifetime !== undefined;
 }
+/** Lifetimes scope agent-owned app roots and declared prerequisite generations
+ * on shell processes, owned Docker/Podman containers and Compose stacks.
+ * Kubernetes and foreign/shared external resources stay out of scope. */
+function scopedRuntime(plan: Plan) {
+	return (
+		plan.runtime === "shell" ||
+		plan.runtime === "docker" ||
+		plan.runtime === "podman" ||
+		plan.runtime === "compose"
+	);
+}
+function canonical(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(canonical);
+	if (value && typeof value === "object")
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>)
+				.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+				.map(([key, item]) => [key, canonical(item)]),
+		);
+	return value;
+}
+/** Canonical identity of one approved plan. A later acquisition may reuse a
+ * prerequisite generation only when this exact description was approved: a
+ * changed command, image, publication, environment or endpoint is a different
+ * generation, never adopted by app name. */
+export function approvedPlanIdentity(plan: Plan) {
+	return JSON.stringify(canonical(plan));
+}
+export function sameApprovedPlan(left: Plan, right: Plan) {
+	return approvedPlanIdentity(left) === approvedPlanIdentity(right);
+}
 /** An opt-in request is a new lifetime, never a permission to split an existing
  * coupled graph or a second acquisition. */
 export function validateLifetime(plans: Plan[], owner: TaskInfo) {
@@ -35,10 +66,8 @@ export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 		(plan) =>
 			!scopedRoot(plan) ||
 			plan.action !== "run" ||
-			plan.runtime !== "shell" ||
-			plan.container ||
-			plan.compose ||
-			plan.kubernetes,
+			plan.kubernetes ||
+			!scopedRuntime(plan),
 	);
 	if (
 		unsupported ||
@@ -48,7 +77,7 @@ export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 		owner.policy !== "workspace-write"
 	)
 		throw new Error(
-			"Lifetimes require one approved request of agent-owned shell app roots without container, Compose or Kubernetes resources; modes cannot be mixed",
+			"Lifetimes require one approved request of agent-owned app roots and declared prerequisites on shell, Docker/Podman or Compose run targets without Kubernetes resources; modes cannot be mixed",
 		);
 	if (
 		plans.some(independentRoot) &&
@@ -60,20 +89,20 @@ export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 		)
 	)
 		throw new Error(
-			"Independent lifetimes require one approved request of agent-owned standalone shell app roots; dependencies and other runtimes are unsupported",
+			"Independent lifetimes require one approved request of agent-owned standalone app roots without declared dependencies; Kubernetes and shared/external resources are unsupported",
 		);
 	if (
 		plans.some(sharedRoot) &&
 		!plans.some((plan) => plan.projectKind === "app")
 	)
 		throw new Error(
-			"Shared lifetimes require one approved request containing at least one shell app root and its declared same-repository prerequisites",
+			"Shared lifetimes require one approved request containing at least one app root and its declared same-repository prerequisites",
 		);
 	if (
 		plans.some(referencedRoot) &&
 		!plans.some((plan) => plan.projectKind === "app")
 	)
 		throw new Error(
-			"Referenced lifetimes require one approved request containing at least one shell app root and its declared same-repository prerequisites",
+			"Referenced lifetimes require one approved request containing at least one app root and its declared same-repository prerequisites",
 		);
 }

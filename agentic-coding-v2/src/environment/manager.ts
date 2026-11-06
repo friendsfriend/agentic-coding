@@ -21,6 +21,7 @@ import { KubernetesProcess } from "./kubernetes.ts";
 import {
 	independentRoot,
 	referencedRoot,
+	sameApprovedPlan,
 	scopedRoot,
 	sharedRoot,
 	validateLifetime,
@@ -777,6 +778,10 @@ export class Environments {
 							throw new Error(
 								"Shared prerequisite generation closed before this acquisition completed; no second copy was started",
 							);
+						if (!sameApprovedPlan(shared[0].plan, plan))
+							throw new Error(
+								"Shared prerequisite generation changed plan before this acquisition completed; no attach and no second copy",
+							);
 					}, background);
 					continue;
 				}
@@ -1283,7 +1288,9 @@ export class Environments {
 					error:
 						"Prerequisite cleanup retained until all dependent generations are confirmed released; no stop dispatched for this generation.",
 				});
-				return true;
+				// Retention is a known, recorded state, not an uncertain cleanup: the
+				// generation is still owned and will be released by its last reference.
+				return false;
 			}
 			const process = this.live.get(run.id);
 			if (process) {

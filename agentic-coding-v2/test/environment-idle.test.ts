@@ -334,7 +334,9 @@ test("explicit standalone roots expire independently without revoking a sibling 
 	]);
 	const agent = await app.startTask(invocation);
 	const review = await pendingReview(app, agent);
-	expect(graphRefusal).toContain("standalone shell app roots");
+	expect(graphRefusal).toContain(
+		"standalone app roots without declared dependencies",
+	);
 	expect(JSON.parse(review.snapshot)).toHaveProperty(
 		"plans.0.lifetime",
 		"independent-roots-v1",
