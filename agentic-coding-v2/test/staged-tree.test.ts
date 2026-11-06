@@ -533,23 +533,20 @@ test("a retained staged tree is owned by its digest, inspectable, and released b
 	}
 });
 test("an auxiliary source is bound to a staged target, digested in the tree and never a private path", async () => {
-	const { app, config } = await fixture(true, (config) => {
+	const { app, config, open } = await fixture(true, (config) => {
 		fs.chmodSync(config.stateDir, 0o700);
 		fs.mkdirSync(config.configDir, { mode: 0o700 });
 	});
-	const host = serve(app);
-	const token = new URLSearchParams(new URL(host.url).hash.slice(1)).get(
-			"token",
-		),
-		api = (route: string, body?: unknown) =>
-			fetch(new URL(route, host.url), {
-				method: body === undefined ? "GET" : "POST",
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				body: body === undefined ? undefined : JSON.stringify(body),
-			});
+	let host = serve(app);
+	const api = (route: string, body?: unknown) =>
+		fetch(new URL(route, host.url), {
+			method: body === undefined ? "GET" : "POST",
+			headers: {
+				Authorization: `Bearer ${new URLSearchParams(new URL(host.url).hash.slice(1)).get("token")}`,
+				"Content-Type": "application/json",
+			},
+			body: body === undefined ? undefined : JSON.stringify(body),
+		});
 	try {
 		const repository = config.repositories[0] ?? "",
 			created = await (
@@ -663,11 +660,47 @@ test("an auxiliary source is bound to a staged target, digested in the tree and 
 				revision: read.revision,
 				digest: read.digest,
 				materializeStagedTree: true,
+				retainStagedTree: true,
 			})
 		).json();
 		expect(tree.accepted).toBe(true);
 		expect(tree.fileCount).toBe(3);
-		expect(tree.treeRetained).toBe(false);
+		expect(tree.treeRetained).toBe(true);
+		const trees = path.join(config.stateDir, "native", "staging", "trees"),
+			held = path.join(trees, tree.treeDigest);
+		expect(fs.readFileSync(path.join(held, "conf", "app.ini"), "utf8")).toBe(
+			"mode=fast\n",
+		);
+		expect(fs.statSync(path.join(held, "conf")).mode & 0o777).toBe(0o500);
+		const reused = await (
+			await api("/api/environments/drafts/preflight", {
+				requestId: "aux-tree-reuse",
+				id: created.id,
+				revision: read.revision,
+				digest: read.digest,
+				materializeStagedTree: true,
+				retainStagedTree: true,
+			})
+		).json();
+		expect(reused.accepted).toBe(true);
+		expect(reused.treeDigest).toBe(tree.treeDigest);
+		expect(fs.readdirSync(trees)).toEqual([tree.treeDigest]);
+		host.stop();
+		await app.close();
+		host = serve(await open());
+		const recoveredMetadata = await (
+			await api("/api/environments/drafts/trees")
+		).json();
+		expect(JSON.stringify(recoveredMetadata)).toContain(tree.treeDigest);
+		const released = await (
+			await api("/api/environments/drafts/tree/release", {
+				requestId: "release-aux-tree",
+				name: tree.treeDigest,
+			})
+		).json();
+		expect(released).toMatchObject({ released: true, owner: created.id });
+		expect(fs.existsSync(held)).toBe(false);
+		expect(fs.readdirSync(trees)).toEqual([]);
 		// The auxiliary binding is removable by digest without touching the target.
 		const removed = await (
 			await api("/api/environments/drafts/source/remove", {

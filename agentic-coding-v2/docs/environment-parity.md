@@ -639,3 +639,11 @@ Verification: 123 tests / 1636 assertions, all passing; Biome, type-check and bu
 Public authenticated draft operations now exercise both Compose-to-auxiliary and auxiliary-to-Compose refusal after changing the saved target path. Refusal preserves the saved revision and existing binding roles. Explicit digest-bound removal followed by a new auxiliary staging request succeeds; this proves the supported role-change path instead of only testing rejection. Staging also rejects an auxiliary descendant/ancestor collision against a declared Compose path even before that target's source is staged. The public two-target case covers an unstaged declared file's descendant; the ancestor branch is guarded but not separately exercised.
 
 Verification: 123 tests / 1647 assertions, all passing; Biome, type-check and build pass. Legacy boundaries: 71 tests / 278 assertions and legacy type-check pass. No UI or live provider changes. This supersedes the earlier missing dedicated source-role scenario limitation; it does not add promotion or crash-reconciliation guarantees.
+
+## Nested auxiliary retained-tree lifecycle re-proof
+
+The public auxiliary-source scenario now retains the verified tree instead of stopping at ephemeral assembly. It checks the nested conf/app.ini bytes and pinned directory mode, submits a distinct owned reuse request (same digest, exactly one retained directory), closes/reopens the host, observes the digest in retained metadata, and explicitly releases that digest through the authenticated route. Release reports the original draft owner and removes the entire nested tree. Draft/source operations remain usable afterward. No production cleanup change was needed.
+
+This supersedes the earlier missing retention/removal proof for nested auxiliary files. It does not explain or claim to fix the historical ENOTEMPTY incident, prove arbitrary concurrent mutation safety, or close creation/move-before-marker crash reconciliation. No runtime, provider, credentials or model calls were used.
+
+Verification: 123 tests / 1656 assertions, all passing; Biome, type-check and build pass. No production or UI changes.
