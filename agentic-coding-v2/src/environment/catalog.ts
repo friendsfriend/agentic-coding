@@ -111,10 +111,15 @@ function readTarget(raw: unknown): Target {
 		(data.endpoints !== undefined ||
 			data.endpointCaRefs !== undefined ||
 			data.endpointAuthRefs !== undefined) &&
-		(data.runtime !== "shell" || data.action !== "run")
+		(data.action !== "run" ||
+			!(
+				data.runtime === "shell" ||
+				data.runtime === "docker" ||
+				data.runtime === "podman"
+			))
 	)
 		throw new Error(
-			"Named local endpoints currently require a shell run target",
+			"Named local endpoints require a shell or owned container run target",
 		);
 	if (
 		data.queryConnection !== undefined &&
@@ -207,6 +212,30 @@ function readTarget(raw: unknown): Target {
 	}
 	const endpoints = readEndpoints(data.endpoints),
 		endpointCaRefs = readEndpointCaRefs(data.endpointCaRefs, endpoints);
+	// A container endpoint is reachable only through an exact published loopback
+	// port and health readiness; the declaration never becomes observation.
+	if (Object.keys(endpoints).length > 0 && container) {
+		if (container.readiness !== "healthy")
+			throw new Error(
+				"Container endpoints require health readiness, not running-only readiness",
+			);
+		for (const value of Object.values(endpoints)) {
+			const url = new URL(value);
+			if (
+				!container.ports.some(
+					(port) =>
+						port.protocol === "tcp" &&
+						port.host ===
+							Number(url.port || (url.protocol === "https:" ? 443 : 80)) &&
+						(port.address === url.hostname ||
+							(port.address === "::1" && url.hostname === "[::1]")),
+				)
+			)
+				throw new Error(
+					"Container endpoints require an exact declared TCP loopback publication",
+				);
+		}
+	}
 	return {
 		id: identifier(data.id),
 		...(telemetry ? { telemetry } : {}),

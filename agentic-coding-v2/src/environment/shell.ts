@@ -126,6 +126,8 @@ export class ShellProcess {
 			runtimeTimestamps?: boolean;
 			privateOutput?: boolean;
 			input?: string;
+			/** Internal live-handle startup snapshot; never a tool/config input. */
+			environment?: ReturnType<typeof processEnvironment>;
 		},
 		capture?: {
 			collector: TelemetryCollector;
@@ -138,7 +140,10 @@ export class ShellProcess {
 			throw new Error(
 				"Native telemetry requires the exact live approved startup scope",
 			);
-		const frozen = capture?.environment ?? processEnvironment(configDir, plan);
+		const frozen =
+			capture?.environment ??
+			invocation?.environment ??
+			processEnvironment(configDir, plan);
 		const { authorization, queryCredentials } = frozen;
 		const env = { ...frozen.env, ...capture?.collector.environment };
 		const redact = capture?.collector.redact ?? frozen.redact;

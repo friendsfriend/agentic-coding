@@ -1,5 +1,5 @@
 import type { Plan } from "./model.ts";
-import { type Exit, ShellProcess } from "./shell.ts";
+import { type Exit, type processEnvironment, ShellProcess } from "./shell.ts";
 
 /** Internal argv-only adapter. Machine-readable stdout is bounded in memory and
  * deliberately never copied to logs: inspecting a foreign resource may expose
@@ -14,6 +14,7 @@ export class EnvironmentCommands {
 		private configDir: string,
 		private executable: string,
 		private prefix: string[],
+		private environment?: ReturnType<typeof processEnvironment>,
 	) {}
 	get logs() {
 		return `${this.output}${this.current?.logs ?? ""}`.slice(-64000);
@@ -46,6 +47,7 @@ export class EnvironmentCommands {
 				args: [...this.prefix, ...args],
 				privateOutput: options.machine,
 				input: options.input,
+				environment: this.environment,
 				captureStdout: (chunk) => {
 					if (!options.machine) return;
 					bytes += Buffer.byteLength(chunk);

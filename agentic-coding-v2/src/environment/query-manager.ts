@@ -129,6 +129,17 @@ export class DatabaseDiagnostics {
 			throw new Error(
 				"SQL requires this task's live ready shell or container infrastructure with a declared query connection; receipts grant no authority",
 			);
+		if (process instanceof ContainerProcess) {
+			const observed = await process.refresh(signal);
+			if (
+				observed?.health !== "healthy" ||
+				observed.owned !== true ||
+				observed.state !== "running"
+			)
+				throw new Error(
+					"SQL requires the exact live health-ready owned infrastructure container",
+				);
+		}
 		const members = runs.filter((item) => item.batch === run.batch),
 			alive = (item: EnvironmentRun) => {
 				const live = this.authority.live.get(item.id);

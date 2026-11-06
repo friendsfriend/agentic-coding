@@ -4,7 +4,10 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
-import { serveContainerFixture } from "./fixtures/container-server.ts";
+import {
+	readEngineFile,
+	serveContainerFixture,
+} from "./fixtures/container-server.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import {
 	disposablePassword,
@@ -18,9 +21,18 @@ afterEach(cleanup);
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 
-test.each(["rotation", "cancellation", "deadline", "write-function"])(
+test.each([
+	"rotation",
+	"cancellation",
+	"deadline",
+	"write-function",
+	"unhealthy",
+	"replacement",
+	"unknown",
+])(
 	"container query handle lifecycle: %s",
 	async (variant) => {
+		const refusal = ["unhealthy", "replacement", "unknown"].includes(variant);
 		const port = disposablePort();
 		let engine: ReturnType<typeof serveContainerFixture> | undefined;
 		const { app, config, fake, invocation } = await fixture(false, (config) => {
@@ -112,7 +124,12 @@ test.each(["rotation", "cancellation", "deadline", "write-function"])(
 								message.toolName === "db_query",
 						),
 					);
-					return fauxAssistantMessage("Container query completed");
+					return refusal
+						? call("request_review", {
+								path: ".",
+								title: "Hold rejected container SQL",
+							})
+						: fauxAssistantMessage("Container query completed");
 				},
 			]);
 			const task = await app.startTask(invocation);
@@ -122,9 +139,37 @@ test.each(["rotation", "cancellation", "deadline", "write-function"])(
 				path.join(config.configDir, ".env"),
 				"DISPOSABLE_SQL_USER=changed\nDISPOSABLE_SQL_PASSWORD=rotated\n",
 			);
+			const engineFile = path.join(config.configDir, "engine.json"),
+				original = fs.readFileSync(engineFile, "utf8");
+			if (refusal) {
+				const state = readEngineFile(engineFile),
+					container = Object.values(state.containers)[0];
+				if (!container)
+					throw new Error("Fixture infrastructure container is missing");
+				if (variant === "unhealthy")
+					container.State.Health = { Status: "unhealthy" };
+				if (variant === "replacement")
+					container.Id = "copied-label-replacement";
+				if (variant === "unknown") state.offline = true;
+				fs.writeFileSync(engineFile, JSON.stringify(state));
+			}
 			const issuedAt = Date.now();
 			await approve(app, task, "Query store");
-			if (variant === "deadline" || variant === "write-function") {
+			if (refusal) {
+				try {
+					await pendingReview(app, task, "Hold rejected container SQL");
+					expect(transcript).toContain('"isError":true');
+					expect(
+						(await app.environments.snapshot()).queryOperations,
+					).toHaveLength(0);
+					expect(fs.existsSync(path.join(config.configDir, "sql-probes"))).toBe(
+						false,
+					);
+				} finally {
+					fs.writeFileSync(engineFile, original);
+				}
+				await app.cancel(task);
+			} else if (variant === "deadline" || variant === "write-function") {
 				await app.harness.waitForTask(task as TaskId, context);
 				expect(transcript).toContain('"isError":true');
 				expect(transcript).not.toContain(disposablePassword);

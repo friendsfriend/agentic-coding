@@ -19,6 +19,7 @@ export class ContainerProcess {
 	readonly queryCredentials: () =>
 		| { username: string; password: string }
 		| undefined;
+	readonly authorization: (endpoint: string) => string | undefined;
 	readonly redact: (value: string) => string;
 	private complete: (exit: Exit) => void = () => {};
 	private result: Exit | null = null;
@@ -28,6 +29,8 @@ export class ContainerProcess {
 	private stopping: Promise<void> | null = null;
 	private follower: ShellProcess | null = null;
 	private commands: EnvironmentCommands;
+	private observing: Promise<void> = Promise.resolve();
+	private frozen: ReturnType<typeof processEnvironment>;
 	private mayHaveCreated = false;
 	private createdId: string | null = null;
 	private didStart = false;
@@ -57,7 +60,9 @@ export class ContainerProcess {
 		if (!spec || !(plan.runtime === "docker" || plan.runtime === "podman"))
 			throw new Error("Structured container configuration is required");
 		const frozen = processEnvironment(configDir, plan);
+		this.frozen = frozen;
 		this.queryCredentials = frozen.queryCredentials;
+		this.authorization = frozen.authorization;
 		this.redact = frozen.redact;
 		this.spec = spec;
 		this.host = digest(stateDir);
@@ -82,6 +87,7 @@ export class ContainerProcess {
 			configDir,
 			plan.runtime,
 			this.prefix,
+			frozen,
 		);
 		this.done = new Promise((resolve) => {
 			this.complete = resolve;
@@ -134,9 +140,64 @@ export class ContainerProcess {
 			effect,
 		});
 	}
-	private async observe(cleanup = false): Promise<Observation | null> {
+	/** Live re-observation for admission decisions: a start-time health reading is
+	 * never treated as continuing authority. Failure stays unknown, never healthy. */
+	async refresh(signal?: AbortSignal): Promise<RuntimeStatus | undefined> {
+		if (this.result || this.cleanupFailed) return this.runtimeStatus;
+		const bounded = AbortSignal.any([
+			this.controller.signal,
+			AbortSignal.timeout(2000),
+			...(signal ? [signal] : []),
+		]);
+		await this.observe(false, bounded);
+		return this.runtimeStatus;
+	}
+	private observe(
+		cleanup = false,
+		diagnosticSignal?: AbortSignal,
+	): Promise<Observation | null> {
+		// Serialize monitor and diagnostic reads without borrowing each other's
+		// cancellation authority. A cancelled queued diagnostic never executes.
+		const operation = this.observing.then(() => {
+			diagnosticSignal?.throwIfAborted();
+			return this.observeCurrent(cleanup, diagnosticSignal);
+		});
+		this.observing = operation.then(
+			() => {},
+			() => {},
+		);
+		if (!diagnosticSignal) return operation;
+		return new Promise((resolve, reject) => {
+			const abort = () =>
+				reject(
+					new Error(
+						"Container diagnostic observation interrupted or timed out",
+					),
+				);
+			diagnosticSignal.addEventListener("abort", abort, { once: true });
+			const detach = () => diagnosticSignal.removeEventListener("abort", abort);
+			operation.then(
+				(value) => {
+					detach();
+					resolve(value);
+				},
+				(error: unknown) => {
+					detach();
+					reject(error);
+				},
+			);
+			if (diagnosticSignal.aborted) {
+				detach();
+				abort();
+			}
+		});
+	}
+	private async observeCurrent(
+		cleanup = false,
+		diagnosticSignal?: AbortSignal,
+	): Promise<Observation | null> {
 		try {
-			const observation = await this.inspect(cleanup);
+			const observation = await this.inspect(cleanup, diagnosticSignal);
 			const health = observation?.health;
 			this.observed = {
 				...this.observed,
@@ -167,11 +228,20 @@ export class ContainerProcess {
 			throw new Error("Container observation failed; absence is not confirmed");
 		}
 	}
-	private async inspect(cleanup: boolean): Promise<Observation | null> {
+	private async inspect(
+		cleanup: boolean,
+		diagnosticSignal?: AbortSignal,
+	): Promise<Observation | null> {
 		const invoke = (args: string[]) =>
-			cleanup
-				? this.commands.checked(args, { timeoutMs: 10000, machine: true })
-				: this.command(args, true);
+			diagnosticSignal
+				? this.commands.checked(args, {
+						signal: diagnosticSignal,
+						timeoutMs: 2000,
+						machine: true,
+					})
+				: cleanup
+					? this.commands.checked(args, { timeoutMs: 10000, machine: true })
+					: this.command(args, true);
 		return inspectContainer(this.name, invoke);
 	}
 	private ownership(observation: Observation): boolean | null {
@@ -311,6 +381,7 @@ export class ContainerProcess {
 					created.id,
 				],
 				runtimeTimestamps: true,
+				environment: this.frozen,
 			},
 		);
 		if (!(await this.follower.spawned))

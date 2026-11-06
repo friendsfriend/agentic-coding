@@ -3,6 +3,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
+import { ContainerProcess } from "./container.ts";
 import {
 	type DiagnosticSelection,
 	diagnosticHistory,
@@ -17,6 +18,7 @@ import {
 	httpDigest,
 	replayHttp,
 } from "./http-receipts.ts";
+import type { Plan } from "./model.ts";
 import {
 	type ReferenceScope,
 	referenceScope,
@@ -54,6 +56,27 @@ export class HeldHttp {
 			}),
 		);
 	}
+	/** The frozen declaration must bind the endpoint to an exact loopback
+	 * publication. Separate live observation checks health/creation identity;
+	 * neither a declaration nor an engine fixture proves actual networking. */
+	private endpointAdmission(run: Plan, base: string) {
+		if (run.runtime === "shell") return;
+		const url = new URL(base);
+		if (
+			run.container?.readiness !== "healthy" ||
+			!run.container.ports.some(
+				(port) =>
+					port.protocol === "tcp" &&
+					port.host ===
+						Number(url.port || (url.protocol === "https:" ? 443 : 80)) &&
+					(port.address === url.hostname ||
+						(port.address === "::1" && url.hostname === "[::1]")),
+			)
+		)
+			throw new Error(
+				"Endpoint requires a declared published TCP loopback port of the held container",
+			);
+	}
 	private async endpointRun(
 		owner: TaskInfo,
 		app: string,
@@ -73,15 +96,25 @@ export class HeldHttp {
 			);
 		const run = runs.length === 1 ? runs[0] : undefined,
 			process = run ? this.authority.live.get(run.id) : undefined;
+		const observed =
+			process instanceof ContainerProcess
+				? await process.refresh(signal)
+				: undefined;
 		if (
 			!run ||
-			!(process instanceof ShellProcess) ||
+			(!(process instanceof ShellProcess) &&
+				!(process instanceof ContainerProcess)) ||
+			!process ||
 			process.outcome ||
 			process.cleanupFailed ||
-			run.plan.workspace !== owner.workspace
+			run.plan.workspace !== owner.workspace ||
+			(process instanceof ContainerProcess &&
+				(observed?.health !== "healthy" ||
+					observed.owned !== true ||
+					observed.state !== "running"))
 		)
 			throw new Error(
-				"Endpoint requires this task's live ready shell app; saved receipts grant no network authority",
+				"Endpoint requires this task's live ready shell app or health-ready owned container; saved receipts grant no network authority",
 			);
 		this.authority.check(owner.id, signal, run.batch, run);
 		const root = referenceScope(run, members);
@@ -108,6 +141,7 @@ export class HeldHttp {
 			base = run.plan.endpoints?.[endpoint];
 		if (!base || !Object.hasOwn(run.plan.endpoints ?? {}, endpoint))
 			throw new Error("Choose a declared endpoint of the held app");
+		this.endpointAdmission(run.plan, base);
 		const ref = Object.hasOwn(run.plan.endpointCaRefs ?? {}, endpoint)
 			? run.plan.endpointCaRefs?.[endpoint]
 			: undefined;
@@ -163,6 +197,7 @@ export class HeldHttp {
 			),
 			base = run.plan.endpoints?.[approved.endpoint];
 		this.scopeOf(approved, root);
+		if (base) this.endpointAdmission(run.plan, base);
 		if (
 			run.id !== approved.run ||
 			!base ||
