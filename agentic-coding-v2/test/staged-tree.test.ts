@@ -726,6 +726,108 @@ test("an auxiliary source is bound to a staged target, digested in the tree and 
 		).json();
 		expect(unchanged.revision).toBe(multiStage.revision);
 		expect(unchanged.sourceBindings).toHaveLength(1);
+		const prefix = await api("/api/environments/drafts/source", {
+			requestId: "unstaged-target-prefix",
+			id: multi.id,
+			revision: multiStage.revision,
+			app: "api",
+			target: "stack",
+			auxiliary: true,
+			file: "compose.other.yaml/child",
+			content: "public",
+		});
+		expect(prefix.status).toBe(400);
+		expect(await prefix.text()).toContain("any declared Compose target");
+		multiContent.projects[0].targets[0].compose.file = "compose.next.yaml";
+		const edited = await (
+			await api("/api/environments/drafts", {
+				requestId: "change-role-target",
+				id: multi.id,
+				revision: multiStage.revision,
+				content: JSON.stringify(multiContent),
+			})
+		).json();
+		const nextSource = await (
+			await api("/api/environments/drafts/source", {
+				requestId: "stage-next-target",
+				id: multi.id,
+				revision: edited.revision,
+				app: "api",
+				target: "stack",
+				content: compose,
+			})
+		).json();
+		const roleChange = await api("/api/environments/drafts/source", {
+			requestId: "refuse-compose-to-aux",
+			id: multi.id,
+			revision: nextSource.revision,
+			app: "api",
+			target: "stack",
+			auxiliary: true,
+			file: "compose.yaml",
+			content: compose,
+		});
+		expect(roleChange.status).toBe(400);
+		expect(await roleChange.text()).toContain(
+			"cannot change between auxiliary and Compose roles",
+		);
+		const retainedRoles = await (
+			await api(`/api/environments/drafts?id=${multi.id}`)
+		).json();
+		expect(retainedRoles.revision).toBe(nextSource.revision);
+		expect(retainedRoles.sourceBindings).toHaveLength(2);
+		const removedRole = await (
+			await api("/api/environments/drafts/source/remove", {
+				requestId: "explicit-role-removal",
+				id: multi.id,
+				revision: retainedRoles.revision,
+				bindingDigest: retainedRoles.sourceBindings.find(
+					(binding: { file: string }) => binding.file === "compose.yaml",
+				).bindingDigest,
+			})
+		).json();
+		const restaged = await api("/api/environments/drafts/source", {
+			requestId: "explicit-aux-restaging",
+			id: multi.id,
+			revision: removedRole.revision,
+			app: "api",
+			target: "stack",
+			auxiliary: true,
+			file: "compose.yaml",
+			content: compose,
+		});
+		expect(restaged.status).toBe(200);
+		const auxiliaryRole = await restaged.json();
+		multiContent.projects[0].targets[0].compose.file = "compose.yaml";
+		const reverseEdit = await (
+			await api("/api/environments/drafts", {
+				requestId: "reverse-role-target",
+				id: multi.id,
+				revision: auxiliaryRole.revision,
+				content: JSON.stringify(multiContent),
+			})
+		).json();
+		const reverse = await api("/api/environments/drafts/source", {
+			requestId: "refuse-aux-to-compose",
+			id: multi.id,
+			revision: reverseEdit.revision,
+			app: "api",
+			target: "stack",
+			content: compose,
+		});
+		expect(reverse.status).toBe(400);
+		expect(await reverse.text()).toContain(
+			"cannot change between auxiliary and Compose roles",
+		);
+		const finalRoles = await (
+			await api(`/api/environments/drafts?id=${multi.id}`)
+		).json();
+		expect(finalRoles.revision).toBe(reverseEdit.revision);
+		expect(
+			finalRoles.sourceBindings.find(
+				(binding: { file: string }) => binding.file === "compose.yaml",
+			).auxiliary,
+		).toBe(true);
 	} finally {
 		host.stop();
 	}

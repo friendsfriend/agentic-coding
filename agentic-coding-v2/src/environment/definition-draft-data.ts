@@ -210,9 +210,15 @@ export function stageSource(
 			projects.some(
 				(project) =>
 					project.repository === declared.repository &&
-					project.targets.some(
-						(candidate) => candidate.compose?.file === auxiliaryFile,
-					),
+					project.targets.some((candidate) => {
+						const file = candidate.compose?.file;
+						return (
+							file !== undefined &&
+							(file === auxiliaryFile ||
+								file.startsWith(`${auxiliaryFile}/`) ||
+								auxiliaryFile.startsWith(`${file}/`))
+						);
+					}),
 			)
 		)
 			throw new Error(
