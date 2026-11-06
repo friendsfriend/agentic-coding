@@ -585,3 +585,9 @@ Docker/Podman infrastructure run targets may now declare a PostgreSQL query conn
 Public configuration coverage accepts the exact health/port binding and refuses running-only readiness, missing publication and mismatched host ports. Existing query and container scenarios remain green. This is backend binding support, not proof of a successful container-hosted database query: no live engine/database was invoked, and end-to-end container-query credential rotation/cancellation still needs dedicated coverage. Engine-command credential lifetime is unchanged by this slice. MySQL and Kubernetes bindings remain gaps.
 
 Verification: 119 tests / 1582 assertions; Biome, type-check, build; legacy boundaries 71 / 278 and legacy type-check pass.
+
+### Container query rotation scenario
+
+A native task now acquires fake-engine health-ready container infrastructure and its requiring app, obtains separate SQL approval, rotates the configuration credential references, and successfully queries the disposable PGlite PostgreSQL protocol server. The returned original password value is redacted and the SQL receipt is completed. The protocol server is owned by the test fixture, not actually hosted in a container; PGlite does not establish production authentication parity. This proves container-handle admission and frozen redactor continuity through rotation, not that a production server authenticated the frozen password. Container-specific in-flight cancellation and authentication enforcement remain gaps; existing shell cancellation/deadline scenarios still pass.
+
+Verification: Biome, type-check and build pass. Full suite: 119 passing, one known diagnostic-history polling timeout (120 tests total); focused diagnostic-history plus query-lifecycle rerun: 5 passing / 39 assertions. The timeout is not claimed fixed and this full-suite attempt is not reported as green.
