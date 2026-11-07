@@ -105,6 +105,40 @@ test("explicit legacy profile import reads no presets or schedules", () => {
 	expect(config).not.toHaveProperty("presets");
 	expect(config).not.toHaveProperty("schedules");
 });
+test("an orchestratorProfile without a configured profile fails fast without logging values", () => {
+	const root = fixture({
+		profiles: { small: { model: "local/small", thinking: "off" } },
+		orchestratorProfile: "missing",
+		repositories: [],
+	});
+	try {
+		loadConfig(path.join(root, "state"), root, root);
+		throw new Error("Expected unknown orchestratorProfile");
+	} catch (error) {
+		expect(String(error)).toContain(
+			"orchestratorProfile names no configured profile",
+		);
+		expect(String(error)).not.toContain("missing");
+	}
+	const legacyRoot = fixture({ profiles: {}, repositories: [] });
+	const source = path.join(legacyRoot, "legacy.json");
+	fs.writeFileSync(
+		source,
+		JSON.stringify({
+			agents: {
+				default_profile: "chosen",
+				profiles: { other: { model: "fake/model" } },
+			},
+		}),
+	);
+	fs.writeFileSync(
+		path.join(legacyRoot, "config.json"),
+		JSON.stringify({ profileSource: source, repositories: [] }),
+	);
+	expect(() =>
+		loadConfig(path.join(legacyRoot, "state"), legacyRoot, legacyRoot),
+	).toThrow("orchestratorProfile names no configured profile");
+});
 test("malformed configuration fails visibly without leaking values or silently broadening repository scope", () => {
 	const root = fixture({ profiles: {}, repositories: "wrong" });
 	expect(() => loadConfig(path.join(root, "state"), root, root)).toThrow(

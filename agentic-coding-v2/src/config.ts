@@ -118,6 +118,13 @@ export function loadConfig(
 	const orchestratorProfile = String(
 		data.orchestratorProfile ?? agents.default_profile ?? profiles[0]?.id ?? "",
 	);
+	if (
+		orchestratorProfile &&
+		!profiles.some((profile) => profile.id === orchestratorProfile)
+	)
+		throw new Error(
+			"orchestratorProfile names no configured profile; names and values are withheld",
+		);
 	const repositories = (
 		Array.isArray(data.repositories) ? data.repositories : [cwd]
 	).map((item) => fs.realpathSync(text(item, "repository", 4096)));
