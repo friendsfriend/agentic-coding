@@ -7,7 +7,13 @@ import type { QueryConnection } from "./query-config.ts";
 import type { Action } from "./selection.ts";
 export type TelemetryOptions = {
 	mode?: "traces" | "logs";
+	view?: "flat" | "tree";
+	cursor?: string;
 	traceId?: string;
+	spanId?: string;
+	http?: string;
+	service?: string;
+	rootKind?: string;
 	limit?: number;
 	since?: string;
 	status?: "all" | "error" | "success";

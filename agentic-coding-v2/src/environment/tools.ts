@@ -274,13 +274,32 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "otel_query",
 				description:
-					"Read only this task's live ready shell app's opt-in native OTLP/HTTP JSON observations. An exact approved telemetry target creates a per-run authenticated ephemeral loopback receiver; no external backend queries, shared/global capture, saved-token adoption or execution effects. Traces mode lists retained trace summaries, or returns flat spans with parent IDs for traceId; logs mode reads retained structured log records. Since selects host receipt time, not exporter event time. Windows, protobuf/gRPC, metrics, events/links, provider integration and live-runtime parity are not claimed. Resource attributes cannot change native app/task/run attribution. Availability is checked before name/status/since filtering: retained spans remain retained even with zero matches. Recently evicted trace IDs are distinguished from unknown using a bounded 200-ID window; unknown is not proof a trace never existed. Linked log availability is independent of span retention. Bounded counts, encoded-data windows and whole-record output omissions are explicit; no historical completeness guarantee. Native skill reads are owner scoped. A referenced-roots-v1 run additionally discloses and revalidates its exact root and prerequisite generations, and a prerequisite read renews the one live root that declares it, refusing ambiguity. The home orchestrator may inspect a live held host run.",
+					"Read only this task's live ready shell app's opt-in native OTLP/HTTP JSON observations. An exact approved telemetry target creates a per-run authenticated ephemeral loopback receiver; no external backend queries, shared/global capture, saved-token adoption or execution effects. Traces mode lists retained trace summaries, or returns spans with parent IDs for traceId. view:tree adds parent-before-child nodes, child IDs, depths and explicit missing-parent/cycle evidence. HTTP and service filters search any span in trace summaries; rootKind selects the root kind (or span kind in exact-trace detail). spanId requires traceId and selects exact spans or their linked logs. Events, exception attributes, links and exporter drop counts are retained within record bounds. Opaque cursor pages are bound to this live receiver and exact filters, expire after five minutes, exclude later captures and refuse evicted/replaced boundaries; they grant no execution or cross-run authority; logs mode reads retained structured log records. Since selects host receipt time, not exporter event time. Windows, protobuf/gRPC, metrics, provider integration and live-runtime parity are not claimed. Resource attributes cannot change native app/task/run attribution. Availability is checked before name/status/since filtering: retained spans remain retained even with zero matches. Recently evicted trace IDs are distinguished from unknown using a bounded 200-ID window; unknown is not proof a trace never existed. Linked log availability is independent of span retention. Bounded counts, encoded-data windows and whole-record output omissions are explicit; no historical completeness guarantee. Native skill reads are owner scoped. A referenced-roots-v1 run additionally discloses and revalidates its exact root and prerequisite generations, and a prerequisite read renews the one live root that declares it, refusing ambiguity. The home orchestrator may inspect a live held host run.",
 				parameters: Type.Object({
 					app: Type.String({ minLength: 1, maxLength: 64 }),
 					mode: Type.Optional(
 						Type.Union([Type.Literal("traces"), Type.Literal("logs")]),
 					),
+					view: Type.Optional(
+						Type.Union([Type.Literal("flat"), Type.Literal("tree")]),
+					),
+					cursor: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
 					traceId: Type.Optional(Type.String({ pattern: "^[a-fA-F0-9]{32}$" })),
+					spanId: Type.Optional(Type.String({ pattern: "^[a-fA-F0-9]{16}$" })),
+					http: Type.Optional(Type.String({ maxLength: 512 })),
+					service: Type.Optional(Type.String({ maxLength: 512 })),
+					rootKind: Type.Optional(
+						Type.Union(
+							[
+								"unspecified",
+								"internal",
+								"server",
+								"client",
+								"producer",
+								"consumer",
+							].map((kind) => Type.Literal(kind)),
+						),
+					),
 					limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
 					since: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
 					status: Type.Optional(

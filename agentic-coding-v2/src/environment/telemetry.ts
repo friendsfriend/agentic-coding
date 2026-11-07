@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { digest } from "../config.ts";
 import { logSince } from "./log-timing.ts";
 import type { TelemetryOptions } from "./model.ts";
 import {
@@ -7,12 +8,14 @@ import {
 	type LogObservation,
 	type SpanObservation,
 } from "./telemetry-data.ts";
+import { traceTree } from "./telemetry-tree.ts";
 
-type Stored<T> = { row: T; bytes: number };
+type Stored<T> = { row: T; bytes: number; sequence: number };
 type Trace = {
 	spans: Map<string, Stored<SpanObservation>>;
 	bytes: number;
 	capturedAt: number;
+	sequence: number;
 };
 const limits = Object.freeze({
 	traces: 200,
@@ -41,6 +44,11 @@ export class TelemetryCollector {
 	private evictedTraces = 0;
 	private droppedSpans = 0;
 	private droppedLogs = 0;
+	private sequence = 0;
+	private readonly cursors = new Map<
+		string,
+		{ boundary: number; highWater: number; query: string; expires: number }
+	>();
 	private closed = false;
 	private stopping: Promise<void> | null = null;
 	constructor(
@@ -189,6 +197,7 @@ export class TelemetryCollector {
 			spans: new Map<string, Stored<SpanObservation>>(),
 			bytes: 0,
 			capturedAt: row.capturedAt,
+			sequence: 0,
 		};
 		const prior = trace.spans.get(row.spanId);
 		if (prior) {
@@ -196,7 +205,8 @@ export class TelemetryCollector {
 			this.traceBytes -= prior.bytes;
 			trace.spans.delete(row.spanId);
 		}
-		trace.spans.set(row.spanId, { row, bytes });
+		trace.spans.set(row.spanId, { row, bytes, sequence: ++this.sequence });
+		trace.sequence = this.sequence;
 		trace.bytes += bytes;
 		trace.capturedAt = row.capturedAt;
 		this.traceBytes += bytes;
@@ -237,7 +247,7 @@ export class TelemetryCollector {
 			this.droppedLogs++;
 			return false;
 		}
-		this.logs.push({ row, bytes });
+		this.logs.push({ row, bytes, sequence: ++this.sequence });
 		this.logBytes += bytes;
 		while (this.logs.length > limits.logs || this.logBytes > limits.logBytes) {
 			const first = this.logs.shift();
@@ -258,7 +268,13 @@ export class TelemetryCollector {
 	query(options: TelemetryOptions) {
 		const allowed = new Set([
 			"mode",
+			"view",
+			"cursor",
 			"traceId",
+			"spanId",
+			"http",
+			"service",
+			"rootKind",
 			"limit",
 			"since",
 			"status",
@@ -278,11 +294,17 @@ export class TelemetryCollector {
 			since = logSince(options.since);
 		if (
 			!["traces", "logs"].includes(mode) ||
+			(options.view !== undefined &&
+				options.view !== "flat" &&
+				options.view !== "tree") ||
+			(options.cursor !== undefined &&
+				(typeof options.cursor !== "string" ||
+					!/^[a-f0-9]{64}$/.test(options.cursor))) ||
 			!Number.isInteger(limit) ||
 			limit < 1 ||
 			limit > 200 ||
 			!["all", "error", "success"].includes(status) ||
-			[options.name, options.text].some(
+			[options.name, options.text, options.http, options.service].some(
 				(value) =>
 					value !== undefined &&
 					(typeof value !== "string" || value.length > 512),
@@ -290,14 +312,32 @@ export class TelemetryCollector {
 			(options.severity !== undefined &&
 				(typeof options.severity !== "string" ||
 					options.severity.length > 64)) ||
+			(options.spanId !== undefined &&
+				(!options.traceId ||
+					!/^[a-f0-9]{16}$/i.test(options.spanId) ||
+					this.redact(options.spanId) !== options.spanId)) ||
+			(options.rootKind !== undefined &&
+				![
+					"unspecified",
+					"internal",
+					"server",
+					"client",
+					"producer",
+					"consumer",
+				].includes(options.rootKind)) ||
 			(options.traceId !== undefined &&
 				(!/^[a-f0-9]{32}$/i.test(options.traceId) ||
 					this.redact(options.traceId) !== options.traceId))
 		)
 			throw new Error("Invalid bounded native telemetry query");
 		if (
+			(options.view === "tree" && (mode !== "traces" || !options.traceId)) ||
 			(mode === "logs" &&
-				(options.status !== undefined || options.name !== undefined)) ||
+				(options.view !== undefined ||
+					options.http !== undefined ||
+					options.rootKind !== undefined ||
+					options.status !== undefined ||
+					options.name !== undefined)) ||
 			(mode === "traces" &&
 				(options.severity !== undefined || options.text !== undefined))
 		)
@@ -319,14 +359,68 @@ export class TelemetryCollector {
 				droppedLogs: this.droppedLogs,
 			},
 		};
-		let rows: unknown[] = [];
+		const fingerprint = digest(
+			JSON.stringify([
+				mode,
+				options.view ?? "flat",
+				options.traceId?.toLowerCase() ?? null,
+				since?.toString() ?? null,
+				status,
+				options.name ?? null,
+				options.severity ?? null,
+				options.text ?? null,
+				options.spanId?.toLowerCase() ?? null,
+				options.http ?? null,
+				options.service ?? null,
+				options.rootKind ?? null,
+			]),
+		);
+		for (const [id, cursor] of this.cursors)
+			if (cursor.expires < Date.now()) this.cursors.delete(id);
+		const cursor = options.cursor
+			? this.cursors.get(options.cursor)
+			: undefined;
+		if (options.cursor && (!cursor || cursor.query !== fingerprint))
+			throw new Error(
+				"Unknown or expired telemetry cursor for this exact run and query; reload newest history",
+			);
+		const highWater = cursor?.highWater ?? this.sequence;
+		const includes = (value: string, filter: string | undefined) =>
+			!filter || value.toLowerCase().includes(filter.toLowerCase());
+		const spanMatches = (span: SpanObservation) =>
+			(!options.spanId || span.spanId === options.spanId.toLowerCase()) &&
+			includes(span.service, options.service) &&
+			includes(
+				[
+					span.name,
+					...[
+						"http.request.method",
+						"http.method",
+						"http.route",
+						"http.target",
+						"url.full",
+						"http.url",
+					]
+						.map((key) => span.attributes[key] ?? "")
+						.filter((value) =>
+							typeof value === "string" ? value.length > 0 : true,
+						),
+				].join(" "),
+				options.http,
+			);
+
+		type Candidate = { row: Record<string, unknown>; sequence: number };
+		let rows: Candidate[] = [],
+			structure: ReturnType<typeof traceTree>["structure"] | undefined;
 		if (mode === "logs")
 			rows = this.logs
 				.toReversed()
-				.map((entry) => entry.row)
+				.filter((entry) => entry.sequence <= highWater)
 				.filter(
-					(row) =>
+					({ row }) =>
 						after(row.capturedAt) &&
+						(!options.spanId || row.spanId === options.spanId.toLowerCase()) &&
+						includes(row.service, options.service) &&
 						(!options.traceId ||
 							row.traceId === options.traceId.toLowerCase()) &&
 						(!options.severity ||
@@ -334,52 +428,124 @@ export class TelemetryCollector {
 								.toLowerCase()
 								.includes(options.severity.toLowerCase())) &&
 						(!options.text || JSON.stringify(row).includes(options.text)),
-				);
+				)
+				.map((entry) => ({ row: entry.row, sequence: entry.sequence }));
 		else if (options.traceId) {
-			const trace = this.traces.get(options.traceId.toLowerCase());
-			rows = trace
-				? [...trace.spans.values()]
-						.map((entry) => entry.row)
-						.filter(
-							(row) =>
-								after(row.capturedAt) &&
-								(!options.name ||
-									row.name
-										.toLowerCase()
-										.includes(options.name.toLowerCase())) &&
-								(status === "all" ||
-									(status === "error") === (row.status === "error")),
-						)
-				: [];
+			const trace = this.traces.get(options.traceId.toLowerCase()),
+				entries = [...(trace?.spans.values() ?? [])].filter(
+					(entry) => entry.sequence <= highWater,
+				),
+				sequences = new Map(
+					entries.map((entry) => [entry.row.spanId, entry.sequence]),
+				);
+			let spans: SpanObservation[] = entries.map((entry) => entry.row);
+			if (options.view === "tree") {
+				const tree = traceTree(spans);
+				spans = tree.ordered;
+				structure = tree.structure;
+			}
+			rows = spans
+				.filter(
+					(row) =>
+						after(row.capturedAt) &&
+						spanMatches(row) &&
+						(!options.rootKind || row.kind === options.rootKind) &&
+						(!options.name ||
+							row.name.toLowerCase().includes(options.name.toLowerCase())) &&
+						(status === "all" ||
+							(status === "error") === (row.status === "error")),
+				)
+				.map((row) => ({ row, sequence: sequences.get(row.spanId) ?? 0 }));
 		} else
 			rows = [...this.traces.entries()]
 				.toReversed()
+				.filter(([, trace]) => trace.sequence <= highWater)
 				.map(([traceId, trace]) => {
 					const spans = [...trace.spans.values()].map((entry) => entry.row),
-						root = spans.find((span) => span.parentSpanId === null) ?? spans[0];
+						root = spans.find((span) => span.parentSpanId === null) ?? spans[0],
+						starts = spans.map((span) => BigInt(span.startTime)),
+						ends = spans.map((span) => BigInt(span.endTime)),
+						// biome-ignore lint/complexity/useMathMinMax: Math.min does not accept bigint nanoseconds.
+						start = starts.reduce((a, b) => (a < b ? a : b), starts[0] ?? 0n),
+						// biome-ignore lint/complexity/useMathMinMax: Math.max does not accept bigint nanoseconds.
+						end = ends.reduce((a, b) => (a > b ? a : b), ends[0] ?? 0n);
 					return {
-						traceId,
-						root: root?.name ?? "not-reported",
-						rootKind: root?.kind ?? "unspecified",
-						spanCount: spans.length,
-						errorCount: spans.filter((span) => span.status === "error").length,
-						capturedAt: trace.capturedAt,
+						sequence: trace.sequence,
+						matches: spans.some(spanMatches),
+						row: {
+							traceId,
+							root: root?.name ?? "not-reported",
+							rootKind: root?.kind ?? "unspecified",
+							rootBasis: spans.some((span) => span.parentSpanId === null)
+								? "reported-parentless-span"
+								: "retained-span-fallback",
+							services: [...new Set(spans.map((span) => span.service))]
+								.sort()
+								.slice(0, 16),
+							servicesOmitted: Math.max(
+								0,
+								new Set(spans.map((span) => span.service)).size - 16,
+							),
+							eventCount: spans.reduce(
+								(count, span) => count + span.events.length,
+								0,
+							),
+							linkCount: spans.reduce(
+								(count, span) => count + span.links.length,
+								0,
+							),
+							spanCount: spans.length,
+							errorCount: spans.filter((span) => span.status === "error")
+								.length,
+							durationMs: Number(end - start) / 1000000,
+							startTime: start.toString(),
+							endTime: end.toString(),
+							capturedAt: trace.capturedAt,
+						},
 					};
 				})
 				.filter(
-					(row) =>
+					({ row, matches }) =>
+						matches &&
+						(!options.rootKind || row.rootKind === options.rootKind) &&
 						after(row.capturedAt) &&
 						(!options.name ||
 							row.root.toLowerCase().includes(options.name.toLowerCase())) &&
 						(status === "all" || (status === "error") === row.errorCount > 0),
 				);
-		const selected: unknown[] = [];
-		let remaining = limits.outputBytes;
-		for (const row of rows.slice(0, limit)) {
-			const cost = Buffer.byteLength(JSON.stringify(row)) + 2;
-			if (cost > remaining) continue;
+		const start = cursor
+			? rows.findIndex((entry) => entry.sequence === cursor.boundary) + 1
+			: 0;
+		if (cursor && start === 0)
+			throw new Error(
+				"Telemetry cursor boundary was evicted or replaced; reload newest history",
+			);
+		const selected: Record<string, unknown>[] = [];
+		let remaining =
+				limits.outputBytes - Buffer.byteLength(JSON.stringify(structure ?? {})),
+			end = start;
+		for (const entry of rows.slice(start, start + limit)) {
+			const cost = Buffer.byteLength(JSON.stringify(entry.row)) + 2;
+			if (cost > remaining) break;
 			remaining -= cost;
-			selected.push(structuredClone(row));
+			selected.push(structuredClone(entry.row));
+			end++;
+		}
+		let nextCursor: string | null = null;
+		const boundary = rows[end - 1];
+		if (end < rows.length && boundary && end > start) {
+			nextCursor = randomBytes(32).toString("hex");
+			this.cursors.set(nextCursor, {
+				boundary: boundary.sequence,
+				highWater,
+				query: fingerprint,
+				expires: Date.now() + 300000,
+			});
+			while (this.cursors.size > 200) {
+				const oldest = this.cursors.keys().next().value;
+				if (!oldest) break;
+				this.cursors.delete(oldest);
+			}
 		}
 		return {
 			...base,
@@ -404,14 +570,24 @@ export class TelemetryCollector {
 				mode === "logs"
 					? "log-records"
 					: options.traceId
-						? "flat-spans-with-parent-ids"
+						? options.view === "tree"
+							? "trace-tree-preorder-nodes"
+							: "flat-spans-with-parent-ids"
 						: "trace-summaries",
+			...(structure ? { tree: structure } : {}),
 			records: selected,
+			nextCursor,
+			paging: {
+				remainingOlder: rows.length - end,
+				pageOffset: start,
+				authority:
+					"Five-minute, bounded, exact-run/query cursors select retained observations only; not frozen snapshots or execution authority. New captures are excluded; evicted/replaced boundaries refuse. Reload newest to see updates.",
+			},
 			selection: {
 				matchedRetainedRecords: rows.length,
 				returnedRecords: selected.length,
-				limitOmitted: Math.max(0, rows.length - limit),
-				budgetOmitted: Math.min(rows.length, limit) - selected.length,
+				limitOmitted: Math.max(0, rows.length - start - limit),
+				budgetOmitted: Math.min(rows.length - start, limit) - selected.length,
 			},
 		};
 	}
@@ -419,6 +595,7 @@ export class TelemetryCollector {
 		if (this.stopping) return this.stopping;
 		this.closed = true;
 		this.traces.clear();
+		this.cursors.clear();
 		this.evictedTraceIds.clear();
 		this.logs.length = 0;
 		this.traceBytes = 0;

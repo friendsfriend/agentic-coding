@@ -13,6 +13,13 @@ export type SpanObservation = {
 	statusMessage: string;
 	service: string;
 	attributes: Record<string, unknown>;
+	events: { name: string; time: string; attributes: Record<string, unknown> }[];
+	links: {
+		traceId: string;
+		spanId: string;
+		attributes: Record<string, unknown>;
+	}[];
+	dropped: { attributes: number; events: number; links: number };
 	capturedAt: number;
 };
 export type LogObservation = {
@@ -153,6 +160,17 @@ function records(
 	}
 	return result;
 }
+function dropped(value: unknown): number {
+	if (value === undefined) return 0;
+	if (
+		typeof value !== "number" ||
+		!Number.isInteger(value) ||
+		value < 0 ||
+		value > 4294967295
+	)
+		throw malformed();
+	return value;
+}
 export function decodeSpans(
 	payload: unknown,
 	redact: (value: string) => string,
@@ -197,6 +215,30 @@ export function decodeSpans(
 					: clipped(status.message, redact, 512),
 			service,
 			attributes: attributes(record.attributes, redact),
+			events: array(record.events, 64).map((raw) => {
+				const event = object(raw);
+				return {
+					name: clipped(event.name, redact, 512),
+					time: nanos(event.timeUnixNano, redact).toString(),
+					attributes: attributes(event.attributes, redact),
+				};
+			}),
+			links: array(record.links, 64).map((raw) => {
+				const link = object(raw),
+					traceId = identifier(link.traceId, 32, redact),
+					spanId = identifier(link.spanId, 16, redact);
+				if (!traceId || !spanId) throw malformed();
+				return {
+					traceId,
+					spanId,
+					attributes: attributes(link.attributes, redact),
+				};
+			}),
+			dropped: {
+				attributes: dropped(record.droppedAttributesCount),
+				events: dropped(record.droppedEventsCount),
+				links: dropped(record.droppedLinksCount),
+			},
 			capturedAt,
 		};
 	});

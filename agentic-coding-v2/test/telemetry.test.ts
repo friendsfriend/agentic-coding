@@ -200,7 +200,7 @@ console.log('TELEMETRY READY');setInterval(()=>{},1000);
 			limit: 1,
 			status: "error",
 		}),
-		call("otel_query", { app: "api", traceId, name: "GET /" }),
+		call("otel_query", { app: "api", traceId, name: "GET /", view: "tree" }),
 		call("otel_query", {
 			app: "api",
 			mode: "logs",
@@ -243,8 +243,16 @@ console.log('TELEMETRY READY');setInterval(()=>{},1000);
 	});
 	expect(observations[1]).toMatchObject({
 		scope: { owner: first },
-		representation: "flat-spans-with-parent-ids",
-		records: [{ traceId, durationMs: 1, attributes: { secret: "[REDACTED]" } }],
+		representation: "trace-tree-preorder-nodes",
+		tree: { roots: ["1111111111111111"], retainedSpans: 1 },
+		records: [
+			{
+				traceId,
+				depth: 0,
+				durationMs: 1,
+				attributes: { secret: "[REDACTED]" },
+			},
+		],
 	});
 	expect(observations[2]).toMatchObject({
 		scope: { owner: first },

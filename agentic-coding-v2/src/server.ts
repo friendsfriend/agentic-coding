@@ -78,7 +78,13 @@ function environmentTelemetryQuery(query: URLSearchParams): {
 		"app",
 		"run",
 		"mode",
+		"view",
+		"cursor",
 		"traceId",
+		"spanId",
+		"http",
+		"service",
+		"rootKind",
 		"limit",
 		"since",
 		"status",
@@ -92,6 +98,9 @@ function environmentTelemetryQuery(query: URLSearchParams): {
 				"Unknown or repeated environment telemetry query parameter",
 			);
 	const mode = query.get("mode") ?? undefined;
+	const view = query.get("view") ?? undefined;
+	if (view !== undefined && view !== "flat" && view !== "tree")
+		throw new Error("Telemetry view must be flat or tree");
 	const status = query.get("status") ?? undefined;
 	if (mode !== undefined && mode !== "traces" && mode !== "logs")
 		throw new Error("Telemetry mode must be traces or logs");
@@ -107,8 +116,14 @@ function environmentTelemetryQuery(query: URLSearchParams): {
 		run: text(query.get("run"), "environment run", 512),
 		options: {
 			mode,
+			view,
+			cursor: query.get("cursor") ?? undefined,
 			status,
 			traceId: query.get("traceId") ?? undefined,
+			spanId: query.get("spanId") ?? undefined,
+			http: query.get("http") ?? undefined,
+			service: query.get("service") ?? undefined,
+			rootKind: query.get("rootKind") ?? undefined,
 			limit: query.has("limit") ? Number(query.get("limit")) : undefined,
 			since: query.get("since") ?? undefined,
 			name: query.get("name") ?? undefined,
