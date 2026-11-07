@@ -93,7 +93,7 @@ An attached shared acquisition approves its prerequisites without starting a sec
 
 `test/shared-diagnostics.test.ts` proves the milestone through the public API against disposable PGlite: `api` starts shared with `store`, `worker` attaches shared and reuses the one live store (no second copy), `db_query` for `store` with `app: "worker"` approves with `root.run` as the worker generation and `resources` as the single reused store ID, frozen-secret redaction holds, and the store outlives the first root. HTTP uses the same scope helper and is enabled for attached roots through the same approved closure, with SQL as the fixture proof.
 
-Gates: **163 native tests / 1956 assertions / 50 files** pass; Biome **165 files** zero diagnostics; `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.5**, objective/verified **82.0**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
+Gates: **163 native tests / 1956 assertions / 50 files** pass; Biome **165 files** zero diagnostics; `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.6**, objective/verified **82.4**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
 
 ## Staging namespace safety and configuration profile fence
 
@@ -101,7 +101,18 @@ Assembly already creates each temporary tree under an exclusive deterministic `t
 
 `src/config.ts` now fails fast when `orchestratorProfile` names no configured profile, without logging names or values; `test/config.test.ts` proves the direct and legacy-`default_profile` mismatch cases. Fixture-constructed configs are unaffected. There is still no configuration/profile editing API.
 
-Gates: **173 native tests / 2037 assertions / 57 files** pass; Biome **172 files** zero diagnostics; `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.5**, objective/verified **82.0**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
+Gates: **173 native tests / 2037 assertions / 57 files** pass; Biome **172 files** zero diagnostics; `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.6**, objective/verified **82.4**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
+
+## Admission and lifecycle fence milestone
+
+Four new suites prove request-time and plan-time admission plus draft storage bounds. Pure unit boundaries assert exact refusal messages; HTTP boundaries assert statuses with details withheld by design.
+
+- `test/query-input-fences.test.ts` (21 scenarios): `queryInput` refuses non-SELECT/WITH statements (including EXPLAIN and leading comments), oversized and control-byte statements, `$n` text even inside literals, out-of-range limits, non-identifier schemas and bad app selectors; one bounded WITH control is admitted.
+- `test/http-options-fences.test.ts` (23 scenarios): `httpOptions` refuses unknown options and methods, non-boolean flags, unapproved writes, bodies on reads, oversized bodies, header-count and header-block overflows, credential/transport headers and unlisted or non-printable headers; bounded approved-write and 16 KiB-boundary controls are admitted.
+- `test/shell-target-fences.test.ts` (14 scenarios): schema inspection refuses shell/container mixing, unreadied queries, empty or oversized commands, oversized readiness text, absolute cwd, off-shell or unreadied telemetry, exporter overrides, compose overrides, library runs, infrastructure non-runs and duplicate target IDs; a ready shell run with loopback telemetry is admitted.
+- `test/draft-lifecycle-fences.test.ts` (4 scenarios, 18 assertions): creation refuses unknown fields and >64 KiB content; well-formed unknown IDs stay unknown; staging is idempotent for identical request IDs but refuses reused IDs for different input and stale preflight revisions; staged sources are capped by count (declared plus three auxiliaries, proved with distinct auxiliary files since same-binding stages replace) and by draft-total bytes (proved with mid-size sources since the per-source 64 KiB cap fires first).
+
+Gates: full native suite **323 pass / 2273 assertions / 67 files**; Biome **183 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.6**, objective/verified **82.4**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
 
 ## Endpoint, credential and cross-binding admission milestone
 
@@ -110,7 +121,7 @@ Two new suites prove every endpoint, secret, query-connection, telemetry and ser
 - `test/endpoint-binding-fences.test.ts` (23 scenarios): 22 refusals — non-loopback and hostname origins, URL credentials, queries, fragments, bad names, endpoints on non-run actions, HTTP-only or mistyped/unreferenced authentication, HTTP-only or absolute CA references, literal/secret collisions, invalid or reserved variable names, non-loopback telemetry listeners, exporter overrides, non-Postgres or non-loopback query connections, literal query credentials, absolute query CA paths — plus one control admitting declared loopback endpoints, HTTPS bearer auth, CA refs, secret refs and a matching query connection. The work surfaced two real contract points: shell commands are single strings (not argv arrays) and query connections require `kind: "infrastructure"` projects.
 - `test/cross-binding-fences.test.ts` (14 scenarios): 11 refusals — service selectors off Compose, unmatched or mistyped selectors, query services without connections or with bad names, container endpoints without healthy readiness or unpublished ports, pod endpoints/queries without forwards on their own ports — plus three controls admitting the consistent Compose, container and pod declarations.
 
-Gates: full native suite **263 pass / 2198 assertions / 63 files**; Biome **179 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.5**, objective/verified **82.0**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
+Gates: full native suite **263 pass / 2198 assertions / 63 files**; Biome **179 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.6**, objective/verified **82.4**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
 
 ## Adapter strict-subset fence milestone
 
@@ -121,7 +132,7 @@ Three new suites prove the Compose, Kubernetes and container adapters refuse uns
 - `test/container-subset-fences.test.ts` (16 scenarios): 15 unsupported container targets — unknown fields, relative sockets, bad images/names, literal build arguments, bad ports/addresses/protocols, absolute mount sources, bad health commands/durations/retries, non-boolean completion, unknown readiness — refused by schema inspection; the loopback-only healthy subset still validates.
 - `src/environment/approval.ts`: the Kubernetes consent copy no longer claims pod logs and port forwards are unsupported — only pod services are; logs stay limited to one owned replica and forwards to declared loopback bindings.
 
-Gates: full native suite **226 pass / 2161 assertions / 61 files**; Biome **177 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.5**, objective/verified **82.0**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
+Gates: full native suite **226 pass / 2161 assertions / 61 files**; Biome **177 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.6**, objective/verified **82.4**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
 
 ## Crash-during-temporary-deletion delete-path guarantees
 
