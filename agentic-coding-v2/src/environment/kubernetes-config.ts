@@ -11,6 +11,9 @@ export type KubernetesTarget = {
 	/** Declared loopback-only pod port forwards; never a readiness signal. Every
 	 * forward pins exactly one replica the operator approved. */
 	portForwards?: { local: number; remote: number; replica: number }[];
+	/** Declared ClusterIP services selecting this run's pods by owner labels.
+	 * In-cluster DNS only; host access still requires declared loopback forwards. */
+	services?: { name: string; port: number; targetPort: number }[];
 };
 export function readKubernetes(raw: unknown): KubernetesTarget {
 	const data = object(raw);
@@ -26,11 +29,12 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 					"replicas",
 					"readinessProbe",
 					"portForwards",
+					"services",
 				].includes(key),
 		)
 	)
 		throw new Error(
-			"Unsupported Kubernetes target field; only bare pod targets are supported",
+			"Unsupported Kubernetes target field; only bare pod targets with ClusterIP services are supported",
 		);
 	const cluster = text(data.cluster, "Kubernetes cluster identifier", 64),
 		namespace = text(data.namespace, "Kubernetes namespace", 63),
@@ -58,6 +62,7 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 	)
 		throw new Error("Kubernetes bare pod replicas must be from 1 to 16");
 	const forwards = readPortForwards(data.portForwards, Number(replicas));
+	const services = readServices(data.services);
 	return {
 		cluster,
 		namespace,
@@ -66,6 +71,7 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 		args: argv(data.args),
 		replicas: Number(replicas),
 		portForwards: forwards,
+		services,
 		...(data.readinessProbe === undefined
 			? {}
 			: { readinessProbe: readReadinessProbe(data.readinessProbe) }),
@@ -123,4 +129,45 @@ function readPortForwards(raw: unknown, replicas: number) {
 	)
 		throw new Error("Kubernetes port forwards require distinct local ports");
 	return forwards;
+}
+
+/** ClusterIP services only: DNS-label names, distinct service ports and no
+ * type, clusterIP, external or headless overrides. The selector is always this
+ * run's owner labels; nothing else chooses the backing pods. */
+function readServices(raw: unknown) {
+	if (raw === undefined) return [];
+	if (!Array.isArray(raw) || raw.length < 1 || raw.length > 4)
+		throw new Error("Kubernetes services require 1–4 declared entries");
+	const services = raw.map((entry) => {
+		const value = object(entry);
+		if (
+			Object.keys(value).some(
+				(key) => !["name", "port", "targetPort"].includes(key),
+			)
+		)
+			throw new Error(
+				"Unsupported Kubernetes service field; only ClusterIP name/port/targetPort declarations are supported",
+			);
+		const name = text(value.name, "Kubernetes service name", 63);
+		if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(name))
+			throw new Error(
+				"Kubernetes service names must be DNS labels within the target namespace",
+			);
+		const port = (key: string) => {
+			const selected = value[key];
+			if (
+				!Number.isSafeInteger(selected) ||
+				Number(selected) < 1 ||
+				Number(selected) > 65535
+			)
+				throw new Error("Kubernetes service ports must be 1–65535");
+			return Number(selected);
+		};
+		return { name, port: port("port"), targetPort: port("targetPort") };
+	});
+	if (new Set(services.map((service) => service.name)).size !== services.length)
+		throw new Error("Kubernetes services require distinct names");
+	if (new Set(services.map((service) => service.port)).size !== services.length)
+		throw new Error("Kubernetes services require distinct service ports");
+	return services;
 }

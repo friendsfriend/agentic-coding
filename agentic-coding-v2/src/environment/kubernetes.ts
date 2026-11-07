@@ -15,6 +15,12 @@ type Pod = {
 	stopped: boolean;
 	exitCode: number | null;
 };
+type ClusterService = {
+	uid: string;
+	version: string;
+	labels: Record<string, unknown>;
+	clusterIP: string;
+};
 function budget(ms: number) {
 	const until = Date.now() + ms;
 	return () => {
@@ -45,6 +51,8 @@ export class KubernetesProcess implements EnvironmentProcess {
 	private stopping: Promise<void> | null = null;
 	private created = new Map<string, string>();
 	private attempted = new Set<string>();
+	private createdServices = new Map<string, ClusterService>();
+	private attemptedServices = new Set<string>();
 	private statuses = new Map<string, RuntimeStatus>();
 	private failure = "";
 	private uncertain = false;
@@ -220,6 +228,43 @@ export class KubernetesProcess implements EnvironmentProcess {
 		const base = `/api/v1/namespaces/${this.target.namespace}/pods`;
 		return name ? `${base}/${name}` : base;
 	}
+	private servicePath(name?: string) {
+		const base = `/api/v1/namespaces/${this.target.namespace}/services`;
+		return name ? `${base}/${name}` : base;
+	}
+	private parseService(raw: unknown, name: string): ClusterService {
+		try {
+			const value = object(raw),
+				metadata = object(value.metadata),
+				labels = object(metadata.labels ?? {}),
+				spec = object(value.spec ?? {});
+			if (
+				value.kind !== "Service" ||
+				metadata.name !== name ||
+				metadata.namespace !== this.target.namespace ||
+				typeof metadata.resourceVersion !== "string" ||
+				!metadata.resourceVersion ||
+				typeof metadata.uid !== "string" ||
+				!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+					metadata.uid,
+				) ||
+				typeof spec.clusterIP !== "string" ||
+				!spec.clusterIP ||
+				spec.clusterIP === "None"
+			)
+				throw new Error();
+			return {
+				uid: metadata.uid,
+				version: metadata.resourceVersion,
+				labels,
+				clusterIP: spec.clusterIP,
+			};
+		} catch {
+			throw new Error(
+				"Invalid private Kubernetes service observation; absence is not confirmed",
+			);
+		}
+	}
 	private parse(raw: unknown, name: string): Pod {
 		try {
 			const value = object(raw),
@@ -285,6 +330,62 @@ export class KubernetesProcess implements EnvironmentProcess {
 			throw new Error(
 				"Pod ownership or live creation UID changed; refusing mutation",
 			);
+	}
+	private ownedService(service: ClusterService, name: string) {
+		if (
+			this.createdServices.get(name)?.uid !== service.uid ||
+			service.labels[hostLabel] !== this.host ||
+			service.labels[runLabel] !== this.run
+		)
+			throw new Error(
+				"Service ownership or live creation UID changed; refusing mutation",
+			);
+	}
+	/** Null when no service answers under this name. A failed observation is
+	 * not absence: creation still runs and refuses on an occupied name rather
+	 * than adopting it. */
+	private async observeService(
+		name: string,
+		timeoutMs: number,
+		signal?: AbortSignal,
+	): Promise<ClusterService | null> {
+		try {
+			const raw = await this.commands.checked(
+				["get", "--raw", this.servicePath(name)],
+				{ timeoutMs, signal, machine: true },
+			);
+			return this.parseService(JSON.parse(raw), name);
+		} catch {
+			return null;
+		}
+	}
+	/** ClusterIP only with this run's owner labels as the single selector.
+	 * No type, external, headless or port overrides are declarable. */
+	private serviceManifest(entry: {
+		name: string;
+		port: number;
+		targetPort: number;
+	}) {
+		return {
+			apiVersion: "v1",
+			kind: "Service",
+			metadata: {
+				name: entry.name,
+				namespace: this.target.namespace,
+				labels: { [hostLabel]: this.host, [runLabel]: this.run },
+			},
+			spec: {
+				type: "ClusterIP",
+				selector: { [hostLabel]: this.host, [runLabel]: this.run },
+				ports: [
+					{
+						port: entry.port,
+						targetPort: entry.targetPort,
+						protocol: "TCP",
+					},
+				],
+			},
+		};
 	}
 	private async observe(name: string, timeoutMs: number, signal?: AbortSignal) {
 		try {
@@ -395,6 +496,55 @@ export class KubernetesProcess implements EnvironmentProcess {
 		const remaining = budget(this.plan.timeoutMs);
 		this.controller.signal.throwIfAborted();
 		this.client = openClusterClient(this.config, this.plan.clusterConnection);
+		// Services select by owner labels before any pod exists, so peer-dependent
+		// readiness can resolve through in-cluster DNS. An occupied name refuses
+		// without adoption even when creation later confirms it.
+		for (const entry of this.target.services ?? []) {
+			this.controller.signal.throwIfAborted();
+			if (
+				await this.observeService(
+					entry.name,
+					remaining(),
+					this.controller.signal,
+				)
+			)
+				throw new Error(
+					"Service name is occupied; no existing service was adopted",
+				);
+			const input = JSON.stringify(this.serviceManifest(entry));
+			if (Buffer.byteLength(input) > 1048576)
+				throw new Error("Kubernetes service request exceeds its size bound");
+			this.attemptedServices.add(entry.name);
+			const raw = await this.commands.checked(
+				["create", "--raw", this.servicePath(), "-f", "-"],
+				{
+					timeoutMs: remaining(),
+					signal: this.controller.signal,
+					machine: true,
+					effect: true,
+					input,
+				},
+			);
+			let service: ClusterService;
+			try {
+				service = this.parseService(JSON.parse(raw), entry.name);
+			} catch {
+				this.uncertain = true;
+				throw new Error(
+					"Kubernetes service creation receipt is invalid; refusing name-based adoption",
+				);
+			}
+			if (
+				service.labels[hostLabel] !== this.host ||
+				service.labels[runLabel] !== this.run
+			) {
+				this.uncertain = true;
+				throw new Error(
+					"Kubernetes service creation receipt ownership mismatch",
+				);
+			}
+			this.createdServices.set(entry.name, service);
+		}
 		for (const name of this.names) {
 			this.controller.signal.throwIfAborted();
 			if (await this.observe(name, remaining(), this.controller.signal))
@@ -600,6 +750,43 @@ export class KubernetesProcess implements EnvironmentProcess {
 					this.uncertain = true;
 					this.failure =
 						"Kubernetes deletion was not confirmed; app slot remains quarantined";
+				}
+			// Services delete after their pods with the live creation UID and
+			// observed resource version; a missing or changed service quarantines
+			// instead of claiming cleanup.
+			for (const name of [...this.attemptedServices].reverse())
+				try {
+					const service = await this.observeService(name, remaining());
+					if (!service) throw new Error("Owned Kubernetes service is gone");
+					this.ownedService(service, name);
+					await this.commands.checked(
+						["delete", "--raw", this.servicePath(name), "-f", "-"],
+						{
+							timeoutMs: remaining(),
+							machine: true,
+							effect: true,
+							input: JSON.stringify({
+								apiVersion: "v1",
+								kind: "DeleteOptions",
+								preconditions: {
+									uid: service.uid,
+									resourceVersion: service.version,
+								},
+								propagationPolicy: "Orphan",
+								gracePeriodSeconds: 5,
+							}),
+						},
+					);
+					for (;;) {
+						const current = await this.observeService(name, remaining());
+						if (!current) break;
+						this.ownedService(current, name);
+						await Bun.sleep(Math.min(100, remaining()));
+					}
+				} catch {
+					this.uncertain = true;
+					this.failure =
+						"Kubernetes service cleanup is uncertain or UID ownership changed; resources remain quarantined";
 				}
 			try {
 				this.client?.close();

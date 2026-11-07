@@ -867,3 +867,7 @@ Checkpoint gates at this stack: native **359 pass / 2469 expects / 76 files**, B
 ## Explicit cluster namespace operations milestone
 
 `env_cluster_namespace` creates or deletes one DNS-label namespace per exact operator approval in one explicitly configured local Kubernetes context, running only through the inspected kubeconfig reference. Reserved system names and malformed labels are refused before review; recreation never adopts; deletion of a missing name fails at the API; a kubeconfig changed after approval still refuses. No default context, no app-start coupling, no cleanup/adoption authority. Proven by `test/cluster-namespace.test.ts` (6 tests) over a bounded namespace fixture client; live cluster contact remains unauthorized and unclaimed.
+
+## Kubernetes ClusterIP services milestone
+
+Kubernetes targets now declare bounded ClusterIP services (DNS-label name, distinct service port, TCP target port) that select exactly the run's pods by owner labels. Services are created before pods and deleted after them with live-UID plus resource-version preconditions; occupied names fail closed without adoption and lost or changed services quarantine the slot. NodePort, LoadBalancer, ExternalName, headless, external-IP and selector overrides are refused at the schema boundary. Host-side access remains loopback-forward only. Proven by `test/kubernetes-services.test.ts` (3 tests) over a bounded fixture CLI; live cluster contact remains unauthorized and unclaimed.
