@@ -56,6 +56,7 @@ async function apply(app: Runtime, effect: Effect): Promise<string | null> {
 		await app.decide(effect.id, effect.revision, effect.decision, "");
 		return `${effect.decision} ${effect.id}.`;
 	}
+	if (effect.kind === "quit") return null;
 	await app.cancel(effect.id);
 	return `Cancelled task ${effect.id}.`;
 }

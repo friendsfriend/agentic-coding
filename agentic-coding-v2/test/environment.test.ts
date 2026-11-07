@@ -9,7 +9,7 @@ import {
 	type EnvironmentRun,
 	EnvironmentState,
 } from "../src/environment/state.ts";
-import { serve } from "../src/server.ts";
+import { serve } from "../src/server/index.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 

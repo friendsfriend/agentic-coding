@@ -7,7 +7,7 @@ import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/n
 import { defaultConfigDir, loadConfig } from "./config.ts";
 import { acquireLock } from "./lock.ts";
 import { Runtime } from "./runtime.ts";
-import { serve } from "./server.ts";
+import { serve } from "./server/index.ts";
 import { runTui } from "./tui/loop.ts";
 
 async function main() {
@@ -29,9 +29,7 @@ async function main() {
 	const tui = args.includes("--tui"),
 		valued = args.filter((arg) => arg !== "--tui");
 	for (let index = 0; index < valued.length; index += 2)
-		if (
-			!["--config-dir", "--state-dir", "--port"].includes(valued[index])
-		)
+		if (!["--config-dir", "--state-dir", "--port"].includes(valued[index]))
 			throw new Error(`Unknown option ${valued[index]}`);
 	const stateDir = path.resolve(
 		option("--state-dir") ??

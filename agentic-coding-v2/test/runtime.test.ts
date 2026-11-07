@@ -7,7 +7,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
 import { digest } from "../src/config.ts";
 import { git } from "../src/git.ts";
-import { serve } from "../src/server.ts";
+import { serve } from "../src/server/index.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup, apps } = createFixtures();

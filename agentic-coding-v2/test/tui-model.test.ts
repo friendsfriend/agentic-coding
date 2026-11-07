@@ -1,7 +1,13 @@
 // Public boundary of the terminal client model: rendering and key handling
 // without stdin/stdout or a live Runtime.
 import { expect, test } from "bun:test";
-import { initial, reduce, render, type Snapshot } from "../src/tui/model.ts";
+import {
+	initial,
+	reduce,
+	render,
+	type Snapshot,
+	type TuiState,
+} from "../src/tui/model.ts";
 
 const snapshot = (): Snapshot => ({
 	messages: [
@@ -54,7 +60,7 @@ test("Home renders messages and sends chat with unique request IDs", () => {
 });
 
 test("Task detail decides reviews with exact revisions and cancels", () => {
-	let state = { ...initial(snapshot()), panel: "tasks" as const };
+	let state: TuiState = { ...initial(snapshot()), panel: "tasks" };
 	state = reduce(state, "down").state;
 	expect(state.taskIndex).toBe(1);
 	state = reduce(state, "down").state;
@@ -80,7 +86,7 @@ test("Task detail decides reviews with exact revisions and cancels", () => {
 });
 
 test("List cancel, env panel and width clipping", () => {
-	let state = { ...initial(snapshot()), panel: "tasks" as const };
+	let state: TuiState = { ...initial(snapshot()), panel: "tasks" };
 	const cancelled = reduce(state, "x");
 	expect(cancelled.effect).toEqual({ kind: "cancel", id: 9 });
 	state = reduce(state, "3").state;

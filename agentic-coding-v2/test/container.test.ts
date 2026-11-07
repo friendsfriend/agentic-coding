@@ -8,7 +8,7 @@ import { type Config, digest } from "../src/config.ts";
 import { validateProjects } from "../src/environment/catalog.ts";
 import type { EnvironmentRun } from "../src/environment/state.ts";
 import { git } from "../src/git.ts";
-import { serve } from "../src/server.ts";
+import { serve } from "../src/server/index.ts";
 import {
 	readEngineFile,
 	serveContainerFixture,

@@ -6,7 +6,7 @@ import { createModels } from "@earendil-works/pi-ai";
 import type { Storage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { Runtime } from "../src/runtime.ts";
-import { serve } from "../src/server.ts";
+import { serve } from "../src/server/index.ts";
 import { createFixtures } from "./fixtures/runtime.ts";
 
 const fixtures = createFixtures();

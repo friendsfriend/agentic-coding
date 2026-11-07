@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
-import { serve } from "../src/server.ts";
+import { serve } from "../src/server/index.ts";
 import { createFixtures } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();

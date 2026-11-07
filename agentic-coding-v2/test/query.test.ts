@@ -4,7 +4,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
-import { serve } from "../src/server.ts";
+import { serve } from "../src/server/index.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import {
 	disposablePassword,

@@ -64,7 +64,7 @@ const configure = (services?: unknown) => (config: Config) => {
 		}),
 	);
 };
-const call = (name: string, args: Record<string, unknown>) =>
+const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxToolCall(name, args);
 
 test("ClusterIP service declarations admit bounded entries and refuse overrides", () => {
@@ -137,7 +137,8 @@ test("declared services select run pods before startup and delete with UID preco
 			fs.existsSync(stateFile)
 				? JSON.parse(fs.readFileSync(stateFile, "utf8"))
 				: null,
-		(state) => state?.services?.api && state?.pods !== undefined,
+		(state: { services?: { api?: unknown }; pods?: unknown } | null) =>
+			Boolean(state?.services?.api && state?.pods !== undefined),
 	);
 	const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
 	const service = state.services.api;
@@ -237,7 +238,8 @@ test("occupied service names refuse without adoption and lost services quarantin
 					fs.existsSync(stateFile)
 						? JSON.parse(fs.readFileSync(stateFile, "utf8"))
 						: null,
-				(state) => state?.services?.api !== undefined,
+				(state: { services?: { api?: unknown } } | null) =>
+					state?.services?.api !== undefined,
 			);
 			const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
 			delete state.services.api;

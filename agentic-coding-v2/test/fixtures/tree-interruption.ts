@@ -6,7 +6,7 @@ import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import type { Config } from "../../src/config.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { serve } from "../../src/server.ts";
+import { serve } from "../../src/server/index.ts";
 
 const input = JSON.parse(fs.readFileSync(process.argv[2] ?? "", "utf8")) as {
 	config: Config;
