@@ -59,7 +59,11 @@ const running = async (subject: Subject) =>
 		.sort();
 const settled = async (subject: Subject) =>
 	(await snapshot(subject)).runs.every((run) => run.state === "exited");
-type Options = { requires: string[]; composeCommand?: string[] };
+type Options = {
+	requires: string[];
+	composeCommand?: string[];
+	chain?: boolean;
+};
 /** One shell root per app declaration plus the declared prerequisite each names. */
 async function configure(config: Config, options: Options) {
 	fs.mkdirSync(config.configDir, { recursive: true });
@@ -127,11 +131,15 @@ function writeDefinition(
 		PATH: `${bin}:${process.env.PATH ?? ""}`,
 		FIXTURE_ENGINE_SOCKET: socket,
 	};
-	const prerequisites = options.requires.map((id) => ({
+	const prerequisites = options.requires.map((id, index) => ({
 		id,
 		kind: "infrastructure",
 		repository: config.repositories[0],
 		defaults: { run: "serve" },
+		// Optional declared chain: the first prerequisite requires the next one.
+		...(options.chain && index === 0
+			? { requires: options.requires.slice(1) }
+			: {}),
 		targets: [
 			{
 				id: "serve",
@@ -148,7 +156,7 @@ function writeDefinition(
 							container: {
 								socket,
 								image: "fixture:latest",
-								name: "lifetime-database",
+								name: `lifetime-${id}`,
 								command: ["serve"],
 								readiness: "healthy",
 							},
@@ -160,7 +168,7 @@ function writeDefinition(
 		path.join(config.configDir, "environments.json"),
 		JSON.stringify({
 			version: 1,
-			projects: [root("api"), root("worker"), ...prerequisites],
+			projects: [root("api"), root("worker"), root("probe"), ...prerequisites],
 		}),
 	);
 }
@@ -338,3 +346,184 @@ test("independent lifetimes refuse a root with declared dependencies", async () 
 	expect(verbs(subject.config, "create")).toBe(0);
 	expect((await snapshot(subject)).runs).toHaveLength(0);
 }, 60000);
+
+test("a released shared prerequisite is started fresh for a later cycle and shared again", async () => {
+	const subject = await fixture(false, (config) =>
+		configure(config, { requires: ["database"] }),
+	);
+	const generations = async () =>
+		(await snapshot(subject)).runs
+			.filter((run) => run.plan.app === "database")
+			.map((run) => `${run.id}:${run.state}`);
+	let firstCycle: string[] = [],
+		secondCycle: string[] = [],
+		attached: string[] = [],
+		afterWorkerRelease: string[] = [];
+	subject.fake.setResponses([
+		call("env_start", { apps: ["api"], lifetime: "shared-prerequisites-v1" }),
+		async () => {
+			await eventually(
+				() => running(subject),
+				(apps) => apps.length === 2,
+			);
+			firstCycle = await generations();
+			return call("env_stop", { apps: ["api"] });
+		},
+		async () => {
+			// The last reference released the prerequisite, so a later acquisition
+			// must start its own generation instead of attaching to the exit.
+			await eventually(
+				async () => (await generations()).length,
+				(count) => count === 1,
+			);
+			await eventually(
+				() => settled(subject),
+				(done) => done,
+			);
+			return call("env_start", {
+				apps: ["worker"],
+				lifetime: "shared-prerequisites-v1",
+			});
+		},
+		async () => {
+			await eventually(
+				() => running(subject),
+				(apps) => apps.length === 2,
+			);
+			secondCycle = await generations();
+			return call("env_start", {
+				apps: ["probe"],
+				lifetime: "shared-prerequisites-v1",
+			});
+		},
+		async () => {
+			// The later cycle is itself attachable: one new root, no new prerequisite.
+			await eventually(
+				() => running(subject),
+				(apps) => apps.length === 3,
+			);
+			attached = await running(subject);
+			return call("env_stop", { apps: ["worker"] });
+		},
+		async () => {
+			await eventually(
+				() => running(subject),
+				(apps) => apps.length === 2,
+			);
+			afterWorkerRelease = await running(subject);
+			return call("env_stop", { apps: ["probe"] });
+		},
+		async () => {
+			await eventually(
+				async () =>
+					(await snapshot(subject)).runs.filter(
+						(run) => run.state === "running",
+					).length,
+				(count) => count === 0,
+			);
+			return fauxAssistantMessage("Lifetime cycles finished", {
+				stopReason: "stop",
+			});
+		},
+	]);
+	const owner = await subject.app.startTask(subject.invocation);
+	await approve(subject.app, owner);
+	await approve(subject.app, owner, "Environment run: worker");
+	await approve(subject.app, owner, "Environment run: probe");
+	await eventually(
+		async () => (await generations()).length,
+		(count) => count === 2,
+	);
+	await eventually(
+		() => settled(subject),
+		(done) => done,
+	);
+	// Cycle one released its generation; cycle two started a different one, which
+	// the third acquisition attached to instead of duplicating.
+	expect(firstCycle[0]?.endsWith(":running")).toBe(true);
+	expect(secondCycle[0]?.endsWith(":exited")).toBe(true);
+	expect(secondCycle[1]?.endsWith(":running")).toBe(true);
+	expect(secondCycle[1]?.split(":")[0]).not.toBe(firstCycle[0]?.split(":")[0]);
+	expect(attached).toEqual(["database", "probe", "worker"]);
+	// A released root keeps no reference, so the shared generation outlives it.
+	expect(afterWorkerRelease).toEqual(["database", "probe"]);
+	expect(verbs(subject.config, "create")).toBe(2);
+	expect(verbs(subject.config, "rm")).toBe(2);
+	expect(starts(subject.config)).toEqual(["api", "worker", "probe"]);
+}, 90000);
+
+test("a transitive shared chain is attached once across acquisitions and released dependency first", async () => {
+	const subject = await fixture(false, (config) =>
+		configure(config, { requires: ["database", "cache"], chain: true }),
+	);
+	const containerId = (app: string) => {
+		const containers = readEngineFile(
+			path.join(subject.config.configDir, "engine.json"),
+		).containers as Record<string, { Name: string }>;
+		const entry = Object.entries(containers).find(
+			([, value]) => value.Name === `/lifetime-${app}`,
+		);
+		if (!entry) throw new Error(`Missing fixture container for ${app}`);
+		return entry[0];
+	};
+	let attached: string[] = [],
+		ids: Record<string, string> = {};
+	subject.fake.setResponses([
+		call("env_start", { apps: ["api"], lifetime: "shared-prerequisites-v1" }),
+		async () => {
+			await eventually(
+				() => running(subject),
+				(apps) => apps.length === 3,
+			);
+			ids = { database: containerId("database"), cache: containerId("cache") };
+			return call("env_start", {
+				apps: ["worker"],
+				lifetime: "shared-prerequisites-v1",
+			});
+		},
+		async () => {
+			// The second root attaches to the whole live chain: one new root, no starts.
+			await eventually(
+				() => running(subject),
+				(apps) => apps.length === 4,
+			);
+			attached = await running(subject);
+			return call("env_stop", { apps: ["api"] });
+		},
+		async () => {
+			await eventually(
+				() => running(subject),
+				(apps) => apps.length === 3,
+			);
+			return call("env_stop", { apps: ["worker"] });
+		},
+		async () => {
+			await eventually(
+				async () =>
+					(await snapshot(subject)).runs.filter(
+						(run) => run.state === "running",
+					).length,
+				(count) => count === 0,
+			);
+			return fauxAssistantMessage("Transitive chain finished", {
+				stopReason: "stop",
+			});
+		},
+	]);
+	const owner = await subject.app.startTask(subject.invocation);
+	await approve(subject.app, owner);
+	await approve(subject.app, owner, "Environment run: worker");
+	await eventually(
+		() => settled(subject),
+		(done) => done,
+	);
+	expect(attached).toEqual(["api", "cache", "database", "worker"]);
+	expect(verbs(subject.config, "create")).toBe(2);
+	expect(verbs(subject.config, "rm")).toBe(2);
+	// The chain is released dependent first: the database goes before its own
+	// prerequisite, never the reverse.
+	const removals = history(subject.config)
+		.filter((argv) => argv.includes("rm") && !argv.includes("network"))
+		.map((argv) => argv[argv.indexOf("rm") + 1]);
+	expect(removals).toEqual([ids.database, ids.cache]);
+}, 90000);

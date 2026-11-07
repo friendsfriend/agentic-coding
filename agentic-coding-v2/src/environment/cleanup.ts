@@ -39,15 +39,17 @@ function prerequisiteGenerations(
 		list.push(member);
 		byApp.set(member.plan.app, list);
 	}
-	// One generation per app: this acquisition's own, or the live one it reused.
+	// Settled generations hold no references. Their historical attachment need
+	// not be reconstructed to release the current acquisition.
+	if (!holdsResource(run)) return new Set<string>();
+	// Prefer this acquisition's own generation; otherwise require one live shared
+	// generation. Historical exits never become a fallback attachment identity.
 	const pick = (app: string) => {
 		const candidates = byApp.get(app) ?? [],
 			local = candidates.filter((member) => sameAcquisition(run, member)),
-			pool = local.length ? local : candidates,
-			live = pool.filter(holdsResource),
-			chosen =
-				live.length === 1 ? live[0] : pool.length === 1 ? pool[0] : pool[0];
-		if (!chosen || live.length > 1 || (local.length !== 1 && pool.length !== 1))
+			pool = local.length ? local : candidates.filter(holdsResource),
+			chosen = pool[0];
+		if (!chosen || pool.length !== 1)
 			throw new Error(
 				"Cleanup prerequisite generation is ambiguous or missing",
 			);
