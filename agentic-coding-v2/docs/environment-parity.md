@@ -861,3 +861,5 @@ Next recommended milestone: promotion beyond config files/auxiliaries, remaining
 ## Pod SQL rotation and cancellation milestone
 
 Pod query connections now prove credential-rotation and cancellation behavior over the pinned loopback forward: frozen startup credentials survive a mid-flight configuration rewrite with redacted output, and an issued query cancelled mid-flight stays `issued` with all runs exited and no success published. No `src` changes were needed. MySQL bindings remain blocked (no server), with the remaining gaps being authorized live verification and the TUI gateway.
+
+Checkpoint gates at this stack: native **359 pass / 2469 expects / 76 files**, Biome **198 files**, native `type-check`, `build` plus compiled `--help`, legacy **71 / 278** plus `type-check`, Desloppify **20.7 / 82.7 / 19.8**. Historical intermittents, MySQL/Windows/PowerShell gaps, legacy full-baseline/TEST-005 and live verification remain unresolved, not fixed.

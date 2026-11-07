@@ -176,3 +176,7 @@ Group related backend capability, lifecycle and verification work into larger mi
 ## Pod SQL rotation and cancellation milestone
 
 `test/kubernetes-sql.test.ts` gains rotation and cancellation variants (`4baf250`, 4 pass, no `src` changes): a rewritten configuration between preparation and approval still queries through the frozen startup pod credentials with the original secret redacted, and cancelling an issued `pg_sleep` over the pinned forward leaves the receipt `issued`, exits all runs within the bound and never publishes success. This closes the Kubernetes-bindings half of the remaining container/query gap; MySQL bindings stay blocked with no server on the machine.
+
+## Deferred-gates checkpoint (`8118c5d` tree)
+
+Full gates on the six-commit stack (providers, provider completion, auxiliary promotion, replica pins, pod SQL lifecycle, milestone docs): native **359 pass / 2469 expects / 76 files**; Biome **198 files** zero diagnostics; native `type-check` clean; `build` emits `agentic-coding-v2.js` and compiled `--help` works; legacy `lint:boundaries` **71 / 278** plus legacy `type-check` clean; Desloppify **20.7 / 82.7 / 19.8** (overall/objective/strict). Dead fixture dirs again left orphaned `logs --follow` processes; reaped manually. Follower teardown on fixture cleanup remains unclaimed.
