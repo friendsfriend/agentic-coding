@@ -857,3 +857,7 @@ Provider APIs live under `/api/providers/{name}` with receipted writes (`approve
 Checkpoint gates for this milestone: affected Kubernetes suites pass (`test/kubernetes.test.ts`, `test/kubernetes-diagnostics.test.ts`, `test/kubernetes-sql.test.ts`: 9 pass / 81 expects; `test/kubernetes-replicas.test.ts`: 2 pass / 11 expects); Biome zero diagnostics; native `type-check` passes. Full native suite, `build`, legacy gates and Desloppify run at the next deferred-gates checkpoint. Historical intermittents, MySQL/Windows/PowerShell gaps, legacy full-baseline/TEST-005 and live verification remain unresolved, not fixed.
 
 Next recommended milestone: promotion beyond config files/auxiliaries, remaining Compose/Podman runtime behavior, MySQL/Windows/PowerShell (if provable), authorized live verification and TUI adaptation last.
+
+## Pod SQL rotation and cancellation milestone
+
+Pod query connections now prove credential-rotation and cancellation behavior over the pinned loopback forward: frozen startup credentials survive a mid-flight configuration rewrite with redacted output, and an issued query cancelled mid-flight stays `issued` with all runs exited and no success published. No `src` changes were needed. MySQL bindings remain blocked (no server), with the remaining gaps being authorized live verification and the TUI gateway.
