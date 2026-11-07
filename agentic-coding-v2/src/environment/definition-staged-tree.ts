@@ -120,23 +120,41 @@ function verify(root: string, files: { relative: string; content: string }[]) {
 		})
 		.sort((a, b) => a.pathDigest.localeCompare(b.pathDigest));
 }
-/** Cleanup must un-pin directories before unlinking their children. */
+/** Cleanup must un-pin directories before unlinking their children. Each
+ * directory is re-verified with lstat before chmod so a swapped symlink is
+ * never followed; removal re-checks the root immediately before unlinking. */
 function discard(root: string) {
+	const pinned = fs.lstatSync(root);
+	if (!pinned.isDirectory() || pinned.isSymbolicLink())
+		throw new Error("Unsafe tree root");
 	const walk = (directory: string) => {
+		const current = fs.lstatSync(directory);
+		if (!current.isDirectory() || current.isSymbolicLink())
+			throw new Error("Unsafe tree entry");
 		try {
 			fs.chmodSync(directory, readableMode);
 		} catch {
 			/* Best-effort unpin; removal is retried by the caller's own cleanup. */
 		}
-		for (const entry of fs.readdirSync(directory, { withFileTypes: true }))
-			if (entry.isDirectory() && !entry.isSymbolicLink())
-				walk(path.join(directory, entry.name));
+		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+			const child = path.join(directory, entry.name);
+			if (entry.isSymbolicLink()) throw new Error("Unsafe tree entry");
+			if (entry.isDirectory()) walk(child);
+			else {
+				const leaf = fs.lstatSync(child);
+				if (leaf.isSymbolicLink() || !leaf.isFile())
+					throw new Error("Unsafe tree entry");
+			}
+		}
 	};
 	try {
 		walk(root);
 	} catch {
 		/* A partially written tree is still removed below when reachable. */
 	}
+	const rechecked = fs.lstatSync(root);
+	if (!rechecked.isDirectory() || rechecked.isSymbolicLink())
+		throw new Error("Unsafe tree root");
 	fs.rmSync(root, { recursive: true, force: true });
 }
 
@@ -281,7 +299,16 @@ export function releaseStagedTree(config: Config, name: string) {
 	if (!stat.isDirectory() || stat.isSymbolicLink())
 		throw new Error("Retained tree is not an ordinary directory");
 	discard(destination);
-	return { name, released: true as const };
+	try {
+		fs.lstatSync(destination);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			return { name, released: true as const };
+		throw error;
+	}
+	throw new Error(
+		"Retained tree removal did not complete; inspect before retry",
+	);
 }
 /** Names only: inspection never reads retained tree content. */
 export function retainedStagedTrees(config: Config) {

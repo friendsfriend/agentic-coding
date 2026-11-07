@@ -50,6 +50,7 @@ import {
 	releaseStagedTree,
 	retainedStagedTrees,
 	stagedTreeIdentity,
+	stagingRoot,
 } from "./definition-staged-tree.ts";
 import {
 	releaseTemporaryTree,
@@ -678,9 +679,30 @@ export class DefinitionDrafts {
 						]
 					: [];
 			});
+		const attempts = treeCleanupHistory(drafts),
+			ownedTemporary = new Set(
+				attempts.flatMap((attempt) =>
+					attempt.assembly ? [attempt.assembly.temporaryName] : [],
+				),
+			);
+		let stagingEntries: string[] = [];
+		try {
+			stagingEntries = fs.readdirSync(stagingRoot(this.config));
+		} catch {
+			stagingEntries = [];
+		}
+		const unownedTemporary = stagingEntries
+			.filter(
+				(name) => /^tree-[a-f0-9]{64}$/.test(name) && !ownedTemporary.has(name),
+			)
+			.sort()
+			.map((name) => ({
+				name,
+				observation: temporaryTreeObservation(this.config, name),
+			}));
 		return {
 			trees: records,
-			cleanupAttempts: treeCleanupHistory(drafts).map((attempt) => ({
+			cleanupAttempts: attempts.map((attempt) => ({
 				...attempt,
 				...(attempt.assembly
 					? {
@@ -693,6 +715,7 @@ export class DefinitionDrafts {
 			})),
 			// Present directories no record owns are disclosed, never deleted here.
 			unowned: [...present].filter((name) => !owned.includes(name)),
+			unownedTemporary,
 			authority:
 				"Retention metadata only. A retained tree is inspection history: it grants no source identity, base freshness, runtime readiness, review approval or publication authority, and promotion still requires the recorded digest.",
 		};
