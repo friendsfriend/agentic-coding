@@ -558,6 +558,37 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											</Show>
 											<Transcript
 												value={transcript()}
+												enabled={current().focus === "content"}
+												selected={
+													typeof current().detail.transcriptSelection ===
+													"string"
+														? String(current().detail.transcriptSelection)
+														: null
+												}
+												select={(id) => {
+													navigation.current.detail = {
+														...current().detail,
+														transcriptSelection: id,
+													};
+													update();
+												}}
+												reveal={(node) => {
+													if (!scroll || !Number.isFinite(node.y)) return;
+													const top =
+														node.y - scroll.viewport.y + scroll.scrollTop;
+													if (top < scroll.scrollTop)
+														scroll.scrollTo(Math.max(0, top));
+													else if (
+														top + node.height >
+														scroll.scrollTop + scroll.viewport.height
+													)
+														scroll.scrollTo(
+															Math.max(
+																0,
+																top + node.height - scroll.viewport.height,
+															),
+														);
+												}}
 												expanded={current().expanded}
 												toggle={(id) => {
 													navigation.current.expanded =

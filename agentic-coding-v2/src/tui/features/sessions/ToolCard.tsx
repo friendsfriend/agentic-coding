@@ -1,0 +1,295 @@
+/** @jsxImportSource @opentui/solid */
+import type { BoxRenderable, SyntaxStyle } from "@opentui/core";
+import { createMemo, For, Show } from "solid-js";
+import type { Data } from "../../../protocol/index.ts";
+import { dataList } from "../../client/connection.ts";
+import { color } from "../../ui/theme/index.ts";
+import { FileContent } from "./FileContent.tsx";
+import { TranscriptHeader } from "./TranscriptHeader.tsx";
+
+const object = (value: unknown): Data =>
+	value && typeof value === "object" && !Array.isArray(value)
+		? (value as Data)
+		: {};
+const string = (value: unknown) => (typeof value === "string" ? value : "");
+
+/** Adapted file/shell cards and independently folded arguments/output/details.
+ * Status comes only from a uniquely paired retained native result, not elapsed
+ * time, a missing result, or a successful transport acknowledgement. */
+export function ToolCard(props: {
+	identity: string;
+	selected: boolean;
+	select: (id: string) => void;
+	anchor: (node: BoxRenderable | null) => void;
+	call: Data;
+	result: Data | null;
+	pairing: "matched" | "missing" | "ambiguous";
+	expanded: string[];
+	toggle: (id: string) => void;
+	syntax: SyntaxStyle;
+}) {
+	const args = () => object(props.call.arguments);
+	const name = () => string(props.call.name) || "Unnamed native tool";
+	const details = () => object(props.result?.details);
+	const output = () =>
+		dataList(props.result?.content)
+			.filter((part) => part.type === "text")
+			.map((part) => string(part.text))
+			.join("\n");
+	const diagnostics = () => dataList(props.result?.nativeDiagnostics);
+	const readOutput = () => {
+		const parts = dataList(props.result?.content);
+		const footer = `<harness>\n${diagnostics()
+			.map((item) => `[${String(item.severity)}] ${string(item.message)}`)
+			.join("\n")}\n</harness>`;
+		// Remove only the exact separately recorded native diagnostic footer;
+		// literal file bytes that resemble harness markup remain untouched.
+		const body =
+			diagnostics().length && parts.at(-1)?.text === footer
+				? parts.slice(0, -1)
+				: parts;
+		return body
+			.filter((part) => part.type === "text")
+			.map((part) => string(part.text))
+			.join("\n");
+	};
+	const path = () => string(args().path);
+	const patch = () => string(details().patch) || string(details().diff);
+	const open = (section = "") =>
+		props.expanded.includes(`${props.identity}${section}`);
+	const status = () =>
+		props.pairing === "ambiguous"
+			? "Ambiguous retained identity — output not paired"
+			: !props.result
+				? "Result not in retained history — activity unknown"
+				: props.result.isError === true
+					? "Native tool error"
+					: "Result recorded";
+	const summary = () =>
+		["read", "edit", "write"].includes(name())
+			? path()
+			: name() === "bash"
+				? string(args().command)
+				: string(args().app) || string(args().title) || string(args().query);
+	const structured = createMemo(() => {
+		const text = dataList(props.result?.content).find(
+			(part) => part.type === "text",
+		)?.text;
+		if (typeof text !== "string") return null;
+		try {
+			const parsed: unknown = JSON.parse(text);
+			return parsed && typeof parsed === "object" ? parsed : null;
+		} catch {
+			return null;
+		}
+	});
+	const specialized = () =>
+		Boolean(
+			path() &&
+				(name() === "read" ||
+					name() === "write" ||
+					(name() === "edit" && patch())),
+		) || name() === "bash";
+	const fold = (suffix: string, label: string) => (
+		<box
+			onMouseDown={() => {
+				props.select(props.identity);
+				props.toggle(`${props.identity}${suffix}`);
+			}}
+		>
+			<text fg={color("accent")}>
+				{open(suffix) ? "▾" : "▸"} {label}
+			</text>
+		</box>
+	);
+	return (
+		<box
+			flexDirection="column"
+			paddingLeft={1}
+			paddingRight={1}
+			border={["left"]}
+			borderColor={
+				props.result?.isError === true
+					? color("error")
+					: props.selected
+						? color("primary")
+						: color("accent")
+			}
+			backgroundColor={color("backgroundPanel")}
+		>
+			<TranscriptHeader
+				identity={props.identity}
+				select={props.select}
+				toggle={props.toggle}
+				anchor={props.anchor}
+			>
+				<text fg={color("accent")} wrapMode="word">
+					{props.selected ? "› " : ""}
+					{open() ? "▾" : "▸"} {name()}
+					{summary() ? ` · ${summary()}` : ""}
+				</text>
+				<text
+					fg={
+						props.result?.isError === true ? color("error") : color("textMuted")
+					}
+					wrapMode="word"
+				>
+					{status()}
+					{typeof props.result?.durationMs === "number" &&
+					Number.isFinite(props.result.durationMs)
+						? ` · reported ${props.result.durationMs} ms`
+						: ""}
+				</text>
+			</TranscriptHeader>
+			<Show when={open()}>
+				<box flexDirection="column" gap={1} paddingTop={1}>
+					<Show when={name() === "read" && path() && props.result}>
+						<Show
+							when={props.result?.isError !== true}
+							fallback={
+								<text fg={color("error")} wrapMode="word">
+									{output()}
+								</text>
+							}
+						>
+							<FileContent
+								path={path()}
+								content={readOutput()}
+								syntax={props.syntax}
+								startLine={
+									typeof args().offset === "number" ? Number(args().offset) : 1
+								}
+								label="Retained read output — not a live file snapshot"
+							/>
+						</Show>
+					</Show>
+					<Show when={name() === "write" && path()}>
+						<FileContent
+							path={path()}
+							content={string(args().content)}
+							syntax={props.syntax}
+							label="Requested write bytes — not a live file snapshot"
+						/>
+					</Show>
+					<Show when={name() === "edit" && path() && patch()}>
+						<FileContent
+							path={path()}
+							content={patch()}
+							syntax={props.syntax}
+							diff={true}
+							label="Native retained edit diff"
+						/>
+					</Show>
+					<Show when={name() === "edit" && !patch()}>
+						<text fg={color("warning")}>
+							No native diff retained. Requested replacements are available
+							under Arguments; no applied diff is inferred.
+						</text>
+					</Show>
+					<Show when={name() === "bash"}>
+						<text fg={color("textMuted")}>
+							Requested shell command ·{" "}
+							{args().timeout === undefined
+								? "default timeout"
+								: `timeout ${String(args().timeout)}`}
+						</text>
+						<code
+							content={string(args().command)}
+							filetype="bash"
+							syntaxStyle={props.syntax}
+							drawUnstyledText={true}
+							wrapMode="word"
+						/>
+						<Show when={props.result}>
+							<text wrapMode="word">
+								{output() || "No text output retained."}
+							</text>
+						</Show>
+					</Show>
+					<Show when={!specialized() && props.result}>
+						<Show
+							when={structured() !== null}
+							fallback={
+								<text wrapMode="word">
+									{output() || "No text output retained."}
+								</text>
+							}
+						>
+							<text fg={color("textMuted")}>
+								Native structured output — status/authority fields are
+								observations, not UI permissions.
+							</text>
+							<code
+								content={JSON.stringify(structured(), null, 2)}
+								filetype="json"
+								syntaxStyle={props.syntax}
+								drawUnstyledText={true}
+								wrapMode="word"
+							/>
+						</Show>
+					</Show>
+					<For each={diagnostics()}>
+						{(item) => (
+							<text
+								wrapMode="word"
+								fg={
+									item.severity === "error"
+										? color("error")
+										: item.severity === "warn"
+											? color("warning")
+											: color("textMuted")
+								}
+							>
+								Native {String(item.severity ?? "diagnostic")} ·{" "}
+								{string(item.message)}
+							</text>
+						)}
+					</For>
+					{fold(":arguments", "Arguments")}
+					<Show when={open(":arguments")}>
+						<code
+							content={JSON.stringify(props.call.arguments ?? {}, null, 2)}
+							filetype="json"
+							syntaxStyle={props.syntax}
+							drawUnstyledText={true}
+							wrapMode="word"
+						/>
+					</Show>
+					<Show when={props.result}>
+						{fold(":output", "Complete retained output")}
+						<Show when={open(":output")}>
+							<text wrapMode="word">
+								{output() || "No text output retained."}
+							</text>
+						</Show>
+						<For
+							each={dataList(props.result?.content).filter(
+								(part) => part.type !== "text",
+							)}
+						>
+							{(part) => (
+								<text fg={color("textMuted")}>
+									Retained {String(part.type ?? "non-text")} content
+									{part.mimeType ? ` (${String(part.mimeType)})` : ""}; inline
+									terminal rendering not implemented.
+								</text>
+							)}
+						</For>
+						<Show when={props.result?.details !== undefined}>
+							{fold(":details", "Native details")}
+							<Show when={open(":details")}>
+								<code
+									content={JSON.stringify(props.result?.details, null, 2)}
+									filetype="json"
+									syntaxStyle={props.syntax}
+									drawUnstyledText={true}
+									wrapMode="word"
+								/>
+							</Show>
+						</Show>
+					</Show>
+				</box>
+			</Show>
+		</box>
+	);
+}

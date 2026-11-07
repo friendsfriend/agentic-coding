@@ -57,6 +57,26 @@ test("native skill task completes in a separate worktree; admission is idempoten
 			}),
 			{ stopReason: "toolUse" },
 		),
+		fauxAssistantMessage(
+			fauxToolCall("edit", {
+				path: "implementation.txt",
+				edits: [
+					{
+						oldText: "Predecessor implementation",
+						newText: "Predecessor implementation\nRetained native edit",
+					},
+				],
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall("read", {
+				path: "implementation.txt",
+				offset: 1,
+				limit: 10,
+			}),
+			{ stopReason: "toolUse" },
+		),
 		fauxAssistantMessage("Implemented and verified."),
 		fauxAssistantMessage(fauxToolCall("read", { path: "implementation.txt" }), {
 			stopReason: "toolUse",
@@ -102,9 +122,36 @@ test("native skill task completes in a separate worktree; admission is idempoten
 		expect(
 			client.state?.sessions.find((session) => session.id === child),
 		).toMatchObject({ task: id, writable: false });
+		const transcript = await client.call("session.read", { id: child });
+		expect(JSON.stringify(transcript)).toContain("Implemented and verified.");
+		const messages = transcript.entries.flatMap((entry) =>
+			Array.isArray(entry.model)
+				? (entry.model as Record<string, unknown>[])
+				: [],
+		);
+		const calls = messages
+			.filter((message) => message.role === "assistant")
+			.flatMap((message) =>
+				Array.isArray(message.content)
+					? (message.content as Record<string, unknown>[])
+					: [],
+			)
+			.filter((part) => part.type === "toolCall");
+		const results = messages.filter((message) => message.role === "toolResult");
+		expect(results.map((result) => result.toolName)).toEqual([
+			"write",
+			"edit",
+			"read",
+		]);
+		for (const result of results)
+			expect(calls.find((call) => call.id === result.toolCallId)?.name).toBe(
+				result.toolName,
+			);
 		expect(
-			JSON.stringify(await client.call("session.read", { id: child })),
-		).toContain("Implemented and verified.");
+			results.find((result) => result.toolName === "edit")?.details,
+		).toMatchObject({
+			patch: expect.stringContaining("+Retained native edit"),
+		});
 		await expect(
 			client.call("session.configure", { id: child, profile: "test" }),
 		).rejects.toThrow();
