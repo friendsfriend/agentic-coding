@@ -8,6 +8,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import { digest } from "../src/config.ts";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server/index.ts";
+import { ClientConnection } from "../src/tui/client/connection.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup, apps } = createFixtures();
@@ -85,6 +86,32 @@ test("native skill task completes in a separate worktree; admission is idempoten
 	expect(view.tasks[0].activity).toBe("idle");
 	expect(view.tasks[0].workspace).not.toBe(invocation.repository);
 	expect(view.tasks[0].detail).toBe("completed");
+	const child = view.tasks[0].conversationId;
+	if (child === undefined)
+		throw new Error(
+			"Completed skill did not retain its native conversation identity",
+		);
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.state,
+			(state) => state !== null,
+		);
+		expect(
+			client.state?.sessions.find((session) => session.id === child),
+		).toMatchObject({ task: id, writable: false });
+		expect(
+			JSON.stringify(await client.call("session.read", { id: child })),
+		).toContain("Implemented and verified.");
+		await expect(
+			client.call("session.configure", { id: child, profile: "test" }),
+		).rejects.toThrow();
+	} finally {
+		client.close();
+		await host.stop();
+	}
 	const workspace = view.tasks[0].workspace;
 	await git(workspace, ["add", "implementation.txt"]);
 	await git(workspace, ["commit", "-m", "predecessor implementation"]);

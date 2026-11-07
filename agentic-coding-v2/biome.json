@@ -4,6 +4,7 @@
 		"includes": [
 			"src/**",
 			"test/**",
+			"scripts/**",
 			"biome.json",
 			"package.json",
 			"tsconfig.json"
@@ -17,5 +18,13 @@
 			"style": { "noNonNullAssertion": "error" }
 		}
 	},
+	"overrides": [
+		{
+			"includes": ["src/tui/**/*.tsx"],
+			"linter": {
+				"rules": { "a11y": { "noStaticElementInteractions": "off" } }
+			}
+		}
+	],
 	"assist": { "actions": { "source": { "organizeImports": "on" } } }
 }

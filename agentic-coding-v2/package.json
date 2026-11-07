@@ -8,7 +8,7 @@
 	},
 	"scripts": {
 		"start": "bun src/cli.ts",
-		"build": "bun build src/cli.ts --target=bun --outfile=dist/agentic-coding-v2.js",
+		"build": "bun scripts/build.ts",
 		"test": "bun test",
 		"type-check": "tsc --noEmit",
 		"lint": "biome check .",
@@ -20,7 +20,11 @@
 		"@earendil-works/pi-coding-agent": "1.4.0",
 		"@earendil-works/pi-durable": "1.4.0",
 		"@js-temporal/polyfill": "0.5.1",
+		"@opentui/core": "0.7.0",
+		"@opentui/keymap": "0.7.0",
+		"@opentui/solid": "0.7.0",
 		"marked": "^18.1.1",
+		"solid-js": "1.9.17",
 		"typebox": "^1.0.0"
 	},
 	"devDependencies": {

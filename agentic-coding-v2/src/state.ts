@@ -9,6 +9,8 @@ export const Catalog = defineDoc<{
 	reviews: Record<string, string>;
 	attachments: Record<string, string>;
 	schedules: Record<string, string>;
+	/** Permanent identity fences, optional for older native catalogs. */
+	deletedSchedules?: Record<string, boolean>;
 	shellStarts: Record<string, string>;
 }>({
 	kind: "v2.catalog",
@@ -21,6 +23,7 @@ export const Catalog = defineDoc<{
 		reviews: {},
 		attachments: {},
 		schedules: {},
+		deletedSchedules: {},
 		shellStarts: {},
 	}),
 	checkpointWhen: () => true,
@@ -30,6 +33,7 @@ export type ExecutionPolicy = "read-only" | "workspace-write";
 export type TaskInfo = {
 	id: number;
 	kind?: "operator-environment";
+	conversationId?: number;
 	baseCommit?: string;
 	policy: ExecutionPolicy;
 	topicId: string;

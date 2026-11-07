@@ -8,13 +8,12 @@ import { defaultConfigDir, loadConfig } from "./config.ts";
 import { acquireLock } from "./lock.ts";
 import { Runtime } from "./runtime.ts";
 import { serve } from "./server/index.ts";
-import { runTui } from "./tui/loop.ts";
 
 async function main() {
 	const args = process.argv.slice(2);
 	if (args.includes("--help")) {
 		console.log(
-			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui]\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\n--tui runs the minimal terminal client instead of the headless host.",
+			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui]\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\n--tui opens the OpenTUI/Solid client on the same authenticated native host.",
 		);
 		return;
 	}
@@ -84,11 +83,13 @@ async function main() {
 					),
 				);
 		}, 1000);
+		host = serve(app, port);
 		if (tui) {
-			await runTui(app);
+			await import("@opentui/solid/preload");
+			const { runTui } = await import("./tui/index.tsx");
+			await runTui(host.client);
 			return;
 		}
-		host = serve(app, port);
 		console.log(
 			`agentic-coding-v2\n${host.url}\nKeep this private URL local. State: ${stateDir}\nConfig: ${configDir}\nNo browser is opened automatically. Ctrl+C stops the host; pending work resumes on the next start.`,
 		);

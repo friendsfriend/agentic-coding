@@ -891,3 +891,9 @@ Native skill tasks can now stage environment definition bytes through `env_draft
 ## Deferred-gates checkpoint after terminal client
 
 Full native suite: 378 pass / 0 fail (264s). `type-check` clean, `build` good with compiled `--help` listing `--tui`, legacy `lint:boundaries` and `type-check` clean, tree clean. Desloppify unavailable: no `.desloppify` installation exists in this checkout, so no scan/status was possible. Compose restart/interpolation refusals and promotion scope re-confirmed as deliberate fences, not gaps; remaining opens stay blocked on live verification (Podman daemon, authorized live checks, MySQL, Windows/PowerShell).
+
+## Subsequent native OpenTUI/client-boundary checkpoint
+
+The historical minimal ANSI-client milestone above has been replaced, not retained as a second UI. The fresh OpenTUI/Solid/keymap shell now connects only through authenticated `/api/client`; native environment action admission/logs and initial resource/operation records are bound without importing Runtime into the client or granting readiness/ownership from saved UI state. Operator task approval and backend lifetime/recovery fences remain unchanged. Navigation/viewpoints are memory-only client data and never replay environment effects.
+
+19 focused functional tests pass, with clean Biome/type-check/build/compiled help. This does not replace the historical 378-test full-suite result with a new full-suite certification. The generic record UI is not the finished selected environment presentation or full action/diagnostic/evidence coverage, and no live terminal/model/engine/provider/cluster verification was performed. See `tui-architecture.md` and `client-server-interface.md` for current implementation scope and pending work.

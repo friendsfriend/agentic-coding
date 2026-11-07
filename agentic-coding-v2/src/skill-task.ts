@@ -63,6 +63,7 @@ export function createSkillTask(
 					const doc = await tx.doc(Catalog);
 					const info = decode<TaskInfo>(doc.tasks[String(task.id)]);
 					info.workspace = workspace;
+					info.conversationId = Number(child.id);
 					doc.tasks[String(task.id)] = JSON.stringify(info);
 					return {
 						status: "running",

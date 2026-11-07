@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { clientPath } from "../protocol/index.ts";
 import type { Runtime } from "../runtime.ts";
 import { equalSecret } from "./auth.ts";
+import { type Connection, clientGateway } from "./client/index.ts";
 import { httpRoutes } from "./http/index.ts";
 import { webAssets } from "./http/web.ts";
 
@@ -17,11 +19,13 @@ export function serve(app: Runtime, port = 0) {
 		Response.json(value, { status, headers: security });
 	const assets = webAssets();
 	const route = httpRoutes(app, json, security);
-	const server = Bun.serve({
+	const gateway = clientGateway(app);
+	const server = Bun.serve<Connection>({
+		websocket: gateway.websocket,
 		hostname: "127.0.0.1",
 		port,
 		maxRequestBodySize: 1_000_000,
-		async fetch(request) {
+		async fetch(request, listener) {
 			const url = new URL(request.url);
 			// The Host check also prevents DNS rebinding to the loopback server.
 			if (url.hostname !== "127.0.0.1" || url.port !== String(server.port))
@@ -49,11 +53,22 @@ export function serve(app: Runtime, port = 0) {
 			const origin = request.headers.get("origin");
 			if (origin && origin !== url.origin)
 				return json({ error: "Cross-origin request refused" }, 403);
+			if (url.pathname === clientPath) {
+				if (request.method !== "GET" || url.searchParams.size)
+					return json({ error: "Unsupported client handshake" }, 400);
+				return listener.upgrade(request, { data: gateway.connection() })
+					? undefined
+					: json({ error: "WebSocket upgrade required" }, 426);
+			}
 			return route(request, url);
 		},
 	});
 	return {
 		url: `http://127.0.0.1:${server.port}/#token=${token}`,
-		stop: () => server.stop(true),
+		client: { url: `ws://127.0.0.1:${server.port}${clientPath}`, token },
+		stop: async () => {
+			await gateway.stop();
+			await server.stop(true);
+		},
 	};
 }

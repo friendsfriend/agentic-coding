@@ -4,11 +4,13 @@
 		"module": "ESNext",
 		"moduleResolution": "Bundler",
 		"strict": true,
+		"jsx": "preserve",
+		"jsxImportSource": "@opentui/solid",
 		"noEmit": true,
 		"allowImportingTsExtensions": true,
 		"skipLibCheck": true,
 		"types": ["bun"],
 		"lib": ["ES2023", "DOM", "DOM.Iterable"]
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts"]
+	"include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "scripts/**/*.ts"]
 }

@@ -30,7 +30,9 @@ export async function finishSlot(
 	outcome: string,
 ) {
 	const doc = await tx.doc(Catalog);
-	const current = decode<Schedule>(doc.schedules[slot.scheduleId]);
+	const raw = doc.schedules[slot.scheduleId];
+	if (!raw) throw new Error("Schedule changed before admission");
+	const current = decode<Schedule>(raw);
 	if (
 		current.revision !== slot.revision ||
 		current.nextDue !== slot.due ||
@@ -78,8 +80,11 @@ export class Scheduler {
 		id: string,
 	): Promise<Schedule | null> {
 		text(id, "schedule ID", 128);
+		const doc = await this.harness.snapshot(Catalog, context);
+		if (doc?.deletedSchedules?.[id])
+			throw new Error("Schedule identity was deleted; use a new request ID");
 		return matchingSchedule(
-			(await this.harness.snapshot(Catalog, context))?.schedules[id],
+			doc?.schedules[id],
 			invocation,
 			timing,
 			lateGraceMs,
@@ -116,6 +121,8 @@ export class Scheduler {
 		};
 		return this.harness.commit(async (tx) => {
 			const doc = await tx.doc(Catalog);
+			if (doc.deletedSchedules?.[id])
+				throw new Error("Schedule identity was deleted; use a new request ID");
 			const existing = matchingSchedule(
 				doc.schedules[id],
 				invocation,
@@ -125,6 +132,19 @@ export class Scheduler {
 			if (existing) return existing;
 			doc.schedules[id] = JSON.stringify(schedule);
 			return schedule;
+		}, context);
+	}
+	/** Delete future timing only; never cancel an already admitted skill task. */
+	async remove(id: string, revision: number) {
+		await this.harness.commit(async (tx) => {
+			const doc = await tx.doc(Catalog);
+			const raw = doc.schedules[id];
+			if (!raw) throw new Error("Unknown schedule");
+			const schedule = decode<Schedule>(raw);
+			if (schedule.revision !== revision) throw new Error("Stale schedule");
+			doc.deletedSchedules ??= {};
+			doc.deletedSchedules[id] = true;
+			delete doc.schedules[id];
 		}, context);
 	}
 	async setState(id: string, revision: number, state: "enabled" | "paused") {
