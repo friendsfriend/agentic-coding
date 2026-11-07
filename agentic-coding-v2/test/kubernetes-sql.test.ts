@@ -19,7 +19,7 @@ import {
 	installDatabase,
 	postgresServer,
 } from "./fixtures/postgres.ts";
-import { createFixtures } from "./fixtures/runtime.ts";
+import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 const servers: ReturnType<typeof Bun.serve>[] = [];
@@ -264,4 +264,109 @@ test("a pod whose declared forward has exited grants no SQL authority", async ()
 	expect(
 		state.queryOperations.filter((query) => query.state === "completed"),
 	).toHaveLength(0);
+}, 30000);
+
+test("a rotated configuration still queries through frozen startup pod credentials with redacted output", async () => {
+	const sqlPort = disposablePort(),
+		databasePort = disposablePort();
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		installDatabase(config);
+		configureLocalCluster(config, podClient, {
+			FIXTURE_STATE: path.join(config.configDir, "pods.json"),
+			FIXTURE_FORWARD_PORT: String(databasePort),
+		});
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify(document(config, sqlPort)),
+		);
+	});
+	await startDatabase(config, databasePort);
+	let payload = "";
+	fake.setResponses([
+		call("env_start", { apps: ["api", "store"], runtime: "kubernetes" }),
+		call("db_query", {
+			infra: "store",
+			sql: "SELECT value FROM fixture_secrets /* NATIVE_SQL_PROBE */",
+		}),
+		(messages) => {
+			payload = JSON.stringify(
+				messages.messages.filter(
+					(message) =>
+						message.role === "toolResult" && message.toolName === "db_query",
+				),
+			);
+			return fauxAssistantMessage("Done");
+		},
+	]);
+	const task = await app.startTask(invocation);
+	await approve(app, task);
+	await pendingReview(app, task, "Query store");
+	// Rotation after preparation must not change the frozen startup credentials
+	// the approved pod query authenticates with.
+	fs.writeFileSync(
+		path.join(config.configDir, ".env"),
+		"DISPOSABLE_SQL_USER=changed\nDISPOSABLE_SQL_PASSWORD=rotated\n",
+	);
+	await approve(app, task, "Query store");
+	await app.harness.waitForTask(task as TaskId, context);
+	const result = JSON.parse(payload) as {
+		isError?: boolean;
+		content: { type: string; text: string }[];
+	}[];
+	expect(result[0]?.isError).toBeFalsy();
+	const body = JSON.parse(result[0]?.content[0]?.text ?? "{}");
+	expect(body.rows).toEqual([{ value: "[REDACTED]" }]);
+	expect(payload).not.toContain(disposablePassword);
+	const state = await app.environments.snapshot();
+	expect(
+		state.queryOperations.filter((query) => query.state === "completed"),
+	).toHaveLength(1);
+}, 30000);
+
+test("cancelling an issued pod query drains diagnostics without publishing success", async () => {
+	const sqlPort = disposablePort(),
+		databasePort = disposablePort();
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		installDatabase(config);
+		configureLocalCluster(config, podClient, {
+			FIXTURE_STATE: path.join(config.configDir, "pods.json"),
+			FIXTURE_FORWARD_PORT: String(databasePort),
+		});
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify(document(config, sqlPort)),
+		);
+	});
+	await startDatabase(config, databasePort);
+	fake.setResponses([
+		call("env_start", { apps: ["api", "store"], runtime: "kubernetes" }),
+		call("db_query", {
+			infra: "store",
+			sql: "SELECT pg_sleep(20) /* NATIVE_SQL_PROBE */",
+		}),
+		() => fauxAssistantMessage("Done"),
+	]);
+	const task = await app.startTask(invocation);
+	await approve(app, task);
+	await pendingReview(app, task, "Query store");
+	await approve(app, task, "Query store");
+	await eventually(async () => {
+		const state = await app.environments.snapshot();
+		return (
+			state.queryOperations[0]?.state === "issued" &&
+			fs.existsSync(path.join(config.configDir, "sql-probes"))
+		);
+	}, Boolean);
+	const before = await app.environments.snapshot();
+	expect(before.queryOperations[0]?.state).toBe("issued");
+	expect(before.runs.every((run) => run.state === "running")).toBe(true);
+	const started = Date.now();
+	await app.cancel(task);
+	expect(Date.now() - started).toBeLessThan(10000);
+	const after = await app.environments.snapshot();
+	expect(after.queryOperations[0]?.state).toBe("issued");
+	expect(after.runs.every((run) => run.state === "exited")).toBe(true);
+	expect(
+		fs.readFileSync(path.join(config.configDir, "sql-probes"), "utf8").trim(),
+	).toBe("query");
 }, 30000);
