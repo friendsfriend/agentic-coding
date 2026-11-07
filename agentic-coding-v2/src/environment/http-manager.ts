@@ -22,6 +22,7 @@ import {
 import { KubernetesProcess } from "./kubernetes.ts";
 import type { Plan } from "./model.ts";
 import {
+	batchApproved,
 	type ReferenceScope,
 	referenceScope,
 	requireScopeLive,
@@ -178,7 +179,14 @@ export class HeldHttp {
 				"Endpoint requires this task's live ready shell app, health-ready owned container or ready owned single-replica pod with its declared loopback port forward; saved receipts grant no network authority",
 			);
 		this.authority.check(owner.id, signal, run.batch, run);
-		const root = referenceScope(run, members);
+		const snapshot = await this.authority
+			.store()
+			.snapshot(EnvironmentState, background);
+		const root = referenceScope(
+			run,
+			members,
+			batchApproved(snapshot?.waits, run.batch, owner.id),
+		);
 		if (root) requireScopeLive(root, members, this.authority.live);
 		return { run, process, handle, root, service };
 	}

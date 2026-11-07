@@ -16,13 +16,18 @@ import {
 	prepareEndpointCa,
 } from "./endpoint-ca.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
-import { referencedLifetime } from "./lifetime.ts";
+import {
+	referencedLifetime,
+	sameApprovedPlan,
+	sharedRoot,
+} from "./lifetime.ts";
 import { readOnlyQuery } from "./query.ts";
 import {
 	type QueryConnection,
 	type QueryInput,
 	queryInput,
 } from "./query-config.ts";
+import { batchApproved } from "./reference-scope.ts";
 import { ShellProcess } from "./shell.ts";
 import { type EnvironmentRun, EnvironmentState } from "./state.ts";
 
@@ -179,6 +184,105 @@ export class DatabaseDiagnostics {
 				throw new Error(
 					"SQL requires the exact live health-ready owned infrastructure container",
 				);
+		}
+		// Attached shared acquisitions approve prerequisites without starting a second
+		// copy. When the named requiring app lives in another batch than the shared
+		// infrastructure, resolve its exact approved closure and require exact plan
+		// identity for every reused generation. Same owner/task only; no cross-owner
+		// or workspace-mismatched adoption, no fallback to another requiring app.
+		if (requiringApp !== undefined) {
+			const named = runs.filter(
+				(item) =>
+					item.plan.projectKind === "app" && item.plan.app === requiringApp,
+			);
+			if (named.length === 1 && named[0] && named[0].batch !== run.batch) {
+				const app = named[0];
+				if (!sharedRoot(app.plan) || !sharedRoot(run.plan))
+					throw new Error(
+						"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
+					);
+				const snapshot = await this.authority
+						.store()
+						.snapshot(EnvironmentState, background),
+					approved = batchApproved(snapshot?.waits, app.batch, owner.id),
+					rootApproved = approved?.find((plan) => plan.app === app.plan.app);
+				if (
+					!approved ||
+					!rootApproved ||
+					!sameApprovedPlan(rootApproved, app.plan)
+				)
+					throw new Error(
+						"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
+					);
+				const closure = declaredInfrastructure(rootApproved, [...approved]),
+					expected = closure.find((plan) => plan.app === infra);
+				if (!expected || !sameApprovedPlan(expected, run.plan))
+					throw new Error(
+						"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
+					);
+				const alive = (item: EnvironmentRun) => {
+					const live = this.authority.live.get(item.id);
+					return (
+						item.state === "running" &&
+						live &&
+						!live.closing &&
+						!live.outcome &&
+						!live.cleanupFailed
+					);
+				};
+				const resolve = (plan: (typeof closure)[number]): EnvironmentRun => {
+					const local = runs.filter(
+						(member) =>
+							member.batch === app.batch &&
+							member.owner === app.owner &&
+							member.plan.workspace === app.plan.workspace &&
+							member.plan.app === plan.app &&
+							sameApprovedPlan(member.plan, plan),
+					);
+					if (local.length === 1 && local[0]) return local[0];
+					if (local.length > 1)
+						throw new Error(
+							"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
+						);
+					const shared = runs.filter(
+						(member) =>
+							member.owner === app.owner &&
+							member.plan.workspace === app.plan.workspace &&
+							sharedRoot(member.plan) &&
+							member.plan.app === plan.app &&
+							sameApprovedPlan(member.plan, plan) &&
+							member.state === "running",
+					);
+					const only = shared[0];
+					if (!only || shared.length !== 1)
+						throw new Error(
+							"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
+						);
+					return only;
+				};
+				const resources = closure.map(resolve),
+					resourceRuns = resources
+						.map((item) => item.id)
+						.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+					required = [app, ...resources];
+				if (!required.every(alive))
+					throw new Error(
+						"SQL requires the selected live held application whose immutable dependency plan requires this infrastructure; no fallback to another requiring app",
+					);
+				this.authority.check(owner.id, signal, run.batch, run);
+				this.authority.check(owner.id, signal, app.batch, app);
+				return {
+					root: { run: app.id, resources: resourceRuns },
+					run,
+					process,
+					service,
+					app,
+					members: required.map((item) => ({
+						run: item,
+						process: this.authority.live.get(item.id),
+					})),
+				};
+			}
 		}
 		const members = runs.filter((item) => item.batch === run.batch),
 			alive = (item: EnvironmentRun) => {

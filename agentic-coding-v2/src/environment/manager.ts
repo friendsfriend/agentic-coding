@@ -39,6 +39,7 @@ import {
 	refreshReferenceGraphs,
 } from "./reference-journal.ts";
 import {
+	batchApproved,
 	referenceScope,
 	requireScopeLive,
 	requiringRoots,
@@ -587,7 +588,15 @@ export class Environments {
 			);
 		this.check(run.owner, undefined, run.batch, run.id);
 		// Referenced runs disclose and revalidate their exact generation closure.
-		const root = referenceScope(run, members);
+		const telemetryState = await this.store.snapshot(
+			EnvironmentState,
+			background,
+		);
+		const root = referenceScope(
+			run,
+			members,
+			batchApproved(telemetryState?.waits, run.batch, run.owner),
+		);
 		if (root) requireScopeLive(root, members, this.live);
 		const requirers = requiringRoots(run, members),
 			first = requirers[0];

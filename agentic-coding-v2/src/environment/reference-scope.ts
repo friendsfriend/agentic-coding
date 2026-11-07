@@ -1,5 +1,6 @@
 import { declaredInfrastructure } from "./dependencies.ts";
 import { referencedRoot, sameApprovedPlan, sharedRoot } from "./lifetime.ts";
+import type { Plan } from "./model.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import type { EnvironmentRun } from "./state.ts";
 
@@ -19,8 +20,60 @@ function sameAcquisition(a: EnvironmentRun, b: EnvironmentRun) {
 export function referenceScope(
 	root: EnvironmentRun,
 	members: readonly EnvironmentRun[],
+	approved?: readonly Plan[],
 ): ReferenceScope | undefined {
 	if (!referencedRoot(root.plan)) return undefined;
+	// Attached shared acquisitions approve prerequisites without starting a second
+	// copy. Their live prerequisite lives in another batch, so the same-batch
+	// closure below cannot resolve it. When the exact approved batch plans are
+	// supplied, resolve against those and require exact plan identity for every
+	// reused generation; never adopt by app name.
+	if (approved) {
+		const rootApproved = approved.find((plan) => plan.app === root.plan.app);
+		if (!rootApproved || !sameApprovedPlan(rootApproved, root.plan))
+			throw new Error(
+				"Referenced diagnostic root generation changed; no fallback to another run",
+			);
+		const closure = declaredInfrastructure(rootApproved, [...approved]);
+		const resolve = (expected: Plan): EnvironmentRun => {
+			const context = members.filter((member) => sameAcquisition(root, member)),
+				local = context.filter(
+					(member) =>
+						member.plan.app === expected.app &&
+						sameApprovedPlan(member.plan, expected),
+				);
+			if (local.length === 1 && local[0]) return local[0];
+			if (local.length > 1)
+				throw new Error(
+					"Shared diagnostic prerequisite generation is ambiguous or unavailable",
+				);
+			if (!sharedRoot(root.plan))
+				throw new Error(
+					"Referenced diagnostic prerequisite generation is unavailable",
+				);
+			const shared = members.filter(
+				(member) =>
+					member.owner === root.owner &&
+					member.plan.workspace === root.plan.workspace &&
+					sharedRoot(member.plan) &&
+					member.plan.app === expected.app &&
+					sameApprovedPlan(member.plan, expected) &&
+					member.state === "running",
+			);
+			const only = shared[0];
+			if (!only || shared.length !== 1)
+				throw new Error(
+					"Shared diagnostic prerequisite generation is ambiguous or unavailable",
+				);
+			return only;
+		};
+		return {
+			run: root.id,
+			resources: closure
+				.map((expected) => resolve(expected).id)
+				.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+		};
+	}
 	const context = members.filter((member) => sameAcquisition(root, member)),
 		plans = declaredInfrastructure(
 			root.plan,
@@ -82,6 +135,33 @@ export function requiringRoots(
 		"Referenced prerequisite diagnostics must name exactly one live requiring root; ambiguity is refused rather than renewing every dependent",
 	);
 }
+export function batchApproved(
+	waits: Record<string, string> | undefined,
+	batch: string,
+	owner: number,
+): Plan[] | undefined {
+	if (!waits) return undefined;
+	for (const raw of Object.values(waits)) {
+		try {
+			const receipt = JSON.parse(raw) as {
+				batch?: unknown;
+				owner?: unknown;
+				plans?: unknown;
+				state?: unknown;
+			};
+			if (
+				receipt.batch !== batch ||
+				receipt.owner !== owner ||
+				receipt.state !== "acquired" ||
+				!Array.isArray(receipt.plans)
+			)
+				continue;
+			return receipt.plans as Plan[];
+		} catch {}
+	}
+	return undefined;
+}
+
 /** Closing generations are an admission fence for diagnostics: every approved
  * generation must still be the original live ready handle without retention or
  * uncertain cleanup, and no other run may substitute for it. */
