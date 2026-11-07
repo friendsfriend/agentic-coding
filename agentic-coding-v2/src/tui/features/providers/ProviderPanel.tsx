@@ -82,8 +82,9 @@ export function ProviderPanel(props: {
 							</text>
 							<text fg={color("textMuted")}>
 								Provider tokens are never displayed or stored in viewpoints.
-								Writes/approval controls are not exposed in this read-only
-								increment.
+								Provider writes use a separate immutable operator intention
+								preview and explicit digest confirmation below; inspections
+								never approve or dispatch a write.
 							</text>
 							<Show
 								when={

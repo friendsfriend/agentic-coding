@@ -3,6 +3,7 @@ import type { BoxRenderable, SyntaxStyle } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
 import type { Data, ToolProgress } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
+import { ImageView } from "../../ui/ImageView.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent } from "./FileContent.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
@@ -328,11 +329,21 @@ export function ToolCard(props: {
 							)}
 						>
 							{(part) => (
-								<text fg={color("textMuted")}>
-									Retained {String(part.type ?? "non-text")} content
-									{part.mimeType ? ` (${String(part.mimeType)})` : ""}; inline
-									terminal rendering not implemented.
-								</text>
+								<Show
+									when={part.type === "image"}
+									fallback={
+										<text fg={color("textMuted")}>
+											Retained {String(part.type ?? "non-text")} content ·{" "}
+											{JSON.stringify(part)}
+										</text>
+									}
+								>
+									<ImageView
+										content={part.data}
+										mediaType={part.mimeType}
+										caption="Retained native tool image"
+									/>
+								</Show>
 							)}
 						</For>
 					</Show>

@@ -3,6 +3,12 @@ import { text } from "../../../config.ts";
 import type { OperatorAction } from "../../../environment/operator.ts";
 import type { Data, Request } from "../../../protocol/index.ts";
 import type { Runtime } from "../../../runtime.ts";
+import {
+	readViewpoints,
+	removeViewpoint,
+	saveViewpoint,
+} from "../../../viewpoints.ts";
+import { readEvidence } from "./evidence.ts";
 import { inspectProvider } from "./providers.ts";
 import { clientSession, clientSnapshot, readSession } from "./sessions.ts";
 import { listSkills, readSkill } from "./skills.ts";
@@ -22,6 +28,24 @@ export async function dispatch(
 	{ method, input }: Request,
 ): Promise<unknown> {
 	switch (method) {
+		case "viewpoints.read":
+			fields(input, []);
+			return readViewpoints(app);
+		case "viewpoints.save":
+			fields(input, ["id", "name", "revision", "view"]);
+			return saveViewpoint(app, {
+				id: text(input.id, "viewpoint identity", 80),
+				name: text(input.name, "viewpoint name", 100),
+				revision: integer(input.revision),
+				view: input.view,
+			});
+		case "viewpoints.remove":
+			fields(input, ["id", "revision"]);
+			return removeViewpoint(
+				app,
+				text(input.id, "viewpoint identity", 80),
+				integer(input.revision),
+			);
 		case "state.read":
 			fields(input, []);
 			return clientSnapshot(app);
@@ -93,6 +117,13 @@ export async function dispatch(
 			);
 			return { configured: true };
 		}
+		case "evidence.read":
+			fields(input, ["taskId", "id"]);
+			return readEvidence(
+				app,
+				integer(input.taskId),
+				text(input.id, "evidence identity", 64),
+			);
 		case "task.read":
 			fields(input, ["id"]);
 			return readTask(app, integer(input.id));
@@ -161,6 +192,23 @@ export async function dispatch(
 			return app.settings.apply(input.id, input.approval);
 		case "providers.inspect":
 			return inspectProvider(app, input);
+		case "providers.receipt":
+			fields(input, ["provider", "requestId"]);
+			return app.providerActions.receipt(
+				text(input.provider, "provider", 64),
+				text(input.requestId, "request ID", 128),
+			);
+		case "providers.actions":
+			fields(input, ["provider"]);
+			return app.providerActions.list(text(input.provider, "provider", 64));
+		case "providers.preview":
+			return app.providerActions.preview(input);
+		case "providers.apply":
+			fields(input, ["id", "approval"]);
+			return app.providerActions.apply(
+				text(input.id, "candidate identity", 80),
+				text(input.approval, "exact approval", 80),
+			);
 		case "providers.read":
 			fields(input, []);
 			return app.environments.providers.list();

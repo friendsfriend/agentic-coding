@@ -24,6 +24,7 @@ import {
 } from "./environment/tools.ts";
 import { createOrchestrator, orchestratorPrompt } from "./orchestrator.ts";
 import { projectState } from "./projection.ts";
+import { ProviderActions } from "./provider-actions.ts";
 import { Scheduler, type ScheduleSlot } from "./scheduler.ts";
 import { Settings } from "./settings.ts";
 import { createSkillTask } from "./skill-task.ts";
@@ -48,6 +49,7 @@ export class Runtime {
 	private reconciling = false;
 	private closed = false;
 	readonly wiki: Wiki;
+	readonly providerActions: ProviderActions;
 	readonly settings: Settings;
 	readonly environments: Environments;
 	readonly operatorEnvironments: OperatorEnvironments;
@@ -56,6 +58,7 @@ export class Runtime {
 		readonly models: Models,
 	) {
 		this.wiki = new Wiki(this);
+		this.providerActions = new ProviderActions(this);
 		this.settings = new Settings(config);
 		this.environments = new Environments(config);
 		this.operatorEnvironments = new OperatorEnvironments(

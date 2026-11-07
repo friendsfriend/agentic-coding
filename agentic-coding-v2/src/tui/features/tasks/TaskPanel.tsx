@@ -4,10 +4,18 @@ import { useRenderer } from "@opentui/solid";
 import { For, onCleanup, Show } from "solid-js";
 import type { Data, TaskDetails } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { ImageView } from "../../ui/ImageView.tsx";
 import { color } from "../../ui/theme/index.ts";
 
 /** Read-only native detail presentation. Action headers prepare an unsent command only. */
 export function TaskPanel(props: {
+	evidence: {
+		id: string;
+		taskId: number;
+		mediaType: string;
+		caption: string;
+		content: string;
+	} | null;
 	rows: Data[];
 	selectedId: number | null;
 	select: (id: number) => void;
@@ -257,6 +265,42 @@ export function TaskPanel(props: {
 							}}
 						</For>
 						<text fg={color("primary")}>
+							Current owned native worker tree · non-atomic bounded inspection
+						</text>
+						<text fg={color("textMuted")}>
+							Native worker IDs are diagnostic identities, not app-task
+							navigation or permission. No checkpoint/input bytes or arbitrary
+							conversation adoption. Missing/terminal worker records are not
+							reconstructed.
+						</text>
+						<For each={details().ownedWork.items}>
+							{(work) => (
+								<box
+									flexDirection="column"
+									paddingLeft={work.parent === null ? 0 : 2}
+								>
+									<text wrapMode="word">
+										#{work.id} · parent {work.parent ?? "app task root"} ·
+										conversation #{work.conversationId} · {work.state}
+										{work.until === null
+											? ""
+											: ` · sleeping until ${work.until} (epoch ms)`}
+									</text>
+									<Show when={work.reason}>
+										<text wrapMode="word" fg={color("warning")}>
+											{work.reason}
+											{work.reasonTruncated ? " (reason clipped)" : ""}
+										</text>
+									</Show>
+								</box>
+							)}
+						</For>
+						<Show when={details().ownedWork.truncated}>
+							<text fg={color("warning")}>
+								Owned worker inspection clipped at 128 records.
+							</text>
+						</Show>
+						<text fg={color("primary")}>
 							Retained image evidence · {details().attachments.length}
 						</text>
 						<For each={details().attachments}>
@@ -267,10 +311,31 @@ export function TaskPanel(props: {
 									</text>
 									<text fg={color("textMuted")} wrapMode="word">
 										Content identity: {item.id}
-										{"\n"}Image pixels are not rendered by this terminal client;
-										metadata is not visual proof. No arbitrary file or external
-										URL is opened.
+										{"\n"}Metadata is not visual proof. Explicit pixel reads are
+										owner/digest-fenced and bounded; no arbitrary file or
+										external URL is opened.
 									</text>
+									<ActionHeader
+										onActivate={() =>
+											props.prepare(`/evidence ${item.taskId} ${item.id}`)
+										}
+									>
+										<text fg={color("accent")}>
+											Prepare explicit retained pixel read
+										</text>
+									</ActionHeader>
+									<Show
+										when={
+											props.evidence?.id === item.id &&
+											props.evidence?.taskId === details().id
+										}
+									>
+										<ImageView
+											content={props.evidence?.content}
+											mediaType={props.evidence?.mediaType}
+											caption={item.caption}
+										/>
+									</Show>
 								</box>
 							)}
 						</For>

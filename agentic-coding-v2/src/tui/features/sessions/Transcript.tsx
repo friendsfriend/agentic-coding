@@ -16,6 +16,7 @@ import type {
 	Transcript as TranscriptData,
 } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
+import { ImageView } from "../../ui/ImageView.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { ToolCard } from "./ToolCard.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
@@ -539,10 +540,11 @@ export function Transcript(props: {
 							)}
 						>
 							{(part) => (
-								<text fg={color("textMuted")}>
-									Retained image ({String(part.mimeType ?? "unknown format")});
-									inline terminal image rendering is not implemented.
-								</text>
+								<ImageView
+									content={part.data}
+									mediaType={part.mimeType}
+									caption="Retained native transcript image"
+								/>
 							)}
 						</For>
 					</>

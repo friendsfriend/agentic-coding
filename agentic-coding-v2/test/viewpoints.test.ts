@@ -1,29 +1,137 @@
-import { expect, test } from "bun:test";
-import { Navigation, view } from "../src/tui/shell/navigation.ts";
-import { Viewpoints } from "../src/tui/shell/viewpoints.ts";
+import { afterEach, expect, test } from "bun:test";
+import type { UiView } from "../src/protocol/viewpoints.ts";
+import { serve } from "../src/server/index.ts";
+import { ClientConnection } from "../src/tui/client/connection.ts";
+import { readViewpoints } from "../src/viewpoints.ts";
+import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
-test("saved viewpoints restore nested state and unsent input; navigation never executes a command", () => {
-	const navigation = new Navigation(),
-		viewpoints = new Viewpoints();
-	navigation.current = {
-		...view("session", "17"),
-		draft: "unsent follow-up",
-		selection: 3,
-		scroll: 28,
-		filter: "error",
-		expanded: ["tool:9"],
-		detail: { tab: "transcript" },
-	};
-	const saved = viewpoints.save("Investigation", navigation.current);
-	navigation.go(view("environments", "api"));
-	const reloaded = new Viewpoints();
-	reloaded.load(viewpoints.export());
-	reloaded.restore(saved.id, navigation);
-	expect(navigation.current).toEqual(saved.view);
-	navigation.current.draft = "changed";
-	expect(reloaded.items[0]?.view.draft).toBe("unsent follow-up");
-	navigation.back();
-	expect(navigation.current.page).toBe("environments");
-	reloaded.remove(saved.id);
-	expect(() => reloaded.restore(saved.id, navigation)).toThrow();
+const { fixture, cleanup } = createFixtures();
+afterEach(cleanup);
+test("authenticated durable viewpoints store only bounded UI state, refuse stale edits/deletion and never admit work", async () => {
+	const { app, open } = await fixture(true),
+		host = serve(app),
+		client = new ClientConnection(host.client);
+	const id = crypto.randomUUID(),
+		view: UiView = {
+			page: "tasks",
+			resource: "missing-task",
+			selection: 0,
+			filter: "",
+			sort: "default",
+			expanded: [],
+			scroll: 3,
+			focus: "content",
+		};
+	let revision = 0;
+	try {
+		client.connect();
+		await eventually(
+			async () => client.state,
+			(state) => state !== null,
+		);
+		const before = await app.snapshot();
+		expect(await client.call("viewpoints.read", {})).toEqual([]);
+		const saved = await client.call("viewpoints.save", {
+			id,
+			name: "Task position",
+			revision: 0,
+			view,
+		});
+		revision = saved.revision;
+		expect(saved.view).toEqual(view);
+		expect(
+			await client.call("viewpoints.save", {
+				id,
+				name: "Task position",
+				revision: 0,
+				view,
+			}),
+		).toEqual(saved);
+		expect(await client.call("viewpoints.read", {})).toEqual([saved]);
+		expect(JSON.stringify(saved)).not.toContain("draft");
+		for (const extra of [
+			{ draft: "private prompt" },
+			{ detail: { approval: "approve:digest", logs: "private output" } },
+			{ execute: true },
+		]) {
+			await expect(
+				client.call("viewpoints.save", {
+					id: crypto.randomUUID(),
+					name: "Forbidden",
+					revision: 0,
+					view: { ...view, ...extra },
+				}),
+			).rejects.toThrow("Native operation refused");
+		}
+		await expect(
+			client.call("viewpoints.save", {
+				id,
+				name: "Changed",
+				revision: 0,
+				view,
+			}),
+		).rejects.toThrow("Native operation refused");
+		const changed = await client.call("viewpoints.save", {
+			id,
+			name: "Updated task position",
+			revision,
+			view: { ...view, scroll: 4 },
+		});
+		revision = changed.revision;
+		await expect(
+			client.call("viewpoints.remove", { id, revision: saved.revision }),
+		).rejects.toThrow("Native operation refused");
+		await expect(
+			client.call("viewpoints.save", {
+				id: crypto.randomUUID(),
+				name: "Oversized",
+				revision: 0,
+				view: { ...view, filter: "x".repeat(257) },
+			}),
+		).rejects.toThrow("Native operation refused");
+		const disposable = crypto.randomUUID(),
+			removed = await client.call("viewpoints.save", {
+				id: disposable,
+				name: "Disposable",
+				revision: 0,
+				view,
+			});
+		await client.call("viewpoints.remove", {
+			id: disposable,
+			revision: removed.revision,
+		});
+		const recreated = await client.call("viewpoints.save", {
+			id: disposable,
+			name: "Recreated",
+			revision: 0,
+			view,
+		});
+		expect(recreated.revision).toBeGreaterThan(removed.revision);
+		await expect(
+			client.call("viewpoints.remove", {
+				id: disposable,
+				revision: removed.revision,
+			}),
+		).rejects.toThrow("Native operation refused");
+		await client.call("viewpoints.remove", {
+			id: disposable,
+			revision: recreated.revision,
+		});
+		expect((await app.snapshot()).tasks).toEqual(before.tasks);
+		expect((await app.snapshot()).schedules).toEqual(before.schedules);
+	} finally {
+		client.close();
+		await host.stop();
+	}
+	await app.close();
+	const reopened = await open();
+	expect(await readViewpoints(reopened)).toEqual([
+		expect.objectContaining({
+			id,
+			revision,
+			name: "Updated task position",
+			view: { ...view, scroll: 4 },
+		}),
+	]);
+	expect((await reopened.snapshot()).tasks).toEqual([]);
 });

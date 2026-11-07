@@ -553,6 +553,12 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 			(status) => status === "connected",
 		);
 		const pendingDetail = await client.call("task.read", { id });
+		expect(
+			pendingDetail.ownedWork.items.every(
+				(work) => !("checkpoint" in work) && !("input" in work),
+			),
+		).toBe(true);
+		expect(pendingDetail.ownedWork.items[0]?.id).toBe(id);
 		expect(pendingDetail.reviews).toEqual(
 			waiting.reviews.map((review) => ({ ...review })),
 		);
@@ -644,6 +650,43 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 				caption: "Screenshot",
 			},
 		]);
+		const pixels = await client.call("evidence.read", {
+			taskId: id,
+			id: digest(png),
+		});
+		expect(pixels).toMatchObject({
+			id: digest(png),
+			taskId: id,
+			mediaType: "image/png",
+			caption: "Screenshot",
+		});
+		expect(Buffer.from(pixels.content, "base64")).toEqual(png);
+		await expect(
+			client.call("evidence.read", { taskId: 999999, id: digest(png) }),
+		).rejects.toThrow();
+		await expect(
+			client.call("evidence.read", { taskId: id, id: "../../capture.png" }),
+		).rejects.toThrow();
+		const extraEvidence = { taskId: id, id: digest(png), path: "capture.png" };
+		await expect(client.call("evidence.read", extraEvidence)).rejects.toThrow();
+		const storedImage = path.join(
+			app.config.stateDir,
+			"attachments",
+			digest(png),
+		);
+		fs.writeFileSync(storedImage, Buffer.concat([png, Buffer.from("changed")]));
+		await expect(
+			client.call("evidence.read", { taskId: id, id: digest(png) }),
+		).rejects.toThrow();
+		fs.writeFileSync(storedImage, png);
+		const safeCopy = `${storedImage}-copy`;
+		fs.renameSync(storedImage, safeCopy);
+		fs.symlinkSync(safeCopy, storedImage);
+		await expect(
+			client.call("evidence.read", { taskId: id, id: digest(png) }),
+		).rejects.toThrow();
+		fs.unlinkSync(storedImage);
+		fs.renameSync(safeCopy, storedImage);
 		expect(nativeDetail.reviews[0]).toMatchObject({
 			state: "approved",
 			snapshot: waiting.reviews[0].snapshot,

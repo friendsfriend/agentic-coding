@@ -1,13 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createEffect, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import type {
 	SettingsCandidate,
 	SettingsDocument,
 } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { SettingsFields } from "./SettingsFields.tsx";
 
 /** Ephemeral editable JSON and immutable native preview. Never writes through a rendering callback. */
 export function SettingsPanel(props: {
@@ -21,6 +22,7 @@ export function SettingsPanel(props: {
 	connected: boolean;
 	prepare: (command: string) => void;
 }) {
+	const [structured, setStructured] = createSignal(false);
 	let editor: TextareaRenderable | undefined;
 	const syntax = SyntaxStyle.fromStyles(
 		{ default: { fg: color("text") } },
@@ -67,27 +69,50 @@ export function SettingsPanel(props: {
 					viewpoints. Enter inserts a newline; Escape returns to the command
 					prompt.
 				</text>
-				<ActionHeader onActivate={() => props.edit(!props.editing)}>
+				<ActionHeader
+					onActivate={() => {
+						props.edit(false);
+						setStructured(!structured());
+					}}
+				>
 					<text fg={color("accent")}>
-						{props.editing ? "Leave JSON editor" : "Edit JSON settings"}
+						{structured()
+							? "Switch to advanced JSON editor"
+							: "Switch to field-specific draft editor"}
 					</text>
 				</ActionHeader>
-				<textarea
-					ref={(value) => {
-						editor = value;
-					}}
-					initialValue={props.draft}
-					focused={props.editing && props.connected}
-					height={12}
-					width="100%"
-					keyBindings={[{ name: "return", action: "newline" }]}
-					onMouseDown={() => props.edit(true)}
-					onContentChange={(value) =>
-						props.change(
-							typeof value === "string" ? value : (editor?.plainText ?? ""),
-						)
-					}
-				/>
+				<Show when={structured()}>
+					<SettingsFields
+						draft={props.draft}
+						change={props.change}
+						editing={props.editing}
+						edit={props.edit}
+						connected={props.connected}
+					/>
+				</Show>
+				<Show when={!structured()}>
+					<ActionHeader onActivate={() => props.edit(!props.editing)}>
+						<text fg={color("accent")}>
+							{props.editing ? "Leave JSON editor" : "Edit JSON settings"}
+						</text>
+					</ActionHeader>
+					<textarea
+						ref={(value) => {
+							editor = value;
+						}}
+						initialValue={props.draft}
+						focused={props.editing && props.connected}
+						height={12}
+						width="100%"
+						keyBindings={[{ name: "return", action: "newline" }]}
+						onMouseDown={() => props.edit(true)}
+						onContentChange={(value) =>
+							props.change(
+								typeof value === "string" ? value : (editor?.plainText ?? ""),
+							)
+						}
+					/>
+				</Show>
 				<Show when={props.connected && !props.error}>
 					<ActionHeader
 						onActivate={() => {

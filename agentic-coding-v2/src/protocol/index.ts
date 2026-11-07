@@ -2,6 +2,13 @@
 export const protocolVersion = 1;
 export const clientPath = "/api/client";
 export const maxFrameBytes = 1_000_000;
+
+import type {
+	ProviderActionCandidate,
+	ProviderActionIntent,
+	ProviderActionReceipt,
+} from "./provider-actions.ts";
+import type { NativeViewpoint, UiView } from "./viewpoints.ts";
 export type Data = Record<string, unknown>;
 export type Session = {
 	id: number;
@@ -128,7 +135,20 @@ export type ProviderInspection = {
 	operation: ProviderQuery["operation"];
 	value: Data | Data[];
 };
+export type OwnedWork = {
+	items: {
+		id: number;
+		parent: number | null;
+		conversationId: number;
+		state: string;
+		until: number | null;
+		reason: string | null;
+		reasonTruncated: boolean;
+	}[];
+	truncated: boolean;
+};
 export type TaskDetails = {
+	ownedWork: OwnedWork;
 	id: number;
 	metadata: Data;
 	native: {
@@ -163,6 +183,15 @@ export type EnvironmentAction = {
 	replicas?: number;
 };
 export type Methods = {
+	"viewpoints.read": { input: Data; output: NativeViewpoint[] };
+	"viewpoints.save": {
+		input: { id: string; name: string; revision: number; view: UiView };
+		output: NativeViewpoint;
+	};
+	"viewpoints.remove": {
+		input: { id: string; revision: number };
+		output: { removed: true };
+	};
 	"state.read": { input: Data; output: Snapshot };
 	"state.subscribe": { input: Data; output: { subscribed: true } };
 	"session.read": { input: { id: number }; output: Transcript };
@@ -182,6 +211,16 @@ export type Methods = {
 	"session.configure": {
 		input: { id: number; profile: string };
 		output: { configured: true };
+	};
+	"evidence.read": {
+		input: { taskId: number; id: string };
+		output: {
+			id: string;
+			taskId: number;
+			mediaType: string;
+			caption: string;
+			content: string;
+		};
 	};
 	"task.read": { input: { id: number }; output: TaskDetails };
 	"task.cancel": { input: { id: number }; output: { requested: unknown } };
@@ -239,6 +278,22 @@ export type Methods = {
 		input: { id: string; approval: string };
 		output: { revision: string; restartRequired: true };
 	};
+	"providers.receipt": {
+		input: { provider: string; requestId: string };
+		output: ProviderActionReceipt;
+	};
+	"providers.actions": {
+		input: { provider: string };
+		output: ProviderActionReceipt[];
+	};
+	"providers.preview": {
+		input: ProviderActionIntent;
+		output: ProviderActionCandidate;
+	};
+	"providers.apply": {
+		input: { id: string; approval: string };
+		output: ProviderActionReceipt;
+	};
 	"providers.read": { input: Data; output: ProviderSummary[] };
 	"providers.inspect": { input: ProviderQuery; output: ProviderInspection };
 };
@@ -270,6 +325,9 @@ export type Frame =
 			message: string;
 	  };
 export const methods: Method[] = [
+	"viewpoints.read",
+	"viewpoints.save",
+	"viewpoints.remove",
 	"state.read",
 	"state.subscribe",
 	"session.read",
@@ -278,6 +336,7 @@ export const methods: Method[] = [
 	"session.abort",
 	"session.compact",
 	"session.configure",
+	"evidence.read",
 	"task.read",
 	"task.cancel",
 	"review.decide",
@@ -294,6 +353,10 @@ export const methods: Method[] = [
 	"settings.read",
 	"settings.preview",
 	"settings.apply",
+	"providers.receipt",
+	"providers.actions",
+	"providers.preview",
+	"providers.apply",
 	"providers.read",
 	"providers.inspect",
 ];

@@ -8,6 +8,11 @@ import {
 	type Snapshot,
 	type Transcript,
 } from "./index.ts";
+import {
+	providerCandidate,
+	providerReceipt,
+} from "./provider-action-frames.ts";
+import { nativeViewpoint } from "./viewpoints.ts";
 
 const integer = (value: unknown, minimum = 0) =>
 	Number.isSafeInteger(value) && Number(value) >= minimum;
@@ -202,7 +207,36 @@ export function result<M extends Method>(
 	method: M,
 	value: unknown,
 ): Methods[M]["output"] {
-	if (method.startsWith("wiki.")) {
+	if (method === "providers.preview") providerCandidate(value);
+	else if (method === "providers.apply" || method === "providers.receipt")
+		providerReceipt(value);
+	else if (method === "providers.actions") {
+		const items = list(value);
+		if (items.length > 256)
+			throw new Error("Provider journal capacity exceeded");
+		items.forEach(providerReceipt);
+	} else if (method === "viewpoints.read") {
+		const items = list(value);
+		if (items.length > 32)
+			throw new Error("Native viewpoint capacity exceeded");
+		items.forEach(nativeViewpoint);
+	} else if (method === "viewpoints.save") nativeViewpoint(value);
+	else if (method === "viewpoints.remove") {
+		if (record(value).removed !== true)
+			throw new Error("Invalid native viewpoint deletion");
+	} else if (method === "evidence.read") {
+		const data = record(value);
+		if (
+			typeof data.id !== "string" ||
+			!/^[a-f0-9]{64}$/.test(data.id) ||
+			!integer(data.taskId) ||
+			!["image/png", "image/jpeg"].includes(String(data.mediaType)) ||
+			typeof data.caption !== "string" ||
+			typeof data.content !== "string" ||
+			data.content.length > 512000
+		)
+			throw new Error("Invalid native evidence");
+	} else if (method.startsWith("wiki.")) {
 		const page = (value: unknown, content: boolean) => {
 			const data = record(value);
 			if (
@@ -388,6 +422,32 @@ export function result<M extends Method>(
 				].includes(String(review.state))
 			)
 				throw new Error("Invalid task review");
+		});
+		const work = record(data.ownedWork);
+		if (typeof work.truncated !== "boolean")
+			throw new Error("Invalid owned work inspection");
+		const seenWork = new Set<number>();
+		const workers = list(work.items);
+		if (workers.length > 128)
+			throw new Error("Owned work inspection exceeds bound");
+		workers.forEach((node, index) => {
+			if (
+				!integer(node.id) ||
+				seenWork.has(Number(node.id)) ||
+				!integer(node.conversationId) ||
+				typeof node.state !== "string" ||
+				!(node.until === null || integer(node.until)) ||
+				!(
+					node.reason === null ||
+					(typeof node.reason === "string" && node.reason.length <= 2048)
+				) ||
+				typeof node.reasonTruncated !== "boolean" ||
+				(index === 0
+					? node.id !== data.id || node.parent !== null
+					: !integer(node.parent) || !seenWork.has(Number(node.parent)))
+			)
+				throw new Error("Invalid scoped owned work node");
+			seenWork.add(Number(node.id));
 		});
 		list(data.attachments).forEach((item) => {
 			if (

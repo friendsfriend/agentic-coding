@@ -90,6 +90,7 @@ export type Client = {
 	get: (path: string) => Promise<unknown>;
 	post: (path: string, body?: unknown) => Promise<unknown>;
 	patch: (path: string, body?: unknown) => Promise<unknown>;
+	put: (path: string, body?: unknown) => Promise<unknown>;
 	raw: (
 		path: string,
 		init?: { redirect?: RequestRedirect; accept?: string; maxBytes?: number },
@@ -135,7 +136,11 @@ export function providerClient(
 		if (status < 200 || status >= 300)
 			throw new Error(`Upstream provider refused the request (${status})`);
 		try {
-			return text ? (JSON.parse(text) as unknown) : null;
+			return text
+				? (JSON.parse(text, (_key, value: unknown) =>
+						typeof value === "string" ? redactSecrets(value, [token]) : value,
+					) as unknown)
+				: null;
 		} catch {
 			throw new Error("Upstream provider returned invalid data");
 		}
@@ -149,17 +154,23 @@ export function providerClient(
 		get: (path) => call("GET", path),
 		post: (path, body) => call("POST", path, body),
 		patch: (path, body) => call("PATCH", path, body),
+		put: (path, body) => call("PUT", path, body),
 		raw: async (path, init) => {
 			if (!path.startsWith("/")) throw new Error("Invalid provider path");
-			return boundedFetch(fetchImpl, `${provider.baseUrl}${path}`, {
-				headers: {
-					...headers,
-					...(init?.accept ? { Accept: init.accept } : {}),
+			const response = await boundedFetch(
+				fetchImpl,
+				`${provider.baseUrl}${path}`,
+				{
+					headers: {
+						...headers,
+						...(init?.accept ? { Accept: init.accept } : {}),
+					},
+					redirect: init?.redirect,
+					maxBytes: init?.maxBytes ?? 262144,
+					onTooLarge: "truncate",
 				},
-				redirect: init?.redirect,
-				maxBytes: init?.maxBytes ?? 262144,
-				onTooLarge: "truncate",
-			});
+			);
+			return { ...response, body: redactSecrets(response.body, [token]) };
 		},
 	};
 }

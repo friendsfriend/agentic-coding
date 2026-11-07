@@ -12,6 +12,7 @@ import {
 	mapGitLabChange,
 	mapGitLabIssue,
 	providerClient,
+	redact,
 } from "./clients.ts";
 import {
 	findProvider,
@@ -37,9 +38,10 @@ export type Version = { id: string; sha: string; message: string };
 type Store = () => Harness;
 const isList = (value: unknown): value is Record<string, unknown>[] =>
 	Array.isArray(value);
-const pick = (raw: Record<string, unknown>, keys: readonly string[]) => {
+const pick = (raw: Record<string, unknown> | null, keys: readonly string[]) => {
 	const out: Record<string, unknown> = {};
-	for (const key of keys) out[key] = raw[key];
+	for (const key of keys)
+		if (raw && Object.hasOwn(raw, key)) out[key] = raw[key];
 	return out;
 };
 /** Provider APIs: registry in config, live reads stateless, writes gated by an
@@ -440,8 +442,13 @@ export class ProviderApis {
 				target,
 				payload,
 			);
-			recordWrite(doc, key, request, result);
-			return result;
+			const safe = JSON.parse(
+				JSON.stringify(result, (_key, value: unknown) =>
+					typeof value === "string" ? redact(value, resolved) : value,
+				),
+			) as unknown;
+			recordWrite(doc, key, request, safe);
+			return safe;
 		}, background);
 	}
 	private splitTarget(target: string): [string, string] {
@@ -470,6 +477,43 @@ export class ProviderApis {
 						{ body: text(payload.body, "comment body", 65536) },
 					)) as Record<string, unknown>,
 					["id", "body"],
+				);
+			},
+		);
+	}
+	/** Explicit immutable-head approval for native UI; does not replace the existing HTTP method. */
+	async approveExactChange(name: unknown, body: Record<string, unknown>) {
+		return this.write(
+			name,
+			body,
+			"approve-exact-change",
+			async (provider, client, target, payload) => {
+				const [repo, number] = this.splitTarget(target),
+					sha = text(payload.sha, "reviewed head SHA", 40).toLowerCase();
+				if (!/^[a-f0-9]{40}$/.test(sha))
+					throw new Error("Full reviewed head SHA required");
+				const raw = (await client.get(
+					provider.type === "github"
+						? `/repos/${repo}/pulls/${number}`
+						: `/projects/${repo}/merge_requests/${number}`,
+				)) as Record<string, unknown>;
+				const head =
+					provider.type === "github"
+						? (raw.head as Record<string, unknown> | undefined)?.sha
+						: ((raw.diff_refs as Record<string, unknown> | undefined)
+								?.head_sha ?? raw.sha);
+				if (head !== sha)
+					throw new Error("Reviewed head changed or is unavailable");
+				return pick(
+					(await client.post(
+						provider.type === "github"
+							? `/repos/${repo}/pulls/${number}/reviews`
+							: `/projects/${repo}/merge_requests/${number}/approve`,
+						provider.type === "github"
+							? { event: "APPROVE", commit_id: sha }
+							: { sha },
+					)) as Record<string, unknown> | null,
+					["id", "state", "commit_id"],
 				);
 			},
 		);
@@ -535,7 +579,7 @@ export class ProviderApis {
 						["id", "state"],
 					);
 				return pick(
-					(await client.post(`/projects/${repo}/issues/${number}`, {
+					(await client.put(`/projects/${repo}/issues/${number}`, {
 						state_event: "close",
 					})) as Record<string, unknown>,
 					["id", "state"],
@@ -553,7 +597,7 @@ export class ProviderApis {
 				if (provider.type === "github")
 					return pick(
 						(await client.post(
-							`/repos/${repo}/actions/runs/${id}/retry`,
+							`/repos/${repo}/actions/runs/${id}/rerun`,
 						)) as Record<string, unknown>,
 						["id", "status"],
 					);
@@ -606,6 +650,11 @@ export class ProviderApis {
 			async (provider, client, target) => {
 				const [repo, number] = this.splitTarget(target);
 				if (provider.type === "github") {
+					const who = (await client.get("/user")) as Record<string, unknown>;
+					if (!provider.username || who.login !== provider.username)
+						throw new Error(
+							"Configured provider username does not match the authenticated account",
+						);
 					const reviews = await client.get(
 						`/repos/${repo}/pulls/${number}/reviews?per_page=100`,
 					);
@@ -620,7 +669,7 @@ export class ProviderApis {
 					if (!mine || typeof mine.id !== "number")
 						throw new Error("No approval by this provider user to dismiss");
 					return pick(
-						(await client.post(
+						(await client.put(
 							`/repos/${repo}/pulls/${number}/reviews/${mine.id}/dismissals`,
 							{ message: "dismissed" },
 						)) as Record<string, unknown>,
@@ -693,7 +742,7 @@ export class ProviderApis {
 				const [repo, change, thread] = this.splitThread(target),
 					resolved = payload.resolved !== false;
 				return pick(
-					(await client.post(
+					(await client.put(
 						`/projects/${repo}/merge_requests/${change}/discussions/${thread}`,
 						{ resolved },
 					)) as Record<string, unknown>,
@@ -722,7 +771,7 @@ export class ProviderApis {
 						["id", "labels"],
 					);
 				return pick(
-					(await client.post(`/projects/${repo}/issues/${number}`, {
+					(await client.put(`/projects/${repo}/issues/${number}`, {
 						labels: labels.join(","),
 					})) as Record<string, unknown>,
 					["id", "labels"],
@@ -754,7 +803,7 @@ export class ProviderApis {
 					this.num(id, "assignee ID"),
 				);
 				return pick(
-					(await client.post(`/projects/${repo}/issues/${number}`, {
+					(await client.put(`/projects/${repo}/issues/${number}`, {
 						assignee_ids,
 					})) as Record<string, unknown>,
 					["id", "assignees"],

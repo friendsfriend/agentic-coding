@@ -1,6 +1,15 @@
 import { record } from "../../protocol/index.ts";
+import {
+	type NativeViewpoint,
+	nativeViewpoint,
+} from "../../protocol/viewpoints.ts";
 import type { Navigation, View } from "./navigation.ts";
-export type Viewpoint = { id: string; name: string; view: View };
+export type Viewpoint = {
+	id: string;
+	name: string;
+	view: View;
+	nativeRevision?: number;
+};
 const pages = [
 	"opencode",
 	"pi",
@@ -35,7 +44,9 @@ function checkedView(value: unknown): View {
 	)
 		throw new Error("Invalid saved viewpoint");
 	if (
-		/^\s*\/(?:settings-apply|wiki-apply|wiki-comment)(?:\s|$)/.test(item.draft)
+		/^\s*\/(?:settings-apply|wiki-apply|wiki-comment|provider-apply)(?:\s|$)/.test(
+			item.draft,
+		)
 	)
 		throw new Error(
 			"Configuration/wiki confirmations and comment admission drafts cannot be saved or restored in viewpoints",
@@ -48,6 +59,34 @@ function checkedView(value: unknown): View {
 /** Data-only bookmark collection. Restoration has no reference to client commands. */
 export class Viewpoints {
 	items: Viewpoint[] = [];
+	private nativeItems: Viewpoint[] = [];
+	get all() {
+		return [...this.items, ...this.nativeItems];
+	}
+	putNative(item: NativeViewpoint) {
+		const prior = this.nativeItems;
+		this.cacheNative([item]);
+		const fresh = this.nativeItems[0];
+		this.nativeItems = fresh
+			? [fresh, ...prior.filter((entry) => entry.id !== fresh.id)].slice(0, 32)
+			: prior;
+	}
+	dropNative(id: string) {
+		this.nativeItems = this.nativeItems.filter(
+			(item) => item.id !== `native:${id}`,
+		);
+	}
+	cacheNative(items: NativeViewpoint[]) {
+		this.nativeItems = items.map((value) => {
+			const item = nativeViewpoint(value);
+			return {
+				id: `native:${item.id}`,
+				name: `Pinned · ${item.name}`,
+				view: checkedView({ ...item.view, draft: "", detail: {} }),
+				nativeRevision: item.revision,
+			};
+		});
+	}
 	save(name: string, current: View) {
 		if (!name.trim() || name.length > 100 || this.items.length >= 64)
 			throw new Error("Viewpoint name or capacity invalid");
@@ -59,9 +98,16 @@ export class Viewpoints {
 		this.items = this.items.filter((item) => item.id !== id);
 	}
 	restore(id: string, navigation: Navigation) {
-		const item = this.items.find((item) => item.id === id);
+		const item = this.all.find((item) => item.id === id);
 		if (!item) throw new Error("Viewpoint no longer exists");
-		navigation.go(checkedView(item.view));
+		const next = checkedView(item.view);
+		if (
+			item.nativeRevision !== undefined &&
+			navigation.current.page === next.page &&
+			navigation.current.resource === next.resource
+		)
+			next.draft = navigation.current.draft;
+		navigation.go(next);
 	}
 	export() {
 		return JSON.stringify({ version: 1, items: this.items });

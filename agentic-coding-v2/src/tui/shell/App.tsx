@@ -1,5 +1,9 @@
 /** @jsxImportSource @opentui/solid */
-import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
+import type {
+	BoxRenderable,
+	ScrollBoxRenderable,
+	TextareaRenderable,
+} from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
 import { useTerminalDimensions } from "@opentui/solid";
 import {
@@ -21,16 +25,28 @@ import type {
 	SkillSummary,
 	TaskDetails,
 } from "../../protocol/index.ts";
+import type {
+	ProviderActionCandidate,
+	ProviderActionIntent,
+	ProviderActionOperation,
+	ProviderActionReceipt,
+} from "../../protocol/provider-actions.ts";
+import { uiView } from "../../protocol/viewpoints.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
+import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
 import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
+import { DraftHistory } from "../features/sessions/history.ts";
+import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
 import { SettingsPanel } from "../features/settings/SettingsPanel.tsx";
 import { SkillPanel } from "../features/skills/SkillPanel.tsx";
 import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { WikiPanel } from "../features/wiki/WikiPanel.tsx";
+import { ActionScope } from "../ui/ActionScope.tsx";
+import { CommandPalette } from "../ui/CommandPalette.tsx";
 import { color } from "../ui/theme/index.ts";
 import { Navigation, type Page, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
@@ -54,6 +70,7 @@ const help = [
 	"/model PROFILE · /abort · /compact [instructions]",
 	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
+	"/evidence TASK_ID CONTENT_DIGEST (explicit bounded owned image read)",
 	"/cancel TASK_ID",
 	"/approve REVIEW_ID@REVISION [comments]",
 	"/reject REVIEW_ID@REVISION comments",
@@ -65,6 +82,10 @@ const help = [
 	"/provider NAME changes|issues REPO [open|closed|all]",
 	"/provider NAME change|issue|files|versions|discussions REPO NUMBER",
 	"/provider NAME jobs REPO [RUN_ID] (required for GitHub)",
+	"/provider-new OPERATION (explicitly replace local intention editor only)",
+	"/provider-preview (seal edited intention; no remote request)",
+	"/provider-apply ID approve:DIGEST (one attempt, no implicit retry)",
+	"/provider-attempts | /provider-receipt REQUEST_ID (native journal only)",
 	"/view settings · /settings-preview · /settings-reset",
 	"/settings-apply CANDIDATE_ID approve:DIGEST (explicit file save; restart required)",
 	"/wiki-page ID · /wiki-new · /wiki-reset · /wiki-preview",
@@ -81,7 +102,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const client = props.client,
 		dimensions = useTerminalDimensions();
 	const navigation = new Navigation(),
-		viewpoints = new Viewpoints();
+		viewpoints = new Viewpoints(),
+		history = new DraftHistory();
 	const [revision, setRevision] = createSignal(0),
 		[notice, setNotice] = createSignal<string | null>(null),
 		[wikiData, setWikiData] = createSignal<Data[]>([]),
@@ -106,6 +128,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[skillError, setSkillError] = createSignal<string | null>(null),
 		[providerData, setProviderData] = createSignal<ProviderSummary[]>([]),
 		[providerError, setProviderError] = createSignal<string | null>(null),
+		[providerWriteDraft, setProviderWriteDraft] = createSignal(""),
+		[providerCandidate, setProviderCandidate] =
+			createSignal<ProviderActionCandidate | null>(null),
+		[providerAttempts, setProviderAttempts] = createSignal<
+			ProviderActionReceipt[]
+		>([]),
+		[providerWriteError, setProviderWriteError] = createSignal<string | null>(
+			null,
+		),
+		[evidence, setEvidence] = createSignal<{
+			id: string;
+			taskId: number;
+			mediaType: string;
+			caption: string;
+			content: string;
+		} | null>(null),
 		[taskDetails, setTaskDetails] = createSignal<TaskDetails | null>(null),
 		[taskError, setTaskError] = createSignal<string | null>(null),
 		[refreshRevision, setRefreshRevision] = createSignal(0),
@@ -117,9 +155,17 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			createSignal<SettingsCandidate | null>(null),
 		[settingsEditing, setSettingsEditing] = createSignal(false),
 		[helpOpen, setHelpOpen] = createSignal(false),
+		[paletteOpen, setPaletteOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
 	let prompt: TextareaRenderable | undefined,
 		scroll: ScrollBoxRenderable | undefined;
+	const reveal = (node: BoxRenderable) => {
+		if (!scroll || !Number.isFinite(node.y)) return;
+		const top = node.y - scroll.viewport.y + scroll.scrollTop;
+		if (top < scroll.scrollTop) scroll.scrollTo(Math.max(0, top));
+		else if (top + node.height > scroll.scrollTop + scroll.viewport.height)
+			scroll.scrollTo(Math.max(0, top + node.height - scroll.viewport.height));
+	};
 	const update = () => setRevision((value) => value + 1);
 	const removeListener = client.onChange(update);
 	onCleanup(removeListener);
@@ -138,7 +184,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	});
 	const bookmarks = () => {
 		revision();
-		return viewpoints.items;
+		return viewpoints.all;
 	};
 	const connectionError = () => {
 		revision();
@@ -165,6 +211,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			navigation.current.scroll = Math.max(0, Math.round(scroll.scrollTop));
 	};
 	const restore = () => {
+		setProviderCandidate(null);
+		setEvidence(null);
 		setWikiCandidate(null);
 		setSettingsCandidate(null);
 		setSettingsEditing(false);
@@ -195,6 +243,29 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		revision();
 		return client.observationError;
 	};
+	let pinEpoch = 0;
+	const pinConnected = createMemo(() => status() === "connected");
+	createEffect(() => {
+		const connected = pinConnected(),
+			epoch = ++pinEpoch;
+		onCleanup(() => {
+			pinEpoch++;
+		});
+		if (!connected) return;
+		void client
+			.call("viewpoints.read", {})
+			.then((items) => {
+				if (epoch !== pinEpoch || !pinConnected()) return;
+				viewpoints.cacheNative(items);
+				update();
+			})
+			.catch((error: Error) => {
+				if (epoch === pinEpoch)
+					setNotice(
+						`Native pinned state could not be refreshed: ${error.message}`,
+					);
+			});
+	});
 	let wikiEpoch = 0;
 	const wikiTarget = createMemo(() =>
 		page() === "wiki" ? current().resource : null,
@@ -336,6 +407,50 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			})
 			.catch((error: Error) => {
 				if (epoch === skillEpoch) setSkillError(error.message);
+			});
+	});
+	const activeProvider = createMemo(() =>
+		page() === "providers"
+			? (providerData().find((entry) => entry.name === current().resource)
+					?.name ?? null)
+			: null,
+	);
+	let providerActionEpoch = 0;
+	createEffect(() => {
+		const provider = activeProvider(),
+			connected = status() === "connected";
+		refreshRevision();
+		const epoch = ++providerActionEpoch;
+		setProviderCandidate(null);
+		setProviderAttempts([]);
+		onCleanup(() => {
+			providerActionEpoch++;
+		});
+		if (!provider) {
+			setProviderWriteError(
+				"Select an exact configured provider name before preparing a write intention; drafts remain local.",
+			);
+			return;
+		}
+		if (!connected) {
+			setProviderWriteError(
+				"Disconnected; local intention only. No candidate can be applied.",
+			);
+			return;
+		}
+		setProviderWriteError(
+			"Reading native attempt journal only; no outbound provider request…",
+		);
+		void client
+			.call("providers.actions", { provider })
+			.then((attempts) => {
+				if (epoch === providerActionEpoch && status() === "connected") {
+					setProviderAttempts(attempts);
+					setProviderWriteError(null);
+				}
+			})
+			.catch((error: Error) => {
+				if (epoch === providerActionEpoch) setProviderWriteError(error.message);
 			});
 	});
 	let providerEpoch = 0;
@@ -499,12 +614,127 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		);
 		update();
 	};
+	const historyKey = () => `${current().page}:${current().resource ?? ""}`;
+	const recall = (direction: -1 | 1) => {
+		if (
+			current().focus !== "content" ||
+			settingsEditing() ||
+			busy() ||
+			helpOpen() ||
+			paletteOpen()
+		)
+			return;
+		remember();
+		try {
+			const recalled = history.recall(historyKey(), direction, current().draft);
+			if (!recalled) {
+				setNotice(
+					"No eligible local accepted-input history for this exact view/session",
+				);
+				return;
+			}
+			navigation.current.draft = recalled.text;
+			prompt?.setText(recalled.text);
+			setNotice(recalled.label);
+			update();
+		} catch (error) {
+			setNotice(
+				error instanceof Error ? error.message : "Local history refused",
+			);
+		}
+	};
+	const paletteEntries = () => [
+		...pages.map(([page, description]) => ({
+			command: `/view ${page}`,
+			description,
+		})),
+		...["opencode", "pi", "pi-durable", "orchestrator"].map((mode) => ({
+			command: `/mode ${mode}`,
+			description: "Select native session mode without launching an engine",
+		})),
+		...[
+			"/help",
+			"/refresh",
+			"/back",
+			"/forward",
+			"/filter FILTER",
+			"/sort newest",
+			"/bookmark NAME",
+			"/jump VIEWPOINT_ID",
+			"/settings-preview",
+			"/wiki-preview",
+			"/wiki-new",
+		].map((command) => ({
+			command,
+			description:
+				"Prepare native UI command; placeholders require explicit editing",
+		})),
+		...(sessionId() === null
+			? []
+			: [
+					{
+						command: `/inspect-model ${sessionId()}`,
+						description: "Inspect selected native conversation model/thinking",
+					},
+					{
+						command: "/model PROFILE",
+						description:
+							"Configure selected conversation from a running-host profile (no in-flight replacement)",
+					},
+					{
+						command: "/compact",
+						description: "Prepare native transcript compaction task",
+					},
+					{
+						command: "/abort",
+						description: "Prepare selected native conversation abort",
+					},
+				]),
+		...(selectedTaskId() === null
+			? []
+			: [
+					{
+						command: `/task ${selectedTaskId()}`,
+						description: "Read selected owning app task",
+					},
+				]),
+	];
 	const keymap = useKeymap();
 	const unregister = keymap.registerLayer({
 		id: "v2.shell",
 		priority: 10,
 		commands: [
 			{ id: "shell.quit", name: "Quit", run: () => props.quit() },
+			{
+				id: "shell.palette",
+				name: "Search native command suggestions (prepare only)",
+				run: () => {
+					if (busy() || settingsEditing()) return;
+					remember();
+					setPaletteOpen(!paletteOpen());
+				},
+			},
+			{
+				id: "shell.historyPrevious",
+				name: "Recall previous local accepted input",
+				run: () => recall(-1),
+			},
+			{
+				id: "shell.historyNext",
+				name: "Recall next local accepted input / restore unsent draft",
+				run: () => recall(1),
+			},
+			{
+				id: "shell.prompt",
+				name: "Focus command/message prompt",
+				run: () => {
+					setSettingsEditing(false);
+					setHelpOpen(false);
+					navigation.current.focus = "content";
+					update();
+					prompt?.focus();
+				},
+			},
 			{
 				id: "shell.back",
 				name: "Back",
@@ -547,6 +777,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					navigation.current.focus = "content";
 					setSettingsEditing(false);
 					setHelpOpen(false);
+					setPaletteOpen(false);
 					update();
 				},
 			},
@@ -579,6 +810,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		],
 		bindings: [
 			{ key: "ctrl+q", cmd: "shell.quit" },
+			{ key: "ctrl+k", cmd: "shell.palette" },
+			{ key: "alt+up", cmd: "shell.historyPrevious" },
+			{ key: "alt+down", cmd: "shell.historyNext" },
+			{ key: "ctrl+e", cmd: "shell.prompt" },
 			{ key: "alt+left", cmd: "shell.back" },
 			{ key: "alt+right", cmd: "shell.forward" },
 			{ key: "ctrl+b", cmd: "shell.sessions" },
@@ -605,6 +840,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					command = match?.[1] ?? "",
 					args = match?.[2]?.trim() ?? "";
 				const clear = () => {
+					history.admitted(`${origin.page}:${origin.resource ?? ""}`, content);
 					if (
 						navigation.current === origin &&
 						prompt &&
@@ -640,6 +876,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					if (!page) throw new Error("Unknown feature view");
 					clear();
 					go(page);
+				} else if (command === "mode") {
+					if (!["opencode", "pi", "pi-durable", "orchestrator"].includes(args))
+						throw new Error("Unknown native mode");
+					clear();
+					go(args as Page);
 				} else if (command === "session") {
 					const id = numbered();
 					if (!state()?.sessions.some((session) => session.id === id))
@@ -669,8 +910,46 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					remember();
 					viewpoints.save(args, current());
 					update();
+				} else if (command === "pin" || command === "repin") {
+					const source = current(),
+						target =
+							command === "repin"
+								? revisioned()
+								: { id: crypto.randomUUID(), revision: 0 },
+						saved = await client.call("viewpoints.save", {
+							...target,
+							name:
+								(command === "repin" ? comments : args) ||
+								`${source.page} ${source.resource ?? ""}`.trim(),
+							view: uiView({
+								page: source.page,
+								resource: source.resource,
+								selection: source.selection,
+								filter: source.filter,
+								sort: source.sort,
+								expanded: source.expanded,
+								scroll: source.scroll,
+								focus: source.focus,
+							}),
+						});
+					viewpoints.putNative(saved);
+					clear();
+					update();
+					setNotice(
+						`Pinned native UI-only state native:${saved.id}@${saved.revision}; no prompt/editor drafts, diagnostics, approvals or execution persisted.`,
+					);
+				} else if (command === "unpin") {
+					const target = revisioned();
+					await client.call("viewpoints.remove", target);
+					viewpoints.dropNative(target.id);
+					clear();
+					update();
+				} else if (command === "pins") {
+					viewpoints.cacheNative(await client.call("viewpoints.read", {}));
+					clear();
+					update();
 				} else if (command === "jump") {
-					const saved = viewpoints.items.find(
+					const saved = viewpoints.all.find(
 						(item) => item.id === args || item.name === args,
 					);
 					if (!saved) throw new Error("Unknown saved viewpoint");
@@ -678,6 +957,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					viewpoints.restore(saved.id, navigation);
 					restore();
 				} else if (command === "forget") {
+					if (args.startsWith("native:"))
+						throw new Error(
+							"Use /unpin UUID@REVISION for native UI-state deletion",
+						);
 					viewpoints.remove(args);
 					clear();
 					update();
@@ -930,6 +1213,183 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					setNotice(
 						`Configuration saved at revision ${result.revision}. Running host is unchanged; a separately authorized restart is required. Edited JSON is retained until explicit reset.`,
 					);
+				} else if (
+					[
+						"provider-new",
+						"provider-preview",
+						"provider-apply",
+						"provider-attempts",
+						"provider-receipt",
+					].includes(command)
+				) {
+					const provider = activeProvider(),
+						parts = args ? args.split(/\s+/) : [],
+						epoch = providerActionEpoch;
+					if (!provider)
+						throw new Error("Select an exact configured provider name first");
+					if (command === "provider-new") {
+						const operation = parts[0] ?? "comment-change";
+						if (
+							parts.length > 1 ||
+							![
+								"comment-change",
+								"approve-exact-change",
+								"unapprove-change",
+								"comment-issue",
+								"close-issue",
+								"retry-job",
+								"cancel-job",
+								"rebase-change",
+								"reply-discussion",
+								"resolve-discussion",
+								"set-issue-labels",
+								"set-issue-assignees",
+							].includes(operation)
+						)
+							throw new Error(
+								"Supply exactly one supported native provider operation",
+							);
+						const payload: Data = [
+							"comment-change",
+							"comment-issue",
+							"reply-discussion",
+						].includes(operation)
+							? { body: "" }
+							: operation === "approve-exact-change"
+								? { sha: "" }
+								: operation === "resolve-discussion"
+									? { resolved: true }
+									: operation === "set-issue-labels"
+										? { labels: [] }
+										: operation === "set-issue-assignees"
+											? { assignees: [] }
+											: {};
+						const intent: ProviderActionIntent = {
+							provider,
+							operation: operation as ProviderActionOperation,
+							repo: "",
+							number: 0,
+							...(operation === "reply-discussion" ||
+							operation === "resolve-discussion"
+								? { thread: "" }
+								: {}),
+							payload,
+							requestId: crypto.randomUUID(),
+						};
+						setProviderWriteDraft(JSON.stringify(intent, null, 2));
+						setProviderCandidate(null);
+						setProviderWriteError(null);
+						clear();
+						setNotice(
+							"Explicitly replaced local intention with a new request identity only; no provider call",
+						);
+					} else if (command === "provider-preview") {
+						if (parts.length)
+							throw new Error(
+								"Preview uses the local intention editor, no additional arguments",
+							);
+						const draft = providerWriteDraft();
+						if (!draft || draft.length > 32000)
+							throw new Error(
+								"A bounded local intention editor document is required",
+							);
+						const intent = JSON.parse(draft) as ProviderActionIntent;
+						if (intent.provider !== provider)
+							throw new Error(
+								"Intention provider differs from the exact selected provider",
+							);
+						setProviderCandidate(null);
+						const candidate = await client.call("providers.preview", intent);
+						if (
+							navigation.current !== origin ||
+							epoch !== providerActionEpoch ||
+							activeProvider() !== provider ||
+							providerWriteDraft() !== draft ||
+							status() !== "connected"
+						)
+							throw new Error(
+								"Provider selection/draft changed; prepare a fresh snapshot",
+							);
+						setProviderCandidate(candidate);
+						setProviderWriteError(null);
+						clear();
+						setNotice(
+							"Native immutable intention only; no outbound request. Inspect it, then manually confirm its exact digest.",
+						);
+					} else if (command === "provider-apply") {
+						const candidate = providerCandidate();
+						if (
+							parts.length !== 2 ||
+							!candidate ||
+							parts[0] !== candidate.id ||
+							candidate.provider !== provider ||
+							parts[1] !== `approve:${candidate.digest}`
+						)
+							throw new Error(
+								"A current selected candidate and exact manually typed approve:DIGEST are required",
+							);
+						setProviderCandidate(null);
+						const receipt = await client.call("providers.apply", {
+							id: candidate.id,
+							approval: parts[1],
+						});
+						if (
+							navigation.current !== origin ||
+							epoch !== providerActionEpoch ||
+							activeProvider() !== provider
+						)
+							throw new Error(
+								"Selection changed during one provider dispatch attempt; inspect the retained native receipt, never replay implicitly",
+							);
+						setProviderAttempts([
+							receipt,
+							...providerAttempts().filter((entry) => entry.id !== receipt.id),
+						]);
+						clear();
+						setNotice(
+							receipt.status === "uncertain"
+								? "Outcome uncertain (including possible preflight/rejection); inspect native receipt and remote state before any separately approved new request ID. No retry."
+								: "Native provider acknowledgement retained; remote completion is not asserted. No follow-up/retry.",
+						);
+					} else {
+						if (parts.length !== (command === "provider-receipt" ? 1 : 0))
+							throw new Error(
+								"Use /provider-attempts or /provider-receipt REQUEST_ID",
+							);
+						const attempts =
+							command === "provider-receipt"
+								? [
+										await client.call("providers.receipt", {
+											provider,
+											requestId: parts[0],
+										}),
+									]
+								: await client.call("providers.actions", { provider });
+						if (
+							navigation.current !== origin ||
+							epoch !== providerActionEpoch ||
+							activeProvider() !== provider ||
+							status() !== "connected"
+						)
+							throw new Error(
+								"Provider selection changed during native receipt read",
+							);
+						setProviderAttempts(
+							command === "provider-receipt"
+								? [
+										...attempts,
+										...providerAttempts().filter(
+											(entry) => entry.id !== attempts[0]?.id,
+										),
+									]
+								: attempts,
+						);
+						setProviderWriteError(null);
+						clear();
+						setNotice(
+							"Read retained native journal only; no remote request or automatic retry",
+						);
+					}
 				} else if (command === "provider") {
 					const [provider, operation, repo, argument] = words;
 					if (!provider || !operation)
@@ -1098,6 +1558,39 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					setNotice(
 						"Loaded instruction snapshot read only; no file access beyond loaded configuration and no task admission.",
 					);
+				} else if (command === "evidence") {
+					const id = numbered(),
+						digest = words[1] ?? "",
+						epoch = detailEpoch;
+					if (
+						origin.page !== "tasks" ||
+						words.length !== 2 ||
+						selectedTaskId() !== id ||
+						taskError() ||
+						!taskDetails()?.attachments.some(
+							(item) => item.id === digest && item.taskId === id,
+						)
+					)
+						throw new Error(
+							"Select an owned task and exact retained image digest",
+						);
+					setEvidence(null);
+					const value = await client.call("evidence.read", {
+						taskId: id,
+						id: digest,
+					});
+					if (
+						value.taskId !== id ||
+						value.id !== digest ||
+						navigation.current !== origin ||
+						epoch !== detailEpoch ||
+						status() !== "connected"
+					)
+						throw new Error(
+							"Evidence identity or selection changed; read explicitly again",
+						);
+					setEvidence(value);
+					clear();
 				} else if (command === "logs") {
 					const logs = await client.call("environment.logs", { app: args });
 					origin.detail = { logs };
@@ -1130,6 +1623,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					content: content.startsWith("//") ? content.slice(1) : content,
 					requestId: crypto.randomUUID(),
 				});
+				history.admitted(`${origin.page}:${origin.resource ?? ""}`, content);
 				if (navigation.current === origin && current().draft === content) {
 					navigation.current.draft = "";
 					prompt?.setText("");
@@ -1248,7 +1742,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						<Show
 							when={helpOpen()}
 							fallback={
-								<>
+								<ActionScope
+									enabled={
+										current().focus === "content" &&
+										!settingsEditing() &&
+										!busy() &&
+										!paletteOpen()
+									}
+									reveal={reveal}
+								>
 									<Show when={isTranscript()}>
 										<Show
 											when={available()}
@@ -1328,6 +1830,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											implemented yet. Legacy launch/delegation is not used.
 										</text>
 									</Show>
+									<Show when={current().page === "pi-durable"}>
+										<SessionExplorer
+											sessions={(state()?.sessions ?? []).filter((session) =>
+												rows().some((row) => row.id === session.id),
+											)}
+											tasks={state()?.tasks ?? []}
+											selected={current().resource}
+											connected={status() === "connected"}
+											select={(id) => {
+												navigation.current.resource = id;
+												update();
+											}}
+											open={(id) => go("session", String(id))}
+											prepare={prepareCommand}
+										/>
+									</Show>
 									<Show when={missingResource()}>
 										<text fg={color("warning")}>
 											Saved resource is unavailable in the current filtered
@@ -1340,6 +1858,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											current().page !== "profiles" &&
 											current().page !== "skills" &&
 											![
+												"pi-durable",
 												"tasks",
 												"environments",
 												"schedules",
@@ -1388,6 +1907,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									</Show>
 									<Show when={current().page === "tasks"}>
 										<TaskPanel
+											evidence={evidence()}
 											rows={rows()}
 											selectedId={selectedTaskId()}
 											select={(id) => go("tasks", String(id))}
@@ -1555,6 +2075,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											prepare={prepareCommand}
 										/>
 									</Show>
+									<Show when={current().page === "providers"}>
+										<ProviderWritePanel
+											draft={providerWriteDraft()}
+											change={(draft) => {
+												setProviderWriteDraft(draft);
+												setProviderCandidate(null);
+											}}
+											editing={settingsEditing()}
+											edit={setSettingsEditing}
+											connected={status() === "connected"}
+											error={providerWriteError()}
+											candidate={providerCandidate()}
+											attempts={providerAttempts()}
+											prepare={prepareCommand}
+										/>
+									</Show>
 									<Show when={current().page === "observability"}>
 										<ObservabilityPanel
 											rows={rows()}
@@ -1670,12 +2206,23 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											{JSON.stringify(current().detail, null, 2)}
 										</text>
 									</Show>
-								</>
+								</ActionScope>
 							}
 						>
 							<For each={help}>{(line) => <text>{line}</text>}</For>
 						</Show>
 					</scrollbox>
+					<Show when={paletteOpen()}>
+						<CommandPalette
+							entries={paletteEntries()}
+							close={() => setPaletteOpen(false)}
+							choose={(command) => {
+								setPaletteOpen(false);
+								navigation.current.focus = "content";
+								prepareCommand(command);
+							}}
+						/>
+					</Show>
 					<box
 						height={5}
 						flexShrink={0}
@@ -1686,7 +2233,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							ref={(value) => {
 								prompt = value;
 							}}
-							focused={current().focus === "content" && !settingsEditing()}
+							focused={
+								current().focus === "content" &&
+								!settingsEditing() &&
+								!paletteOpen()
+							}
 							initialValue={current().draft}
 							placeholder={
 								isTranscript()
@@ -1722,7 +2273,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						focused={current().focus === "viewpoints"}
 						options={bookmarks().map((item) => ({
 							name: item.name,
-							description: `${item.view.page} ${item.view.resource ?? ""}`,
+							description: `${item.view.page} ${item.view.resource ?? ""}${item.nativeRevision === undefined ? " · memory/draft" : ` · rev ${item.nativeRevision} · UI-only pin`}`,
 							value: item.id,
 						}))}
 						textColor={color("text")}
@@ -1734,7 +2285,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							restore();
 						}}
 					/>
-					<text fg={color("textMuted")}> Memory-only · drafts retained</text>
+					<text wrapMode="word" fg={color("textMuted")}>
+						Memory bookmarks keep drafts; native pins never persist drafts,
+						diagnostics or confirmations. /pin NAME · /pins · /repin UUID@REV
+						NAME · /unpin UUID@REV. Cached pins may be stale; restoration never
+						executes/adopts missing resources.
+					</text>
 				</box>
 			</box>
 			<text

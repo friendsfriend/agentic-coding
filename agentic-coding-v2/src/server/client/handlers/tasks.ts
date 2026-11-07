@@ -9,6 +9,7 @@ import {
 	type TaskInfo,
 	values,
 } from "../../../state.ts";
+import { ownedWork } from "../../../task-work.ts";
 
 /** Catalog-owned tasks only; no arbitrary native task/checkpoint or filesystem reads. */
 export async function readTask(app: Runtime, id: number): Promise<TaskDetails> {
@@ -17,6 +18,7 @@ export async function readTask(app: Runtime, id: number): Promise<TaskDetails> {
 	const raw = catalog?.tasks[String(id)];
 	if (!raw) throw new Error("Task metadata unavailable");
 	return {
+		ownedWork: await ownedWork(app.harness, id),
 		id,
 		metadata: { ...decode<TaskInfo>(raw) },
 		native: native
