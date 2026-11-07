@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { type Config, digest } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
-import type { Draft } from "./definition-draft-data.ts";
+import {
+	auxiliaryPath,
+	type Draft,
+	type SourceDraft,
+} from "./definition-draft-data.ts";
 import { within } from "./path-within.ts";
 
 const limit = 65536,
@@ -182,17 +186,19 @@ function payload(config: Config, draft: Draft) {
 		);
 	return { bytes: Buffer.from(content, "utf8"), projects, targets };
 }
-/** Atomic same-directory replace: exclusive temp file, fsync, rename, re-read. */
+/** Atomic same-directory replace: exclusive temp file, fsync, rename. */
 function replace(
 	destination: string,
+	tag: string,
 	bytes: Buffer,
 	staged: string,
 	onWrite: () => void,
+	called: { value: boolean },
 ) {
 	const directory = path.dirname(destination),
 		temp = path.join(
 			directory,
-			`.${name}.${digest(`${destination}${staged}`).slice(0, 24)}.tmp`,
+			`.${tag}.${digest(`${destination}${staged}`).slice(0, 24)}.tmp`,
 		);
 	const fd = fs.openSync(
 		temp,
@@ -214,7 +220,10 @@ function replace(
 	}
 	fs.closeSync(fd);
 	try {
-		onWrite();
+		if (!called.value) {
+			called.value = true;
+			onWrite();
+		}
 		fs.renameSync(temp, destination);
 	} catch (error) {
 		fs.rmSync(temp, { force: true });
@@ -231,17 +240,99 @@ function replace(
 		/* Directory fsync is best effort; the rename itself already happened. */
 	}
 }
+/** Auxiliary staged sources only: bounded relative public paths shaped for the
+ * live configuration directory. Repository-bound sources are never published;
+ * the repository's own review workflow owns those bytes. */
+function auxiliaries(draft: Draft): SourceDraft[] {
+	return draft.sources?.filter((source) => source.auxiliary === true) ?? [];
+}
+function auxiliariesApproval(list: SourceDraft[]): string {
+	return digest(
+		JSON.stringify(
+			list.map((source) => ({ file: source.file, digest: source.digest })),
+		),
+	);
+}
+function auxiliaryBytes(source: SourceDraft): Buffer {
+	if (
+		Buffer.byteLength(source.content) > limit ||
+		Buffer.from(source.content).toString("utf8") !== source.content ||
+		digest(source.content) !== source.digest
+	)
+		throw new Error("Staged auxiliary content integrity check failed");
+	return Buffer.from(source.content, "utf8");
+}
+/** Resolves and pre-verifies an auxiliary destination without writing. */
+function auxiliaryDestination(directory: string, source: SourceDraft) {
+	const file = auxiliaryPath(source.file),
+		destination = path.join(directory, file);
+	if (!within(directory, destination))
+		throw new Error(
+			"Auxiliary promotion refuses a destination outside the live configuration directory",
+		);
+	let stat: fs.Stats;
+	try {
+		stat = fs.lstatSync(destination);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			return { destination, previous: null as string | null };
+		throw new Error("Auxiliary destination is unavailable");
+	}
+	if (!stat.isFile())
+		throw new Error(
+			"Auxiliary promotion refuses a non-regular destination; symlinks and directories are never adopted or converted",
+		);
+	return { destination, previous: readDigest(destination) };
+}
+function readDigest(destination: string): string {
+	const fd = fs.openSync(
+		destination,
+		fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+	);
+	try {
+		const stat = fs.fstatSync(fd),
+			buffer = Buffer.alloc(limit + 1);
+		if (!stat.isFile())
+			throw new Error("Auxiliary destination changed under promotion");
+		let length = 0;
+		while (length < buffer.length) {
+			const read = fs.readSync(
+				fd,
+				buffer,
+				length,
+				buffer.length - length,
+				null,
+			);
+			if (!read) break;
+			length += read;
+		}
+		if (length > limit) throw new Error("Auxiliary destination is oversized");
+		return digest(buffer.subarray(0, length));
+	} finally {
+		fs.closeSync(fd);
+	}
+}
 /** Writes the exact staged configuration document to the live destination once
  * the developer explicitly approves its digest and the recorded base still holds. */
 export function promoteDefinition(
 	config: Config,
 	draft: Draft,
 	approval: string,
+	sourcesApproval: string | undefined,
 	onWrite: () => void,
 ) {
 	if (approval !== draft.digest)
 		throw new Error(
 			"Promotion requires explicit approval of the exact current staged content digest",
+		);
+	const staged = auxiliaries(draft);
+	if (staged.length === 0 && sourcesApproval !== undefined)
+		throw new Error(
+			"Promotion refuses an auxiliary approval when the draft stages no auxiliary sources",
+		);
+	if (staged.length > 0 && sourcesApproval !== auxiliariesApproval(staged))
+		throw new Error(
+			"Promotion requires explicit approval of the exact staged auxiliary file digests",
 		);
 	const { bytes, projects, targets } = payload(config, draft),
 		destination = writable(config),
@@ -255,33 +346,86 @@ export function promoteDefinition(
 			throw new Error(
 				"Draft lacks the current configuration-directory identity; create a fresh draft",
 			);
-		const live = inspectDestination(canonical);
-		if (live.state === "regular" && live.digest === draft.digest)
+		const prepared = staged.map((source) => ({
+				source,
+				bytes: auxiliaryBytes(source),
+				...auxiliaryDestination(pinned.directory, source),
+			})),
+			live = inspectDestination(canonical),
+			configUnchanged =
+				live.state === "regular" && live.digest === draft.digest,
+			auxiliariesUnchanged = prepared.every(
+				({ previous, source }) => previous === source.digest,
+			);
+		if (configUnchanged && auxiliariesUnchanged)
 			return {
 				outcome: "unchanged" as const,
 				previous: live.digest,
 				projects: projects.length,
 				targets,
 				bytes: bytes.length,
+				auxiliaryFiles: prepared.map(({ source, previous }) => ({
+					file: source.file,
+					digest: source.digest,
+					bytes: Buffer.byteLength(source.content),
+					previous,
+				})),
 			};
 		if (!fence(draft, live))
 			throw new Error(
 				"Live destination changed since this draft's recorded base; start or reload a draft to stage against the current configuration",
 			);
 		sameDirectory(config, pinned.directoryDigest);
-		replace(destination, bytes, draft.digest, onWrite);
+		const called = { value: false };
+		if (!configUnchanged)
+			replace(destination, name, bytes, draft.digest, onWrite, called);
+		for (const entry of prepared)
+			if (
+				entry.previous === null ||
+				readDigest(entry.destination) !== entry.source.digest
+			) {
+				fs.mkdirSync(path.dirname(entry.destination), {
+					mode: 0o700,
+					recursive: true,
+				});
+				sameDirectory(config, pinned.directoryDigest);
+				replace(
+					entry.destination,
+					path.basename(entry.destination),
+					entry.bytes,
+					entry.source.digest,
+					onWrite,
+					called,
+				);
+			}
 		const after = inspectDestination(canonical);
 		sameDirectory(config, pinned.directoryDigest);
 		if (after.state !== "regular" || after.digest !== draft.digest)
 			throw new Error(
 				"Promoted bytes did not verify against the staged digest; the live configuration state is unverified and further promotion needs a fresh draft",
 			);
+		const auxiliaryFiles = prepared.map(
+			({ destination: auxiliary, source, previous }) => {
+				const verified = readDigest(auxiliary);
+				if (verified !== source.digest)
+					throw new Error(
+						"Promoted auxiliary bytes did not verify against the staged digest; the live configuration state is unverified and further promotion needs a fresh draft",
+					);
+				return {
+					file: source.file,
+					digest: source.digest,
+					bytes: auxiliaryBytes(source).length,
+					previous,
+				};
+			},
+		);
 		return {
 			outcome: "written" as const,
 			previous: live.digest,
 			projects: projects.length,
 			targets,
 			bytes: bytes.length,
+			auxiliaryFiles,
 		};
 	});
 }

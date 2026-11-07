@@ -27,19 +27,31 @@ export function promotionRequest(body: Record<string, unknown>) {
 	if (
 		Object.keys(body).some(
 			(key) =>
-				!["requestId", "id", "revision", "digest", "approve"].includes(key),
+				![
+					"requestId",
+					"id",
+					"revision",
+					"digest",
+					"approve",
+					"sourcesApprove",
+				].includes(key),
 		)
 	)
 		throw new Error("Unsupported promotion field");
 	const requestId = text(body.requestId, "promotion request ID", 128),
 		id = text(body.id, "draft ID", 80),
 		contentDigest = text(body.digest, "draft digest", 64),
-		approve = text(body.approve, "approved content digest", 64);
+		approve = text(body.approve, "approved content digest", 64),
+		sourcesApprove =
+			body.sourcesApprove === undefined
+				? undefined
+				: text(body.sourcesApprove, "approved auxiliary sources digest", 64);
 	if (!/^draft-[a-f0-9]{64}$/.test(id))
 		throw new Error("Invalid definition draft ID");
 	if (
 		!/^[a-f0-9]{64}$/.test(contentDigest) ||
 		!/^[a-f0-9]{64}$/.test(approve) ||
+		(sourcesApprove !== undefined && !/^[a-f0-9]{64}$/.test(sourcesApprove)) ||
 		!Number.isSafeInteger(body.revision) ||
 		Number(body.revision) < 1
 	)
@@ -49,7 +61,14 @@ export function promotionRequest(body: Record<string, unknown>) {
 	if (approve !== contentDigest)
 		throw new Error("Approval must equal the exact requested content digest");
 	const request = digest(
-			JSON.stringify({ id, revision: body.revision, digest: contentDigest }),
+			sourcesApprove === undefined
+				? JSON.stringify({ id, revision: body.revision, digest: contentDigest })
+				: JSON.stringify({
+						id,
+						revision: body.revision,
+						digest: contentDigest,
+						sourcesApprove,
+					}),
 		),
 		key = digest(requestId);
 	return {
@@ -57,6 +76,7 @@ export function promotionRequest(body: Record<string, unknown>) {
 		revision: Number(body.revision),
 		contentDigest,
 		approve,
+		sourcesApprove,
 		request,
 		key,
 	};
@@ -135,7 +155,13 @@ export function recordPromotion(
 				"Staged tree identity is stale or does not match the staged bytes; reassemble the isolated tree for this revision",
 			);
 	}
-	const result = promoteDefinition(config, draft, approve, onWrite),
+	const result = promoteDefinition(
+			config,
+			draft,
+			approve,
+			intent.sourcesApprove,
+			onWrite,
+		),
 		record = {
 			...result,
 			id: `promotion-${key}`,
@@ -143,7 +169,7 @@ export function recordPromotion(
 			revision: draft.revision,
 			digest: draft.digest,
 			destination: "environments.json",
-			sourceFilesWritten: false,
+			sourceFilesWritten: result.auxiliaryFiles.length > 0,
 			repositoriesChanged: false,
 			runtimeChecked: false,
 			reloaded: false,
@@ -160,7 +186,7 @@ export function recordPromotion(
 			observedAt: new Date().toISOString(),
 			ordinal: Object.keys(records.records).length + 1,
 			message:
-				"Historical promotion outcome only, not current live-file state. Written outcomes used an exclusive temp file, fsync and same-directory rename after checking the recorded base; unchanged outcomes wrote nothing. No source/repository files, processes, containers or leases were changed. No runtime validation or reload. Exact replay performs no new destination observation or write.",
+				"Historical promotion outcome only, not current live-file state. Written outcomes used an exclusive temp file, fsync and same-directory rename after checking the recorded base; unchanged outcomes wrote nothing. Auxiliary staged sources publish into the live configuration directory only; repository-bound sources, processes, containers and leases were never changed. No runtime validation or reload. Exact replay performs no new destination observation or write.",
 		};
 	records.records[record.id] = JSON.stringify(record);
 	records.requests[key] = JSON.stringify({ request, id: record.id });
