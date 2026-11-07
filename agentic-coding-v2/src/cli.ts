@@ -8,12 +8,13 @@ import { defaultConfigDir, loadConfig } from "./config.ts";
 import { acquireLock } from "./lock.ts";
 import { Runtime } from "./runtime.ts";
 import { serve } from "./server.ts";
+import { runTui } from "./tui/loop.ts";
 
 async function main() {
 	const args = process.argv.slice(2);
 	if (args.includes("--help")) {
 		console.log(
-			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER]\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2",
+			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui]\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\n--tui runs the minimal terminal client instead of the headless host.",
 		);
 		return;
 	}
@@ -25,9 +26,13 @@ async function main() {
 			throw new Error(`Missing value for ${name}`);
 		return value;
 	};
-	for (let index = 0; index < args.length; index += 2)
-		if (!["--config-dir", "--state-dir", "--port"].includes(args[index]))
-			throw new Error(`Unknown option ${args[index]}`);
+	const tui = args.includes("--tui"),
+		valued = args.filter((arg) => arg !== "--tui");
+	for (let index = 0; index < valued.length; index += 2)
+		if (
+			!["--config-dir", "--state-dir", "--port"].includes(valued[index])
+		)
+			throw new Error(`Unknown option ${valued[index]}`);
 	const stateDir = path.resolve(
 		option("--state-dir") ??
 			path.join(os.homedir(), ".local/share/agentic-coding-v2"),
@@ -70,10 +75,6 @@ async function main() {
 				fsync: true,
 			}),
 		);
-		host = serve(app, port);
-		console.log(
-			`agentic-coding-v2\n${host.url}\nKeep this private URL local. State: ${stateDir}\nConfig: ${configDir}\nNo browser is opened automatically. Ctrl+C stops the host; pending work resumes on the next start.`,
-		);
 		const running = app;
 		timer = setInterval(() => {
 			void running
@@ -85,6 +86,14 @@ async function main() {
 					),
 				);
 		}, 1000);
+		if (tui) {
+			await runTui(app);
+			return;
+		}
+		host = serve(app, port);
+		console.log(
+			`agentic-coding-v2\n${host.url}\nKeep this private URL local. State: ${stateDir}\nConfig: ${configDir}\nNo browser is opened automatically. Ctrl+C stops the host; pending work resumes on the next start.`,
+		);
 		await new Promise<void>((resolve) => {
 			process.once("SIGINT", resolve);
 			process.once("SIGTERM", resolve);

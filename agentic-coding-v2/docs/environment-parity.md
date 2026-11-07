@@ -883,3 +883,7 @@ Native skill tasks can now stage environment definition bytes through `env_draft
 ## Model-staged source files milestone
 
 `env_draft_source` lets a native skill task stage one Compose or auxiliary source file onto a draft it staged, under the same ownership firewall: the app/target must already be declared in the staged document, the declared Compose file comes before any auxiliary, bounded auxiliary paths and the 4-file/128 KiB cap still hold, and foreign or developer-staged drafts refuse. Removal stays developer-side; the tool only adds or replaces. Proven by `test/draft-source-tool.test.ts` (2 tests): declared-then-auxiliary staging with digest receipts and untouched foreign drafts, plus declared-first and exact-target fences. Staged sources stay inert until developer review and promotion like staged documents.
+
+## Minimal terminal client milestone
+
+`agentic-coding-v2 --tui` runs a zero-dependency raw-mode terminal client instead of the headless host. Home panel chats with the orchestrator (tasks start through the existing admission path, never directly), tasks panel drills into task detail with exact-revision approve/reject/changes-requested and cancellation, env panel lists runs diagnostically. The pure key/render model (`src/tui/model.ts`) is proven by `test/tui-model.test.ts` (3 tests); the raw-mode loop (`src/tui/loop.ts`) is untested IO over the same Runtime accessors the dashboard uses. Reconciliation ticks in both modes; quitting restores the terminal.
