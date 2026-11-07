@@ -14,6 +14,9 @@ import type {
 	Data,
 	ProviderQuery,
 	ProviderSummary,
+	SettingsCandidate,
+	SettingsDefinition,
+	SettingsDocument,
 	TaskDetails,
 } from "../../protocol/index.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
@@ -21,6 +24,7 @@ import { ObservabilityPanel } from "../features/observability/ObservabilityPanel
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
+import { SettingsPanel } from "../features/settings/SettingsPanel.tsx";
 import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { color } from "../ui/theme/index.ts";
 import { Navigation, type Page, view } from "./navigation.ts";
@@ -52,6 +56,8 @@ const help = [
 	"/provider NAME changes|issues REPO [open|closed|all]",
 	"/provider NAME change|issue|files|versions|discussions REPO NUMBER",
 	"/provider NAME jobs REPO [RUN_ID] (required for GitHub)",
+	"/view settings · /settings-preview · /settings-reset",
+	"/settings-apply CANDIDATE_ID approve:DIGEST (explicit file save; restart required)",
 	"/bookmark NAME · /jump NAME_OR_ID · /forget ID",
 	"Alt+1..4: session modes · Alt+Left/Right: history",
 	"Ctrl+B: sessions focus · Ctrl+V: viewpoints focus",
@@ -72,6 +78,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[taskDetails, setTaskDetails] = createSignal<TaskDetails | null>(null),
 		[taskError, setTaskError] = createSignal<string | null>(null),
 		[refreshRevision, setRefreshRevision] = createSignal(0),
+		[settingsDocument, setSettingsDocument] =
+			createSignal<SettingsDocument | null>(null),
+		[settingsError, setSettingsError] = createSignal<string | null>(null),
+		[settingsDraft, setSettingsDraft] = createSignal(""),
+		[settingsCandidate, setSettingsCandidate] =
+			createSignal<SettingsCandidate | null>(null),
+		[settingsEditing, setSettingsEditing] = createSignal(false),
 		[helpOpen, setHelpOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
 	let prompt: TextareaRenderable | undefined,
@@ -121,6 +134,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			navigation.current.scroll = Math.max(0, Math.round(scroll.scrollTop));
 	};
 	const restore = () => {
+		setSettingsCandidate(null);
+		setSettingsEditing(false);
+		if (navigation.current.page === "settings")
+			setRefreshRevision((value) => value + 1);
 		prompt?.setText(navigation.current.draft);
 		scroll?.scrollTo(navigation.current.scroll);
 		update();
@@ -146,6 +163,44 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		revision();
 		return client.observationError;
 	};
+	let settingsEpoch = 0;
+	createEffect(() => {
+		const selectedPage = page(),
+			connected = status() === "connected";
+		refreshRevision();
+		const epoch = ++settingsEpoch;
+		onCleanup(() => {
+			settingsEpoch++;
+		});
+		setSettingsCandidate(null);
+		if (selectedPage !== "settings") {
+			setSettingsEditing(false);
+			return;
+		}
+		if (!connected) {
+			setSettingsEditing(false);
+			setSettingsError(
+				"Disconnected; document is cached and confirmations were discarded",
+			);
+			return;
+		}
+		setSettingsError("Reading native writable settings…");
+		void client
+			.call("settings.read", {})
+			.then((document) => {
+				if (epoch !== settingsEpoch || status() !== "connected") return;
+				setSettingsDocument(document);
+				if (!settingsDraft())
+					setSettingsDraft(JSON.stringify(document.settings, null, 2));
+				setSettingsError(null);
+			})
+			.catch((error: Error) => {
+				if (epoch === settingsEpoch) setSettingsError(error.message);
+			});
+	});
+	createEffect(() => {
+		if (current().focus !== "content" || helpOpen()) setSettingsEditing(false);
+	});
 	let providerEpoch = 0;
 	createEffect(() => {
 		const selectedPage = page(),
@@ -349,6 +404,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				name: "Focus content",
 				run: () => {
 					navigation.current.focus = "content";
+					setSettingsEditing(false);
 					setHelpOpen(false);
 					update();
 				},
@@ -528,6 +584,85 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					setNotice(
 						`Native environment task #${result.taskId}; inspect its review before execution.`,
 					);
+				} else if (command === "settings-reset") {
+					if (
+						origin.page !== "settings" ||
+						args ||
+						!settingsDocument() ||
+						settingsError()
+					)
+						throw new Error(
+							"Open settings and refresh its native document before reset",
+						);
+					setSettingsCandidate(null);
+					setSettingsDraft(
+						JSON.stringify(settingsDocument()?.settings, null, 2),
+					);
+					clear();
+				} else if (command === "settings-preview") {
+					const document = settingsDocument(),
+						draft = settingsDraft(),
+						epoch = settingsEpoch;
+					if (
+						origin.page !== "settings" ||
+						args ||
+						!document ||
+						settingsError()
+					)
+						throw new Error(
+							"Open settings and refresh its native document before preview",
+						);
+					let settings: SettingsDefinition;
+					try {
+						settings = JSON.parse(draft) as SettingsDefinition;
+					} catch {
+						throw new Error("Settings editor must contain a JSON object");
+					}
+					setSettingsCandidate(null);
+					const candidate = await client.call("settings.preview", {
+						baseRevision: document.revision,
+						settings,
+					});
+					if (
+						navigation.current !== origin ||
+						epoch !== settingsEpoch ||
+						settingsDraft() !== draft ||
+						status() !== "connected"
+					)
+						throw new Error(
+							"Preview selection/draft changed; create a fresh candidate",
+						);
+					if (candidate.baseRevision !== document.revision)
+						throw new Error("Wrong settings candidate revision");
+					setSettingsCandidate(candidate);
+					clear();
+					setNotice(
+						"Native candidate prepared only. Inspect its exact immutable snapshot; no file has been written.",
+					);
+				} else if (command === "settings-apply") {
+					const candidate = settingsCandidate();
+					if (
+						origin.page !== "settings" ||
+						words.length !== 2 ||
+						!candidate ||
+						identity !== candidate.id ||
+						comments !== `approve:${candidate.digest}` ||
+						candidate.expiresAt <= Date.now() ||
+						settingsError()
+					)
+						throw new Error(
+							"A fresh displayed settings candidate and manually typed exact approve:DIGEST are required",
+						);
+					setSettingsCandidate(null);
+					const result = await client.call("settings.apply", {
+						id: candidate.id,
+						approval: comments,
+					});
+					clear();
+					setRefreshRevision((value) => value + 1);
+					setNotice(
+						`Configuration saved at revision ${result.revision}. Running host is unchanged; a separately authorized restart is required. Edited JSON is retained until explicit reset.`,
+					);
 				} else if (command === "provider") {
 					const [provider, operation, repo, argument] = words;
 					if (!provider || !operation)
@@ -655,7 +790,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				setNotice(`Admitted submission #${result.submissionId}`);
 			}
 		} catch (error) {
-			setNotice(error instanceof Error ? error.message : "Command refused");
+			const message =
+				error instanceof Error ? error.message : "Command refused";
+			setNotice(
+				/^\/settings-apply(?:\s|$)/.test(content)
+					? `${message}. If apply was sent, the file may already have changed; refresh its revision before creating a new confirmation. No automatic retry.`
+					: message,
+			);
 		} finally {
 			setBusy(false);
 			update();
@@ -1008,11 +1149,26 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										/>
 									</Show>
 									<Show when={current().page === "settings"}>
-										<text fg={color("textMuted")}>
-											Writable configuration editing has no native v2
-											candidate/apply contract yet. No read-only settings
-											inventory is presented.
-										</text>
+										<SettingsPanel
+											document={settingsDocument()}
+											error={settingsError()}
+											draft={settingsDraft()}
+											change={(value) => {
+												if (value !== settingsDraft()) {
+													setSettingsDraft(value);
+													setSettingsCandidate(null);
+												}
+											}}
+											editing={settingsEditing()}
+											edit={(value) => {
+												navigation.current.focus = "content";
+												setSettingsEditing(value);
+												update();
+											}}
+											candidate={settingsCandidate()}
+											connected={status() === "connected"}
+											prepare={prepareCommand}
+										/>
 									</Show>
 									<Show when={current().page === "wiki"}>
 										<text fg={color("textMuted")}>
@@ -1065,7 +1221,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							ref={(value) => {
 								prompt = value;
 							}}
-							focused={current().focus === "content"}
+							focused={current().focus === "content" && !settingsEditing()}
 							initialValue={current().draft}
 							placeholder={
 								isTranscript()

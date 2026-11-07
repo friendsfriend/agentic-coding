@@ -202,7 +202,56 @@ export function result<M extends Method>(
 	method: M,
 	value: unknown,
 ): Methods[M]["output"] {
-	if (method === "providers.read") {
+	if (method === "settings.read") {
+		const data = record(value),
+			settings = record(data.settings);
+		if (
+			typeof data.revision !== "string" ||
+			data.restartRequired !== true ||
+			typeof settings.orchestratorProfile !== "string" ||
+			!Array.isArray(settings.repositories) ||
+			!settings.repositories.every((repo) => typeof repo === "string")
+		)
+			throw new Error("Invalid settings document");
+		Object.values(record(settings.profiles)).forEach((raw) => {
+			const profile = record(raw);
+			if (
+				typeof profile.model !== "string" ||
+				typeof profile.thinking !== "string" ||
+				typeof profile.description !== "string"
+			)
+				throw new Error("Invalid settings profile");
+		});
+		list(settings.providers).forEach((provider) => {
+			if (
+				typeof provider.name !== "string" ||
+				!["github", "gitlab"].includes(String(provider.type)) ||
+				typeof provider.baseUrl !== "string" ||
+				(provider.username !== undefined &&
+					typeof provider.username !== "string") ||
+				(provider.tokenRef !== undefined &&
+					typeof provider.tokenRef !== "string")
+			)
+				throw new Error("Invalid provider setting");
+		});
+	} else if (method === "settings.preview") {
+		const data = record(value);
+		if (
+			typeof data.id !== "string" ||
+			typeof data.baseRevision !== "string" ||
+			typeof data.digest !== "string" ||
+			!/^[a-f0-9]{64}$/.test(data.digest) ||
+			typeof data.snapshot !== "string" ||
+			data.snapshot.length > 128000 ||
+			!Number.isSafeInteger(data.expiresAt) ||
+			data.restartRequired !== true
+		)
+			throw new Error("Invalid settings candidate");
+	} else if (method === "settings.apply") {
+		const data = record(value);
+		if (typeof data.revision !== "string" || data.restartRequired !== true)
+			throw new Error("Invalid settings receipt");
+	} else if (method === "providers.read") {
 		list(value).forEach((provider) => {
 			if (
 				typeof provider.name !== "string" ||

@@ -65,6 +65,34 @@ export type Transcript = {
 		cost: number;
 	};
 };
+export type SettingsDefinition = {
+	profiles: Record<
+		string,
+		{ model: string; thinking: string; description: string }
+	>;
+	orchestratorProfile: string;
+	repositories: string[];
+	providers: {
+		name: string;
+		type: "github" | "gitlab";
+		baseUrl: string;
+		username?: string;
+		tokenRef?: string;
+	}[];
+};
+export type SettingsDocument = {
+	revision: string;
+	settings: SettingsDefinition;
+	restartRequired: true;
+};
+export type SettingsCandidate = {
+	id: string;
+	baseRevision: string;
+	digest: string;
+	snapshot: string;
+	expiresAt: number;
+	restartRequired: true;
+};
 export type ProviderSummary = {
 	name: string;
 	type: "github" | "gitlab";
@@ -167,6 +195,15 @@ export type Methods = {
 		output: { taskId: number };
 	};
 	"environment.logs": { input: { app: string }; output: unknown };
+	"settings.read": { input: Data; output: SettingsDocument };
+	"settings.preview": {
+		input: { baseRevision: string; settings: SettingsDefinition };
+		output: SettingsCandidate;
+	};
+	"settings.apply": {
+		input: { id: string; approval: string };
+		output: { revision: string; restartRequired: true };
+	};
 	"providers.read": { input: Data; output: ProviderSummary[] };
 	"providers.inspect": { input: ProviderQuery; output: ProviderInspection };
 };
@@ -212,6 +249,9 @@ export const methods: Method[] = [
 	"schedule.delete",
 	"environment.action",
 	"environment.logs",
+	"settings.read",
+	"settings.preview",
+	"settings.apply",
 	"providers.read",
 	"providers.inspect",
 ];

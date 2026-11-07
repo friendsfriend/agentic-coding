@@ -25,6 +25,7 @@ import {
 import { createOrchestrator, orchestratorPrompt } from "./orchestrator.ts";
 import { projectState } from "./projection.ts";
 import { Scheduler, type ScheduleSlot } from "./scheduler.ts";
+import { Settings } from "./settings.ts";
 import { createSkillTask } from "./skill-task.ts";
 import {
 	type Attachment,
@@ -45,12 +46,14 @@ export class Runtime {
 	private admission: TaskAdmission | null = null;
 	private reconciling = false;
 	private closed = false;
+	readonly settings: Settings;
 	readonly environments: Environments;
 	readonly operatorEnvironments: OperatorEnvironments;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
 	) {
+		this.settings = new Settings(config);
 		this.environments = new Environments(config);
 		this.operatorEnvironments = new OperatorEnvironments(
 			config,

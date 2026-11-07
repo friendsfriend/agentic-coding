@@ -131,6 +131,15 @@ export async function dispatch(
 		case "environment.logs":
 			fields(input, ["app"]);
 			return app.environments.logs(text(input.app, "app", 64));
+		case "settings.read":
+			fields(input, []);
+			return app.settings.read();
+		case "settings.preview":
+			fields(input, ["baseRevision", "settings"]);
+			return app.settings.preview(input.baseRevision, input.settings);
+		case "settings.apply":
+			fields(input, ["id", "approval"]);
+			return app.settings.apply(input.id, input.approval);
 		case "providers.inspect":
 			return inspectProvider(app, input);
 		case "providers.read":
