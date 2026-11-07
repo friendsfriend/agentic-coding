@@ -107,7 +107,7 @@ Gates: **173 native tests / 2037 assertions / 57 files** pass; Biome **172 files
 
 `test/promotion-write-fences.test.ts` (3 tests): a recreated configuration directory invalidates the recorded base identity, non-regular live destinations (directory, symlink, oversized) are refused untouched, and a held cooperative lock blocks promotion while its removal unblocks without residue. Unreachable without live races and left unclaimed: post-write verification failure and staged-content integrity mismatch (content is immutable through the API).
 
-Gates: new suite **3 pass**; full native suite **334 pass / 2363 assertions / 71 files** (previous checkpoint, unchanged code paths); Biome clean; native `type-check` passes.
+Gates: new suite **3 pass**; full checkpoint: native suite **337 pass / 2379 assertions / 72 files**; Biome **188 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.6**, objective/verified **82.4**, strict **19.6**.
 
 ## Write-path and operator route fences milestone
 
