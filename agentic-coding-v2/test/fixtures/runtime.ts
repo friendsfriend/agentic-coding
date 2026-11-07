@@ -20,6 +20,10 @@ export function createFixtures() {
 	async function fixture(
 		persistent = false,
 		configure?: (config: Config) => void,
+		streaming?: Pick<
+			NonNullable<Parameters<typeof fauxProvider>[0]>,
+			"tokensPerSecond" | "tokenSize"
+		>,
 	) {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-v2-test-"));
 		roots.push(root);
@@ -32,6 +36,7 @@ export function createFixtures() {
 		await git(repo, ["add", "README.md"]);
 		await git(repo, ["commit", "-m", "initial"]);
 		const fake = fauxProvider({
+			...streaming,
 			models: [{ id: "original" }, { id: "replacement" }],
 		});
 		const models = createModels();

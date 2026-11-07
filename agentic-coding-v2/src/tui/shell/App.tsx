@@ -10,10 +10,7 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
-import type {
-	Data,
-	Transcript as TranscriptData,
-} from "../../protocol/index.ts";
+import type { Data } from "../../protocol/index.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { Transcript } from "../features/sessions/Transcript.tsx";
 import { color } from "../ui/theme/index.ts";
@@ -56,14 +53,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		viewpoints = new Viewpoints();
 	const [revision, setRevision] = createSignal(0),
 		[notice, setNotice] = createSignal<string | null>(null),
-		[transcript, setTranscript] = createSignal<TranscriptData | null>(null),
 		[providerData, setProviderData] = createSignal<unknown>(null),
 		[helpOpen, setHelpOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
 	let prompt: TextareaRenderable | undefined,
-		scroll: ScrollBoxRenderable | undefined,
-		lastSession: number | null = null,
-		reading = false;
+		scroll: ScrollBoxRenderable | undefined;
 	const update = () => setRevision((value) => value + 1);
 	const removeListener = client.onChange(update);
 	onCleanup(removeListener);
@@ -119,33 +113,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		setNotice(null);
 		restore();
 	};
-	async function refreshTranscript() {
-		const id = sessionId();
-		if (id === null || client.status !== "connected" || reading || !available())
-			return;
-		reading = true;
-		try {
-			const value = await client.call("session.read", { id });
-			if (sessionId() === id) setTranscript(value);
-		} catch (error) {
-			if (sessionId() === id)
-				setNotice(
-					error instanceof Error ? error.message : "Transcript unavailable",
-				);
-		} finally {
-			reading = false;
-		}
-	}
-	const timer = setInterval(() => void refreshTranscript(), 1000);
-	onCleanup(() => clearInterval(timer));
-	createEffect(() => {
-		const id = sessionId();
-		if (id !== lastSession) {
-			lastSession = id;
-			setTranscript(null);
-			void refreshTranscript();
-		}
-	});
+	const watchedSession = createMemo(() => (available() ? sessionId() : null));
+	createEffect(() => client.selectSession(watchedSession()));
+	onCleanup(() => client.selectSession(null));
+	const transcript = () => {
+		revision();
+		return client.transcript?.id === sessionId() ? client.transcript : null;
+	};
+	const observation = () => {
+		revision();
+		return client.observation;
+	};
+	const observationError = () => {
+		revision();
+		return client.observationError;
+	};
 	createEffect(() => {
 		if (page() === "providers" && status() === "connected")
 			void client
@@ -405,7 +387,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							...(args ? { instructions: args } : {}),
 						});
 					clear();
-					await refreshTranscript();
 				} else
 					throw new Error(
 						"Unsupported prompt command; /help lists available commands",
@@ -424,7 +405,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					prompt?.setText("");
 				}
 				setNotice(`Admitted submission #${result.submissionId}`);
-				await refreshTranscript();
 			}
 		} catch (error) {
 			setNotice(error instanceof Error ? error.message : "Command refused");
@@ -558,6 +538,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											</Show>
 											<Transcript
 												value={transcript()}
+												observation={observation()}
+												observationError={observationError()}
 												enabled={current().focus === "content"}
 												selected={
 													typeof current().detail.transcriptSelection ===

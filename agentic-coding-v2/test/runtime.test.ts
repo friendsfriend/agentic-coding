@@ -210,7 +210,9 @@ test("shell execution waits for human approval of its exact command", async () =
 	const { app, fake, invocation } = await fixture();
 	fake.setResponses([
 		fauxAssistantMessage(
-			fauxToolCall("bash", { command: "printf verified > approved.txt" }),
+			fauxToolCall("bash", {
+				command: "printf started; sleep 0.5; printf verified > approved.txt",
+			}),
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("Review acknowledged."),
@@ -225,17 +227,82 @@ test("shell execution waits for human approval of its exact command", async () =
 	expect(fs.existsSync(proof)).toBe(false);
 	expect(view.tasks[0].detail).toBe("awaiting review");
 	expect(view.tasks[0].activity).toBe("idle");
-	await expect(
-		app.decide(review.id, review.revision + 1, "approved", ""),
-	).rejects.toThrow("stale");
-	await app.decide(review.id, review.revision, "approved", "Looks good");
-	expect(
-		(await app.harness.waitForTask(id as TaskId, context)).state.outcome.status,
-	).toBe("completed");
-	expect(fs.readFileSync(proof, "utf8")).toBe("verified");
-	await expect(
-		app.decide(review.id, review.revision, "approved", ""),
-	).rejects.toThrow("stale");
+	const child = view.tasks[0].conversationId;
+	if (child === undefined) throw new Error("Native child conversation missing");
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.selectSession(child);
+		client.connect();
+		const slot = await eventually(
+			async () =>
+				client.transcript?.progress.tools.find(
+					(slot) => slot.name === "bash" && slot.status === "running",
+				),
+			(value) => value !== undefined,
+		);
+		if (!slot || slot.taskId === undefined)
+			throw new Error("Native tool task identity missing");
+		const owner = client.transcript?.progress.run?.taskId;
+		if (owner === undefined) throw new Error("Native generation owner missing");
+		expect(
+			Number(
+				(await app.harness.getTask(slot.taskId as TaskId, context))?.owner,
+			),
+		).toBe(owner);
+		expect(
+			client.transcript?.entries.some(
+				(entry) =>
+					entry.byTaskId === owner &&
+					Array.isArray(entry.model) &&
+					(entry.model as Record<string, unknown>[]).some(
+						(message) =>
+							Array.isArray(message.content) &&
+							(message.content as Record<string, unknown>[]).some(
+								(part) => part.type === "toolCall" && part.id === slot.callId,
+							),
+					),
+			),
+		).toBe(true);
+		expect(slot.output).toBeUndefined();
+		expect(fs.existsSync(proof)).toBe(false); // Running native slot is not shell authorization.
+		await expect(
+			app.decide(review.id, review.revision + 1, "approved", ""),
+		).rejects.toThrow("stale");
+		await app.decide(review.id, review.revision, "approved", "Looks good");
+		await eventually(
+			async () =>
+				client.transcript?.progress.tools.find(
+					(slot) => slot.name === "bash" && slot.status === "running",
+				)?.output,
+			(output) => output?.includes("started") === true,
+		);
+		expect(
+			(await app.harness.waitForTask(id as TaskId, context)).state.outcome
+				.status,
+		).toBe("completed");
+		expect(fs.readFileSync(proof, "utf8")).toBe("verified");
+		await eventually(
+			async () => client.transcript,
+			(value) =>
+				value?.progress.run === null &&
+				value.entries.some(
+					(entry) =>
+						Array.isArray(entry.model) &&
+						(entry.model as Record<string, unknown>[]).some(
+							(message) =>
+								message.role === "toolResult" &&
+								JSON.stringify(message.content).includes("started"),
+						),
+				),
+		);
+		await expect(
+			app.decide(review.id, review.revision, "approved", ""),
+		).rejects.toThrow("stale");
+	} finally {
+		client.close();
+		await host.stop();
+	}
 });
 test("review and exact native task identity survive a host close/reopen", async () => {
 	const { app, fake, invocation, open, config } = await fixture(true);

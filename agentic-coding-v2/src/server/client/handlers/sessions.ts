@@ -1,5 +1,9 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import type { ConversationId } from "@earendil-works/pi-durable";
+import {
+	type ConversationId,
+	InboxDoc,
+	LiveDoc,
+} from "@earendil-works/pi-durable";
 import type { Session, Snapshot, Transcript } from "../../../protocol/index.ts";
 import { record } from "../../../protocol/index.ts";
 import type { Runtime } from "../../../runtime.ts";
@@ -72,6 +76,10 @@ export async function readSession(
 		context,
 	);
 	const visible = history.items.slice(0, 200);
+	// Read entries before the live document: native commits replace a partial with its
+	// retained entry and clear it together. This is still a non-atomic projection.
+	const live = await app.harness.snapshot(LiveDoc, session.id, context);
+	const inbox = await app.harness.snapshot(InboxDoc, session.id, context);
 	return {
 		id,
 		model: agent.model
@@ -80,6 +88,25 @@ export async function readSession(
 		thinking: agent.thinkingLevel,
 		entries: [...visible].reverse().map((entry) => ({ ...entry })),
 		truncated: history.items.length > 200,
+		progress: {
+			run: live?.run ?? null,
+			generation: live?.generation
+				? {
+						...live.generation,
+						message: live.generation.message
+							? record({ ...live.generation.message })
+							: undefined,
+					}
+				: null,
+			tools: live?.tools ?? [],
+			nestedTools: live?.nestedTools ?? [],
+			compactions: live?.compactions ?? [],
+			compactionFailure: live?.compactionFailure ?? null,
+			inbox: (inbox?.items ?? []).map(({ id, mode }) => ({
+				id: Number(id),
+				mode,
+			})),
+		},
 		// Reported provider usage in the returned history window, not a lifetime estimate.
 		usage: visible
 			.flatMap((entry) => entry.model ?? [])

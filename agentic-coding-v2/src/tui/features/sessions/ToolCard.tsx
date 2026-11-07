@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { BoxRenderable, SyntaxStyle } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
-import type { Data } from "../../../protocol/index.ts";
+import type { Data, ToolProgress } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent } from "./FileContent.tsx";
@@ -14,14 +14,17 @@ const object = (value: unknown): Data =>
 const string = (value: unknown) => (typeof value === "string" ? value : "");
 
 /** Adapted file/shell cards and independently folded arguments/output/details.
- * Status comes only from a uniquely paired retained native result, not elapsed
- * time, a missing result, or a successful transport acknowledgement. */
+ * Status comes from a paired retained result or a scoped native live slot.
+ * An in-flight model call is explicitly not an execution observation. */
 export function ToolCard(props: {
 	identity: string;
 	selected: boolean;
 	select: (id: string) => void;
 	anchor: (node: BoxRenderable | null) => void;
 	call: Data;
+	partial?: boolean;
+	progress?: ToolProgress;
+	liveOnly?: boolean;
 	result: Data | null;
 	pairing: "matched" | "missing" | "ambiguous";
 	expanded: string[];
@@ -30,13 +33,18 @@ export function ToolCard(props: {
 }) {
 	const args = () => object(props.call.arguments);
 	const name = () => string(props.call.name) || "Unnamed native tool";
+	const detailsValue = () =>
+		props.result ? props.result.details : props.progress?.details;
 	const details = () => object(props.result?.details);
 	const output = () =>
 		dataList(props.result?.content)
 			.filter((part) => part.type === "text")
 			.map((part) => string(part.text))
 			.join("\n");
-	const diagnostics = () => dataList(props.result?.nativeDiagnostics);
+	const diagnostics = () =>
+		props.result
+			? dataList(props.result.nativeDiagnostics)
+			: (props.progress?.diagnostics ?? []);
 	const readOutput = () => {
 		const parts = dataList(props.result?.content);
 		const footer = `<harness>\n${diagnostics()
@@ -58,13 +66,17 @@ export function ToolCard(props: {
 	const open = (section = "") =>
 		props.expanded.includes(`${props.identity}${section}`);
 	const status = () =>
-		props.pairing === "ambiguous"
-			? "Ambiguous retained identity — output not paired"
-			: !props.result
-				? "Result not in retained history — activity unknown"
-				: props.result.isError === true
+		props.partial
+			? "Native in-flight call — still being generated, not execution status"
+			: props.result
+				? props.result.isError === true
 					? "Native tool error"
-					: "Result recorded";
+					: "Result recorded"
+				: props.progress
+					? `Native slot ${props.progress.status}${props.progress.status === "running" ? " — may be waiting on owned work/review" : props.progress.status === "done" ? " — no terminal result linked" : ""}${props.progress.summary?.isError === true ? " · nested summary reports an error" : ""}`
+					: props.pairing === "ambiguous"
+						? "Ambiguous retained identity — output not paired"
+						: "Result not in retained history — activity unknown";
 	const summary = () =>
 		["read", "edit", "write"].includes(name())
 			? path()
@@ -140,6 +152,16 @@ export function ToolCard(props: {
 						? ` · reported ${props.result.durationMs} ms`
 						: ""}
 				</text>
+				<Show when={props.liveOnly}>
+					<text fg={color("textMuted")}>
+						{props.progress?.parentTaskId === undefined
+							? "Unassociated current-round native slot; retained intent not linked"
+							: `Native nested slot · parent task #${props.progress.parentTaskId} · parent call ${props.progress.parentCallId}`}{" "}
+						{props.progress?.taskId === undefined
+							? ""
+							: `· task #${props.progress.taskId}`}
+					</text>
+				</Show>
 			</TranscriptHeader>
 			<Show when={open()}>
 				<box flexDirection="column" gap={1} paddingTop={1}>
@@ -168,7 +190,11 @@ export function ToolCard(props: {
 							path={path()}
 							content={string(args().content)}
 							syntax={props.syntax}
-							label="Requested write bytes — not a live file snapshot"
+							label={
+								props.partial
+									? "Partial requested write bytes — call still being generated"
+									: "Requested write bytes — not a live file snapshot"
+							}
 						/>
 					</Show>
 					<Show when={name() === "edit" && path() && patch()}>
@@ -186,7 +212,7 @@ export function ToolCard(props: {
 							under Arguments; no applied diff is inferred.
 						</text>
 					</Show>
-					<Show when={name() === "bash"}>
+					<Show when={name() === "bash" && props.call.arguments !== undefined}>
 						<text fg={color("textMuted")}>
 							Requested shell command ·{" "}
 							{args().timeout === undefined
@@ -245,15 +271,49 @@ export function ToolCard(props: {
 							</text>
 						)}
 					</For>
-					{fold(":arguments", "Arguments")}
+					{fold(
+						":arguments",
+						props.partial
+							? "Partial arguments"
+							: props.liveOnly
+								? "Live slot arguments"
+								: "Requested arguments",
+					)}
 					<Show when={open(":arguments")}>
-						<code
-							content={JSON.stringify(props.call.arguments ?? {}, null, 2)}
-							filetype="json"
-							syntaxStyle={props.syntax}
-							drawUnstyledText={true}
-							wrapMode="word"
-						/>
+						<Show
+							when={props.call.arguments !== undefined}
+							fallback={
+								<text fg={color("textMuted")}>
+									Arguments not present in this native live slot; inspect a
+									retained request if available.
+								</text>
+							}
+						>
+							<code
+								content={JSON.stringify(props.call.arguments, null, 2)}
+								filetype="json"
+								syntaxStyle={props.syntax}
+								drawUnstyledText={true}
+								wrapMode="word"
+							/>
+						</Show>
+					</Show>
+					<Show when={!props.result && props.progress?.output !== undefined}>
+						{fold(
+							":output",
+							"Native bounded running output — not a terminal result",
+						)}
+						<text fg={color("textMuted")}>
+							{props.progress?.droppedBytes === undefined
+								? ""
+								: `Native dropped bytes: ${props.progress.droppedBytes}`}
+							{props.progress?.droppedLines === undefined
+								? ""
+								: ` · native dropped lines: ${props.progress.droppedLines}`}
+						</text>
+						<Show when={open(":output")}>
+							<text wrapMode="word">{props.progress?.output}</text>
+						</Show>
 					</Show>
 					<Show when={props.result}>
 						{fold(":output", "Complete retained output")}
@@ -275,18 +335,27 @@ export function ToolCard(props: {
 								</text>
 							)}
 						</For>
-						<Show when={props.result?.details !== undefined}>
-							{fold(":details", "Native details")}
-							<Show when={open(":details")}>
-								<code
-									content={JSON.stringify(props.result?.details, null, 2)}
-									filetype="json"
-									syntaxStyle={props.syntax}
-									drawUnstyledText={true}
-									wrapMode="word"
-								/>
-							</Show>
+					</Show>
+					<Show when={detailsValue() !== undefined}>
+						{fold(
+							":details",
+							props.result ? "Native retained details" : "Native live details",
+						)}
+						<Show when={open(":details")}>
+							<code
+								content={JSON.stringify(detailsValue(), null, 2)}
+								filetype="json"
+								syntaxStyle={props.syntax}
+								drawUnstyledText={true}
+								wrapMode="word"
+							/>
 						</Show>
+					</Show>
+					<Show when={props.progress?.summary !== undefined && !props.result}>
+						<text fg={color("textMuted")}>
+							Native nested completion summary:{" "}
+							{JSON.stringify(props.progress?.summary)}
+						</text>
 					</Show>
 				</box>
 			</Show>

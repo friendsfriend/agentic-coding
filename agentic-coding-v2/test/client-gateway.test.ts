@@ -1,8 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import {
+	fauxAssistantMessage,
+	fauxText,
+	fauxThinking,
+} from "@earendil-works/pi-ai";
 import { serve } from "../src/server/index.ts";
 import {
 	ClientConnection,
 	CommandUncertain,
+	dataList,
 } from "../src/tui/client/connection.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
@@ -132,3 +139,117 @@ test("disconnect makes an in-flight native mutation uncertain; reconnect only re
 		await host.stop();
 	}
 });
+
+test("native progress watch resynchronizes without replay or duplicate retained messages", async () => {
+	const { app, fake } = await fixture(false, undefined, {
+		tokensPerSecond: 30,
+		tokenSize: { min: 1, max: 1 },
+	});
+	const release = Promise.withResolvers<void>();
+	const entered = Promise.withResolvers<void>();
+	const response =
+		"Native transcript progress remains observation, not execution authority. ".repeat(
+			4,
+		);
+	fake.setResponses([
+		async () => {
+			entered.resolve();
+			await release.promise;
+			return fauxAssistantMessage([
+				fauxThinking(
+					"Native thinking streamed by a disposable faux provider. ".repeat(2),
+				),
+				fauxText(response),
+			]);
+		},
+	]);
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	const id = Number(app.home.id);
+	try {
+		client.selectSession(id);
+		client.connect();
+		await eventually(
+			async () => client.observation,
+			(value) => value === "watching",
+		);
+		expect(client.transcript?.progress.run).toBeNull();
+		const admission = await client.call("session.send", {
+			id,
+			content: "Demonstrate native progress",
+			requestId: "native-progress",
+		});
+		await entered.promise;
+		await eventually(
+			async () => client.transcript?.progress.generation,
+			(value) => value != null,
+		);
+		expect(client.transcript?.progress.run?.inputs).toContain(
+			admission.submissionId,
+		);
+		expect(client.transcript?.progress.generation?.message).toBeUndefined();
+		release.resolve();
+		await eventually(
+			async () =>
+				dataList(client.transcript?.progress.generation?.message?.content),
+			(blocks) =>
+				blocks.some(
+					(block) =>
+						block.type === "thinking" &&
+						typeof block.thinking === "string" &&
+						block.thinking.length > 0,
+				),
+		);
+		client.reconnectNow();
+		expect(client.observation).toBe("resynchronizing");
+		await eventually(
+			async () =>
+				client.observation === "watching" &&
+				dataList(client.transcript?.progress.generation?.message?.content).some(
+					(block) =>
+						block.type === "text" &&
+						typeof block.text === "string" &&
+						block.text.length > 0,
+				),
+			Boolean,
+		);
+		expect(fake.state.callCount).toBe(1);
+		await app.home.waitForIdle(context);
+		await eventually(
+			async () => client.transcript,
+			(value) =>
+				value?.progress.run === null &&
+				value.entries.some((entry) =>
+					dataList(entry.model).some(
+						(message) =>
+							message.role === "assistant" &&
+							dataList(message.content).some(
+								(block) => block.text === response,
+							),
+					),
+				),
+		);
+		expect(client.transcript?.progress.generation).toBeNull();
+		const entries = client.transcript?.entries ?? [];
+		expect(new Set(entries.map((entry) => entry.id)).size).toBe(entries.length);
+		expect(
+			entries
+				.flatMap((entry) => dataList(entry.model))
+				.filter((message) => message.role === "assistant"),
+		).toHaveLength(1);
+		client.selectSession(null);
+		client.selectSession(id);
+		await eventually(
+			async () => client.observation,
+			(value) => value === "watching",
+		);
+		expect(client.transcript?.entries.map((entry) => entry.id)).toEqual(
+			entries.map((entry) => entry.id),
+		);
+		expect(fake.state.callCount).toBe(1);
+	} finally {
+		release.resolve();
+		client.close();
+		await host.stop();
+	}
+}, 15000);

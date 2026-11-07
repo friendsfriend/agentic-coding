@@ -6,6 +6,7 @@ import {
 	type Methods,
 	maxFrameBytes,
 	type Snapshot,
+	type Transcript,
 } from "../../protocol/index.ts";
 
 // DOM typings hide Bun's native header-taking constructor overload.
@@ -35,7 +36,12 @@ export class ClientConnection {
 	private closed = false;
 	private attempt = 0;
 	private generation = 0;
+	private resynchronizingSocket = false;
 	private sequence = 0;
+	private desiredSession: { id: number | null; watchId: string } | null = null;
+	transcript: Transcript | null = null;
+	observation: "none" | "resynchronizing" | "watching" | "unavailable" = "none";
+	observationError: string | null = null;
 	state: Snapshot | null = null;
 	status: "connecting" | "connected" | "reconnecting" | "closed" = "connecting";
 	error: string | null = null;
@@ -62,15 +68,60 @@ export class ClientConnection {
 	private notify() {
 		for (const listener of this.listeners) listener();
 	}
+	/** UI selection only. Reconnect repeats this read-only watch, never commands. */
+	selectSession(id: number | null) {
+		if (!(id === null || (Number.isSafeInteger(id) && id >= 0)))
+			throw new Error("Invalid session identity");
+		if (this.desiredSession?.id === id && this.observation !== "unavailable")
+			return;
+		this.desiredSession = { id, watchId: crypto.randomUUID() };
+		this.transcript = null;
+		this.observation = id === null ? "none" : "resynchronizing";
+		this.observationError = null;
+		this.notify();
+		void this.observeSession();
+	}
+	private async observeSession() {
+		const target = this.desiredSession,
+			generation = this.generation;
+		if (!target || this.status !== "connected") return;
+		this.observation = target.id === null ? "none" : "resynchronizing";
+		this.observationError = null;
+		this.notify();
+		try {
+			const ack = await this.call("session.watch", target);
+			if (ack.id !== target.id || ack.watchId !== target.watchId)
+				throw new Error("Invalid session watch acknowledgement");
+		} catch (error) {
+			if (
+				generation !== this.generation ||
+				this.status !== "connected" ||
+				this.desiredSession?.watchId !== target.watchId
+			)
+				return;
+			this.observation = target.id === null ? "none" : "unavailable";
+			this.observationError =
+				error instanceof Error
+					? error.message
+					: "Native observation unavailable";
+			this.notify();
+		}
+	}
 	connect() {
 		if (this.closed || this.socket) return;
 		const generation = ++this.generation;
+		this.resynchronizingSocket = false;
 		const socket = new NativeWebSocket(this.endpoint.url, {
 			headers: { Authorization: `Bearer ${this.endpoint.token}` },
 		});
 		this.socket = socket;
 		socket.onmessage = (event) => {
-			if (generation !== this.generation || this.closed) return;
+			if (
+				generation !== this.generation ||
+				this.closed ||
+				this.resynchronizingSocket
+			)
+				return;
 			try {
 				if (
 					typeof event.data !== "string" ||
@@ -86,6 +137,7 @@ export class ClientConnection {
 					this.status = "connected";
 					this.error = null;
 					this.attempt = 0;
+					if (this.desiredSession?.id !== null) void this.observeSession();
 					void this.call("state.read", {})
 						.then((value) => {
 							if (generation === this.generation) {
@@ -110,6 +162,25 @@ export class ClientConnection {
 						throw new Error("Out-of-order server state");
 					this.sequence = frame.sequence;
 					this.state = frame.value;
+				} else if (
+					frame.type === "session" ||
+					frame.type === "session-unavailable"
+				) {
+					if (frame.sequence <= this.sequence)
+						throw new Error("Out-of-order session publication");
+					this.sequence = frame.sequence;
+					if (frame.watchId === this.desiredSession?.watchId) {
+						if (frame.type === "session") {
+							if (frame.value.id !== this.desiredSession.id)
+								throw new Error("Wrong native session publication");
+							this.transcript = frame.value;
+							this.observation = "watching";
+							this.observationError = null;
+						} else {
+							this.observation = "unavailable";
+							this.observationError = frame.message;
+						}
+					}
 				} else if (frame.type === "response" || frame.type === "error") {
 					const pending =
 						frame.id === null ? undefined : this.pending.get(frame.id);
@@ -140,6 +211,12 @@ export class ClientConnection {
 			}
 			this.pending.clear();
 			this.status = this.closed ? "closed" : "reconnecting";
+			this.observation =
+				this.desiredSession && this.desiredSession.id !== null
+					? "resynchronizing"
+					: "none";
+			this.observationError =
+				"Disconnected; native activity is unknown until a new snapshot arrives";
 			this.notify();
 			if (!this.closed)
 				this.reconnect = setTimeout(
@@ -198,8 +275,14 @@ export class ClientConnection {
 	/** User-requested transport refresh; pending commands still become uncertain. */
 	reconnectNow() {
 		if (this.closed) return;
-		if (this.socket) this.socket.close(1001, "Client resynchronizing");
-		else {
+		if (this.desiredSession?.id !== null) this.observation = "resynchronizing";
+		this.notify();
+		if (this.socket) {
+			this.resynchronizingSocket = true;
+			this.status = "reconnecting";
+			this.socket.close(1001, "Client resynchronizing");
+			this.notify();
+		} else {
 			if (this.reconnect) clearTimeout(this.reconnect);
 			this.reconnect = null;
 			this.connect();
@@ -208,6 +291,7 @@ export class ClientConnection {
 	close() {
 		this.closed = true;
 		this.status = "closed";
+		this.observation = "none";
 		if (this.reconnect) clearTimeout(this.reconnect);
 		for (const pending of this.pending.values()) {
 			clearTimeout(pending.timer);

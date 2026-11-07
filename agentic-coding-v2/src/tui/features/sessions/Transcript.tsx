@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import type {
 	Data,
+	ToolProgress,
 	Transcript as TranscriptData,
 } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
@@ -25,6 +26,8 @@ type Link = {
 };
 export function Transcript(props: {
 	value: TranscriptData | null;
+	observation: "none" | "resynchronizing" | "watching" | "unavailable";
+	observationError: string | null;
 	enabled: boolean;
 	selected: string | null;
 	select: (id: string) => void;
@@ -59,31 +62,111 @@ export function Transcript(props: {
 		renderer.nativeScene,
 	);
 	onCleanup(() => syntax.destroy());
-	const messages = createMemo<Data[]>(() =>
-		(props.value?.entries ?? []).flatMap((entry) =>
-			dataList(entry.model).map((message, index) => ({
-				...message,
-				identity: `${props.value?.id}:${entry.id}:${index}`,
-				nativeDiagnostics: dataList(
-					entry.data &&
-						typeof entry.data === "object" &&
-						!Array.isArray(entry.data)
-						? (entry.data as Data).diagnostics
-						: undefined,
-				),
-			})),
-		),
-	);
+	const progress = () =>
+		props.observation === "watching" ? props.value?.progress : undefined;
+	// Equal retained records keep their render identity across progress publications.
+	// Changed bytes always replace the cached value; cache is pruned with the window.
+	let retainedCache = new Map<string, { signature: string; value: Data }>();
+	const messages = createMemo<Data[]>(() => {
+		const nextCache = new Map<string, { signature: string; value: Data }>();
+		const retained = (props.value?.entries ?? []).flatMap((entry) =>
+			dataList(entry.model).map((message, index) => {
+				const value = {
+					...message,
+					identity: `${props.value?.id}:${entry.id}:${index}`,
+					nativePartial: false,
+					nativeTaskId: entry.byTaskId,
+					nativeEntryId: entry.id,
+					nativeDiagnostics: dataList(
+						entry.data &&
+							typeof entry.data === "object" &&
+							!Array.isArray(entry.data)
+							? (entry.data as Data).diagnostics
+							: undefined,
+					),
+				};
+				const signature = JSON.stringify(value);
+				const previous = retainedCache.get(value.identity);
+				const cached =
+					previous?.signature === signature ? previous : { signature, value };
+				nextCache.set(value.identity, cached);
+				return cached.value;
+			}),
+		);
+		retainedCache = nextCache;
+		const live = progress();
+		const message = live?.generation?.message;
+		return live?.run && live.generation && message?.role === "assistant"
+			? [
+					...retained,
+					{
+						...message,
+						identity: `${props.value?.id}:live:${live.run.taskId}:${live.generation.attempt}`,
+						nativePartial: true,
+						nativeDiagnostics: [],
+					},
+				]
+			: retained;
+	});
 	const parts = (message: Data) =>
 		dataList(message.content).map((part, index) => ({
 			part,
 			identity: `${message.identity}:${index}`,
 		}));
+	const liveLinks = createMemo(() => {
+		const slots = progress()?.tools ?? [];
+		const owner = progress()?.run?.taskId;
+		const calls =
+			owner === undefined
+				? []
+				: messages()
+						.filter(
+							(message) =>
+								message.role === "assistant" &&
+								message.nativePartial !== true &&
+								message.nativeTaskId === owner &&
+								message.stopReason !== "error" &&
+								message.stopReason !== "aborted",
+						)
+						.flatMap(parts);
+		const linked = new Map<string, ToolProgress>();
+		const consumed = new Set<ToolProgress>();
+		for (const slot of slots) {
+			const matches = calls.filter(
+				({ part }) => part.type === "toolCall" && part.id === slot.callId,
+			);
+			const match = matches[0];
+			if (
+				matches.length === 1 &&
+				match?.part.name === slot.name &&
+				slots.filter((other) => other.callId === slot.callId).length === 1
+			) {
+				linked.set(match.identity, slot);
+				consumed.add(slot);
+			}
+		}
+		return { linked, consumed };
+	});
+	const standalone = createMemo(() =>
+		[
+			...(progress()?.tools ?? []).filter(
+				(slot) => !liveLinks().consumed.has(slot),
+			),
+			...(progress()?.nestedTools ?? []),
+		].map((slot, index) => ({
+			slot,
+			identity: `${props.value?.id}:live-tool:${progress()?.run?.taskId ?? "unassociated"}:${slot.taskId ?? slot.entry ?? `pending:${slot.callId}:${index}`}`,
+			part: { type: "liveTool" },
+		})),
+	);
 	// Call IDs are opaque. Only unique call/result pairs with the same name are
 	// associated. A clipped window or reused ID never implies running/success.
 	const associations = createMemo(() => {
 		const calls = messages()
-			.filter((message) => message.role === "assistant")
+			.filter(
+				(message) =>
+					message.role === "assistant" && message.nativePartial !== true,
+			)
 			.flatMap(parts)
 			.filter(({ part }) => part.type === "toolCall");
 		const results = messages().filter(
@@ -110,8 +193,22 @@ export function Transcript(props: {
 				callCounts.get(part.id) === 1 &&
 				candidates.length === 1;
 			const candidate = unique ? candidates[0] : undefined;
+			const slot = liveLinks().linked.get(identity);
+			const pointed =
+				slot?.entry === undefined
+					? []
+					: results.filter(
+							(result) =>
+								result.nativeEntryId === slot.entry &&
+								result.toolCallId === slot.callId &&
+								result.toolName === slot.name,
+						);
 			const matched =
-				candidate && candidate.toolName === part.name ? candidate : null;
+				pointed.length === 1
+					? (pointed[0] ?? null)
+					: candidate && candidate.toolName === part.name
+						? candidate
+						: null;
 			links.set(identity, {
 				result: matched,
 				pairing: matched
@@ -124,14 +221,15 @@ export function Transcript(props: {
 		}
 		return { links, consumed };
 	});
-	const controls = createMemo(() =>
-		messages()
+	const controls = createMemo(() => [
+		...messages()
 			.filter((message) => message.role === "assistant")
 			.flatMap(parts)
 			.filter(
 				({ part }) => part.type === "toolCall" || part.type === "thinking",
 			),
-	);
+		...standalone(),
+	]);
 	const enabled = createMemo(() => props.enabled);
 	const selected = () =>
 		controls().find((item) => item.identity === props.selected);
@@ -154,10 +252,19 @@ export function Transcript(props: {
 	};
 	const toggleSection = (suffix: string) => {
 		const row = selected();
-		if (row?.part.type !== "toolCall") return;
+		if (!row || (row.part.type !== "toolCall" && row.part.type !== "liveTool"))
+			return;
+		const slot =
+			liveLinks().linked.get(row.identity) ??
+			standalone().find((item) => item.identity === row.identity)?.slot;
 		const result = associations().links.get(row.identity)?.result;
-		if (suffix !== ":arguments" && !result) return;
-		if (suffix === ":details" && result?.details === undefined) return;
+		if (suffix === ":output" && !result && slot?.output === undefined) return;
+		if (
+			suffix === ":details" &&
+			result?.details === undefined &&
+			slot?.details === undefined
+		)
+			return;
 		if (!props.expanded.includes(row.identity)) props.toggle(row.identity);
 		props.toggle(`${row.identity}${suffix}`);
 	};
@@ -170,17 +277,17 @@ export function Transcript(props: {
 				commands: [
 					{
 						id: "transcript.previous",
-						name: "Previous retained thinking/tool card",
+						name: "Previous observed thinking/tool card",
 						run: () => move(-1),
 					},
 					{
 						id: "transcript.next",
-						name: "Next retained thinking/tool card",
+						name: "Next observed thinking/tool card",
 						run: () => move(1),
 					},
 					{
 						id: "transcript.toggle",
-						name: "Toggle selected retained card",
+						name: "Toggle selected observed card",
 						run: () => {
 							const row = selected();
 							if (row) props.toggle(row.identity);
@@ -217,16 +324,71 @@ export function Transcript(props: {
 					.join("\n");
 	return (
 		<box flexDirection="column" gap={1}>
+			<text
+				fg={
+					props.observation === "watching"
+						? color("textMuted")
+						: color("warning")
+				}
+			>
+				{props.observation === "watching"
+					? "Watching native commits · last observed projection (not an atomic revision)"
+					: `Native activity unknown · observation ${props.observation}`}
+				{props.observationError ? ` · ${props.observationError}` : ""}
+			</text>
+			<Show when={progress()}>
+				{(live) => (
+					<>
+						<text fg={color("textMuted")}>
+							{live().run
+								? `Native run task #${live().run?.taskId} · inputs ${live().run?.inputs.join(", ")}`
+								: "No native run recorded in this observation"}{" "}
+							· queued inputs {live().inbox.length}
+						</text>
+						<Show when={live().generation}>
+							{(generation) => (
+								<text fg={color("textMuted")}>
+									Native generation · attempt {generation().attempt} · committed
+									partials only
+									{generation().retry
+										? ` · retry recorded at ${generation().retry?.at}: ${generation().retry?.error}`
+										: ""}
+									{generation().deferred
+										? ` · deferred poll recorded at ${generation().deferred?.pollAt}`
+										: ""}
+								</text>
+							)}
+						</Show>
+						<For each={live().compactions}>
+							{(item) => (
+								<text fg={color("textMuted")}>
+									Native compaction #{String(item.taskId)} ·{" "}
+									{String(item.reason)} · attempt {String(item.attempt)}
+									{item.retry ? ` · retry ${JSON.stringify(item.retry)}` : ""}
+								</text>
+							)}
+						</For>
+						<Show when={live().compactionFailure}>
+							{(failure) => (
+								<text fg={color("warning")}>
+									Native compaction failure · {String(failure().error)}
+								</text>
+							)}
+						</Show>
+					</>
+				)}
+			</Show>
 			<Show when={controls().length}>
 				<text fg={color("textMuted")}>
-					Ctrl+↑/↓: retained cards · Ctrl+O: expand · Ctrl+Alt+A/O/D:
+					Ctrl+↑/↓: observed cards · Ctrl+O: expand · Ctrl+Alt+A/O/D:
 					arguments/output/details
 				</text>
 			</Show>
 			<Show when={props.selected && !selected()}>
 				<text fg={color("warning")}>
-					Saved card is outside this retained history. Selection is not replaced
-					automatically; choose a retained card explicitly.
+					Saved card is not in the currently observed transcript (clipped
+					history or ended/disconnected live activity). Selection is not
+					replaced automatically; choose an observed card explicitly.
 				</text>
 			</Show>
 			<Show when={props.value?.truncated}>
@@ -251,7 +413,12 @@ export function Transcript(props: {
 								border={message.role === "user" ? ["left"] : false}
 								borderColor={color("accent")}
 							>
-								<text fg={color("textMuted")}>{String(message.role)}</text>
+								<text fg={color("textMuted")}>
+									{String(message.role)}
+									{message.nativePartial === true
+										? " · native in-flight committed partial"
+										: ""}
+								</text>
 								<markdown
 									content={text(message)}
 									syntaxStyle={syntax}
@@ -288,7 +455,9 @@ export function Transcript(props: {
 													<text fg={color("accent")}>
 														{props.selected === identity ? "› " : ""}
 														{props.expanded.includes(identity) ? "▾" : "▸"}{" "}
-														Retained thinking
+														{message.nativePartial === true
+															? "Native in-flight thinking (committed partial)"
+															: "Retained thinking"}
 													</text>
 												</TranscriptHeader>
 												<Show when={props.expanded.includes(identity)}>
@@ -311,6 +480,8 @@ export function Transcript(props: {
 											select={props.select}
 											anchor={track}
 											call={part}
+											partial={message.nativePartial === true}
+											progress={liveLinks().linked.get(identity)}
 											result={
 												associations().links.get(identity)?.result ?? null
 											}
@@ -375,6 +546,28 @@ export function Transcript(props: {
 							)}
 						</For>
 					</>
+				)}
+			</For>
+			<For each={standalone()}>
+				{(row) => (
+					<ToolCard
+						identity={row.identity}
+						selected={props.selected === row.identity}
+						select={props.select}
+						anchor={anchor(row.identity)}
+						call={{
+							id: row.slot.callId,
+							name: row.slot.name,
+							arguments: row.slot.arguments,
+						}}
+						progress={row.slot}
+						liveOnly={true}
+						result={null}
+						pairing="missing"
+						expanded={props.expanded}
+						toggle={props.toggle}
+						syntax={syntax}
+					/>
 				)}
 			</For>
 			<Show when={!messages().length}>

@@ -11,6 +11,8 @@ import {
 
 const integer = (value: unknown, minimum = 0) =>
 	Number.isSafeInteger(value) && Number(value) >= minimum;
+const time = (value: unknown) =>
+	typeof value === "number" && Number.isFinite(value) && value >= 0;
 const list = (value: unknown): Data[] => {
 	if (!Array.isArray(value)) throw new Error("Expected a server list");
 	return value.map(record);
@@ -37,6 +39,105 @@ export function snapshot(value: unknown): Snapshot {
 	}
 	return data as Snapshot;
 }
+function progress(value: unknown) {
+	const data = record(value);
+	if (data.run !== null) {
+		const run = record(data.run);
+		if (
+			!integer(run.taskId) ||
+			!Array.isArray(run.inputs) ||
+			!run.inputs.every((id) => integer(id))
+		)
+			throw new Error("Invalid native run");
+	}
+	if (data.generation !== null) {
+		const generation = record(data.generation);
+		if (!integer(generation.attempt))
+			throw new Error("Invalid native generation");
+		if (generation.message !== undefined) {
+			const message = record(generation.message);
+			if (message.role !== "assistant")
+				throw new Error("Invalid native generation message");
+			list(message.content);
+		}
+		if (generation.retry !== undefined) {
+			const retry = record(generation.retry);
+			if (!time(retry.at) || typeof retry.error !== "string")
+				throw new Error("Invalid native retry");
+		}
+		if (
+			generation.deferred !== undefined &&
+			!time(record(generation.deferred).pollAt)
+		)
+			throw new Error("Invalid native deferred poll");
+	}
+	for (const key of ["tools", "nestedTools"])
+		for (const slot of list(data[key])) {
+			if (
+				typeof slot.callId !== "string" ||
+				typeof slot.name !== "string" ||
+				!["pending", "running", "done"].includes(String(slot.status))
+			)
+				throw new Error("Invalid native tool progress");
+			for (const field of [
+				"taskId",
+				"entry",
+				"droppedBytes",
+				"droppedLines",
+				"parentTaskId",
+			])
+				if (slot[field] !== undefined && !integer(slot[field]))
+					throw new Error("Invalid native tool identity/count");
+			if (slot.output !== undefined && typeof slot.output !== "string")
+				throw new Error("Invalid native tool output");
+			if (slot.arguments !== undefined) record(slot.arguments);
+			if (slot.summary !== undefined) {
+				const summary = record(slot.summary);
+				if (
+					typeof summary.isError !== "boolean" ||
+					(summary.durationMs !== undefined && !time(summary.durationMs))
+				)
+					throw new Error("Invalid native nested summary");
+			}
+			if (
+				key === "nestedTools" &&
+				(!integer(slot.taskId) ||
+					!integer(slot.parentTaskId) ||
+					typeof slot.parentCallId !== "string")
+			)
+				throw new Error("Invalid native nested tool relationship");
+			if (slot.diagnostics !== undefined)
+				for (const item of list(slot.diagnostics))
+					if (
+						typeof item.message !== "string" ||
+						!["info", "warn", "error"].includes(String(item.severity))
+					)
+						throw new Error("Invalid native diagnostic");
+		}
+	for (const item of list(data.compactions))
+		if (
+			!integer(item.taskId) ||
+			!integer(item.attempt) ||
+			typeof item.reason !== "string" ||
+			typeof item.blocking !== "boolean"
+		)
+			throw new Error("Invalid native compaction");
+	if (data.compactionFailure !== null) {
+		const failure = record(data.compactionFailure);
+		if (
+			!integer(failure.taskId) ||
+			typeof failure.reason !== "string" ||
+			typeof failure.error !== "string"
+		)
+			throw new Error("Invalid native compaction failure");
+	}
+	for (const item of list(data.inbox))
+		if (
+			!integer(item.id) ||
+			!["steer", "followUp", "write"].includes(String(item.mode))
+		)
+			throw new Error("Invalid native inbox");
+}
 export function transcript(value: unknown): Transcript {
 	const data = record(value);
 	if (
@@ -47,6 +148,7 @@ export function transcript(value: unknown): Transcript {
 	)
 		throw new Error("Invalid native transcript");
 	list(data.entries);
+	progress(data.progress);
 	const usage = record(data.usage);
 	if (
 		!["input", "output", "cacheRead", "cacheWrite", "cost"].every(
@@ -72,6 +174,16 @@ export function frame(value: unknown): Frame {
 	} else if (data.type === "state") {
 		if (!integer(data.sequence, 1)) throw new Error("Invalid server sequence");
 		snapshot(data.value);
+	} else if (data.type === "session" || data.type === "session-unavailable") {
+		if (
+			!integer(data.sequence, 1) ||
+			typeof data.watchId !== "string" ||
+			!/^[a-zA-Z0-9:_-]{1,128}$/.test(data.watchId)
+		)
+			throw new Error("Invalid session publication");
+		if (data.type === "session") transcript(data.value);
+		else if (typeof data.message !== "string")
+			throw new Error("Invalid session availability");
 	} else if (data.type === "response") {
 		if (typeof data.id !== "string" || !("value" in data))
 			throw new Error("Invalid server response");
@@ -92,7 +204,15 @@ export function result<M extends Method>(
 ): Methods[M]["output"] {
 	if (method === "state.read") snapshot(value);
 	else if (method === "session.read") transcript(value);
-	else if (method !== "providers.read" && method !== "environment.logs") {
+	else if (method === "session.watch") {
+		const data = record(value);
+		if (
+			!(data.id === null || integer(data.id)) ||
+			typeof data.watchId !== "string" ||
+			!/^[a-zA-Z0-9:_-]{1,128}$/.test(data.watchId)
+		)
+			throw new Error("Invalid session watch acknowledgement");
+	} else if (method !== "providers.read" && method !== "environment.logs") {
 		const data = record(value);
 		const expected =
 			method === "state.subscribe"

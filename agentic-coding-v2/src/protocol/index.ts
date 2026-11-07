@@ -20,12 +20,43 @@ export type Snapshot = {
 	environments: Data;
 	sessions: Session[];
 };
+export type ToolProgress = {
+	callId: string;
+	name: string;
+	status: "pending" | "running" | "done";
+	taskId?: number;
+	entry?: number;
+	output?: string;
+	droppedBytes?: number;
+	droppedLines?: number;
+	details?: unknown;
+	diagnostics?: Data[];
+	parentCallId?: string;
+	parentTaskId?: number;
+	arguments?: Data;
+	summary?: Data;
+};
+export type Progress = {
+	run: { taskId: number; inputs: number[] } | null;
+	generation: {
+		attempt: number;
+		message?: Data;
+		retry?: { at: number; error: string };
+		deferred?: { pollAt: number };
+	} | null;
+	tools: ToolProgress[];
+	nestedTools: ToolProgress[];
+	compactions: Data[];
+	compactionFailure: Data | null;
+	inbox: { id: number; mode: "steer" | "followUp" | "write" }[];
+};
 export type Transcript = {
 	id: number;
 	model: string | null;
 	thinking: string;
 	entries: Data[];
 	truncated: boolean;
+	progress: Progress;
 	usage: {
 		input: number;
 		output: number;
@@ -56,6 +87,10 @@ export type Methods = {
 	"state.read": { input: Data; output: Snapshot };
 	"state.subscribe": { input: Data; output: { subscribed: true } };
 	"session.read": { input: { id: number }; output: Transcript };
+	"session.watch": {
+		input: { id: number | null; watchId: string };
+		output: { id: number | null; watchId: string };
+	};
 	"session.send": {
 		input: { id: number; content: string; requestId: string };
 		output: { submissionId: number };
@@ -102,11 +137,26 @@ export type Frame =
 			code: "invalid-request" | "refused" | "unavailable";
 			message: string;
 	  }
-	| { version: 1; type: "state"; sequence: number; value: Snapshot };
+	| { version: 1; type: "state"; sequence: number; value: Snapshot }
+	| {
+			version: 1;
+			type: "session";
+			sequence: number;
+			watchId: string;
+			value: Transcript;
+	  }
+	| {
+			version: 1;
+			type: "session-unavailable";
+			sequence: number;
+			watchId: string;
+			message: string;
+	  };
 export const methods: Method[] = [
 	"state.read",
 	"state.subscribe",
 	"session.read",
+	"session.watch",
 	"session.send",
 	"session.abort",
 	"session.compact",

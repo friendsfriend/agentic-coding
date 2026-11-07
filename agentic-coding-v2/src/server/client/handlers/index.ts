@@ -25,6 +25,10 @@ export async function dispatch(
 		case "state.subscribe":
 			fields(input, []);
 			return { subscribed: true };
+		case "session.watch":
+			throw new Error(
+				"Session observation requires a native client connection",
+			);
 		case "session.read":
 			fields(input, ["id"]);
 			return readSession(app, integer(input.id));

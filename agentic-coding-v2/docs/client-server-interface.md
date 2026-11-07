@@ -24,6 +24,10 @@ Server frames all carry `version:1`:
 - `response`: request `id` and method `value`.
 - `error`: nullable request `id`, `code` (`invalid-request`, `refused`, `unavailable`) and sanitized `message`.
 - `state`: connection-local increasing `sequence` and complete inventory `value`.
+- `session`: selected `watchId`, increasing `sequence` and complete native transcript/progress projection.
+- `session-unavailable`: selected `watchId`, increasing `sequence` and sanitized observation failure. This does not imply that native work stopped.
+
+Inventory and session publications share the connection-local sequence. Old selection publications cannot replace the current selection.
 
 These are JSON frames, not executable UI descriptors. The client rejects incompatible/malformed server frames, invalid method acknowledgements and non-increasing subscription sequences. The native host/client are paired in one installed release; an incompatible method catalog requires updating them together.
 
@@ -33,7 +37,8 @@ These are JSON frames, not executable UI descriptors. The client rejects incompa
 | --- | --- |
 | `state.read` | Empty input; authoritative derived inventory: tasks, reviews, schedules, profiles, topics, repositories, environments and native session catalog. |
 | `state.subscribe` | Empty input; acknowledges subscription. One-second complete inventory refreshes while connected. |
-| `session.read` | Native numeric session ID; newest 200 entries in chronological order, model/thinking and reported usage in that returned history window. Truncation is explicit; usage is not a lifetime total. |
+| `session.read` | Native numeric session ID; newest 200 entries in chronological order, model/thinking and reported usage in that returned history window, plus native live/inbox evidence. Truncation is explicit; usage is not a lifetime total. |
+| `session.watch` | Connection-only read-only observation control: bounded `watchId` and native numeric session ID, or `id:null` to stop. Replaces the socket's previous watch; publishes complete transcript/progress projections. Same session-catalog fence as reads, never arbitrary conversation adoption. |
 | `session.send` | Session ID, bounded content and caller submission identity; returns native submission ID. |
 | `session.abort` | Session ID; native abort request acknowledgement, not a guarantee that all owned work has already stopped. |
 | `session.compact` | Session ID and optional bounded instructions; returns native compaction task ID. No automatic model call occurs merely from reading a session. |
@@ -49,12 +54,14 @@ The home session is available. App-owned skill conversations are discoverable fr
 
 ## Ordering, limits and consistency
 
-- At most eight active native-client connections and sixteen in-flight requests per connection.
+- At most eight native-client connections, counting closing connections until their watch/setup cleanup completes, and sixteen in-flight requests per connection. One selected native session watch per socket.
 - Requests run sequentially within a connection. There is no cross-connection command order.
 - Frames are bounded to 1,000,000 bytes. Oversized frames/backpressure close with code 1009; excess connection capacity closes with 1013. Complete inventories are not silently truncated to fit. A large retained catalog can therefore make this initial snapshot interface unavailable; pagination is not implemented yet.
 - Inventory polling is shared, non-overlapping, and runs only while there are native clients. It is not a durable subscription log.
+- Transcript progress is event-driven through native `watchEvents`, not one-second polling. Commit batches and native overflow snapshots invalidate the complete projection; bursts coalesce for 100 ms with one read in flight. Registration precedes the initial projection so intervening commits schedule another read.
+- Transcript history is read before live/inbox state. These reads are **non-atomic**: native terminal commits append the final assistant message and clear its partial together, so this order avoids final-plus-stale-partial duplication, but a crossing commit can temporarily omit content until the next projection. Usage still describes only the retained window.
 - Inventory is assembled from native projections/services, **not one atomic whole-system transaction**. Sequence orders publication on one connection, not native commits globally. UI mutations must still provide current identities/revisions.
-- There is no replay cursor or partial-resume guarantee. Reconnect obtains a fresh inventory and subscribes anew. Last displayed inventory may remain cached while disconnected, but client commands are unavailable until reconnection.
+- There is no replay cursor or partial-resume guarantee. Reconnect obtains a fresh inventory and reattaches only the selected read-only watch. Retained transcript/inventory may remain cached, but partial progress is hidden as unknown while disconnected/resynchronizing, and commands are unavailable until reconnection. An unavailable observation is not native idle/completion evidence.
 
 ## Uncertainty, retries and lifecycle
 
@@ -64,7 +71,7 @@ Native session submission identities deduplicate according to pi-durable's submi
 
 Reconnect uses bounded exponential delay (1–30 seconds); explicit `/reconnect` requests the same synchronization path. New requests get new correlation IDs, but no old mutation is reissued. The functional disconnect test holds a native mutation in flight, reconnects the same client, observes its uncertain outcome and proves that only one native mutation occurred. The deletion scenario also reopens persistent native storage and proves that the retired schedule ID cannot be recreated.
 
-Closing a connection discards queued work that has not started. Already-running work may finish. Host shutdown stops polling, closes clients and waits for running request chains before stopping the listener/runtime. TUI renderer/client/signal handlers are cleaned up on exit; no legacy window launcher is involved.
+Closing a connection discards queued work that has not started and retires its watch/timer. Already-running work may finish. Host shutdown stops polling, closes clients and waits for running request chains and watch/setup cleanup before stopping the listener/runtime. Stopping observation does not abort native work. TUI renderer/client/signal handlers are cleaned up on exit; no legacy window launcher is involved.
 
 ## Not yet claimed
 
