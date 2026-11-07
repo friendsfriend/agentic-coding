@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { digest } from "../src/config.ts";
+import type { ProviderQuery } from "../src/protocol/index.ts";
 import { serve } from "../src/server/index.ts";
-import { createFixtures } from "./fixtures/runtime.ts";
+import { ClientConnection } from "../src/tui/client/connection.ts";
+import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
@@ -144,7 +146,20 @@ test("unknown and tokenless providers fail closed", async () => {
 });
 test("reads map both hosts to one model over Bearer auth", async () => {
 	const { app, host, api } = await setup();
+	const client = new ClientConnection(host.client);
 	try {
+		client.connect();
+		await eventually(
+			async () => client.state,
+			(state) => state !== null,
+		);
+		const registry = await client.call("providers.read", {});
+		expect(registry.map((entry) => [entry.name, entry.has_token])).toEqual([
+			["gh", true],
+			["gl", true],
+		]);
+		expect(JSON.stringify(registry)).not.toContain("stub-secret");
+		expect(seenAuth).toEqual([]);
 		const search = await (
 			await api("/api/providers/gh/repos/search", { query: "r" })
 		).json();
@@ -181,8 +196,72 @@ test("reads map both hosts to one model over Bearer auth", async () => {
 				url: "https://h/i",
 			},
 		]);
+		expect(
+			await client.call("providers.inspect", {
+				provider: "gh",
+				operation: "repos",
+				query: "r",
+			}),
+		).toEqual({ provider: "gh", operation: "repos", value: search });
+		expect(
+			await client.call("providers.inspect", {
+				provider: "gh",
+				operation: "changes",
+				repo: "o/r",
+			}),
+		).toEqual({ provider: "gh", operation: "changes", value: changes });
+		expect(
+			await client.call("providers.inspect", {
+				provider: "gl",
+				operation: "issues",
+				repo: "o/r",
+			}),
+		).toEqual({ provider: "gl", operation: "issues", value: issues });
+		const calls = seenAuth.length;
+		await expect(
+			client.call("providers.inspect", {
+				provider: "nope",
+				operation: "changes",
+				repo: "o/r",
+			}),
+		).rejects.toThrow("Native operation refused");
+		await expect(
+			client.call("providers.inspect", {
+				provider: "gh",
+				operation: "change",
+				repo: "o/r",
+				number: 0,
+			}),
+		).rejects.toThrow("Native operation refused");
+		delete process.env.PROVIDER_TEST_TOKEN;
+		await expect(
+			client.call("providers.inspect", {
+				provider: "gh",
+				operation: "changes",
+				repo: "o/r",
+			}),
+		).rejects.toThrow("Native operation refused");
+		expect(seenAuth.length).toBe(calls);
+		// Deliberately malformed wire request: the authenticated gateway cannot forward writes or arbitrary fields.
+		await expect(
+			client.call("providers.inspect", {
+				provider: "gh",
+				operation: "comment",
+				repo: "o/r",
+			} as unknown as ProviderQuery),
+		).rejects.toThrow("Native operation refused");
+		await expect(
+			client.call("providers.inspect", {
+				provider: "gh",
+				operation: "changes",
+				repo: "o/r",
+				body: "never send",
+			} as ProviderQuery),
+		).rejects.toThrow("Native operation refused");
+		expect(seenAuth.length).toBe(calls);
 	} finally {
-		host.stop();
+		client.close();
+		await host.stop();
 		await app.close();
 	}
 });

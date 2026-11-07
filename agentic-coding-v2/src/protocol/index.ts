@@ -65,6 +65,33 @@ export type Transcript = {
 		cost: number;
 	};
 };
+export type ProviderSummary = {
+	name: string;
+	type: "github" | "gitlab";
+	baseUrl: string;
+	username: string;
+	has_token: boolean;
+};
+export type ProviderQuery = { provider: string } & (
+	| { operation: "repos"; query: string }
+	| { operation: "branches" | "labels" | "collaborators"; repo: string }
+	| {
+			operation: "changes" | "issues";
+			repo: string;
+			state?: "open" | "closed" | "all";
+	  }
+	| {
+			operation: "change" | "issue" | "files" | "versions" | "discussions";
+			repo: string;
+			number: number;
+	  }
+	| { operation: "jobs"; repo: string; run?: number }
+);
+export type ProviderInspection = {
+	provider: string;
+	operation: ProviderQuery["operation"];
+	value: Data | Data[];
+};
 export type TaskDetails = {
 	id: number;
 	metadata: Data;
@@ -140,7 +167,8 @@ export type Methods = {
 		output: { taskId: number };
 	};
 	"environment.logs": { input: { app: string }; output: unknown };
-	"providers.read": { input: Data; output: unknown };
+	"providers.read": { input: Data; output: ProviderSummary[] };
+	"providers.inspect": { input: ProviderQuery; output: ProviderInspection };
 };
 export type Method = keyof Methods;
 export type Request = { version: 1; id: string; method: Method; input: Data };
@@ -185,6 +213,7 @@ export const methods: Method[] = [
 	"environment.action",
 	"environment.logs",
 	"providers.read",
+	"providers.inspect",
 ];
 export function record(value: unknown): Data {
 	if (!value || typeof value !== "object" || Array.isArray(value))

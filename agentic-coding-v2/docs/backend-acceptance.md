@@ -224,6 +224,14 @@ Catalog-fenced `task.read` exposes native status/abort-request/outcome, retained
 
 Existing completion and screenshot/review fixtures now verify the authenticated task-detail boundary, including catalog refusal, native outcome/child identity and exact retained review bytes/digest/revision plus attachment ownership. Twenty focused tests, Biome (232 files), full v2 type-check/build/help and 71 legacy boundaries/full type-check pass. No new renderer/helper/navigation tests, real external operations or web edits. Broader UI/evidence/diagnostic/integration/wiki/settings scope and manual TTY verification remain incomplete.
 
+## Provider inspection and native journal UI checkpoint
+
+The authenticated client now has an explicit read-only native `providers.inspect` allow-list with operation-specific fields and positive numeric IDs, retaining named-provider/token/HTTPS fences and sanitized errors. Registry reads/navigation have no outbound effects. Provider cards stage unsent commands; only explicit submission reads upstream, with provider/operation identity checked and cached results never replayed by reconnect/viewpoint restore. Writes, arbitrary routes and signed job-log reads are not exposed. Existing HTTP/web behavior remains unchanged.
+
+Observability now presents native HTTP/query/wait/reference journals with exact observation/scope/uncertainty labels and catalog-fenced owner links, not live rollback/execution/lease authority. No external telemetry probes run by displaying these journals. Async submission completion preserves edited drafts.
+
+Sixteen focused provider/runtime/gateway tests pass, including the existing faux-provider read fixture extended across the authenticated public boundary for normalized results, token-free registry/no automatic outbound calls and fail-closed malformed/unknown/tokenless requests. Biome (235 files), full v2 type-check/build/help, 71 legacy boundaries/full legacy type-check and diff hygiene pass. No renderer/helper/navigation tests or real external operations. Manual TUI/full native-suite acceptance and remaining integration/wiki/writable-settings/richer diagnostic/interaction scope are not claimed.
+
 ## Podman shared Compose networking milestone
 
 Shared Podman targets are eligible and create the name-fenced bridge network through the `--url` CLI prefix: occupied names refuse without adoption or container effects, the claimed creation name is verified through one label-matching inspect read-back before any attachment, and a mismatched name receipt interrupts startup with the unverified network left unmutated (`refusing mutation` in run logs, no `network rm`, no containers). `test/compose-podman-network.test.ts` (2 tests) proves the lifecycle and the occupied fence; the repointed `test/container.test.ts` case proves the mismatched-receipt fence. Fixture-only proof; no live daemon contact.

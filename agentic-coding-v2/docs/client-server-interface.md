@@ -49,6 +49,7 @@ These are JSON frames, not executable UI descriptors. The client rejects incompa
 | `schedule.delete` | Schedule ID and exact revision; deletes future timing transactionally and permanently retires the request identity, preventing delete/recreate ABA against stale revisions. Does not cancel an already admitted occurrence task. Schedule create/update remains orchestrator-only; recreation needs a new ID. |
 | `environment.action` | Typed native operator selection (`apps`, action, request identity, optional target/profile/runtime/replicas/workspace/base); admits an operator environment task and preserves its human review. No client-side readiness or ownership grant. |
 | `environment.logs` | Configured app ID; native diagnostic logs, not lease takeover. |
+| `providers.inspect` | Explicit read-only allow-list: repository search/branches/labels/collaborators; changes/issues (list/detail); change files/versions/discussions; jobs (GitHub requires run ID). Exact operation fields, bounded repository/query text, positive numeric IDs; native named provider and token/HTTPS fences retained. No arbitrary route, write, log redirect or automatic outbound call. |
 | `providers.read` | Empty input; native provider namespace inventory. No external provider operation. |
 
 The home session is available. App-owned skill conversations are discoverable from their execution checkpoint; new skill tasks retain their native conversation ID in catalog metadata so completed transcripts remain readable. Terminal children are not writable. Older already-terminal tasks without retained IDs are not migrated or guessed. Arbitrary harness conversation IDs are not a client navigation capability. Native ownership admission, not a saved sidebar/viewpoint, governs new owned work.
@@ -79,6 +80,14 @@ Closing a connection discards queued work that has not started and retires its w
 Task details refresh on selection, reconnect, relevant inventory changes or explicit `/refresh`; stale in-flight detail results cannot replace a newer selection. Disconnected detail is cached/unknown, not fresh activity. `/task ID` opens a catalog-owned task. Task/review headers prepare an **unsent** revision-fenced decision/cancellation command and refuse to replace an existing draft. Only explicit prompt submission invokes native mutation methods; saved expansion/selection cannot submit or grant approval.
 
 Environment overviews show configured targets, observed runs/readiness/owners, idle/cleanup diagnostics and waiters. Run/build/test/log headers prepare commands only; no environment is probed, restarted or adopted by display. Schedule overview shows exact timing/invocation, admitted task, errors and retained history, with revision-fenced deletion preparation only. IDs that cannot be represented as one prompt token do not gain prepared action shortcuts. Full diagnostics/action controls remain incomplete.
+
+## Provider inspection and diagnostic journals
+
+`providers.read` now returns validated native provider summaries (name/type/configured origin/username/token presence only). The TUI registry refresh is selection/reconnect/manual-refresh driven and stale completions are fenced. Registry presence is not authentication or reachability proof.
+
+`/provider NAME OPERATION ...` explicitly submits `providers.inspect`; `/help` lists supported arguments. Preparation only stages an unsent command with editable placeholders. Result identity is checked against the submitted provider/operation, then retained as cached UI data with local receipt time. Navigation/reconnect/viewpoint restore never repeats upstream reads. Returned URLs remain inert text. Unknown providers, missing tokens, invalid numeric IDs, unsupported operations and extra fields refuse through the existing sanitized gateway error boundary. Writes and signed job-log redirect reads are not exposed by this method.
+
+Observability presents the existing native `httpOperations`, `queryOperations`, `waits` and `referenceGraphs` journals with filter/selection, scoped identities, exact diagnostic records and catalog-fenced owner links. These observations cannot restore execution, lease or rollback authority, and empty records do not prove inactivity. No remote logs/spans/database probes run by opening this view. Async command completion now preserves drafts edited while the request is pending.
 
 ## Not yet claimed
 

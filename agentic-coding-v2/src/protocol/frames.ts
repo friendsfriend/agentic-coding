@@ -202,7 +202,40 @@ export function result<M extends Method>(
 	method: M,
 	value: unknown,
 ): Methods[M]["output"] {
-	if (method === "state.read") snapshot(value);
+	if (method === "providers.read") {
+		list(value).forEach((provider) => {
+			if (
+				typeof provider.name !== "string" ||
+				!["github", "gitlab"].includes(String(provider.type)) ||
+				typeof provider.baseUrl !== "string" ||
+				typeof provider.username !== "string" ||
+				typeof provider.has_token !== "boolean"
+			)
+				throw new Error("Invalid provider registry");
+		});
+	} else if (method === "providers.inspect") {
+		const data = record(value);
+		if (
+			typeof data.provider !== "string" ||
+			![
+				"repos",
+				"branches",
+				"labels",
+				"collaborators",
+				"changes",
+				"issues",
+				"change",
+				"issue",
+				"files",
+				"versions",
+				"discussions",
+				"jobs",
+			].includes(String(data.operation))
+		)
+			throw new Error("Invalid provider inspection");
+		if (Array.isArray(data.value)) list(data.value);
+		else record(data.value);
+	} else if (method === "state.read") snapshot(value);
 	else if (method === "session.read") transcript(value);
 	else if (method === "task.read") {
 		const data = record(value);

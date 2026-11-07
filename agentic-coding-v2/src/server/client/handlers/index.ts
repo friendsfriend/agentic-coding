@@ -3,6 +3,7 @@ import { text } from "../../../config.ts";
 import type { OperatorAction } from "../../../environment/operator.ts";
 import type { Data, Request } from "../../../protocol/index.ts";
 import type { Runtime } from "../../../runtime.ts";
+import { inspectProvider } from "./providers.ts";
 import { clientSession, clientSnapshot, readSession } from "./sessions.ts";
 import { readTask } from "./tasks.ts";
 
@@ -130,6 +131,8 @@ export async function dispatch(
 		case "environment.logs":
 			fields(input, ["app"]);
 			return app.environments.logs(text(input.app, "app", 64));
+		case "providers.inspect":
+			return inspectProvider(app, input);
 		case "providers.read":
 			fields(input, []);
 			return app.environments.providers.list();

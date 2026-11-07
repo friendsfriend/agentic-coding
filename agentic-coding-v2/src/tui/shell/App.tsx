@@ -10,8 +10,15 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
-import type { Data, TaskDetails } from "../../protocol/index.ts";
+import type {
+	Data,
+	ProviderQuery,
+	ProviderSummary,
+	TaskDetails,
+} from "../../protocol/index.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
+import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
+import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
 import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
@@ -41,6 +48,10 @@ const help = [
 	"/delete-schedule SCHEDULE_ID@REVISION",
 	"/run|build|test APP [target] (native task + review)",
 	"/logs APP · /filter TEXT · /sort newest|default",
+	"/provider NAME repos QUERY | branches|labels|collaborators REPO",
+	"/provider NAME changes|issues REPO [open|closed|all]",
+	"/provider NAME change|issue|files|versions|discussions REPO NUMBER",
+	"/provider NAME jobs REPO [RUN_ID] (required for GitHub)",
 	"/bookmark NAME · /jump NAME_OR_ID · /forget ID",
 	"Alt+1..4: session modes · Alt+Left/Right: history",
 	"Ctrl+B: sessions focus · Ctrl+V: viewpoints focus",
@@ -56,7 +67,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		viewpoints = new Viewpoints();
 	const [revision, setRevision] = createSignal(0),
 		[notice, setNotice] = createSignal<string | null>(null),
-		[providerData, setProviderData] = createSignal<unknown>(null),
+		[providerData, setProviderData] = createSignal<ProviderSummary[]>([]),
+		[providerError, setProviderError] = createSignal<string | null>(null),
 		[taskDetails, setTaskDetails] = createSignal<TaskDetails | null>(null),
 		[taskError, setTaskError] = createSignal<string | null>(null),
 		[refreshRevision, setRefreshRevision] = createSignal(0),
@@ -134,12 +146,31 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		revision();
 		return client.observationError;
 	};
+	let providerEpoch = 0;
 	createEffect(() => {
-		if (page() === "providers" && status() === "connected")
-			void client
-				.call("providers.read", {})
-				.then(setProviderData)
-				.catch((error: Error) => setNotice(error.message));
+		const selectedPage = page(),
+			connected = status() === "connected";
+		refreshRevision();
+		const epoch = ++providerEpoch;
+		onCleanup(() => {
+			providerEpoch++;
+		});
+		if (selectedPage !== "providers") return;
+		if (!connected) {
+			setProviderError("Disconnected; provider registry is cached");
+			return;
+		}
+		setProviderError("Refreshing local native provider registry…");
+		void client
+			.call("providers.read", {})
+			.then((providers) => {
+				if (epoch !== providerEpoch || status() !== "connected") return;
+				setProviderData(providers);
+				setProviderError(null);
+			})
+			.catch((error: Error) => {
+				if (epoch === providerEpoch) setProviderError(error.message);
+			});
 	});
 	const rows = createMemo(() => {
 		const snapshot = state(),
@@ -151,9 +182,37 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					? (snapshot?.schedules ?? [])
 					: selected.page === "environments"
 						? dataList(snapshot?.environments.projects)
-						: selected.page === "pi-durable"
-							? (snapshot?.sessions ?? []).map((session) => ({ ...session }))
-							: [];
+						: selected.page === "providers"
+							? providerData().map((provider) => ({
+									...provider,
+									id: provider.name,
+								}))
+							: selected.page === "observability"
+								? (
+										[
+											["http", snapshot?.environments.httpOperations],
+											["query", snapshot?.environments.queryOperations],
+											["wait", snapshot?.environments.waits],
+											["reference", snapshot?.environments.referenceGraphs],
+										] as const
+									).flatMap(([journal, records]) =>
+										dataList(records).map((row, index) => {
+											const nativeIdentity = String(
+												row.id ?? row.batch ?? `unidentified:${index}`,
+											);
+											return {
+												...row,
+												journal,
+												nativeIdentity,
+												id: `${journal}:${nativeIdentity}`,
+											};
+										}),
+									)
+								: selected.page === "pi-durable"
+									? (snapshot?.sessions ?? []).map((session) => ({
+											...session,
+										}))
+									: [];
 		if (selected.filter)
 			rows = rows.filter((row) =>
 				JSON.stringify(row)
@@ -349,6 +408,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					command = match?.[1] ?? "",
 					args = match?.[2]?.trim() ?? "";
 				const clear = () => {
+					if (
+						navigation.current === origin &&
+						prompt &&
+						prompt.plainText !== content
+					) {
+						origin.draft = prompt.plainText;
+						return;
+					}
+					if (origin.draft !== content) return;
 					origin.draft = "";
 					if (navigation.current === origin) prompt?.setText("");
 				};
@@ -460,6 +528,94 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					setNotice(
 						`Native environment task #${result.taskId}; inspect its review before execution.`,
 					);
+				} else if (command === "provider") {
+					const [provider, operation, repo, argument] = words;
+					if (!provider || !operation)
+						throw new Error(
+							"Use /provider NAME OPERATION ...; /help lists read-only operations",
+						);
+					const positive = (value: string | undefined) => {
+						if (
+							!value ||
+							!/^\d+$/.test(value) ||
+							!Number.isSafeInteger(Number(value)) ||
+							Number(value) < 1
+						)
+							throw new Error("Supply a positive native provider number");
+						return Number(value);
+					};
+					let input: ProviderQuery;
+					if (operation === "repos") {
+						if (!repo) throw new Error("Supply a repository search query");
+						input = { provider, operation, query: words.slice(2).join(" ") };
+					} else {
+						if (!repo || words.length > 4)
+							throw new Error(
+								"Supply a repository and only the operation's allowed arguments",
+							);
+						if (operation === "changes" || operation === "issues") {
+							if (argument && !["open", "closed", "all"].includes(argument))
+								throw new Error("State accepts open, closed or all");
+							input = {
+								provider,
+								operation,
+								repo,
+								state: (argument ?? "open") as "open" | "closed" | "all",
+							};
+						} else if (
+							["change", "issue", "files", "versions", "discussions"].includes(
+								operation,
+							)
+						)
+							input = {
+								provider,
+								operation: operation as
+									| "change"
+									| "issue"
+									| "files"
+									| "versions"
+									| "discussions",
+								repo,
+								number: positive(argument),
+							};
+						else if (operation === "jobs")
+							input = {
+								provider,
+								operation,
+								repo,
+								...(argument ? { run: positive(argument) } : {}),
+							};
+						else if (
+							operation === "branches" ||
+							operation === "labels" ||
+							operation === "collaborators"
+						) {
+							if (argument)
+								throw new Error("This read accepts only a repository");
+							input = { provider, operation, repo };
+						} else
+							throw new Error(
+								"Unsupported provider operation; no write or arbitrary route is forwarded",
+							);
+					}
+					const inspection = await client.call("providers.inspect", input);
+					if (
+						inspection.provider !== provider ||
+						inspection.operation !== operation
+					)
+						throw new Error("Wrong provider inspection identity");
+					const retained = { ...inspection, input, receivedAt: Date.now() };
+					origin.detail = { ...origin.detail, providerInspection: retained };
+					clear();
+					if (navigation.current === origin) {
+						if (origin.page !== "providers") go("providers", provider);
+						navigation.current.resource = provider;
+						navigation.current.detail = {
+							...navigation.current.detail,
+							providerInspection: retained,
+						};
+					}
+					update();
 				} else if (command === "logs") {
 					const logs = await client.call("environment.logs", { app: args });
 					origin.detail = { logs };
@@ -693,9 +849,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									<Show
 										when={
 											rows().length &&
-											!["tasks", "environments", "schedules"].includes(
-												current().page,
-											)
+											![
+												"tasks",
+												"environments",
+												"schedules",
+												"providers",
+												"observability",
+											].includes(current().page)
 										}
 									>
 										<box flexDirection="column" gap={1}>
@@ -801,25 +961,51 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										/>
 									</Show>
 									<Show when={current().page === "providers"}>
-										<text wrapMode="word">
-											{providerData() === null
-												? "Provider inventory unavailable"
-												: JSON.stringify(providerData(), null, 2)}
-										</text>
+										<ProviderPanel
+											rows={rows()}
+											selected={rowSelected}
+											select={(row, index) => {
+												navigation.current.selection = index;
+												navigation.current.resource = String(row.id);
+												update();
+											}}
+											connected={status() === "connected"}
+											error={providerError()}
+											inspection={
+												current().detail.providerInspection &&
+												typeof current().detail.providerInspection ===
+													"object" &&
+												!Array.isArray(current().detail.providerInspection)
+													? (current().detail.providerInspection as Data)
+													: null
+											}
+											expanded={current().expanded}
+											toggle={toggleDetail}
+											prepare={prepareCommand}
+										/>
 									</Show>
 									<Show when={current().page === "observability"}>
-										<text wrapMode="word">
-											{JSON.stringify(
-												{
-													http: state()?.environments.httpOperations ?? [],
-													database: state()?.environments.queryOperations ?? [],
-													referenceGraphs:
-														state()?.environments.referenceGraphs ?? [],
-												},
-												null,
-												2,
-											)}
-										</text>
+										<ObservabilityPanel
+											rows={rows()}
+											selected={rowSelected}
+											select={(row, index) => {
+												navigation.current.selection = index;
+												navigation.current.resource = String(row.id);
+												update();
+											}}
+											environments={state()?.environments}
+											connected={status() === "connected"}
+											expanded={current().expanded}
+											toggle={toggleDetail}
+											openTask={(id) => {
+												if (state()?.tasks.some((task) => task.id === id))
+													go("tasks", String(id));
+												else
+													setNotice(
+														"Owner task is not in the native catalog; no arbitrary task is adopted.",
+													);
+											}}
+										/>
 									</Show>
 									<Show when={current().page === "settings"}>
 										<text fg={color("textMuted")}>
@@ -853,7 +1039,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											resources.
 										</text>
 									</Show>
-									<Show when={Object.keys(current().detail).length}>
+									<Show
+										when={
+											Object.keys(current().detail).length &&
+											current().page !== "providers"
+										}
+									>
 										<text wrapMode="word">
 											{JSON.stringify(current().detail, null, 2)}
 										</text>
