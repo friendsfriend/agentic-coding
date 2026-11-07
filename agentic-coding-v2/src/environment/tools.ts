@@ -175,6 +175,45 @@ export function createEnvironmentTools(
 					),
 			}),
 			defineTool({
+				name: "env_draft_stage",
+				description:
+					"Stage inert environment definition bytes as a private native draft for later developer review and promotion. Staging stores text only: it never touches live configuration, repositories, running apps or existing approvals, and it cannot promote, validate runtime readiness or resolve secrets. The developer reviews staged drafts and promotes them through their own authenticated workflow; nothing staged takes effect on its own. Revising needs the exact current revision of a draft this task staged; developer-staged and other tasks' drafts are refused. Invalid JSON stays editable but never becomes a runnable target. At most 8 staged drafts per task within 16 total.",
+				parameters: Type.Object(
+					{
+						requestId: Type.String({ minLength: 1, maxLength: 128 }),
+						content: Type.String({ minLength: 1, maxLength: 65536 }),
+						id: Type.Optional(Type.String({ maxLength: 80 })),
+						revision: Type.Optional(Type.Integer({ minimum: 1 })),
+					},
+					{ additionalProperties: false },
+				),
+				replay: "safe",
+				executionMode: "sequential",
+				execute: async (args, api) => {
+					const owner = await ownerOf(api.conversationId);
+					if (!owner)
+						throw new Error("Draft staging requires a native skill task");
+					const staged = await manager.drafts.save(
+						{
+							requestId: args.requestId,
+							content: args.content,
+							...(args.id === undefined ? {} : { id: args.id }),
+							...(args.revision === undefined
+								? {}
+								: { revision: args.revision }),
+						},
+						owner.id,
+					);
+					const current = await manager.drafts.staged(staged.id);
+					return environmentResult({
+						staged,
+						schema: current.schema,
+						authority:
+							"Staged bytes are inert until the developer reviews and promotes them; schema acceptance is not runtime validation or approval.",
+					});
+				},
+			}),
+			defineTool({
 				name: "env_cluster_status",
 				description:
 					"Request human approval to inspect the API identity of one explicitly configured local Kubernetes context. No default context, cluster creation, app start, secret inspection or cleanup/adoption authority. Credential plugins and inline credentials are unsupported.",

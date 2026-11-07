@@ -270,6 +270,23 @@ export class DefinitionDrafts {
 		};
 	}
 	/** Historical summaries only; independent of draft existence and live files. */
+	/** Staged receipt with a schema-only verdict. Unlike read, this never
+	 * inspects the live destination, trees or preflight history, so staging
+	 * stays independent of live configuration state. */
+	async staged(id: string) {
+		privateState(this.config);
+		this.id(id);
+		const doc = await this.engine().snapshot(DraftState, background),
+			raw = doc?.drafts[id];
+		if (!raw) throw new Error("Unknown definition draft");
+		const draft = parseDraft(raw);
+		return {
+			id: draft.id,
+			revision: draft.revision,
+			digest: draft.digest,
+			schema: schema(this.config, draft),
+		};
+	}
 	async preflights() {
 		privateState(this.config);
 		const doc = await this.engine().snapshot(Preflights, background);
@@ -950,7 +967,9 @@ export class DefinitionDrafts {
 		if (!/^draft-[a-f0-9]{64}$/.test(value))
 			throw new Error("Invalid definition draft ID");
 	}
-	async save(body: Record<string, unknown>) {
+	/** Native tasks stage inert bytes for later developer review and promotion;
+	 * the origin task owns its staged drafts and may revise only those. */
+	async save(body: Record<string, unknown>, origin?: number) {
 		privateState(this.config);
 		if (
 			Object.keys(body).some(
@@ -1004,9 +1023,23 @@ export class DefinitionDrafts {
 				throw new Error(
 					"Draft revision conflict; load the current draft explicitly before saving",
 				);
+			if (editing && origin !== undefined && previous?.stagedBy !== origin)
+				throw new Error(
+					"Native tasks may revise only their own staged drafts; ask the developer to edit anything else",
+				);
 			if (!editing && Object.keys(doc.drafts).length >= 16)
 				throw new Error(
 					"Native draft capacity reached; automatic pruning is unsupported",
+				);
+			if (
+				!editing &&
+				origin !== undefined &&
+				Object.values(doc.drafts).filter(
+					(raw) => stored<Draft>(raw).stagedBy === origin,
+				).length >= 8
+			)
+				throw new Error(
+					"Native task draft capacity reached; ask the developer to remove staged drafts",
 				);
 			const draft: Draft = {
 				id,
@@ -1015,6 +1048,9 @@ export class DefinitionDrafts {
 				digest: digest(content),
 				base: previous?.base ?? base(this.config),
 				...(previous?.sources ? { sources: previous.sources } : {}),
+				...(origin !== undefined || previous?.stagedBy !== undefined
+					? { stagedBy: origin ?? previous?.stagedBy ?? null }
+					: {}),
 			};
 			const result = { id, revision: draft.revision, digest: draft.digest };
 			doc.drafts[id] = JSON.stringify(draft);

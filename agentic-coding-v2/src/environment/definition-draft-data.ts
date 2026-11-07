@@ -26,6 +26,8 @@ export type Draft = {
 	digest: string;
 	base: Base;
 	sources?: SourceDraft[];
+	/** Native task that staged this draft; absent for developer-staged drafts. */
+	stagedBy?: number | null;
 };
 export type Receipt = {
 	request: string;
