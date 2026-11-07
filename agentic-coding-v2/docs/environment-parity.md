@@ -841,3 +841,7 @@ Promotion attempts, preflight routing, tree cleanup/release/removal and operator
 Checkpoint gates: full native suite **334 pass / 2363 assertions / 71 files**; Biome **187 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.6**, objective/verified **82.4**, strict **19.6**; subjective dimensions unassessed, exclusions unchanged. Historical intermittent cleanup observation, nested `ENOTEMPTY`, polling/stall and legacy full-baseline/TEST-005 items remain unresolved, not fixed.
 
 Next recommended milestone: promotion write barriers against live configuration internals beyond the HTTP boundary, remaining Compose/Podman runtime behavior, Kubernetes multi-replica diagnostics, Windows/PowerShell, authorized live verification and TUI adaptation last.
+
+## Promotion write fences milestone
+
+Promotion writes are fenced against configuration-directory replacement, non-regular live destinations and held cooperative locks, proven by `test/promotion-write-fences.test.ts` (3 tests). Post-write verification failure and staged-content integrity mismatch are unreachable through the API (immutable staged content, no live race harness) and remain unclaimed, not fixed.
