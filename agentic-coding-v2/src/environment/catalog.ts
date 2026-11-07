@@ -481,6 +481,57 @@ function parseProjects(
 	validateDependencies(projects);
 	return projects;
 }
+/** Batch-level namespace fences, checked before approval, reservation or
+ * commands. Host ports are single-occupancy regardless of which mechanism
+ * claims them (container publication, query listener, app endpoint binding or
+ * Kubernetes loopback forward); two apps sharing one is an engine startup
+ * conflict, never a queue to serialize. Same-app endpoint aliases for one URL
+ * are allowed; every other duplicate binding is refused. */
+function refuseBatchCollisions(plans: Plan[]) {
+	const bound = new Map<string, string>();
+	const claim = (key: string, app: string, detail: string) => {
+		const owner = bound.get(key);
+		if (owner === undefined) bound.set(key, app);
+		else if (owner !== app)
+			throw new Error(
+				`Environment batch binds the same host port twice (${detail}); choose distinct ports before approval`,
+			);
+	};
+	for (const plan of plans) {
+		for (const port of plan.container?.ports ?? [])
+			claim(
+				`${port.protocol}/${String(port.address).toLowerCase()}:${port.host}`,
+				plan.app,
+				`container publication ${String(port.address)}:${port.host}`,
+			);
+		if (plan.queryConnection)
+			claim(
+				`tcp/${plan.queryConnection.host.toLowerCase()}:${plan.queryConnection.port}`,
+				plan.app,
+				`query listener ${plan.queryConnection.host}:${plan.queryConnection.port}`,
+			);
+		for (const value of Object.values(plan.endpoints ?? {})) {
+			let url: URL;
+			try {
+				url = new URL(value);
+			} catch {
+				continue;
+			}
+			const port = Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+				host =
+					url.hostname.toLowerCase() === "localhost"
+						? "127.0.0.1"
+						: url.hostname.toLowerCase();
+			claim(`tcp/${host}:${port}`, plan.app, `endpoint ${host}:${port}`);
+		}
+		for (const forward of plan.kubernetes?.portForwards ?? [])
+			claim(
+				`tcp/127.0.0.1:${forward.local}`,
+				plan.app,
+				`port forward 127.0.0.1:${forward.local}`,
+			);
+	}
+}
 export function resolvePlans(
 	projects: Project[],
 	owner: Pick<TaskInfo, "policy" | "repository" | "workspace">,
@@ -553,7 +604,10 @@ export function resolvePlans(
 	};
 	const selection = typeof target === "string" ? { target } : (target ?? {});
 	const roots = apps.map((app) => resolve(app, selection));
-	return action === "run"
-		? expandDependencies(roots, (id) => resolve(id, {}))
-		: roots;
+	const plans =
+		action === "run"
+			? expandDependencies(roots, (id) => resolve(id, {}))
+			: roots;
+	refuseBatchCollisions(plans);
+	return plans;
 }
