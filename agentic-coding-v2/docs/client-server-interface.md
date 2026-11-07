@@ -43,6 +43,7 @@ These are JSON frames, not executable UI descriptors. The client rejects incompa
 | `session.abort` | Session ID; native abort request acknowledgement, not a guarantee that all owned work has already stopped. |
 | `session.compact` | Session ID and optional bounded instructions; returns native compaction task ID. No automatic model call occurs merely from reading a session. |
 | `session.configure` | Session ID and existing configured profile ID; changes model/thinking through the native conversation API, without replacing its tools/ownership. |
+| `task.read` | Catalog-owned numeric task ID; retained metadata, native status/abort-request/terminal outcome, owner-scoped immutable reviews and retained image metadata. No arbitrary native task/checkpoint or filesystem reads. Projection is non-atomic; metadata is not image-pixel proof. |
 | `task.cancel` | Native app-task ID; delegates cancellation and owned-resource release. |
 | `review.decide` | Review ID, exact revision, decision and comments; native review/approval fences remain authoritative. |
 | `schedule.delete` | Schedule ID and exact revision; deletes future timing transactionally and permanently retires the request identity, preventing delete/recreate ABA against stale revisions. Does not cancel an already admitted occurrence task. Schedule create/update remains orchestrator-only; recreation needs a new ID. |
@@ -72,6 +73,12 @@ Native session submission identities deduplicate according to pi-durable's submi
 Reconnect uses bounded exponential delay (1–30 seconds); explicit `/reconnect` requests the same synchronization path. New requests get new correlation IDs, but no old mutation is reissued. The functional disconnect test holds a native mutation in flight, reconnects the same client, observes its uncertain outcome and proves that only one native mutation occurred. The deletion scenario also reopens persistent native storage and proves that the retired schedule ID cannot be recreated.
 
 Closing a connection discards queued work that has not started and retires its watch/timer. Already-running work may finish. Host shutdown stops polling, closes clients and waits for running request chains and watch/setup cleanup before stopping the listener/runtime. Stopping observation does not abort native work. TUI renderer/client/signal handlers are cleaned up on exit; no legacy window launcher is involved.
+
+## Task and resource presentation
+
+Task details refresh on selection, reconnect, relevant inventory changes or explicit `/refresh`; stale in-flight detail results cannot replace a newer selection. Disconnected detail is cached/unknown, not fresh activity. `/task ID` opens a catalog-owned task. Task/review headers prepare an **unsent** revision-fenced decision/cancellation command and refuse to replace an existing draft. Only explicit prompt submission invokes native mutation methods; saved expansion/selection cannot submit or grant approval.
+
+Environment overviews show configured targets, observed runs/readiness/owners, idle/cleanup diagnostics and waiters. Run/build/test/log headers prepare commands only; no environment is probed, restarted or adopted by display. Schedule overview shows exact timing/invocation, admitted task, errors and retained history, with revision-fenced deletion preparation only. IDs that cannot be represented as one prompt token do not gain prepared action shortcuts. Full diagnostics/action controls remain incomplete.
 
 ## Not yet claimed
 

@@ -122,6 +122,19 @@ test("native skill task completes in a separate worktree; admission is idempoten
 		expect(
 			client.state?.sessions.find((session) => session.id === child),
 		).toMatchObject({ task: id, writable: false });
+		const details = await client.call("task.read", { id });
+		expect(details.metadata).toMatchObject({
+			id,
+			conversationId: child,
+			workspace: view.tasks[0].workspace,
+		});
+		expect(details.native).toMatchObject({
+			status: "terminal",
+			outcome: { status: "completed", result: "Implemented and verified." },
+		});
+		expect(details.reviews).toEqual([]);
+		expect(details.attachments).toEqual([]);
+		await expect(client.call("task.read", { id: 999999 })).rejects.toThrow();
 		const transcript = await client.call("session.read", { id: child });
 		expect(JSON.stringify(transcript)).toContain("Implemented and verified.");
 		const messages = transcript.entries.flatMap((entry) =>
@@ -531,8 +544,23 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		(view) => view.reviews.length === 1,
 	);
 	fs.writeFileSync(path.join(waiting.tasks[0].workspace, "capture.png"), png);
-	const host = serve(app);
+	const host = serve(app),
+		client = new ClientConnection(host.client);
 	try {
+		client.connect();
+		await eventually(
+			async () => client.status,
+			(status) => status === "connected",
+		);
+		const pendingDetail = await client.call("task.read", { id });
+		expect(pendingDetail.reviews).toEqual(
+			waiting.reviews.map((review) => ({ ...review })),
+		);
+		expect(pendingDetail.native).toMatchObject({
+			status: "running",
+			abortRequested: false,
+			outcome: null,
+		});
 		const url = new URL(host.url);
 		const origin = url.origin;
 		const headers = {
@@ -607,7 +635,23 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		);
 		expect(attachment.headers.get("content-type")).toBe("image/png");
 		expect(Buffer.from(await attachment.arrayBuffer())).toEqual(png);
+		const nativeDetail = await client.call("task.read", { id });
+		expect(nativeDetail.attachments).toEqual([
+			{
+				id: digest(png),
+				taskId: id,
+				mediaType: "image/png",
+				caption: "Screenshot",
+			},
+		]);
+		expect(nativeDetail.reviews[0]).toMatchObject({
+			state: "approved",
+			snapshot: waiting.reviews[0].snapshot,
+			digest: waiting.reviews[0].digest,
+			revision: waiting.reviews[0].revision + 1,
+		});
 	} finally {
+		client.close();
 		await host.stop();
 	}
 });

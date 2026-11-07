@@ -65,6 +65,22 @@ export type Transcript = {
 		cost: number;
 	};
 };
+export type TaskDetails = {
+	id: number;
+	metadata: Data;
+	native: {
+		status: string;
+		abortRequested: boolean;
+		outcome: Data | null;
+	} | null;
+	reviews: Data[];
+	attachments: {
+		id: string;
+		taskId: number;
+		mediaType: string;
+		caption: string;
+	}[];
+};
 export type EnvironmentAction = {
 	apps: string[];
 	action: "run" | "build" | "test";
@@ -104,6 +120,7 @@ export type Methods = {
 		input: { id: number; profile: string };
 		output: { configured: true };
 	};
+	"task.read": { input: { id: number }; output: TaskDetails };
 	"task.cancel": { input: { id: number }; output: { requested: unknown } };
 	"review.decide": {
 		input: {
@@ -161,6 +178,7 @@ export const methods: Method[] = [
 	"session.abort",
 	"session.compact",
 	"session.configure",
+	"task.read",
 	"task.cancel",
 	"review.decide",
 	"schedule.delete",

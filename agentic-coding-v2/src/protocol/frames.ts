@@ -204,7 +204,49 @@ export function result<M extends Method>(
 ): Methods[M]["output"] {
 	if (method === "state.read") snapshot(value);
 	else if (method === "session.read") transcript(value);
-	else if (method === "session.watch") {
+	else if (method === "task.read") {
+		const data = record(value);
+		if (!integer(data.id) || record(data.metadata).id !== data.id)
+			throw new Error("Invalid task detail identity");
+		list(data.reviews).forEach((review) => {
+			if (
+				review.taskId !== data.id ||
+				typeof review.id !== "string" ||
+				!integer(review.revision, 1) ||
+				typeof review.snapshot !== "string" ||
+				typeof review.digest !== "string" ||
+				typeof review.title !== "string" ||
+				typeof review.comments !== "string" ||
+				![
+					"pending",
+					"approved",
+					"rejected",
+					"changes-requested",
+					"cancelled",
+				].includes(String(review.state))
+			)
+				throw new Error("Invalid task review");
+		});
+		list(data.attachments).forEach((item) => {
+			if (
+				item.taskId !== data.id ||
+				typeof item.id !== "string" ||
+				!/^[a-f0-9]{64}$/.test(item.id) ||
+				typeof item.caption !== "string" ||
+				!["image/png", "image/jpeg"].includes(String(item.mediaType))
+			)
+				throw new Error("Invalid task attachment");
+		});
+		if (data.native !== null) {
+			const native = record(data.native);
+			if (
+				typeof native.status !== "string" ||
+				typeof native.abortRequested !== "boolean"
+			)
+				throw new Error("Invalid native task status");
+			if (native.outcome !== null) record(native.outcome);
+		}
+	} else if (method === "session.watch") {
 		const data = record(value);
 		if (
 			!(data.id === null || integer(data.id)) ||

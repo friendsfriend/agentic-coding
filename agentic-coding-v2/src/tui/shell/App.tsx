@@ -10,9 +10,11 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
-import type { Data } from "../../protocol/index.ts";
+import type { Data, TaskDetails } from "../../protocol/index.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
+import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
+import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { color } from "../ui/theme/index.ts";
 import { Navigation, type Page, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
@@ -31,6 +33,7 @@ const help = [
 	"/help · /view tasks|environments|providers|schedules",
 	"/session ID · /back · /forward · /reconnect",
 	"/model PROFILE · /abort · /compact [instructions]",
+	"/task TASK_ID · /refresh (read-only refresh)",
 	"/cancel TASK_ID",
 	"/approve REVIEW_ID@REVISION [comments]",
 	"/reject REVIEW_ID@REVISION comments",
@@ -54,6 +57,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const [revision, setRevision] = createSignal(0),
 		[notice, setNotice] = createSignal<string | null>(null),
 		[providerData, setProviderData] = createSignal<unknown>(null),
+		[taskDetails, setTaskDetails] = createSignal<TaskDetails | null>(null),
+		[taskError, setTaskError] = createSignal<string | null>(null),
+		[refreshRevision, setRefreshRevision] = createSignal(0),
 		[helpOpen, setHelpOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
 	let prompt: TextareaRenderable | undefined,
@@ -165,6 +171,79 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		current().resource !== null &&
 		!isTranscript() &&
 		!rows().some((row) => String(row.id) === current().resource);
+	const selectedTaskId = createMemo(() => {
+		if (page() !== "tasks") return null;
+		const row = rows().find(rowSelected);
+		return row && Number.isSafeInteger(row.id) ? Number(row.id) : null;
+	});
+	const taskReadKey = createMemo(() =>
+		JSON.stringify([
+			selectedTaskId(),
+			status(),
+			refreshRevision(),
+			state()?.tasks.find((task) => task.id === selectedTaskId()),
+			state()?.reviews.filter((review) => review.taskId === selectedTaskId()),
+		]),
+	);
+	let detailEpoch = 0;
+	createEffect(() => {
+		taskReadKey();
+		const id = selectedTaskId(),
+			epoch = ++detailEpoch;
+		onCleanup(() => {
+			detailEpoch++;
+		});
+		if (id === null) {
+			setTaskDetails(null);
+			setTaskError(null);
+			return;
+		}
+		if (status() !== "connected") {
+			setTaskError(
+				"Disconnected; task details are cached and current activity is unknown",
+			);
+			return;
+		}
+		setTaskError("Refreshing native task detail…");
+		void client
+			.call("task.read", { id })
+			.then((details) => {
+				if (
+					epoch !== detailEpoch ||
+					status() !== "connected" ||
+					selectedTaskId() !== id
+				)
+					return;
+				if (details.id !== id)
+					throw new Error("Wrong native task detail identity");
+				setTaskDetails(details);
+				setTaskError(null);
+			})
+			.catch((error: Error) => {
+				if (epoch === detailEpoch) setTaskError(error.message);
+			});
+	});
+	const toggleDetail = (id: string) => {
+		navigation.current.expanded = current().expanded.includes(id)
+			? current().expanded.filter((key) => key !== id)
+			: [...current().expanded, id];
+		update();
+	};
+	const prepareCommand = (command: string) => {
+		remember();
+		if (navigation.current.draft.trim()) {
+			setNotice(
+				"An unsent draft already exists; it was not replaced. Clear or save it before preparing another command.",
+			);
+			return;
+		}
+		navigation.current.draft = command;
+		prompt?.setText(command);
+		setNotice(
+			"Command prepared only. Inspect the native snapshot, add comments, and submit explicitly; no action has run.",
+		);
+		update();
+	};
 	const keymap = useKeymap();
 	const unregister = keymap.registerLayer({
 		id: "v2.shell",
@@ -302,6 +381,19 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						throw new Error("Native session is unavailable");
 					clear();
 					go("session", String(id));
+				} else if (command === "task") {
+					const id = numbered();
+					if (!state()?.tasks.some((task) => task.id === id))
+						throw new Error("Native task is unavailable");
+					clear();
+					go("tasks", String(id));
+				} else if (command === "refresh") {
+					await client.call("state.read", {}).then((snapshot) => {
+						client.state = snapshot;
+						update();
+					});
+					setRefreshRevision((value) => value + 1);
+					clear();
 				} else if (command === "back" || command === "forward") {
 					clear();
 					if (command === "back") navigation.back();
@@ -598,7 +690,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											inventory. Its draft remains unsent.
 										</text>
 									</Show>
-									<Show when={rows().length}>
+									<Show
+										when={
+											rows().length &&
+											!["tasks", "environments", "schedules"].includes(
+												current().page,
+											)
+										}
+									>
 										<box flexDirection="column" gap={1}>
 											<For each={rows()}>
 												{(row, index) => (
@@ -638,26 +737,68 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										</box>
 									</Show>
 									<Show when={current().page === "tasks"}>
-										<box flexDirection="column" gap={1}>
-											<For each={state()?.reviews ?? []}>
-												{(review) => (
-													<box
-														border={true}
-														borderColor={color("warning")}
-														flexDirection="column"
-														padding={1}
-													>
-														<text fg={color("warning")}>
-															Review {String(review.id)}@
-															{String(review.revision)} · {String(review.state)}
-														</text>
-														<text wrapMode="word">
-															{JSON.stringify(review, null, 2)}
-														</text>
-													</box>
-												)}
-											</For>
-										</box>
+										<TaskPanel
+											rows={rows()}
+											selectedId={selectedTaskId()}
+											select={(id) => go("tasks", String(id))}
+											details={
+												taskDetails()?.id === selectedTaskId()
+													? taskDetails()
+													: null
+											}
+											error={taskError()}
+											connected={status() === "connected"}
+											reviews={state()?.reviews ?? []}
+											expanded={current().expanded}
+											toggle={toggleDetail}
+											prepare={prepareCommand}
+											openSession={
+												state()?.sessions.find(
+													(session) => session.task === selectedTaskId(),
+												)
+													? () => {
+															const session = state()?.sessions.find(
+																(session) => session.task === selectedTaskId(),
+															);
+															if (session) go("session", String(session.id));
+														}
+													: null
+											}
+										/>
+									</Show>
+									<Show
+										when={
+											current().page === "environments" ||
+											current().page === "schedules"
+										}
+									>
+										<ResourcePanel
+											kind={
+												current().page === "schedules"
+													? "schedules"
+													: "environments"
+											}
+											rows={rows()}
+											selected={rowSelected}
+											select={(row, index) => {
+												navigation.current.selection = index;
+												navigation.current.resource = String(row.id);
+												update();
+											}}
+											environments={state()?.environments}
+											connected={status() === "connected"}
+											expanded={current().expanded}
+											toggle={toggleDetail}
+											prepare={prepareCommand}
+											openTask={(id) => {
+												if (state()?.tasks.some((task) => task.id === id))
+													go("tasks", String(id));
+												else
+													setNotice(
+														"Owner task is not in the native catalog; no arbitrary native task is adopted.",
+													);
+											}}
+										/>
 									</Show>
 									<Show when={current().page === "providers"}>
 										<text wrapMode="word">

@@ -4,6 +4,7 @@ import type { OperatorAction } from "../../../environment/operator.ts";
 import type { Data, Request } from "../../../protocol/index.ts";
 import type { Runtime } from "../../../runtime.ts";
 import { clientSession, clientSnapshot, readSession } from "./sessions.ts";
+import { readTask } from "./tasks.ts";
 
 function fields(input: Data, allowed: string[]) {
 	if (Object.keys(input).some((key) => !allowed.includes(key)))
@@ -90,6 +91,9 @@ export async function dispatch(
 			);
 			return { configured: true };
 		}
+		case "task.read":
+			fields(input, ["id"]);
+			return readTask(app, integer(input.id));
 		case "task.cancel":
 			fields(input, ["id"]);
 			return { requested: await app.cancel(integer(input.id)) };
