@@ -136,7 +136,7 @@ function document(
 	};
 }
 const forwardRefusal =
-	"Kubernetes query connections require a single-replica target and exactly one declared loopback port forward on the query port";
+	"Kubernetes query connections require exactly one declared loopback port forward on the query port";
 
 test("an owned pod query connection requires its declared forward and stays read-only and redacted", async () => {
 	const sqlPort = disposablePort(),
@@ -256,7 +256,7 @@ test("a pod whose declared forward has exited grants no SQL authority", async ()
 	await approve(app, task, "Query store");
 	await app.harness.waitForTask(task as TaskId, context);
 	expect(refused).toContain(
-		"SQL requires the exact live ready owned single-replica pod and its declared loopback forward on the query port",
+		"SQL requires the exact live ready owned pod and its declared loopback forward on the query port",
 	);
 	expect(refused).toContain('"isError":true');
 	expect(fs.existsSync(path.join(config.configDir, "sql-probes"))).toBe(false);

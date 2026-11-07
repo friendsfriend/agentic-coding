@@ -71,14 +71,15 @@ export class HeldHttp {
 			port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
 		if (run.runtime === "kubernetes") {
 			// The declaration must name the exact loopback port forward this run
-			// starts; live ownership and readiness are observed separately.
+			// starts; the forward pins its replica explicitly, and live
+			// ownership and readiness are observed separately.
 			if (
-				run.kubernetes?.replicas !== 1 ||
-				run.kubernetes.portForwards?.filter((forward) => forward.local === port)
-					.length !== 1
+				run.kubernetes?.portForwards?.filter(
+					(forward) => forward.local === port,
+				).length !== 1
 			)
 				throw new Error(
-					"Endpoint on a Kubernetes target requires exactly one declared single-replica loopback port forward on the endpoint's own port",
+					"Endpoint on a Kubernetes target requires exactly one declared loopback port forward on the endpoint's own port",
 				);
 			return;
 		}
@@ -147,7 +148,7 @@ export class HeldHttp {
 					: undefined,
 			pod =
 				process instanceof KubernetesProcess
-					? await process.diagnostic(signal)
+					? await process.diagnostic(forward?.local ?? -1, signal)
 					: undefined,
 			forwardedLive =
 				pod && forward ? pod.forwarded(forward.local, forward.remote) : false;
@@ -176,7 +177,7 @@ export class HeldHttp {
 					pod.status.state !== "running"))
 		)
 			throw new Error(
-				"Endpoint requires this task's live ready shell app, health-ready owned container or ready owned single-replica pod with its declared loopback port forward; saved receipts grant no network authority",
+				"Endpoint requires this task's live ready shell app, health-ready owned container or ready owned pod with its declared loopback port forward; saved receipts grant no network authority",
 			);
 		this.authority.check(owner.id, signal, run.batch, run);
 		const snapshot = await this.authority

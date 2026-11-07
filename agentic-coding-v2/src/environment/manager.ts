@@ -368,9 +368,34 @@ export class Environments {
 				))
 		);
 	}
+	/** An explicit replica selects one followed Kubernetes pod buffer; any
+	 * other runtime, an unfollowed pod or an absent live run is refused
+	 * instead of falling back to aggregate output. */
+	private outputFor(run: EnvironmentRun, replica: number | undefined) {
+		if (replica === undefined) return this.live.get(run.id)?.logs;
+		const process = this.live.get(run.id);
+		if (!process || process.outcome || process.cleanupFailed)
+			throw new Error("Replica log selection requires a live running run");
+		const selected =
+			typeof (process as { logsFor?: unknown }).logsFor === "function"
+				? (
+						process as unknown as {
+							logsFor: (replica: number) => string | undefined;
+						}
+					).logsFor(replica)
+				: undefined;
+		if (selected === undefined)
+			throw new Error("Replica log selection names no followed pod");
+		return selected;
+	}
 	private visible(
 		run: EnvironmentRun,
-		options: { output: boolean; services?: boolean; timing?: boolean },
+		options: {
+			output: boolean;
+			services?: boolean;
+			timing?: boolean;
+			replica?: number;
+		},
 	) {
 		const { output, services, timing } = options;
 		const {
@@ -402,7 +427,9 @@ export class Environments {
 			...(this.live.get(run.id)?.runtimeStatuses
 				? { runtimeStatuses: this.live.get(run.id)?.runtimeStatuses }
 				: {}),
-			...(output ? { output: this.live.get(run.id)?.logs ?? stored } : {}),
+			...(output
+				? { output: this.outputFor(run, options.replica) ?? stored }
+				: {}),
 			...(timing
 				? { logTiming: this.live.get(run.id)?.logTiming ?? storedTiming }
 				: {}),
@@ -534,6 +561,7 @@ export class Environments {
 		owner?: number,
 		services = false,
 		kind?: Plan["projectKind"],
+		replica?: number,
 	) {
 		const all = await this.records();
 		if (owner !== undefined) {
@@ -550,8 +578,14 @@ export class Environments {
 					this.idle.touchRun(owner, requirer.id);
 			else this.idle.touch(owner, app);
 		}
+		// An explicit replica reads the live run only: retained output is
+		// aggregate and never a per-pod buffer.
+		const scoped =
+			replica === undefined
+				? all
+				: all.filter((run) => this.live.get(run.id) !== undefined);
 		return recentRuns(
-			all.filter(
+			scoped.filter(
 				(run) =>
 					run.plan.app === app &&
 					(owner === undefined || run.owner === owner) &&
@@ -565,7 +599,7 @@ export class Environments {
 					b.createdAt - a.createdAt,
 			)
 			.map((run) =>
-				this.visible(run, { output: true, services, timing: true }),
+				this.visible(run, { output: true, services, timing: true, replica }),
 			);
 	}
 	async queryTelemetry(
@@ -614,10 +648,23 @@ export class Environments {
 		owner: number | undefined,
 		options: LogOptions,
 	) {
+		if (options.service !== undefined && options.replica !== undefined)
+			throw new Error("Choose either a service or a replica log selector");
+		if (
+			options.replica !== undefined &&
+			(!Number.isSafeInteger(options.replica) || options.replica < 0)
+		)
+			throw new Error("Replica log selection must be a non-negative index");
 		return logView(
 			app,
 			(
-				await this.logs(app, owner, options.service !== undefined, options.kind)
+				await this.logs(
+					app,
+					owner,
+					options.service !== undefined,
+					options.kind,
+					options.replica,
+				)
 			).map((run) => ({
 				...run,
 				output: run.output ?? "",

@@ -12,6 +12,7 @@ export type LogOptions = {
 	since?: string;
 	tail?: number;
 	service?: string;
+	replica?: number;
 	kind?: "infrastructure";
 };
 type LogRun = Pick<

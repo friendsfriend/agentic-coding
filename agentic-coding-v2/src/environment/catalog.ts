@@ -127,7 +127,7 @@ function readTarget(raw: unknown): Target {
 			))
 	)
 		throw new Error(
-			"Named local endpoints require a shell, owned container or owned single-replica pod run target",
+			"Named local endpoints require a shell, owned container or owned pod run target",
 		);
 	if (
 		data.queryConnection !== undefined &&
@@ -139,7 +139,7 @@ function readTarget(raw: unknown): Target {
 					)))
 	)
 		throw new Error(
-			"Query connections require a shell run with explicit readiness, a health-ready container run or a single-replica pod run",
+			"Query connections require a shell run with explicit readiness, a health-ready container run or a pod run",
 		);
 	const container =
 		data.runtime === "shell" ||
@@ -227,8 +227,7 @@ function readTarget(raw: unknown): Target {
 		loopback = (url: URL) =>
 			url.hostname === "127.0.0.1" || url.hostname === "[::1]",
 		forwarded = (port: number) =>
-			kubernetes?.replicas === 1 &&
-			kubernetes.portForwards?.filter((forward) => forward.local === port)
+			kubernetes?.portForwards?.filter((forward) => forward.local === port)
 				.length === 1,
 		endpoints = readEndpoints(data.endpoints),
 		endpointCaRefs = readEndpointCaRefs(data.endpointCaRefs, endpoints);
@@ -291,7 +290,7 @@ function readTarget(raw: unknown): Target {
 	// inferred, and the declaration is not networking or ownership evidence.
 	if (queryConnection && kubernetes && !forwarded(queryConnection.port))
 		throw new Error(
-			"Kubernetes query connections require a single-replica target and exactly one declared loopback port forward on the query port",
+			"Kubernetes query connections require exactly one declared loopback port forward on the query port",
 		);
 	// A pod is reachable only through the one loopback forward this run starts;
 	// the declaration never becomes networking or ownership evidence.
@@ -300,7 +299,7 @@ function readTarget(raw: unknown): Target {
 			port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
 		if (!loopback(url) || !forwarded(port))
 			throw new Error(
-				"Kubernetes endpoints require a single-replica target and exactly one declared loopback port forward on the endpoint's own port",
+				"Kubernetes endpoints require exactly one declared loopback port forward on the endpoint's own port",
 			);
 	}
 	return {

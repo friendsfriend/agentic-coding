@@ -56,6 +56,7 @@ export class KubernetesProcess implements EnvironmentProcess {
 	private followers = new Map<string, ShellProcess>();
 	private forwards = new Map<string, ShellProcess>();
 	private waiters: {
+		name: string;
 		resolve: (pod: Pod) => void;
 		reject: (error: Error) => void;
 	}[] = [];
@@ -106,13 +107,24 @@ export class KubernetesProcess implements EnvironmentProcess {
 		return this.stopping !== null;
 	}
 	/** Pod log buffers are only exposed for a single owned replica: merging
-	 * several pods would invent a chronology this adapter cannot verify. */
+	 * several pods would invent a chronology this adapter cannot verify. Name
+	 * an explicit replica instead; an absent selection with several followers
+	 * stays refused. */
 	get logs() {
 		if (this.failure) return `${this.failure}\n`;
 		const follower =
 			this.followers.size === 1 ? [...this.followers.values()][0] : undefined;
 		if (follower) return follower.logs;
 		return "Kubernetes pod logs are not exported for this run: capture is limited to one owned replica, and no merge of several pod buffers is invented.\n";
+	}
+	/** One owned replica's bounded buffer by explicit index, or undefined when
+	 * the replica names no followed pod. Never a merged chronology. */
+	logsFor(replica: number) {
+		if (this.failure) return `${this.failure}\n`;
+		if (!Number.isSafeInteger(replica) || replica < 0) return undefined;
+		const name = this.names[replica];
+		if (name === undefined) return undefined;
+		return this.followers.get(name)?.logs;
 	}
 	get logTiming() {
 		return this.failure
@@ -131,16 +143,20 @@ export class KubernetesProcess implements EnvironmentProcess {
 	get runtimeStatuses() {
 		return [...this.statuses.values()].map((value) => ({ ...value }));
 	}
-	/** One fresh read of the single owned replica behind a diagnostic: the live
-	 * pod UID/readiness plus whether the declared loopback forward for that port
-	 * is still its own running process. The read is performed by the single
-	 * observation loop, so a diagnostic never competes with it for the CLI. A
-	 * forward is a local client, never readiness, ownership or network proof. */
-	async diagnostic(signal?: AbortSignal) {
-		const name = this.names.length === 1 ? this.names[0] : undefined;
-		if (!name)
+	/** One fresh read of the owned replica pinned by the declared forward on
+	 * this port: the live pod UID/readiness plus whether that forward is still
+	 * its own running process. The read is performed by the single observation
+	 * loop, so a diagnostic never competes with it for the CLI. A forward is a
+	 * local client, never readiness, ownership or network proof. */
+	async diagnostic(local: number, signal?: AbortSignal) {
+		const forward = this.target.portForwards?.find(
+			(candidate) => candidate.local === local,
+		);
+		const name =
+			forward === undefined ? undefined : this.names[forward.replica ?? 0];
+		if (forward === undefined || name === undefined)
 			throw new Error(
-				"Kubernetes diagnostics require exactly one owned pod replica",
+				"Kubernetes diagnostics require a declared loopback port forward pinning one owned pod replica",
 			);
 		if (this.stopping || this.result)
 			throw new Error("Owned Kubernetes pod runtime is closing");
@@ -162,6 +178,7 @@ export class KubernetesProcess implements EnvironmentProcess {
 				};
 			signal?.addEventListener("abort", cancel, { once: true });
 			this.waiters.push({
+				name,
 				resolve: (value) => {
 					settle();
 					resolve(value);
@@ -435,10 +452,10 @@ export class KubernetesProcess implements EnvironmentProcess {
 				await Bun.sleep(Math.min(100, remaining()));
 			}
 		}
-		if (this.names.length === 1 && this.client) {
-			const target = this.names[0];
-			if (!target) throw new Error("Kubernetes pod identity is missing");
+		if (this.client) {
 			for (const forward of this.target.portForwards ?? []) {
+				const target = this.names[forward.replica ?? 0];
+				if (!target) throw new Error("Kubernetes pod identity is missing");
 				const process = this.client.forward(
 					this.target.namespace,
 					target,
@@ -449,12 +466,10 @@ export class KubernetesProcess implements EnvironmentProcess {
 					throw new Error("Kubernetes port forward could not start");
 				this.forwards.set(`${forward.local}:${forward.remote}`, process);
 			}
-		}
-		if (this.names.length === 1 && this.client) {
-			const name = this.names[0];
-			if (!name) throw new Error("Kubernetes pod identity is missing");
-			const follower = this.client.follow(this.target.namespace, name);
-			if (await follower.spawned) this.followers.set(name, follower);
+			for (const name of this.names) {
+				const follower = this.client.follow(this.target.namespace, name);
+				if (await follower.spawned) this.followers.set(name, follower);
+			}
 		}
 	}
 	private async monitor() {
@@ -471,7 +486,15 @@ export class KubernetesProcess implements EnvironmentProcess {
 						void this.stop();
 						return;
 					}
-					for (const waiter of this.waiters.splice(0)) waiter.resolve(pod);
+					// A diagnostic waits for its own pinned replica only: resolving
+					// another pod's observation would refuse on the UID check.
+					for (let index = this.waiters.length - 1; index >= 0; index--) {
+						const waiter = this.waiters[index];
+						if (waiter?.name === name) {
+							this.waiters.splice(index, 1);
+							waiter.resolve(pod);
+						}
+					}
 				}
 			}
 		} catch {

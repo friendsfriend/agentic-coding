@@ -97,9 +97,7 @@ test("an owned pod endpoint requires its declared loopback forward and re-observ
 					},
 				}),
 			),
-		).toThrow(
-			"single-replica target and exactly one declared loopback port forward",
-		);
+		).toThrow("exactly one declared loopback port forward");
 		expect(() =>
 			validateProjects(
 				config,
@@ -108,9 +106,7 @@ test("an owned pod endpoint requires its declared loopback forward and re-observ
 					endpoints: { api: "http://127.0.0.1:1" },
 				}),
 			),
-		).toThrow(
-			"single-replica target and exactly one declared loopback port forward",
-		);
+		).toThrow("exactly one declared loopback port forward");
 		expect(() =>
 			validateProjects(
 				config,
@@ -221,7 +217,7 @@ test("a pod whose declared forward has exited grants no endpoint authority", asy
 	await pendingReview(app, task, "Hold pod forward");
 	expect(received).toBe(0);
 	expect(refused).toContain(
-		"single-replica pod with its declared loopback port forward",
+		"ready owned pod with its declared loopback port forward",
 	);
 	await app.cancel(task);
 }, 30000);

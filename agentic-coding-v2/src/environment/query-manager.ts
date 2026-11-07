@@ -151,7 +151,7 @@ export class DatabaseDiagnostics {
 			handle?.cleanupFailed
 		)
 			throw new Error(
-				"SQL requires this task's live ready shell, container or single-replica pod infrastructure with a declared query connection; receipts grant no authority",
+				"SQL requires this task's live ready shell, container or pod infrastructure with a declared query connection; receipts grant no authority",
 			);
 		if (process instanceof KubernetesProcess) {
 			// Only the exact declared forward on the query port is authority, and both
@@ -159,7 +159,7 @@ export class DatabaseDiagnostics {
 			const forward = run.plan.kubernetes?.portForwards?.find(
 					(item) => item.local === connection.port,
 				),
-				observed = await process.diagnostic(signal);
+				observed = await process.diagnostic(connection.port, signal);
 			if (
 				!forward ||
 				observed.status.owned !== true ||
@@ -168,7 +168,7 @@ export class DatabaseDiagnostics {
 				!observed.forwarded(forward.local, forward.remote)
 			)
 				throw new Error(
-					"SQL requires the exact live ready owned single-replica pod and its declared loopback forward on the query port",
+					"SQL requires the exact live ready owned pod and its declared loopback forward on the query port",
 				);
 		}
 		if (process instanceof ContainerProcess) {
