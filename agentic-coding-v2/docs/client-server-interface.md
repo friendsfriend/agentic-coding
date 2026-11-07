@@ -102,6 +102,12 @@ Native save preserves unknown existing JSON field values privately; its approval
 
 No live configuration, session/model, repository authority, providers, lease or environment changes are applied by save. No model/provider/engine validation call or restart is performed. Saving profiles makes them explicit in the v2 file rather than continuing fallback inheritance. User skills, environment definitions, credentials/state and arbitrary files are not editable through this contract. Windows file editing is explicitly refused until its filesystem safety is verified. Invalid UTF-8 files also refuse rather than normalizing opaque values. Crash/racing-external-writer proof and richer field-specific settings controls remain unclaimed.
 
+## Conversation profile UI
+
+`/view profiles` displays running-host profile definitions and catalog-owned conversations, not pending file settings. Select a target, then prepare `/inspect-model ID` (read only) or `/model-for ID PROFILE` (explicit submission required). Inspection retains only ID/model/thinking/local receive time and labels cached/non-atomic observations. Switch preparation protects drafts, requires a writable current catalog target and safely representable profile ID; submission rechecks host profile/catalog membership and uses the existing native `session.configure` ownership fence. Original `/model PROFILE` still configures the selected transcript conversation.
+
+Availability is only the existing registry/auth hint, not generation/connectivity proof. There is no discovery/credential/provider probe added by this panel. Terminal targets can be inspected/opened but are not offered switching. Restored missing targets are explicit, and restored selection/cache/drafts never execute configuration. Switch acknowledgements do not authorize restart, default/file/task-metadata edits, cancellation, mutation replay or replacing an in-flight generation.
+
 ## Not yet claimed
 
 Full selected transcript/tool presentation, all environment diagnostics/actions, external OpenCode/Pi adapters, complete native descendant trees, evidence viewers, wiki storage/comment-skill bindings and writable configuration editing are not completed by this increment. Capabilities are published only for implemented native methods. Viewpoints are memory-only, data-only client navigation; durable draft retention is not implemented.

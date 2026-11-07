@@ -21,6 +21,7 @@ import type {
 } from "../../protocol/index.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
+import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
@@ -34,6 +35,7 @@ const pages: [Page, string][] = [
 	["tasks", "Tasks & reviews"],
 	["environments", "Environments"],
 	["providers", "Providers"],
+	["profiles", "Profiles & models"],
 	["observability", "Observability"],
 	["schedules", "Schedules"],
 	["wiki", "Wiki"],
@@ -44,6 +46,7 @@ const help = [
 	"/help · /view tasks|environments|providers|schedules",
 	"/session ID · /back · /forward · /reconnect",
 	"/model PROFILE · /abort · /compact [instructions]",
+	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
 	"/cancel TASK_ID",
 	"/approve REVIEW_ID@REVISION [comments]",
@@ -237,37 +240,39 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					? (snapshot?.schedules ?? [])
 					: selected.page === "environments"
 						? dataList(snapshot?.environments.projects)
-						: selected.page === "providers"
-							? providerData().map((provider) => ({
-									...provider,
-									id: provider.name,
-								}))
-							: selected.page === "observability"
-								? (
-										[
-											["http", snapshot?.environments.httpOperations],
-											["query", snapshot?.environments.queryOperations],
-											["wait", snapshot?.environments.waits],
-											["reference", snapshot?.environments.referenceGraphs],
-										] as const
-									).flatMap(([journal, records]) =>
-										dataList(records).map((row, index) => {
-											const nativeIdentity = String(
-												row.id ?? row.batch ?? `unidentified:${index}`,
-											);
-											return {
-												...row,
-												journal,
-												nativeIdentity,
-												id: `${journal}:${nativeIdentity}`,
-											};
-										}),
-									)
-								: selected.page === "pi-durable"
-									? (snapshot?.sessions ?? []).map((session) => ({
-											...session,
-										}))
-									: [];
+						: selected.page === "profiles"
+							? (snapshot?.profiles ?? [])
+							: selected.page === "providers"
+								? providerData().map((provider) => ({
+										...provider,
+										id: provider.name,
+									}))
+								: selected.page === "observability"
+									? (
+											[
+												["http", snapshot?.environments.httpOperations],
+												["query", snapshot?.environments.queryOperations],
+												["wait", snapshot?.environments.waits],
+												["reference", snapshot?.environments.referenceGraphs],
+											] as const
+										).flatMap(([journal, records]) =>
+											dataList(records).map((row, index) => {
+												const nativeIdentity = String(
+													row.id ?? row.batch ?? `unidentified:${index}`,
+												);
+												return {
+													...row,
+													journal,
+													nativeIdentity,
+													id: `${journal}:${nativeIdentity}`,
+												};
+											}),
+										)
+									: selected.page === "pi-durable"
+										? (snapshot?.sessions ?? []).map((session) => ({
+												...session,
+											}))
+										: [];
 		if (selected.filter)
 			rows = rows.filter((row) =>
 				JSON.stringify(row)
@@ -751,6 +756,53 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						};
 					}
 					update();
+				} else if (command === "inspect-model" || command === "model-for") {
+					const id = numbered(),
+						target = state()?.sessions.find((session) => session.id === id);
+					if (!target || words.length !== (command === "inspect-model" ? 1 : 2))
+						throw new Error(
+							"Supply a current catalog-owned conversation ID and exactly one profile token for model-for",
+						);
+					if (command === "model-for") {
+						const profile = words[1];
+						if (
+							!target.writable ||
+							!state()?.profiles.some((item) => item.id === profile)
+						)
+							throw new Error(
+								"Conversation is not writable or profile is not configured on the running host",
+							);
+						await client.call("session.configure", {
+							id,
+							profile: profile ?? "",
+						});
+						delete origin.detail.modelInspection;
+						clear();
+						setNotice(
+							`Configured native conversation #${id}; explicitly inspect its current model to verify. No saved default or task admission metadata was changed.`,
+						);
+					} else {
+						const result = await client.call("session.read", { id });
+						if (result.id !== id)
+							throw new Error("Wrong native conversation inspection identity");
+						if (
+							navigation.current === origin &&
+							origin.detail.profileTarget === id &&
+							state()?.sessions.some((session) => session.id === id) &&
+							status() === "connected"
+						)
+							origin.detail.modelInspection = {
+								id,
+								model: result.model,
+								thinking: result.thinking,
+								observedAt: new Date().toISOString(),
+							};
+						clear();
+						setNotice(
+							`Read native conversation #${id}: ${result.model ?? "no model"}, thinking ${result.thinking}. No configuration change was made.`,
+						);
+					}
+					update();
 				} else if (command === "logs") {
 					const logs = await client.call("environment.logs", { app: args });
 					origin.detail = { logs };
@@ -990,6 +1042,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									<Show
 										when={
 											rows().length &&
+											current().page !== "profiles" &&
 											![
 												"tasks",
 												"environments",
@@ -1097,6 +1150,47 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 												else
 													setNotice(
 														"Owner task is not in the native catalog; no arbitrary native task is adopted.",
+													);
+											}}
+										/>
+									</Show>
+									<Show when={current().page === "profiles"}>
+										<ProfilePanel
+											rows={rows()}
+											selected={rowSelected}
+											select={(row, index) => {
+												navigation.current.selection = index;
+												navigation.current.resource = String(row.id);
+												update();
+											}}
+											sessions={state()?.sessions ?? []}
+											target={
+												Number.isSafeInteger(current().detail.profileTarget)
+													? Number(current().detail.profileTarget)
+													: null
+											}
+											selectTarget={(id) => {
+												navigation.current.detail.profileTarget = id;
+												delete navigation.current.detail.modelInspection;
+												update();
+											}}
+											inspection={
+												current().detail.modelInspection &&
+												typeof current().detail.modelInspection === "object" &&
+												!Array.isArray(current().detail.modelInspection)
+													? (current().detail.modelInspection as Data)
+													: null
+											}
+											connected={status() === "connected"}
+											prepare={prepareCommand}
+											open={(id) => {
+												if (
+													state()?.sessions.some((session) => session.id === id)
+												)
+													go("session", String(id));
+												else
+													setNotice(
+														"Conversation is no longer in the native catalog; no arbitrary adoption.",
 													);
 											}}
 										/>

@@ -10,6 +10,7 @@ const pages = [
 	"tasks",
 	"environments",
 	"providers",
+	"profiles",
 	"observability",
 	"schedules",
 	"wiki",

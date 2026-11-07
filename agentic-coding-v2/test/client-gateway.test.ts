@@ -17,7 +17,15 @@ const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
 
 test("authenticated client reads/subscribes, configures its native session and deletes timing without stale approval", async () => {
-	const { app, invocation, open } = await fixture(true);
+	const { app, config, invocation, open } = await fixture(true);
+	const original = config.profiles[0];
+	if (!original) throw new Error("Fixture profile missing");
+	config.profiles.push({
+		...original,
+		id: "alternate",
+		thinking: "high",
+		description: "Explicit native conversation switch fixture",
+	});
 	const host = serve(app);
 	const client = new ClientConnection(host.client);
 	try {
@@ -36,12 +44,30 @@ test("authenticated client reads/subscribes, configures its native session and d
 			thinking: "off",
 		});
 		expect(
+			await client.call("session.configure", { id, profile: "alternate" }),
+		).toEqual({ configured: true });
+		expect(await client.call("session.read", { id })).toMatchObject({
+			id,
+			model: `${original.provider}/${original.modelId}`,
+			thinking: "high",
+		});
+		expect(
 			await client.call("session.configure", { id, profile: "test" }),
 		).toEqual({ configured: true });
 		await expect(
 			client.call("session.configure", { id, profile: "foreign" }),
 		).rejects.toThrow();
 		await expect(client.call("session.read", { id: 999999 })).rejects.toThrow();
+		await expect(
+			client.call("session.configure", { id: 999999, profile: "test" }),
+		).rejects.toThrow();
+		expect(await client.call("session.read", { id })).toMatchObject({
+			id,
+			thinking: "off",
+		});
+		expect((await client.call("state.read", {})).profiles).toEqual(
+			state?.profiles ?? [],
+		);
 		const schedule = await app.scheduler.create(
 			invocation,
 			{ kind: "once", at: Date.now() + 60000 },

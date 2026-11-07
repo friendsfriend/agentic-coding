@@ -8,6 +8,7 @@ export type Page =
 	| "tasks"
 	| "environments"
 	| "providers"
+	| "profiles"
 	| "observability"
 	| "schedules"
 	| "wiki"
