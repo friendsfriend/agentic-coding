@@ -4,6 +4,7 @@ import { createMemo, For, Show } from "solid-js";
 import type { Data, ToolProgress } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { ImageView } from "../../ui/ImageView.tsx";
+import { StructuredData } from "../../ui/StructuredData.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent } from "./FileContent.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
@@ -246,12 +247,9 @@ export function ToolCard(props: {
 								Native structured output — status/authority fields are
 								observations, not UI permissions.
 							</text>
-							<code
-								content={JSON.stringify(structured(), null, 2)}
-								filetype="json"
-								syntaxStyle={props.syntax}
-								drawUnstyledText={true}
-								wrapMode="word"
+							<StructuredData
+								value={structured()}
+								label={`${name()} · retained native result`}
 							/>
 						</Show>
 					</Show>

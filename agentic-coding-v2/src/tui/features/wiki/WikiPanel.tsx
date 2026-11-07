@@ -4,6 +4,7 @@ import { useRenderer } from "@opentui/solid";
 import { createEffect, For, onCleanup, Show } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
 import { color } from "../../ui/theme/index.ts";
 export function WikiPanel(props: {
 	rows: Data[];
@@ -120,9 +121,8 @@ export function WikiPanel(props: {
 				Page fields: id/title/content/baseRevision (0 for a new page). Comment
 				fields:
 				pageId/pageRevision/comment/profile/repository/baseRef/requestId. All
-				targets and text must be explicit; do not paste credentials. Enter
-				inserts a newline, Escape leaves the editor. Existing drafts are never
-				replaced by automatic reads.
+				targets and text must be explicit; do not paste credentials. Editing
+				cannot submit. Existing drafts are never replaced by automatic reads.
 			</text>
 			<ActionHeader onActivate={() => props.edit("page")}>
 				<text fg={color("accent")}>Edit page candidate JSON</text>
@@ -138,7 +138,7 @@ export function WikiPanel(props: {
 				height={12}
 				width="100%"
 				focused={props.editing && props.connected}
-				keyBindings={[{ name: "return", action: "newline" }]}
+				keyBindings={textareaBindings(editorKeybinds)}
 				onContentChange={(value) => {
 					const text =
 						typeof value === "string" ? value : (editor?.plainText ?? "");

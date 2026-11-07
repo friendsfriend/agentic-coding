@@ -207,7 +207,19 @@ export function result<M extends Method>(
 	method: M,
 	value: unknown,
 ): Methods[M]["output"] {
-	if (method === "providers.preview") providerCandidate(value);
+	if (method === "environment.preview") {
+		const data = record(value);
+		if (
+			typeof data.id !== "string" ||
+			!/^[a-f0-9-]{36}$/.test(data.id) ||
+			typeof data.digest !== "string" ||
+			!/^[a-f0-9]{64}$/.test(data.digest) ||
+			typeof data.snapshot !== "string" ||
+			data.snapshot.length > 96000 ||
+			!time(data.expiresAt)
+		)
+			throw new Error("Invalid environment candidate");
+	} else if (method === "providers.preview") providerCandidate(value);
 	else if (method === "providers.apply" || method === "providers.receipt")
 		providerReceipt(value);
 	else if (method === "providers.actions") {
@@ -224,6 +236,21 @@ export function result<M extends Method>(
 	else if (method === "viewpoints.remove") {
 		if (record(value).removed !== true)
 			throw new Error("Invalid native viewpoint deletion");
+	} else if (method === "session.history") {
+		const data = record(value),
+			entries = list(data.entries);
+		if (
+			!integer(data.id) ||
+			entries.length > 50 ||
+			!(
+				data.cursor === null ||
+				(typeof data.cursor === "string" && /^[a-f0-9-]{36}$/.test(data.cursor))
+			)
+		)
+			throw new Error("Invalid native history page");
+		for (const entry of entries)
+			if (!integer(entry.id) || typeof entry.kind !== "string")
+				throw new Error("Invalid history entry");
 	} else if (method === "evidence.read") {
 		const data = record(value);
 		if (
@@ -476,6 +503,12 @@ export function result<M extends Method>(
 			!/^[a-zA-Z0-9:_-]{1,128}$/.test(data.watchId)
 		)
 			throw new Error("Invalid session watch acknowledgement");
+	} else if (
+		method === "environment.inspect" ||
+		method === "environment.apply"
+	) {
+		if (Array.isArray(value)) list(value);
+		else record(value);
 	} else if (method !== "providers.read" && method !== "environment.logs") {
 		const data = record(value);
 		const expected =

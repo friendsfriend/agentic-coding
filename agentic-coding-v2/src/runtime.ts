@@ -22,6 +22,7 @@ import {
 	createEnvironmentTools,
 	environmentInspectionTools,
 } from "./environment/tools.ts";
+import { EnvironmentWorkbench } from "./environment/workbench.ts";
 import { createOrchestrator, orchestratorPrompt } from "./orchestrator.ts";
 import { projectState } from "./projection.ts";
 import { ProviderActions } from "./provider-actions.ts";
@@ -53,6 +54,7 @@ export class Runtime {
 	readonly settings: Settings;
 	readonly environments: Environments;
 	readonly operatorEnvironments: OperatorEnvironments;
+	readonly environmentWorkbench: EnvironmentWorkbench;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
@@ -61,6 +63,7 @@ export class Runtime {
 		this.providerActions = new ProviderActions(this);
 		this.settings = new Settings(config);
 		this.environments = new Environments(config);
+		this.environmentWorkbench = new EnvironmentWorkbench(this);
 		this.operatorEnvironments = new OperatorEnvironments(
 			config,
 			this.environments,

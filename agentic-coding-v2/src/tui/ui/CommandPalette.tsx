@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { useKeymap } from "@opentui/keymap/solid";
 import { createMemo, createSignal, For, onCleanup } from "solid-js";
+import { bindings, paletteKeybinds } from "./keybinds.ts";
 import { color } from "./theme/index.ts";
 export type PaletteEntry = { command: string; description: string };
 /** Search prepares text only. Enter here cannot dispatch a gateway method. */
@@ -53,19 +54,13 @@ export function CommandPalette(props: {
 				run: () => props.close(),
 			},
 		],
-		bindings: [
-			{ key: "up", cmd: "palette.previous" },
-			{ key: "down", cmd: "palette.next" },
-			{ key: "return", cmd: "palette.choose" },
-			{ key: "escape", cmd: "palette.close" },
-		],
+		bindings: bindings(paletteKeybinds),
 	});
 	onCleanup(unregister);
 	return (
 		<box flexDirection="column" border={true} padding={1} gap={1} height={12}>
 			<text fg={color("primary")}>
-				Command suggestions · filter then ↑/↓/Enter to prepare only · Escape
-				closes
+				Command suggestions · filter and prepare only
 			</text>
 			<text fg={color("textMuted")}>
 				Existing unsent drafts are not replaced. No automatic submission,

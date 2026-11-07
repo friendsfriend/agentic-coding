@@ -17,6 +17,7 @@ import type {
 } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { ImageView } from "../../ui/ImageView.tsx";
+import { bindings, transcriptKeybinds } from "../../ui/keybinds.ts";
 import { color } from "../../ui/theme/index.ts";
 import { ToolCard } from "./ToolCard.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
@@ -304,14 +305,7 @@ export function Transcript(props: {
 						run: () => toggleSection(suffix ?? ""),
 					})),
 				],
-				bindings: [
-					{ key: "ctrl+up", cmd: "transcript.previous" },
-					{ key: "ctrl+down", cmd: "transcript.next" },
-					{ key: "ctrl+o", cmd: "transcript.toggle" },
-					{ key: "ctrl+alt+a", cmd: "transcript.arguments" },
-					{ key: "ctrl+alt+o", cmd: "transcript.output" },
-					{ key: "ctrl+alt+d", cmd: "transcript.details" },
-				],
+				bindings: bindings(transcriptKeybinds),
 			}),
 		);
 		onCleanup(unregister);
@@ -379,12 +373,7 @@ export function Transcript(props: {
 					</>
 				)}
 			</Show>
-			<Show when={controls().length}>
-				<text fg={color("textMuted")}>
-					Ctrl+↑/↓: observed cards · Ctrl+O: expand · Ctrl+Alt+A/O/D:
-					arguments/output/details
-				</text>
-			</Show>
+
 			<Show when={props.selected && !selected()}>
 				<text fg={color("warning")}>
 					Saved card is not in the currently observed transcript (clipped

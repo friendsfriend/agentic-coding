@@ -37,7 +37,12 @@ import { ObservabilityPanel } from "../features/observability/ObservabilityPanel
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
+import {
+	EnvironmentWorkbench,
+	type WorkbenchMemory,
+} from "../features/resources/EnvironmentWorkbench.tsx";
 import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
+import { HistoryPanel } from "../features/sessions/HistoryPanel.tsx";
 import { DraftHistory } from "../features/sessions/history.ts";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
@@ -47,6 +52,19 @@ import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { WikiPanel } from "../features/wiki/WikiPanel.tsx";
 import { ActionScope } from "../ui/ActionScope.tsx";
 import { CommandPalette } from "../ui/CommandPalette.tsx";
+import {
+	actionKeybinds,
+	bindings,
+	editorKeybinds,
+	keybindCatalogs,
+	keybindFooter,
+	keyLabel,
+	paletteKeybinds,
+	promptKeybinds,
+	shellKeybinds,
+	textareaBindings,
+	transcriptKeybinds,
+} from "../ui/keybinds.ts";
 import { color } from "../ui/theme/index.ts";
 import { Navigation, type Page, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
@@ -91,10 +109,7 @@ const help = [
 	"/wiki-page ID · /wiki-new · /wiki-reset · /wiki-preview",
 	"/wiki-apply CANDIDATE_ID approve:DIGEST · /wiki-comment (explicit read-only admission)",
 	"/bookmark NAME · /jump NAME_OR_ID · /forget ID",
-	"Alt+1..4: session modes · Alt+Left/Right: history",
-	"Ctrl+B: sessions focus · Ctrl+V: viewpoints focus",
-	"Ctrl+P: save viewpoint · Escape: content focus",
-	"Enter: submit · Shift+Enter: newline · Ctrl+Q: quit",
+
 	"Unknown commands refuse locally. // sends a literal slash.",
 ];
 
@@ -104,6 +119,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const navigation = new Navigation(),
 		viewpoints = new Viewpoints(),
 		history = new DraftHistory();
+	const [environmentEditor, setEnvironmentEditor] =
+		createSignal<WorkbenchMemory>({
+			body: "{}",
+			mode: "read",
+			read: "drafts",
+			mutation: "save",
+		});
 	const [revision, setRevision] = createSignal(0),
 		[notice, setNotice] = createSignal<string | null>(null),
 		[wikiData, setWikiData] = createSignal<Data[]>([]),
@@ -706,6 +728,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		commands: [
 			{ id: "shell.quit", name: "Quit", run: () => props.quit() },
 			{
+				id: "shell.help",
+				name: "Show keybinding/command help",
+				run: () => {
+					setSettingsEditing(false);
+					setHelpOpen(!helpOpen());
+				},
+			},
+			{
 				id: "shell.palette",
 				name: "Search native command suggestions (prepare only)",
 				run: () => {
@@ -808,22 +838,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				run: () => go(page as Page),
 			})),
 		],
-		bindings: [
-			{ key: "ctrl+q", cmd: "shell.quit" },
-			{ key: "ctrl+k", cmd: "shell.palette" },
-			{ key: "alt+up", cmd: "shell.historyPrevious" },
-			{ key: "alt+down", cmd: "shell.historyNext" },
-			{ key: "ctrl+e", cmd: "shell.prompt" },
-			{ key: "alt+left", cmd: "shell.back" },
-			{ key: "alt+right", cmd: "shell.forward" },
-			{ key: "ctrl+b", cmd: "shell.sessions" },
-			{ key: "ctrl+v", cmd: "shell.viewpoints" },
-			{ key: "escape", cmd: "shell.content" },
-			{ key: "ctrl+p", cmd: "shell.bookmark" },
-			...["opencode", "pi", "pi-durable", "orchestrator"].map(
-				(page, index) => ({ key: `alt+${index + 1}`, cmd: `shell.${page}` }),
-			),
-		],
+		bindings: bindings(shellKeybinds),
 	});
 	onCleanup(unregister);
 	async function submit() {
@@ -1774,6 +1789,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 													{(transcript()?.usage.cost ?? 0).toFixed(4)}
 												</text>
 											</Show>
+											<HistoryPanel
+												client={client}
+												id={sessionId() ?? Number.NaN}
+												connected={status() === "connected"}
+											/>
 											<Transcript
 												value={transcript()}
 												observation={observation()}
@@ -2051,6 +2071,23 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											}}
 										/>
 									</Show>
+									<Show
+										when={
+											current().page === "environments" ||
+											current().page === "observability"
+										}
+									>
+										<EnvironmentWorkbench
+											client={client}
+											memory={environmentEditor()}
+											remember={setEnvironmentEditor}
+											focused={current().focus === "content"}
+											editing={settingsEditing()}
+											connected={status() === "connected"}
+											resource={current().resource}
+											edit={setSettingsEditing}
+										/>
+									</Show>
 									<Show when={current().page === "providers"}>
 										<ProviderPanel
 											rows={rows()}
@@ -2210,6 +2247,20 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							}
 						>
 							<For each={help}>{(line) => <text>{line}</text>}</For>
+							<For each={Object.entries(keybindCatalogs)}>
+								{([name, catalog]) => (
+									<box flexDirection="column">
+										<text fg={color("primary")}>{name} keybindings</text>
+										<For each={catalog}>
+											{(binding) => (
+												<text wrapMode="word">
+													{keyLabel(binding.key)} · {binding.action}
+												</text>
+											)}
+										</For>
+									</box>
+								)}
+							</For>
 						</Show>
 					</scrollbox>
 					<Show when={paletteOpen()}>
@@ -2236,7 +2287,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							focused={
 								current().focus === "content" &&
 								!settingsEditing() &&
-								!paletteOpen()
+								!paletteOpen() &&
+								!helpOpen()
 							}
 							initialValue={current().draft}
 							placeholder={
@@ -2244,10 +2296,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									? "Send a message or /help…"
 									: "Prompt command (/help)…"
 							}
-							keyBindings={[
-								{ name: "return", action: "submit" },
-								{ name: "return", shift: true, action: "newline" },
-							]}
+							keyBindings={textareaBindings(promptKeybinds)}
 							onContentChange={(value) => {
 								navigation.current.draft =
 									typeof value === "string" ? value : (prompt?.plainText ?? "");
@@ -2267,7 +2316,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					borderColor={color("border")}
 				>
 					<text fg={color("textMuted")}> VIEWPOINTS</text>
-					<text fg={color("textMuted")}> Ctrl+P saves current state</text>
+
 					<select
 						flexGrow={1}
 						focused={current().focus === "viewpoints"}
@@ -2293,6 +2342,20 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					</text>
 				</box>
 			</box>
+			<text wrapMode="word" fg={color("textMuted")}>
+				{keybindFooter(
+					paletteOpen()
+						? paletteKeybinds
+						: settingsEditing()
+							? [...shellKeybinds, ...editorKeybinds]
+							: [
+									...shellKeybinds,
+									...actionKeybinds,
+									...(isTranscript() ? transcriptKeybinds : []),
+									...(current().focus === "content" ? promptKeybinds : []),
+								],
+				)}
+			</text>
 			<text
 				height={1}
 				fg={
@@ -2302,7 +2365,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				{" "}
 				{notice() ??
 					connectionError() ??
-					"Ctrl+B sessions · Ctrl+V viewpoints · /help · Ctrl+Q quit"}
+					"Native observations only · actions require explicit submission"}
 			</text>
 		</box>
 	);

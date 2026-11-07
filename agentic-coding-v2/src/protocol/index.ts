@@ -4,6 +4,11 @@ export const clientPath = "/api/client";
 export const maxFrameBytes = 1_000_000;
 
 import type {
+	EnvironmentCandidate,
+	EnvironmentInspection,
+	EnvironmentIntention,
+} from "./environment-workbench.ts";
+import type {
 	ProviderActionCandidate,
 	ProviderActionIntent,
 	ProviderActionReceipt,
@@ -56,6 +61,11 @@ export type Progress = {
 	compactions: Data[];
 	compactionFailure: Data | null;
 	inbox: { id: number; mode: "steer" | "followUp" | "write" }[];
+};
+export type SessionHistoryPage = {
+	id: number;
+	entries: Data[];
+	cursor: string | null;
 };
 export type Transcript = {
 	id: number;
@@ -183,6 +193,15 @@ export type EnvironmentAction = {
 	replicas?: number;
 };
 export type Methods = {
+	"environment.inspect": { input: EnvironmentInspection; output: unknown };
+	"environment.preview": {
+		input: EnvironmentIntention;
+		output: EnvironmentCandidate;
+	};
+	"environment.apply": {
+		input: { id: string; approval: string };
+		output: unknown;
+	};
 	"viewpoints.read": { input: Data; output: NativeViewpoint[] };
 	"viewpoints.save": {
 		input: { id: string; name: string; revision: number; view: UiView };
@@ -195,6 +214,10 @@ export type Methods = {
 	"state.read": { input: Data; output: Snapshot };
 	"state.subscribe": { input: Data; output: { subscribed: true } };
 	"session.read": { input: { id: number }; output: Transcript };
+	"session.history": {
+		input: { id: number; cursor?: string };
+		output: SessionHistoryPage;
+	};
 	"session.watch": {
 		input: { id: number | null; watchId: string };
 		output: { id: number | null; watchId: string };
@@ -331,6 +354,7 @@ export const methods: Method[] = [
 	"state.read",
 	"state.subscribe",
 	"session.read",
+	"session.history",
 	"session.watch",
 	"session.send",
 	"session.abort",
@@ -341,6 +365,9 @@ export const methods: Method[] = [
 	"task.cancel",
 	"review.decide",
 	"schedule.delete",
+	"environment.inspect",
+	"environment.preview",
+	"environment.apply",
 	"environment.action",
 	"environment.logs",
 	"wiki.list",

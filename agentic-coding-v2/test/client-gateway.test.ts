@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import fs from "node:fs";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
 	fauxAssistantMessage,
@@ -15,6 +16,118 @@ import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
+
+test("authenticated native environment staging and retained history remain explicit, bounded and ownership-fenced", async () => {
+	const { app } = await fixture(true, (config) => {
+		fs.chmodSync(config.stateDir, 0o700);
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+	});
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.state,
+			(state) => state !== null,
+		);
+		expect(
+			await client.call("environment.inspect", {
+				operation: "drafts",
+				selection: {},
+			}),
+		).toEqual([]);
+		const sealed = await client.call("environment.preview", {
+			operation: "save",
+			body: { requestId: "ui-inert-draft", content: "{}" },
+		});
+		expect(
+			await client.call("environment.inspect", {
+				operation: "drafts",
+				selection: {},
+			}),
+		).toEqual([]);
+		await expect(
+			client.call("environment.apply", {
+				id: sealed.id,
+				approval: `approve:${"0".repeat(64)}`,
+			}),
+		).rejects.toThrow();
+		await client.call("environment.apply", {
+			id: sealed.id,
+			approval: `approve:${sealed.digest}`,
+		});
+		await expect(
+			client.call("environment.apply", {
+				id: sealed.id,
+				approval: `approve:${sealed.digest}`,
+			}),
+		).rejects.toThrow();
+		const drafts = dataList(
+			await client.call("environment.inspect", {
+				operation: "drafts",
+				selection: {},
+			}),
+		);
+		expect(drafts.length).toBe(1);
+		expect(
+			await client.call("environment.inspect", {
+				operation: "draft",
+				selection: { id: drafts[0]?.id },
+			}),
+		).toMatchObject({ content: "{}", authority: expect.any(String) });
+		await expect(
+			client.call("environment.inspect", {
+				operation: "telemetry",
+				selection: { app: "foreign", run: "foreign", options: {} },
+			}),
+		).rejects.toThrow();
+		expect((await client.call("state.read", {})).tasks).toEqual([]);
+		await app.home.commit(async (tx) => {
+			for (let index = 0; index < 55; index++)
+				await tx.appendEntry(app.home.id, {
+					kind: "fixture.history",
+					data: { index },
+				});
+		}, context);
+		const page = await client.call("session.history", {
+			id: Number(app.home.id),
+		});
+		expect(page.entries.length).toBe(50);
+		expect(page.cursor).not.toBeNull();
+		const older = await client.call("session.history", {
+			id: page.id,
+			cursor: page.cursor ?? undefined,
+		});
+		expect(older.entries.length).toBeGreaterThan(0);
+		await expect(
+			client.call("session.history", {
+				id: page.id,
+				cursor: page.cursor ?? undefined,
+			}),
+		).rejects.toThrow();
+		expect(
+			older.entries.every(
+				(entry) => !page.entries.some((recent) => recent.id === entry.id),
+			),
+		).toBe(true);
+		await expect(
+			client.call("session.history", {
+				id: 999999,
+				cursor: page.cursor ?? undefined,
+			}),
+		).rejects.toThrow();
+		await expect(
+			client.call("session.history", {
+				id: page.id,
+				cursor: "invented-cursor",
+			}),
+		).rejects.toThrow();
+		expect((await client.call("state.read", {})).tasks).toEqual([]);
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});
 
 test("authenticated client reads/subscribes, configures its native session and deletes timing without stale approval", async () => {
 	const { app, config, invocation, open } = await fixture(true);

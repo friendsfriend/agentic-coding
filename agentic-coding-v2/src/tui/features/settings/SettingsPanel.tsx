@@ -7,6 +7,7 @@ import type {
 	SettingsDocument,
 } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
 import { color } from "../../ui/theme/index.ts";
 import { SettingsFields } from "./SettingsFields.tsx";
 
@@ -66,8 +67,7 @@ export function SettingsPanel(props: {
 				</text>
 				<text fg={color("textMuted")}>
 					Editor/candidate contents are client-memory only, not saved in
-					viewpoints. Enter inserts a newline; Escape returns to the command
-					prompt.
+					viewpoints. Editing cannot submit or grant approval.
 				</text>
 				<ActionHeader
 					onActivate={() => {
@@ -104,7 +104,7 @@ export function SettingsPanel(props: {
 						focused={props.editing && props.connected}
 						height={12}
 						width="100%"
-						keyBindings={[{ name: "return", action: "newline" }]}
+						keyBindings={textareaBindings(editorKeybinds)}
 						onMouseDown={() => props.edit(true)}
 						onContentChange={(value) =>
 							props.change(

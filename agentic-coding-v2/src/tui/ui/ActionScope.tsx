@@ -9,7 +9,7 @@ import {
 	untrack,
 } from "solid-js";
 import { type ActionAnchor, ActionRegistry } from "./ActionHeader.tsx";
-import { color } from "./theme/index.ts";
+import { actionKeybinds, bindings } from "./keybinds.ts";
 /** Keyboard parity for rendered read/navigation/preparation controls. No backend methods here. */
 export function ActionScope(props: {
 	enabled: boolean;
@@ -78,11 +78,7 @@ export function ActionScope(props: {
 						},
 					},
 				],
-				bindings: [
-					{ key: "ctrl+alt+j", cmd: "controls.next" },
-					{ key: "ctrl+alt+k", cmd: "controls.previous" },
-					{ key: "ctrl+alt+return", cmd: "controls.activate" },
-				],
+				bindings: bindings(actionKeybinds),
 			}),
 		);
 		onCleanup(unregister);
@@ -101,10 +97,6 @@ export function ActionScope(props: {
 				},
 			}}
 		>
-			<text fg={color("textMuted")}>
-				Ctrl+Alt+J/K selects UI controls; Ctrl+Alt+Enter activates selected
-				control. Prepared commands remain unsent.
-			</text>
 			{props.children}
 		</ActionRegistry.Provider>
 	);

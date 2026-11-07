@@ -97,7 +97,7 @@ export class DraftHistory {
 		view.recalled = view.entries[index] ?? "";
 		return {
 			text: view.recalled,
-			label: `Local accepted input ${index + 1}/${view.entries.length}; explicit submission required. Alt+Down past latest restores original draft.`,
+			label: `Local accepted input ${index + 1}/${view.entries.length}; explicit submission required. Advancing past latest restores the original draft.`,
 		};
 	}
 }

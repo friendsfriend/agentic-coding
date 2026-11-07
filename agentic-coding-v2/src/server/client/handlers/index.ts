@@ -1,6 +1,10 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { text } from "../../../config.ts";
 import type { OperatorAction } from "../../../environment/operator.ts";
+import type {
+	EnvironmentInspection,
+	EnvironmentIntention,
+} from "../../../protocol/environment-workbench.ts";
 import type { Data, Request } from "../../../protocol/index.ts";
 import type { Runtime } from "../../../runtime.ts";
 import {
@@ -9,11 +13,13 @@ import {
 	saveViewpoint,
 } from "../../../viewpoints.ts";
 import { readEvidence } from "./evidence.ts";
+import { SessionHistory } from "./history.ts";
 import { inspectProvider } from "./providers.ts";
 import { clientSession, clientSnapshot, readSession } from "./sessions.ts";
 import { listSkills, readSkill } from "./skills.ts";
 import { readTask } from "./tasks.ts";
 
+const histories = new WeakMap<Runtime, SessionHistory>();
 function fields(input: Data, allowed: string[]) {
 	if (Object.keys(input).some((key) => !allowed.includes(key)))
 		throw new Error("Unsupported command field");
@@ -56,6 +62,20 @@ export async function dispatch(
 			throw new Error(
 				"Session observation requires a native client connection",
 			);
+		case "session.history": {
+			fields(input, ["id", "cursor"]);
+			let history = histories.get(app);
+			if (!history) {
+				history = new SessionHistory(app);
+				histories.set(app, history);
+			}
+			return history.read(
+				integer(input.id),
+				input.cursor === undefined
+					? undefined
+					: text(input.cursor, "history cursor", 80),
+			);
+		}
 		case "session.read":
 			fields(input, ["id"]);
 			return readSession(app, integer(input.id));
@@ -156,6 +176,16 @@ export async function dispatch(
 				integer(input.revision),
 			);
 			return { deleted: true };
+		case "environment.inspect":
+			return app.environmentWorkbench.inspect(input as EnvironmentInspection);
+		case "environment.preview":
+			return app.environmentWorkbench.preview(input as EnvironmentIntention);
+		case "environment.apply":
+			fields(input, ["id", "approval"]);
+			return app.environmentWorkbench.apply(
+				text(input.id, "candidate", 80),
+				text(input.approval, "exact approval", 80),
+			);
 		case "environment.action":
 			return {
 				taskId: await app.startEnvironmentAction(input as OperatorAction),

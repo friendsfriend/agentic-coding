@@ -7,6 +7,7 @@ import type {
 	ProviderActionReceipt,
 } from "../../../protocol/provider-actions.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
 import { color } from "../../ui/theme/index.ts";
 /** Mutable local intention editor; immutable approval candidate; read-only native attempt journal. */
 export function ProviderWritePanel(props: {
@@ -70,7 +71,7 @@ export function ProviderWritePanel(props: {
 				focused={props.editing}
 				height={10}
 				width="100%"
-				keyBindings={[{ name: "return", action: "newline" }]}
+				keyBindings={textareaBindings(editorKeybinds)}
 				onMouseDown={() => props.edit(true)}
 				onContentChange={(value) =>
 					props.change(
