@@ -1,3 +1,4 @@
+import { evidenceMediaTypes } from "./evidence.ts";
 import {
 	type Data,
 	type Frame,
@@ -257,14 +258,38 @@ export function result<M extends Method>(
 			typeof data.id !== "string" ||
 			!/^[a-f0-9]{64}$/.test(data.id) ||
 			!integer(data.taskId) ||
-			!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
-				String(data.mediaType),
-			) ||
+			!evidenceMediaTypes.some((type) => type === data.mediaType) ||
 			typeof data.caption !== "string" ||
 			typeof data.content !== "string" ||
-			data.content.length > 512000
+			data.content.length > 512000 ||
+			!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+				data.content,
+			) ||
+			!integer(data.offset) ||
+			!integer(data.totalBytes, 1) ||
+			Number(data.totalBytes) > 10_000_000 ||
+			Number(data.offset) >= Number(data.totalBytes) ||
+			(data.nextOffset !== null &&
+				(!integer(data.nextOffset) ||
+					Number(data.nextOffset) <= Number(data.offset) ||
+					Number(data.nextOffset) >= Number(data.totalBytes)))
 		)
 			throw new Error("Invalid native evidence");
+		const encoded = String(data.content),
+			bytes =
+				(encoded.length / 4) * 3 -
+				(encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0),
+			end = Number(data.offset) + bytes;
+		if (
+			bytes < 1 ||
+			end > Number(data.totalBytes) ||
+			(data.nextOffset === null
+				? end !== data.totalBytes
+				: end !== data.nextOffset) ||
+			(String(data.mediaType).startsWith("image/") &&
+				(data.offset !== 0 || data.nextOffset !== null))
+		)
+			throw new Error("Invalid evidence byte window");
 	} else if (method.startsWith("wiki.")) {
 		const page = (value: unknown, content: boolean) => {
 			const data = record(value);
@@ -519,9 +544,7 @@ export function result<M extends Method>(
 				typeof item.id !== "string" ||
 				!/^[a-f0-9]{64}$/.test(item.id) ||
 				typeof item.caption !== "string" ||
-				!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
-					String(item.mediaType),
-				)
+				!evidenceMediaTypes.some((type) => type === item.mediaType)
 			)
 				throw new Error("Invalid task attachment");
 		});

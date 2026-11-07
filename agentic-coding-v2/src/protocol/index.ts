@@ -8,6 +8,7 @@ import type {
 	EnvironmentInspection,
 	EnvironmentIntention,
 } from "./environment-workbench.ts";
+import type { EvidenceDocument } from "./evidence.ts";
 import type {
 	ProviderActionCandidate,
 	ProviderActionIntent,
@@ -250,14 +251,8 @@ export type Methods = {
 		output: { configured: true };
 	};
 	"evidence.read": {
-		input: { taskId: number; id: string };
-		output: {
-			id: string;
-			taskId: number;
-			mediaType: string;
-			caption: string;
-			content: string;
-		};
+		input: { taskId: number; id: string; offset?: number };
+		output: EvidenceDocument;
 	};
 	"task.read": { input: { id: number }; output: TaskDetails };
 	"task.cancel": { input: { id: number }; output: { requested: unknown } };

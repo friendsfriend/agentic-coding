@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import {
 	type ConversationId,
 	defineExtension,
@@ -12,11 +10,11 @@ import {
 	createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import { Type } from "typebox";
-import { type Config, digest, text } from "./config.ts";
-import { imageMediaType } from "./evidence-format.ts";
+import type { Config } from "./config.ts";
+import { captureAttachment } from "./evidence-capture.ts";
 import { captureReview, contained } from "./git.ts";
 import { requestReview } from "./reviews.ts";
-import { type Attachment, Catalog, type TaskInfo } from "./state.ts";
+import { Catalog, type TaskInfo } from "./state.ts";
 
 export const toolResult = (value: unknown) => ({
 	output: [
@@ -67,35 +65,41 @@ export function createAgentTools(config: Config, ownerOf: OwnerLookup) {
 				replay: "safe",
 				execute: async (args, api, context) => {
 					const owner = await ownerOf(api.conversationId);
-					const file = contained(owner.workspace, args.path);
-					if (fs.statSync(file).size > 10_000_000)
-						throw new Error("Image exceeds 10 MB");
-					const bytes = fs.readFileSync(file);
-					if (bytes.length > 10_000_000) throw new Error("Image exceeds 10 MB");
-					const mediaType = imageMediaType(bytes);
-					if (!mediaType)
-						throw new Error(
-							"Only PNG, JPEG, WebP and GIF attachments are supported",
-						);
-					const id = digest(bytes);
-					const dir = path.join(config.stateDir, "attachments");
-					fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-					fs.writeFileSync(path.join(dir, id), bytes, { mode: 0o600 });
-					const attachment: Attachment = {
-						id,
-						taskId: owner.id,
-						mediaType,
-						caption: text(args.caption, "caption", 1024),
-						filename: id,
-					};
-					await api.commit(async (tx) => {
-						(await tx.doc(Catalog)).attachments[id] =
-							JSON.stringify(attachment);
-					}, context);
 					return toolResult(
-						`![${attachment.caption.replace(/[[\]\\\r\n]/g, " ")}](/attachments/${id})`,
+						await captureAttachment(
+							config,
+							owner,
+							{ ...args, kind: "image" },
+							api,
+							context,
+						),
 					);
 				},
+			}),
+			defineTool({
+				name: "attach_evidence",
+				description:
+					"Retain an image, UTF-8 log/script/report/JSON, ZIP trace or WebM/MP4 from this task workspace (10 MB maximum). Files are never executed, extracted or independently certified as evidence.",
+				parameters: Type.Object({
+					path: Type.String(),
+					caption: Type.String(),
+					kind: Type.Union(
+						["image", "log", "script", "report", "json", "trace", "video"].map(
+							(kind) => Type.Literal(kind),
+						),
+					),
+				}),
+				replay: "safe",
+				execute: async (args, api, context) =>
+					toolResult(
+						await captureAttachment(
+							config,
+							await ownerOf(api.conversationId),
+							args,
+							api,
+							context,
+						),
+					),
 			}),
 		],
 	});

@@ -14,6 +14,7 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
+import type { EvidenceDocument } from "../../protocol/evidence.ts";
 import type {
 	Data,
 	ProviderQuery,
@@ -37,6 +38,10 @@ import { ObservabilityPanel } from "../features/observability/ObservabilityPanel
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
+import {
+	type DiagnosticDraft,
+	DiagnosticsComposer,
+} from "../features/resources/DiagnosticsComposer.tsx";
 import {
 	EnvironmentWorkbench,
 	type WorkbenchMemory,
@@ -92,7 +97,7 @@ const help = [
 	"/model PROFILE · /abort · /compact [instructions]",
 	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
-	"/evidence TASK_ID CONTENT_DIGEST (explicit bounded owned image read)",
+	"/evidence TASK_ID CONTENT_DIGEST [BYTE_OFFSET] (explicit bounded owned evidence read)",
 	"/cancel TASK_ID",
 	"/approve REVIEW_ID@REVISION [comments]",
 	"/reject REVIEW_ID@REVISION comments",
@@ -127,6 +132,16 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		name: "",
 		content: "",
 	});
+	const [diagnosticDraft, setDiagnosticDraft] = createSignal<DiagnosticDraft>({
+		task: "",
+		kind: "http",
+		app: "",
+		target: "",
+		body: "",
+	});
+	const [resourceEditor, setResourceEditor] = createSignal<
+		"workbench" | "diagnostics" | null
+	>(null);
 	const [environmentEditor, setEnvironmentEditor] =
 		createSignal<WorkbenchMemory>({
 			body: "{}",
@@ -167,13 +182,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[providerWriteError, setProviderWriteError] = createSignal<string | null>(
 			null,
 		),
-		[evidence, setEvidence] = createSignal<{
-			id: string;
-			taskId: number;
-			mediaType: string;
-			caption: string;
-			content: string;
-		} | null>(null),
+		[evidence, setEvidence] = createSignal<EvidenceDocument | null>(null),
 		[taskDetails, setTaskDetails] = createSignal<TaskDetails | null>(null),
 		[taskError, setTaskError] = createSignal<string | null>(null),
 		[refreshRevision, setRefreshRevision] = createSignal(0),
@@ -1587,7 +1596,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						epoch = detailEpoch;
 					if (
 						origin.page !== "tasks" ||
-						words.length !== 2 ||
+						(words.length !== 2 && words.length !== 3) ||
+						(words.length === 3 &&
+							(!/^\d+$/.test(words[2] ?? "") ||
+								!Number.isSafeInteger(Number(words[2])))) ||
 						selectedTaskId() !== id ||
 						taskError() ||
 						!taskDetails()?.attachments.some(
@@ -1595,15 +1607,17 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						)
 					)
 						throw new Error(
-							"Select an owned task and exact retained image digest",
+							"Select an owned task, exact retained evidence digest and optional byte offset",
 						);
 					setEvidence(null);
 					const value = await client.call("evidence.read", {
 						taskId: id,
 						id: digest,
+						offset: Number(words[2] ?? 0),
 					});
 					if (
 						value.taskId !== id ||
+						value.offset !== Number(words[2] ?? 0) ||
 						value.id !== digest ||
 						navigation.current !== origin ||
 						epoch !== detailEpoch ||
@@ -2099,11 +2113,64 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											client={client}
 											memory={environmentEditor()}
 											remember={setEnvironmentEditor}
-											focused={current().focus === "content"}
-											editing={settingsEditing()}
+											focused={
+												current().focus === "content" &&
+												resourceEditor() !== "diagnostics"
+											}
+											editing={
+												settingsEditing() && resourceEditor() !== "diagnostics"
+											}
 											connected={status() === "connected"}
 											resource={current().resource}
-											edit={setSettingsEditing}
+											edit={(value) => {
+												if (value) {
+													setResourceEditor("workbench");
+													setSettingsEditing(true);
+												} else if (resourceEditor() === "workbench") {
+													setResourceEditor(null);
+													setSettingsEditing(false);
+												}
+											}}
+										/>
+										<DiagnosticsComposer
+											memory={diagnosticDraft()}
+											remember={setDiagnosticDraft}
+											tasks={state()?.tasks ?? []}
+											sessions={state()?.sessions ?? []}
+											connected={status() === "connected"}
+											focused={
+												current().focus === "content" &&
+												resourceEditor() !== "workbench"
+											}
+											editing={
+												settingsEditing() && resourceEditor() !== "workbench"
+											}
+											edit={(value) => {
+												if (value) {
+													setResourceEditor("diagnostics");
+													setSettingsEditing(true);
+												} else if (resourceEditor() === "diagnostics") {
+													setResourceEditor(null);
+													setSettingsEditing(false);
+												}
+											}}
+											prepare={(conversation, content) => {
+												if (
+													!state()?.sessions.some(
+														(session) =>
+															session.id === conversation &&
+															session.writable &&
+															session.task !== null,
+													)
+												) {
+													setNotice(
+														"Native diagnostic owner is no longer writable; draft remains unsent.",
+													);
+													return;
+												}
+												go("session", String(conversation));
+												prepareCommand(content);
+											}}
 										/>
 									</Show>
 									<Show when={current().page === "providers"}>

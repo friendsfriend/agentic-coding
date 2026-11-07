@@ -138,11 +138,12 @@ export async function dispatch(
 			return { configured: true };
 		}
 		case "evidence.read":
-			fields(input, ["taskId", "id"]);
+			fields(input, ["taskId", "id", "offset"]);
 			return readEvidence(
 				app,
 				integer(input.taskId),
 				text(input.id, "evidence identity", 64),
+				input.offset === undefined ? 0 : integer(input.offset),
 			);
 		case "task.read":
 			fields(input, ["id"]);

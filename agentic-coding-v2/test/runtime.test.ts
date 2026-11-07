@@ -524,6 +524,7 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		"R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
 		"base64",
 	);
+	const report = Buffer.from(`Native disposable report\n${"x".repeat(384010)}`);
 	const image = `![Screenshot](/attachments/${digest(png)})`;
 	fake.setResponses([
 		fauxAssistantMessage(
@@ -544,6 +545,14 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 			}),
 			{ stopReason: "toolUse" },
 		),
+		fauxAssistantMessage(
+			fauxToolCall("attach_evidence", {
+				path: "report.md",
+				caption: "Retained report",
+				kind: "report",
+			}),
+			{ stopReason: "toolUse" },
+		),
 		fauxAssistantMessage(image),
 		fauxAssistantMessage(
 			`${image}\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))`,
@@ -556,6 +565,7 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 	);
 	fs.writeFileSync(path.join(waiting.tasks[0].workspace, "capture.png"), png);
 	fs.writeFileSync(path.join(waiting.tasks[0].workspace, "capture.gif"), gif);
+	fs.writeFileSync(path.join(waiting.tasks[0].workspace, "report.md"), report);
 	const host = serve(app),
 		client = new ClientConnection(host.client);
 	try {
@@ -653,6 +663,12 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		);
 		expect(attachment.headers.get("content-type")).toBe("image/png");
 		expect(Buffer.from(await attachment.arrayBuffer())).toEqual(png);
+		const retainedReport = await fetch(
+			`${origin}/attachments/${digest(report)}`,
+			{ headers },
+		);
+		expect(retainedReport.headers.get("content-type")).toBe("text/markdown");
+		expect(Buffer.from(await retainedReport.arrayBuffer())).toEqual(report);
 		const nativeDetail = await client.call("task.read", { id });
 		expect(nativeDetail.attachments).toEqual([
 			{
@@ -666,6 +682,12 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 				taskId: id,
 				mediaType: "image/gif",
 				caption: "Retained GIF",
+			},
+			{
+				id: digest(report),
+				taskId: id,
+				mediaType: "text/markdown",
+				caption: "Retained report",
 			},
 		]);
 		const pixels = await client.call("evidence.read", {
@@ -685,11 +707,47 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		});
 		expect(retainedGif.mediaType).toBe("image/gif");
 		expect(Buffer.from(retainedGif.content, "base64")).toEqual(gif);
+		const firstWindow = await client.call("evidence.read", {
+			taskId: id,
+			id: digest(report),
+		});
+		expect(firstWindow).toMatchObject({
+			mediaType: "text/markdown",
+			offset: 0,
+			totalBytes: report.length,
+			nextOffset: 384000,
+		});
+		const secondWindow = await client.call("evidence.read", {
+			taskId: id,
+			id: digest(report),
+			offset: firstWindow.nextOffset ?? -1,
+		});
+		expect(secondWindow.nextOffset).toBeNull();
+		expect(
+			Buffer.concat([
+				Buffer.from(firstWindow.content, "base64"),
+				Buffer.from(secondWindow.content, "base64"),
+			]),
+		).toEqual(report);
+		await expect(
+			client.call("evidence.read", {
+				taskId: id,
+				id: digest(report),
+				offset: report.length,
+			}),
+		).rejects.toThrow();
 		await expect(
 			client.call("evidence.read", { taskId: 999999, id: digest(png) }),
 		).rejects.toThrow();
 		await expect(
 			client.call("evidence.read", { taskId: id, id: "../../capture.png" }),
+		).rejects.toThrow();
+		fs.writeFileSync(
+			path.join(app.config.stateDir, "attachments", digest(report)),
+			Buffer.from("tampered retained bytes"),
+		);
+		await expect(
+			client.call("evidence.read", { taskId: id, id: digest(report) }),
 		).rejects.toThrow();
 		const extraEvidence = { taskId: id, id: digest(png), path: "capture.png" };
 		await expect(client.call("evidence.read", extraEvidence)).rejects.toThrow();

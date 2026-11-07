@@ -2,20 +2,15 @@
 import { SyntaxStyle } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { For, onCleanup, Show } from "solid-js";
+import type { EvidenceDocument } from "../../../protocol/evidence.ts";
 import type { Data, TaskDetails } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { ImageView } from "../../ui/ImageView.tsx";
+import { EvidenceView } from "../../ui/EvidenceView.tsx";
 import { color } from "../../ui/theme/index.ts";
 
 /** Read-only native detail presentation. Action headers prepare an unsent command only. */
 export function TaskPanel(props: {
-	evidence: {
-		id: string;
-		taskId: number;
-		mediaType: string;
-		caption: string;
-		content: string;
-	} | null;
+	evidence: EvidenceDocument | null;
 	rows: Data[];
 	selectedId: number | null;
 	select: (id: number) => void;
@@ -301,7 +296,7 @@ export function TaskPanel(props: {
 							</text>
 						</Show>
 						<text fg={color("primary")}>
-							Retained image evidence · {details().attachments.length}
+							Retained task-owned evidence · {details().attachments.length}
 						</text>
 						<For each={details().attachments}>
 							{(item) => (
@@ -311,9 +306,9 @@ export function TaskPanel(props: {
 									</text>
 									<text fg={color("textMuted")} wrapMode="word">
 										Content identity: {item.id}
-										{"\n"}Metadata is not visual proof. Explicit pixel reads are
-										owner/digest-fenced and bounded; no arbitrary file or
-										external URL is opened.
+										{"\n"}Metadata is not process or visual proof. Explicit byte
+										reads are owner/digest-fenced and bounded; no arbitrary file
+										or external URL is opened.
 									</text>
 									<ActionHeader
 										onActivate={() =>
@@ -321,7 +316,7 @@ export function TaskPanel(props: {
 										}
 									>
 										<text fg={color("accent")}>
-											Prepare explicit retained pixel read
+											Prepare explicit retained evidence read
 										</text>
 									</ActionHeader>
 									<Show
@@ -330,11 +325,15 @@ export function TaskPanel(props: {
 											props.evidence?.taskId === details().id
 										}
 									>
-										<ImageView
-											content={props.evidence?.content}
-											mediaType={props.evidence?.mediaType}
-											caption={item.caption}
-										/>
+										<Show when={props.evidence}>
+											{(evidence) => (
+												<EvidenceView
+													document={evidence()}
+													syntax={syntax}
+													prepare={props.prepare}
+												/>
+											)}
+										</Show>
 									</Show>
 								</box>
 							)}

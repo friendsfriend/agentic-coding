@@ -1,10 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { digest } from "../../../config.ts";
-import { imageMediaType } from "../../../evidence-format.ts";
+import { validateEvidenceType } from "../../../evidence-format.ts";
+import { evidenceMediaTypes } from "../../../protocol/evidence.ts";
 import type { Runtime } from "../../../runtime.ts";
 /** Read exact native-owned content bytes, never caller-supplied paths or URLs. */
-export async function readEvidence(app: Runtime, taskId: number, id: string) {
+export async function readEvidence(
+	app: Runtime,
+	taskId: number,
+	id: string,
+	offset = 0,
+) {
+	if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10_000_000)
+		throw new Error("Invalid evidence byte offset");
 	if (process.platform === "win32")
 		throw new Error("Evidence descriptor fences require POSIX");
 	if (!/^[a-f0-9]{64}$/.test(id)) throw new Error("Invalid evidence identity");
@@ -14,9 +22,7 @@ export async function readEvidence(app: Runtime, taskId: number, id: string) {
 		!item ||
 		item.taskId !== taskId ||
 		item.filename !== id ||
-		!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
-			item.mediaType,
-		)
+		!evidenceMediaTypes.some((type) => type === item.mediaType)
 	)
 		throw new Error("Evidence owner or format unavailable");
 	const root = path.join(fs.realpathSync(app.config.stateDir), "attachments"),
@@ -33,9 +39,14 @@ export async function readEvidence(app: Runtime, taskId: number, id: string) {
 			!before.isFile() ||
 			before.nlink !== 1 ||
 			before.size < 1 ||
-			before.size > 384000
+			before.size > 10_000_000 ||
+			offset >= before.size ||
+			(item.mediaType.startsWith("image/") &&
+				(offset !== 0 || before.size > 384000))
 		)
-			throw new Error("Evidence unavailable or exceeds 384000-byte TUI limit");
+			throw new Error(
+				"Evidence unavailable, outside byte range or exceeds retained/display limits",
+			);
 		const bytes = Buffer.alloc(before.size + 1);
 		let used = 0;
 		while (used < bytes.length) {
@@ -64,7 +75,7 @@ export async function readEvidence(app: Runtime, taskId: number, id: string) {
 		)
 			throw new Error("Evidence changed during read");
 		const body = bytes.subarray(0, used);
-		if (digest(body) !== id || imageMediaType(body) !== item.mediaType)
+		if (digest(body) !== id || !validateEvidenceType(body, item.mediaType))
 			throw new Error("Evidence digest or image signature mismatch");
 		const retained = await app.attachment(id);
 		if (
@@ -78,7 +89,10 @@ export async function readEvidence(app: Runtime, taskId: number, id: string) {
 			taskId,
 			mediaType: item.mediaType,
 			caption: item.caption,
-			content: body.toString("base64"),
+			content: body.subarray(offset, offset + 384000).toString("base64"),
+			offset,
+			totalBytes: body.length,
+			nextOffset: offset + 384000 < body.length ? offset + 384000 : null,
 		};
 	} finally {
 		fs.closeSync(fd);
