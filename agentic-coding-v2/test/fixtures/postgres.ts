@@ -6,11 +6,9 @@ import { certificate } from "./tls.ts";
 export const disposablePassword = 'disposable-sql-secret-7b5c"\\end';
 /** Real disposable relational engine and PostgreSQL protocol, with a tiny TLS upgrade
  * adapter. PGlite does not establish production PostgreSQL authentication parity. */
-export function installPostgres(
-	config: Config,
-	port: number,
-	badIdentity = false,
-) {
+/** Certificate, TLS identity and credential references shared by every disposable
+ * database fixture; it writes no environment definition of its own. */
+export function installDatabase(config: Config, badIdentity = false) {
 	fs.mkdirSync(config.configDir);
 	certificate(
 		config.configDir,
@@ -21,9 +19,14 @@ export function installPostgres(
 		path.join(config.configDir, ".env"),
 		`DISPOSABLE_SQL_USER=postgres\nDISPOSABLE_SQL_PASSWORD=${disposablePassword}\n`,
 	);
-	const heartbeat = (name: string) =>
-		`setInterval(()=>{try{fs.writeSync(1,'.')}catch{fs.writeFileSync(process.env.CONFIG_DIR+'/${name}-reaped','ok');process.exit(0)}},20);`;
-	const source = `
+}
+/** The disposable TLS PostgreSQL server: it reads CONFIG_DIR, PORT, PGPASSWORD. */
+/** A liveness heartbeat that leaves a reaped marker instead of exiting silently. */
+export function heartbeat(name: string) {
+	return `setInterval(()=>{try{fs.writeSync(1,'.')}catch{fs.writeFileSync(process.env.CONFIG_DIR+'/${name}-reaped','ok');process.exit(0)}},20);`;
+}
+export function postgresServer(name = "store") {
+	return `
  import fs from 'node:fs';import net from 'node:net';import tls from 'node:tls';
  import {PGlite} from ${JSON.stringify(import.meta.resolve("@electric-sql/pglite"))};
  import {PGLiteSocketHandler} from ${JSON.stringify(import.meta.resolve("@electric-sql/pglite-socket"))};
@@ -37,9 +40,18 @@ export function installPostgres(
  let tail='',seen=false;secure.on('data',packet=>{tail=(tail+packet.toString('utf8')).slice(-8192);if(!seen&&tail.includes('NATIVE_SQL_PROBE')){seen=true;fs.appendFileSync(process.env.CONFIG_DIR+'/sql-probes','query\\n');}});
  secure.pause();void (async()=>{await db.exec('ROLLBACK');await db.exec('DISCARD ALL');await db.exec('SET search_path TO public');if(secure.destroyed)return;const handler=new PGLiteSocketHandler({db,closeOnDetach:true});await handler.attach(secure);if(secure.destroyed)handler.detach(true);else secure.resume();})().catch(()=>secure.destroy());
  });});server.listen(Number(process.env.PORT),'127.0.0.1',()=>console.log('STORE_READY'));
- process.on('SIGTERM',()=>process.exit(0));${heartbeat("store")}
+ process.on('SIGTERM',()=>process.exit(0));${heartbeat(name)}
  `;
-	const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`,
+}
+
+export function installPostgres(
+	config: Config,
+	port: number,
+	badIdentity = false,
+) {
+	installDatabase(config, badIdentity);
+	const source = postgresServer(),
+		quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`,
 		command = (source: string) =>
 			`${quote(process.execPath)} -e ${quote(source)}`;
 	fs.writeFileSync(

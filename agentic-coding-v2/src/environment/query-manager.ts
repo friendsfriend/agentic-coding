@@ -15,6 +15,7 @@ import {
 	loadEndpointCa,
 	prepareEndpointCa,
 } from "./endpoint-ca.ts";
+import { KubernetesProcess } from "./kubernetes.ts";
 import { referencedLifetime } from "./lifetime.ts";
 import { readOnlyQuery } from "./query.ts";
 import {
@@ -130,20 +131,41 @@ export class DatabaseDiagnostics {
 			handle instanceof ComposeProcess && service
 				? await handle.diagnosticService(service, signal)
 				: handle;
+		const connection = run?.plan.queryConnection;
 		if (
 			!run ||
 			!(
-				process instanceof ShellProcess || process instanceof ContainerProcess
+				process instanceof ShellProcess ||
+				process instanceof ContainerProcess ||
+				process instanceof KubernetesProcess
 			) ||
-			!run.plan.queryConnection ||
+			!connection ||
 			handle?.closing ||
 			process.closing ||
 			handle?.outcome ||
 			handle?.cleanupFailed
 		)
 			throw new Error(
-				"SQL requires this task's live ready shell or container infrastructure with a declared query connection; receipts grant no authority",
+				"SQL requires this task's live ready shell, container or single-replica pod infrastructure with a declared query connection; receipts grant no authority",
 			);
+		if (process instanceof KubernetesProcess) {
+			// Only the exact declared forward on the query port is authority, and both
+			// the owned pod and that forward are re-observed for every call.
+			const forward = run.plan.kubernetes?.portForwards?.find(
+					(item) => item.local === connection.port,
+				),
+				observed = await process.diagnostic(signal);
+			if (
+				!forward ||
+				observed.status.owned !== true ||
+				observed.status.state !== "running" ||
+				observed.status.health !== "healthy" ||
+				!observed.forwarded(forward.local, forward.remote)
+			)
+				throw new Error(
+					"SQL requires the exact live ready owned single-replica pod and its declared loopback forward on the query port",
+				);
+		}
 		if (process instanceof ContainerProcess) {
 			const observed =
 				handle instanceof ComposeProcess

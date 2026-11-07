@@ -32,6 +32,9 @@ export class KubernetesProcess implements EnvironmentProcess {
 	readonly authorization: ReturnType<
 		typeof processEnvironment
 	>["authorization"];
+	readonly queryCredentials: ReturnType<
+		typeof processEnvironment
+	>["queryCredentials"];
 	readonly redact: ReturnType<typeof processEnvironment>["redact"];
 	readonly done: Promise<Exit>;
 	private complete: ((exit: Exit) => void) | undefined;
@@ -67,6 +70,7 @@ export class KubernetesProcess implements EnvironmentProcess {
 			);
 		const frozen = processEnvironment(config.configDir, plan);
 		this.authorization = frozen.authorization;
+		this.queryCredentials = frozen.queryCredentials;
 		this.redact = frozen.redact;
 		this.host = digest(config.stateDir).slice(0, 32);
 		this.run = digest(run).slice(0, 32);

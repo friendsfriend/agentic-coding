@@ -134,10 +134,12 @@ function readTarget(raw: unknown): Target {
 		(data.action !== "run" ||
 			!(data.runtime === "shell"
 				? Boolean(data.readyText)
-				: ["docker", "podman", "compose"].includes(String(data.runtime))))
+				: ["docker", "podman", "compose", "kubernetes"].includes(
+						String(data.runtime),
+					)))
 	)
 		throw new Error(
-			"Query connections require a shell run with explicit readiness or a health-ready container run",
+			"Query connections require a shell run with explicit readiness, a health-ready container run or a single-replica pod run",
 		);
 	const container =
 		data.runtime === "shell" ||
@@ -284,6 +286,13 @@ function readTarget(raw: unknown): Target {
 				);
 		}
 	}
+	// A pod query connection is reachable only through the one loopback forward
+	// this run starts on the query port; a second forward or pod choice is never
+	// inferred, and the declaration is not networking or ownership evidence.
+	if (queryConnection && kubernetes && !forwarded(queryConnection.port))
+		throw new Error(
+			"Kubernetes query connections require a single-replica target and exactly one declared loopback port forward on the query port",
+		);
 	// A pod is reachable only through the one loopback forward this run starts;
 	// the declaration never becomes networking or ownership evidence.
 	for (const value of kubernetes ? Object.values(endpoints) : []) {
