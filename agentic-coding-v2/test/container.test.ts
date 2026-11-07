@@ -632,7 +632,7 @@ test("Compose shared networks refuse foreign occupancy, copied-label replacement
 	}
 }, 20000);
 
-test("Podman Compose requires explicit isolated mode rather than inventing network receipt authority", async () => {
+test("Podman shared networks are name-fenced and isolated mode has no network", async () => {
 	for (const network of ["shared", "isolated"]) {
 		const { app, config, fake, invocation } = await fixture(false, (config) => {
 			configureCompose(config);
@@ -641,20 +641,46 @@ test("Podman Compose requires explicit isolated mode rather than inventing netwo
 			data.projects[0].targets[0].compose.provider = "podman";
 			data.projects[0].targets[0].compose.network = network;
 			fs.writeFileSync(file, JSON.stringify(data));
+			if (network === "shared") {
+				const state = readEngine(config);
+				state.invalidNetworkReceipt = true;
+				fs.writeFileSync(engine(config), JSON.stringify(state));
+			}
 		});
 		await composeFile(invocation.repository, stackYaml);
 		const listing = await app.environments.snapshot();
 		if (network === "shared") {
 			expect(listing.projects[0]?.targets[0]?.availability?.eligible).toBe(
-				false,
+				true,
 			);
+			// A mismatched name receipt fails closed: created but never verified,
+			// adopted or attached, and the startup receipt error is inspectable.
+			let transcript = "";
 			fake.setResponses([
 				call("env_start", { apps: ["api"] }),
-				fauxAssistantMessage("No unsupported shared network effect"),
+				(messages) => {
+					transcript = JSON.stringify(messages.messages);
+					return fauxAssistantMessage("No Podman network adoption");
+				},
 			]);
 			const task = await app.startTask(invocation);
+			await approve(app, task);
 			await app.harness.waitForTask(task as TaskId, context);
-			expect(readEngine(config).history).toHaveLength(0);
+			// The startup receipt error reaches the model only as the generic
+			// tool refusal; the inspectable boundary is the mutation fence.
+			expect(transcript).toContain("Environment execution did not complete");
+			expect(Object.keys(readEngine(config).containers)).toHaveLength(0);
+			expect(
+				readEngine(config).history.some(
+					(args) => args[2] === "network" && args[3] === "rm",
+				),
+			).toBe(false);
+			expect(
+				JSON.stringify(await app.environments.logs("api", task)),
+			).toContain("refusing mutation");
+			expect((await app.environments.snapshot()).runs[0]?.state).toBe(
+				"interrupted",
+			);
 		} else {
 			fake.setResponses([
 				call("env_start", { apps: ["api"] }),

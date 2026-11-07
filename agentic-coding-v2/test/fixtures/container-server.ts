@@ -81,6 +81,24 @@ export function serveContainerFixture(file: string) {
 					)
 						throw new Error("Implicit/remote daemon is forbidden in fixture");
 					const value = (key: string) => args[args.indexOf(key) + 1],
+						// The CLI prefix names the provider under test: Podman
+						// returns the claimed name from network create (not an ID)
+						// and lowercases inspected network fields.
+						podman = flag === "--url",
+						cased = (record: {
+							Id: string;
+							Name: string;
+							Labels: Record<string, string>;
+							Containers: Record<string, unknown>;
+						}) =>
+							podman
+								? {
+										id: record.Id,
+										name: record.Name,
+										labels: record.Labels,
+										containers: record.Containers,
+									}
+								: record,
 						find = (id: string | undefined) =>
 							Object.values(state.containers).find(
 								(item) => item.Id === id || item.Name.replace(/^\//, "") === id,
@@ -106,7 +124,7 @@ export function serveContainerFixture(file: string) {
 										exit = 1;
 										break;
 									}
-									print(JSON.stringify([found]));
+									print(JSON.stringify([cased(found)]));
 									stderr = "must-not-leak-private-network-metadata";
 								} else if (args[1] === "create") {
 									const name = args.at(-1);
@@ -130,7 +148,15 @@ export function serveContainerFixture(file: string) {
 										Labels: labels,
 										Containers: {},
 									};
-									print(state.invalidNetworkReceipt ? "lost-receipt" : id);
+									print(
+										podman
+											? state.invalidNetworkReceipt
+												? "lost-receipt"
+												: name
+											: state.invalidNetworkReceipt
+												? "lost-receipt"
+												: id,
+									);
 								} else if (args[1] === "rm") {
 									const found = findNetwork(args[2]);
 									if (!found || Object.keys(found.Containers).length) {

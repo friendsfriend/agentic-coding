@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { digest, object } from "../config.ts";
 import { EnvironmentCommands } from "./command.ts";
 import type { Plan } from "./model.ts";
@@ -17,18 +18,22 @@ function parse(raw: string): Observation {
 		const result: unknown = JSON.parse(raw);
 		if (!Array.isArray(result) || result.length !== 1) throw new Error();
 		const value = object(result[0]),
-			labels = object(value.Labels),
-			attachments = object(value.Containers);
+			// Docker reports PascalCase fields, Podman lowercase ones; both
+			// describe the same inspected network and are validated identically.
+			labels = object(value.Labels ?? value.labels ?? {}),
+			attachments = object(value.Containers ?? value.containers ?? {});
+		const id = value.Id ?? value.id,
+			name = value.Name ?? value.name;
 		if (
-			typeof value.Id !== "string" ||
-			!/^[a-f0-9]{64}$/.test(value.Id) ||
-			typeof value.Name !== "string" ||
+			typeof id !== "string" ||
+			!/^[a-f0-9]{64}$/.test(id) ||
+			typeof name !== "string" ||
 			Object.values(labels).some((value) => typeof value !== "string")
 		)
 			throw new Error();
 		return {
-			id: value.Id,
-			name: value.Name,
+			id,
+			name,
 			labels: labels as Record<string, string>,
 			attachments: Object.keys(attachments),
 		};
@@ -51,6 +56,7 @@ function budget(timeoutMs: number) {
  * labels, including persisted diagnostics, can never authorize removal. */
 export class ComposeNetwork {
 	private commands: EnvironmentCommands;
+	private provider: "docker" | "podman";
 	private createdId: string | null = null;
 	private mayHaveCreated = false;
 	private uncertain = false;
@@ -65,21 +71,32 @@ export class ComposeNetwork {
 		private run: string,
 		startupEnvironment?: ReturnType<typeof processEnvironment>,
 	) {
-		if (plan.compose?.provider !== "docker")
+		const provider = plan.compose?.provider;
+		if (provider !== "docker" && provider !== "podman")
 			throw new Error(
-				"Shared Compose networking currently requires a Docker client with immutable network creation receipts",
+				"Shared Compose networking requires an explicit Docker or Podman provider with immutable network creation identity",
 			);
+		if (!plan.compose?.socket)
+			throw new Error(
+				"Shared Compose networking requires an explicit local socket",
+			);
+		this.provider = provider;
 		this.host = digest(stateDir);
 		this.name = `acv2-${plan.app}-${this.host.slice(0, 8)}-default`;
 		this.commands = new EnvironmentCommands(
 			plan,
 			configDir,
-			"docker",
-			["--host", `unix://${plan.compose.socket}`],
+			provider,
+			provider === "docker"
+				? ["--host", `unix://${plan.compose.socket}`]
+				: [
+						"--url",
+						pathToFileURL(plan.compose.socket).href.replace(/^file:/, "unix:"),
+					],
 			startupEnvironment,
 		);
 		this.observed = {
-			runtime: "docker",
+			runtime: provider,
 			kind: "network",
 			name: this.name,
 			id: null,
@@ -199,11 +216,39 @@ export class ComposeNetwork {
 					{ timeoutMs: remaining(), signal, machine: true, effect: true },
 				)
 			).trim();
-			if (!/^[a-f0-9]{64}$/.test(receipt)) {
-				this.uncertain = true;
-				throw new Error("Invalid live network creation receipt");
+			if (this.provider === "docker") {
+				if (!/^[a-f0-9]{64}$/.test(receipt)) {
+					this.uncertain = true;
+					throw new Error("Invalid live network creation receipt");
+				}
+				this.createdId = receipt;
+			} else {
+				// Podman returns the claimed name rather than an ID receipt. The
+				// creation identity is read back through one label-verified
+				// inspect of that name: creation succeeded only after the
+				// occupied check, so a conflicting name fails the create itself
+				// and is never adopted here.
+				if (receipt !== this.name) {
+					this.uncertain = true;
+					throw new Error("Invalid live Podman network creation receipt");
+				}
+				const created = await this.observe(remaining(), signal);
+				if (!created) {
+					this.uncertain = true;
+					throw new Error("Created Podman network disappeared");
+				}
+				if (
+					created.name !== this.name ||
+					created.labels[hostLabel] !== this.host ||
+					created.labels[runLabel] !== this.run
+				) {
+					this.uncertain = true;
+					throw new Error(
+						"Podman network creation receipt ownership mismatch; refusing adoption",
+					);
+				}
+				this.createdId = created.id;
 			}
-			this.createdId = receipt;
 			await this.attachment(remaining(), signal);
 		} catch (error) {
 			this.failure =
