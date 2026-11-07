@@ -103,6 +103,15 @@ Assembly already creates each temporary tree under an exclusive deterministic `t
 
 Gates: **173 native tests / 2037 assertions / 57 files** pass; Biome **172 files** zero diagnostics; `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.5**, objective/verified **82.0**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
 
+## Endpoint, credential and cross-binding admission milestone
+
+Two new suites prove every endpoint, secret, query-connection, telemetry and service-selector declaration is refused unless it is loopback-only, declared and mutually consistent. Creation stores content unvalidated; schema inspection refuses before approval, reservation or any connection. Details stay withheld by design, so the suites assert refusal statuses, never the messages.
+
+- `test/endpoint-binding-fences.test.ts` (23 scenarios): 22 refusals — non-loopback and hostname origins, URL credentials, queries, fragments, bad names, endpoints on non-run actions, HTTP-only or mistyped/unreferenced authentication, HTTP-only or absolute CA references, literal/secret collisions, invalid or reserved variable names, non-loopback telemetry listeners, exporter overrides, non-Postgres or non-loopback query connections, literal query credentials, absolute query CA paths — plus one control admitting declared loopback endpoints, HTTPS bearer auth, CA refs, secret refs and a matching query connection. The work surfaced two real contract points: shell commands are single strings (not argv arrays) and query connections require `kind: "infrastructure"` projects.
+- `test/cross-binding-fences.test.ts` (14 scenarios): 11 refusals — service selectors off Compose, unmatched or mistyped selectors, query services without connections or with bad names, container endpoints without healthy readiness or unpublished ports, pod endpoints/queries without forwards on their own ports — plus three controls admitting the consistent Compose, container and pod declarations.
+
+Gates: full native suite **263 pass / 2198 assertions / 63 files**; Biome **179 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.5**, objective/verified **82.0**, strict **19.6**. No live engine, credential, model or existing-app effect. Full legacy baseline/TEST-005 and historical intermittents remain unresolved.
+
 ## Adapter strict-subset fence milestone
 
 Three new suites prove the Compose, Kubernetes and container adapters refuse unsupported effects at the public boundary instead of guessing. Parser and source details stay withheld by design at these boundaries, so the suites assert refusal statuses, never the messages.

@@ -817,3 +817,11 @@ Compose, Kubernetes and container adapters now prove their narrowing refusals at
 Checkpoint gates: full native suite **226 pass / 2161 assertions / 61 files**; Biome **177 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.5**, objective/verified **82.0**, strict **19.6**; subjective dimensions unassessed, exclusions unchanged. Historical intermittent cleanup observation, nested `ENOTEMPTY`, polling/stall and legacy full-baseline/TEST-005 items remain unresolved, not fixed.
 
 Next recommended milestone: remaining Compose/Podman runtime behavior, Kubernetes multi-replica diagnostics, Windows/PowerShell, authorized live verification and TUI adaptation last.
+
+## Endpoint, credential and cross-binding admission milestone
+
+Endpoint, secret, query-connection, telemetry and service-selector declarations are now proven refused unless loopback-only, declared and mutually consistent. `test/endpoint-binding-fences.test.ts` (23 scenarios) refuses 22 bad bindings at schema inspection and admits one fully declared control; `test/cross-binding-fences.test.ts` (14 scenarios) refuses 11 inconsistent endpoint/service/port/forward combinations and admits the three consistent Compose, container and pod declarations. Surfaced contract points now documented in `docs/backend-acceptance.md`: shell commands are single strings, and query connections require `kind: infrastructure` projects.
+
+Checkpoint gates: full native suite **263 pass / 2198 assertions / 63 files**; Biome **179 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.5**, objective/verified **82.0**, strict **19.6**; subjective dimensions unassessed, exclusions unchanged. Historical intermittent cleanup observation, nested `ENOTEMPTY`, polling/stall and legacy full-baseline/TEST-005 items remain unresolved, not fixed.
+
+Next recommended milestone: remaining Compose/Podman runtime behavior, Kubernetes multi-replica diagnostics, Windows/PowerShell, authorized live verification and TUI adaptation last.
