@@ -203,6 +203,28 @@ export type Methods = {
 		output: { taskId: number };
 	};
 	"environment.logs": { input: { app: string }; output: unknown };
+	"wiki.list": { input: Data; output: Data[] };
+	"wiki.read": {
+		input: { id: string };
+		output: { page: Data; comments: Data[] };
+	};
+	"wiki.preview": {
+		input: { id: string; title: string; content: string; baseRevision: number };
+		output: { id: string; snapshot: string; digest: string; expiresAt: number };
+	};
+	"wiki.apply": { input: { id: string; approval: string }; output: Data };
+	"wiki.comment": {
+		input: {
+			pageId: string;
+			pageRevision: number;
+			comment: string;
+			profile: string;
+			repository: string;
+			baseRef: string;
+			requestId: string;
+		};
+		output: { taskId: number };
+	};
 	"skills.read": { input: Data; output: SkillSummary[] };
 	"skill.read": {
 		input: { id: string; revision: string };
@@ -262,6 +284,11 @@ export const methods: Method[] = [
 	"schedule.delete",
 	"environment.action",
 	"environment.logs",
+	"wiki.list",
+	"wiki.read",
+	"wiki.preview",
+	"wiki.apply",
+	"wiki.comment",
 	"skills.read",
 	"skill.read",
 	"settings.read",

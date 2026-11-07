@@ -202,7 +202,60 @@ export function result<M extends Method>(
 	method: M,
 	value: unknown,
 ): Methods[M]["output"] {
-	if (method === "skills.read" || method === "skill.read") {
+	if (method.startsWith("wiki.")) {
+		const page = (value: unknown, content: boolean) => {
+			const data = record(value);
+			if (
+				typeof data.id !== "string" ||
+				typeof data.title !== "string" ||
+				!integer(data.revision, 1) ||
+				typeof data.digest !== "string" ||
+				data.digest.length !== 64 ||
+				!/^[a-f0-9]{64}$/.test(data.digest) ||
+				!integer(data.updatedAt, 1) ||
+				(content &&
+					(typeof data.content !== "string" || data.content.length > 32000))
+			)
+				throw new Error("Invalid wiki page");
+		};
+		if (method === "wiki.list") {
+			const entries = list(value);
+			if (entries.length > 64) throw new Error("Invalid wiki list");
+			for (const entry of entries) page(entry, false);
+		} else if (method === "wiki.read") {
+			const data = record(value);
+			page(data.page, true);
+			const comments = list(data.comments);
+			if (comments.length > 128) throw new Error("Invalid wiki comments");
+			comments.forEach((comment) => {
+				if (
+					typeof comment.id !== "string" ||
+					typeof comment.pageId !== "string" ||
+					!integer(comment.pageRevision, 1) ||
+					typeof comment.comment !== "string" ||
+					comment.comment.length > 4000 ||
+					!(comment.taskId === null || integer(comment.taskId, 0))
+				)
+					throw new Error("Invalid wiki comment");
+			});
+		} else if (method === "wiki.apply") page(value, true);
+		else if (method === "wiki.comment") {
+			if (!integer(record(value).taskId, 0))
+				throw new Error("Invalid comment task");
+		} else {
+			const data = record(value);
+			if (
+				typeof data.id !== "string" ||
+				typeof data.snapshot !== "string" ||
+				data.snapshot.length > 64000 ||
+				typeof data.digest !== "string" ||
+				data.digest.length !== 64 ||
+				!/^[a-f0-9]{64}$/.test(data.digest) ||
+				!integer(data.expiresAt, 1)
+			)
+				throw new Error("Invalid wiki candidate");
+		}
+	} else if (method === "skills.read" || method === "skill.read") {
 		const entries = method === "skills.read" ? list(value) : [record(value)];
 		if (
 			entries.length > 128 ||

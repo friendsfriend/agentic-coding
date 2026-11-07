@@ -9,6 +9,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import codeSkill from "../skills/code/SKILL.md" with { type: "text" };
 import researchSkill from "../skills/research/SKILL.md" with { type: "text" };
+import wikiCommentSkill from "../skills/wiki-comment/SKILL.md" with {
+	type: "text",
+};
 import { readProviders } from "./providers/config.ts";
 
 export type Profile = {
@@ -133,6 +136,7 @@ export function loadConfig(
 	const skills: Skill[] = [
 		{ content: codeSkill, readOnly: false },
 		{ content: researchSkill, readOnly: true },
+		{ content: wikiCommentSkill, readOnly: true },
 	].map(({ content, readOnly }) => {
 		const { frontmatter } = parseFrontmatter(content);
 		return {

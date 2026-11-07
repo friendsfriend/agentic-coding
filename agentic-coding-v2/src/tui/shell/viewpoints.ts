@@ -34,9 +34,11 @@ function checkedView(value: unknown): View {
 		!["sessions", "content", "viewpoints"].includes(String(item.focus))
 	)
 		throw new Error("Invalid saved viewpoint");
-	if (/^\s*\/settings-apply(?:\s|$)/.test(item.draft))
+	if (
+		/^\s*\/(?:settings-apply|wiki-apply|wiki-comment)(?:\s|$)/.test(item.draft)
+	)
 		throw new Error(
-			"Settings confirmations cannot be saved or restored in viewpoints",
+			"Configuration/wiki confirmations and comment admission drafts cannot be saved or restored in viewpoints",
 		);
 	record(item.detail);
 	if (JSON.stringify(item).length > 128000)

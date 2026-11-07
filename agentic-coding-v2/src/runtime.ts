@@ -37,6 +37,7 @@ import {
 	type TaskInput,
 	values,
 } from "./state.ts";
+import { Wiki } from "./wiki.ts";
 
 const nativeTaskId = (id: number) => id as TaskId;
 export class Runtime {
@@ -46,6 +47,7 @@ export class Runtime {
 	private admission: TaskAdmission | null = null;
 	private reconciling = false;
 	private closed = false;
+	readonly wiki: Wiki;
 	readonly settings: Settings;
 	readonly environments: Environments;
 	readonly operatorEnvironments: OperatorEnvironments;
@@ -53,6 +55,7 @@ export class Runtime {
 		readonly config: Config,
 		readonly models: Models,
 	) {
+		this.wiki = new Wiki(this);
 		this.settings = new Settings(config);
 		this.environments = new Environments(config);
 		this.operatorEnvironments = new OperatorEnvironments(

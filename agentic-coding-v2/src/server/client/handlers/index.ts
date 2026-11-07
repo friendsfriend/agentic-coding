@@ -132,6 +132,18 @@ export async function dispatch(
 		case "environment.logs":
 			fields(input, ["app"]);
 			return app.environments.logs(text(input.app, "app", 64));
+		case "wiki.list":
+			fields(input, []);
+			return app.wiki.list();
+		case "wiki.read":
+			fields(input, ["id"]);
+			return app.wiki.read(input.id);
+		case "wiki.preview":
+			return app.wiki.preview(input);
+		case "wiki.apply":
+			return app.wiki.apply(input);
+		case "wiki.comment":
+			return app.wiki.comment(input);
 		case "skills.read":
 			fields(input, []);
 			return listSkills(app);
