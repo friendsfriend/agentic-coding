@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import codeSkill from "../skills/code/SKILL.md" with { type: "text" };
 import researchSkill from "../skills/research/SKILL.md" with { type: "text" };
+import { readProviders } from "./providers/config.ts";
 
 export type Profile = {
 	id: string;
@@ -29,6 +30,7 @@ export type Config = {
 	profiles: Profile[];
 	orchestratorProfile: string;
 	repositories: string[];
+	providers: import("./providers/config.ts").ProviderConfig[];
 	skills: Skill[];
 	stateDir: string;
 	configDir: string;
@@ -165,6 +167,7 @@ export function loadConfig(
 		profiles,
 		orchestratorProfile,
 		repositories,
+		providers: readProviders(data.providers),
 		skills,
 		stateDir,
 		configDir,

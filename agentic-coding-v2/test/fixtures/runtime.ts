@@ -51,6 +51,7 @@ export function createFixtures() {
 			],
 			orchestratorProfile: "test",
 			repositories: [fs.realpathSync(repo)],
+			providers: [],
 			skills: [
 				{
 					id: "code",

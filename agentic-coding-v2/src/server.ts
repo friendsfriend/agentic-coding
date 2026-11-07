@@ -5,6 +5,7 @@ import type { LogOptions } from "./environment/logs.ts";
 import type { TelemetryOptions } from "./environment/model.ts";
 import type { OperatorAction } from "./environment/operator.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { providerRoute } from "./providers/routes.ts";
 import type { Runtime } from "./runtime.ts";
 import type { Review } from "./state.ts";
 import script from "./web/app.js" with { type: "text" };
@@ -424,6 +425,18 @@ export function serve(app: Runtime, port = 0) {
 						),
 					);
 				}
+				if (
+					request.method === "GET" &&
+					url.pathname.startsWith("/api/providers")
+				) {
+					const routed = await providerRoute(
+						app.environments.providers,
+						request.method,
+						url,
+						undefined,
+					);
+					if (routed) return json(routed.value, routed.status);
+				}
 				if (request.method !== "POST") return json({ error: "Not found" }, 404);
 				const body = object(await request.json());
 				if (url.pathname === "/api/session") return json({ ok: true });
@@ -507,6 +520,18 @@ export function serve(app: Runtime, port = 0) {
 					return json(await app.environments.drafts.save(body));
 				if (url.pathname === "/api/environments/revoke")
 					return json(await app.environments.operator.revoke(body));
+				if (
+					request.method === "POST" &&
+					url.pathname.startsWith("/api/providers")
+				) {
+					const routed = await providerRoute(
+						app.environments.providers,
+						request.method,
+						url,
+						body,
+					);
+					if (routed) return json(routed.value, routed.status);
+				}
 				if (url.pathname === "/api/environments/actions")
 					return json({
 						taskId: await app.startEnvironmentAction(body as OperatorAction),

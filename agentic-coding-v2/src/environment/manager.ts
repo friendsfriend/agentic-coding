@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
+import { ProviderApis } from "../providers/providers.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
 import { Acquisitions } from "./acquisitions.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
@@ -76,6 +77,7 @@ export class Environments {
 	readonly database: DatabaseDiagnostics;
 	readonly acquisitions: Acquisitions;
 	readonly operator: OperatorRevocations;
+	readonly providers: ProviderApis;
 	readonly idle: IdleLifecycle;
 	private engine: Harness | null = null;
 	private live = new Map<string, EnvironmentProcess>();
@@ -147,6 +149,7 @@ export class Environments {
 		};
 		this.http = new HeldHttp(config, authority);
 		this.database = new DatabaseDiagnostics(config, authority);
+		this.providers = new ProviderApis(config, () => this.store);
 	}
 	discover(repository: string, owner?: TaskInfo, directory = ".") {
 		return discoverDefinitions(this.config, repository, owner, directory);
