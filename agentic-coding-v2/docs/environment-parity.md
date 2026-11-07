@@ -887,3 +887,7 @@ Native skill tasks can now stage environment definition bytes through `env_draft
 ## Minimal terminal client milestone
 
 `agentic-coding-v2 --tui` runs a zero-dependency raw-mode terminal client instead of the headless host. Home panel chats with the orchestrator (tasks start through the existing admission path, never directly), tasks panel drills into task detail with exact-revision approve/reject/changes-requested and cancellation, env panel lists runs diagnostically. The pure key/render model (`src/tui/model.ts`) is proven by `test/tui-model.test.ts` (3 tests); the raw-mode loop (`src/tui/loop.ts`) is untested IO over the same Runtime accessors the dashboard uses. Reconciliation ticks in both modes; quitting restores the terminal.
+
+## Deferred-gates checkpoint after terminal client
+
+Full native suite: 378 pass / 0 fail (264s). `type-check` clean, `build` good with compiled `--help` listing `--tui`, legacy `lint:boundaries` and `type-check` clean, tree clean. Desloppify unavailable: no `.desloppify` installation exists in this checkout, so no scan/status was possible. Compose restart/interpolation refusals and promotion scope re-confirmed as deliberate fences, not gaps; remaining opens stay blocked on live verification (Podman daemon, authorized live checks, MySQL, Windows/PowerShell).
