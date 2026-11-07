@@ -28,6 +28,7 @@ import { projectState } from "./projection.ts";
 import { ProviderActions } from "./provider-actions.ts";
 import { Scheduler, type ScheduleSlot } from "./scheduler.ts";
 import { Settings } from "./settings.ts";
+import { SkillFiles } from "./skill-files.ts";
 import { createSkillTask } from "./skill-task.ts";
 import {
 	type Attachment,
@@ -52,6 +53,7 @@ export class Runtime {
 	readonly wiki: Wiki;
 	readonly providerActions: ProviderActions;
 	readonly settings: Settings;
+	readonly skillFiles: SkillFiles;
 	readonly environments: Environments;
 	readonly operatorEnvironments: OperatorEnvironments;
 	readonly environmentWorkbench: EnvironmentWorkbench;
@@ -62,6 +64,7 @@ export class Runtime {
 		this.wiki = new Wiki(this);
 		this.providerActions = new ProviderActions(this);
 		this.settings = new Settings(config);
+		this.skillFiles = new SkillFiles(config);
 		this.environments = new Environments(config);
 		this.environmentWorkbench = new EnvironmentWorkbench(this);
 		this.operatorEnvironments = new OperatorEnvironments(

@@ -90,6 +90,20 @@ export type SkillSummary = {
 	readOnly: boolean;
 };
 export type SkillDocument = SkillSummary & { content: string };
+export type SkillFileDocument = {
+	name: string;
+	revision: string;
+	directoryIdentity: string;
+	content: string;
+	restartRequired: true;
+};
+export type SkillFileCandidate = Omit<SkillFileDocument, "revision"> & {
+	id: string;
+	baseRevision: string;
+	digest: string;
+	snapshot: string;
+	expiresAt: number;
+};
 export type SettingsDefinition = {
 	profiles: Record<
 		string,
@@ -287,6 +301,15 @@ export type Methods = {
 		};
 		output: { taskId: number };
 	};
+	"skill-file.read": { input: { name: string }; output: SkillFileDocument };
+	"skill-file.preview": {
+		input: { name: string; baseRevision: string; content: string };
+		output: SkillFileCandidate;
+	};
+	"skill-file.apply": {
+		input: { id: string; approval: string };
+		output: { name: string; revision: string; restartRequired: true };
+	};
 	"skills.read": { input: Data; output: SkillSummary[] };
 	"skill.read": {
 		input: { id: string; revision: string };
@@ -375,6 +398,9 @@ export const methods: Method[] = [
 	"wiki.preview",
 	"wiki.apply",
 	"wiki.comment",
+	"skill-file.read",
+	"skill-file.preview",
+	"skill-file.apply",
 	"skills.read",
 	"skill.read",
 	"settings.read",

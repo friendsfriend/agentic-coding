@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-durable/tools";
 import { Type } from "typebox";
 import { type Config, digest, text } from "./config.ts";
+import { imageMediaType } from "./evidence-format.ts";
 import { captureReview, contained } from "./git.ts";
 import { requestReview } from "./reviews.ts";
 import { type Attachment, Catalog, type TaskInfo } from "./state.ts";
@@ -58,7 +59,7 @@ export function createAgentTools(config: Config, ownerOf: OwnerLookup) {
 			defineTool({
 				name: "attach_image",
 				description:
-					"Store a PNG or JPEG from this task's workspace and return an inline Markdown image reference.",
+					"Store a PNG, JPEG, WebP or GIF from this task's workspace and return an inline Markdown image reference.",
 				parameters: Type.Object({
 					path: Type.String(),
 					caption: Type.String(),
@@ -70,15 +71,12 @@ export function createAgentTools(config: Config, ownerOf: OwnerLookup) {
 					if (fs.statSync(file).size > 10_000_000)
 						throw new Error("Image exceeds 10 MB");
 					const bytes = fs.readFileSync(file);
-					const mediaType = bytes
-						.subarray(0, 8)
-						.equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-						? "image/png"
-						: bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
-							? "image/jpeg"
-							: null;
+					if (bytes.length > 10_000_000) throw new Error("Image exceeds 10 MB");
+					const mediaType = imageMediaType(bytes);
 					if (!mediaType)
-						throw new Error("Only PNG and JPEG attachments are supported");
+						throw new Error(
+							"Only PNG, JPEG, WebP and GIF attachments are supported",
+						);
 					const id = digest(bytes);
 					const dir = path.join(config.stateDir, "attachments");
 					fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

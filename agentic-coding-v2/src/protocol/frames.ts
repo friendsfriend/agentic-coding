@@ -257,7 +257,9 @@ export function result<M extends Method>(
 			typeof data.id !== "string" ||
 			!/^[a-f0-9]{64}$/.test(data.id) ||
 			!integer(data.taskId) ||
-			!["image/png", "image/jpeg"].includes(String(data.mediaType)) ||
+			!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+				String(data.mediaType),
+			) ||
 			typeof data.caption !== "string" ||
 			typeof data.content !== "string" ||
 			data.content.length > 512000
@@ -316,6 +318,41 @@ export function result<M extends Method>(
 			)
 				throw new Error("Invalid wiki candidate");
 		}
+	} else if (method.startsWith("skill-file.")) {
+		const data = record(value);
+		if (
+			typeof data.name !== "string" ||
+			!/^[a-z][a-z0-9-]{0,63}$/.test(data.name) ||
+			data.restartRequired !== true
+		)
+			throw new Error("Invalid skill file identity");
+		const revision =
+			method === "skill-file.preview" ? data.baseRevision : data.revision;
+		if (
+			typeof revision !== "string" ||
+			!(revision === "missing" || /^[a-f0-9]{64}$/.test(revision))
+		)
+			throw new Error("Invalid skill file revision");
+		if (
+			method !== "skill-file.apply" &&
+			(typeof data.content !== "string" ||
+				data.content.length > 64000 ||
+				typeof data.directoryIdentity !== "string" ||
+				data.directoryIdentity.length > 256)
+		)
+			throw new Error("Invalid skill file text/identity");
+		if (
+			method === "skill-file.preview" &&
+			(typeof data.id !== "string" ||
+				data.id.length > 80 ||
+				typeof data.snapshot !== "string" ||
+				data.snapshot.length > 400000 ||
+				typeof data.digest !== "string" ||
+				!/^[a-f0-9]{64}$/.test(data.digest) ||
+				typeof data.expiresAt !== "number" ||
+				!Number.isSafeInteger(data.expiresAt))
+		)
+			throw new Error("Invalid skill file candidate");
 	} else if (method === "skills.read" || method === "skill.read") {
 		const entries = method === "skills.read" ? list(value) : [record(value)];
 		if (
@@ -482,7 +519,9 @@ export function result<M extends Method>(
 				typeof item.id !== "string" ||
 				!/^[a-f0-9]{64}$/.test(item.id) ||
 				typeof item.caption !== "string" ||
-				!["image/png", "image/jpeg"].includes(String(item.mediaType))
+				!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+					String(item.mediaType),
+				)
 			)
 				throw new Error("Invalid task attachment");
 		});

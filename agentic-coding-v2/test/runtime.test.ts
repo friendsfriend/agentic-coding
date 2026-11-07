@@ -520,6 +520,10 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0AAAAABJRU5ErkJggg==",
 		"base64",
 	);
+	const gif = Buffer.from(
+		"R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+		"base64",
+	);
 	const image = `![Screenshot](/attachments/${digest(png)})`;
 	fake.setResponses([
 		fauxAssistantMessage(
@@ -530,6 +534,13 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 			fauxToolCall("attach_image", {
 				path: "capture.png",
 				caption: "Screenshot",
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall("attach_image", {
+				path: "capture.gif",
+				caption: "Retained GIF",
 			}),
 			{ stopReason: "toolUse" },
 		),
@@ -544,6 +555,7 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		(view) => view.reviews.length === 1,
 	);
 	fs.writeFileSync(path.join(waiting.tasks[0].workspace, "capture.png"), png);
+	fs.writeFileSync(path.join(waiting.tasks[0].workspace, "capture.gif"), gif);
 	const host = serve(app),
 		client = new ClientConnection(host.client);
 	try {
@@ -649,6 +661,12 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 				mediaType: "image/png",
 				caption: "Screenshot",
 			},
+			{
+				id: digest(gif),
+				taskId: id,
+				mediaType: "image/gif",
+				caption: "Retained GIF",
+			},
 		]);
 		const pixels = await client.call("evidence.read", {
 			taskId: id,
@@ -661,6 +679,12 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 			caption: "Screenshot",
 		});
 		expect(Buffer.from(pixels.content, "base64")).toEqual(png);
+		const retainedGif = await client.call("evidence.read", {
+			taskId: id,
+			id: digest(gif),
+		});
+		expect(retainedGif.mediaType).toBe("image/gif");
+		expect(Buffer.from(retainedGif.content, "base64")).toEqual(gif);
 		await expect(
 			client.call("evidence.read", { taskId: 999999, id: digest(png) }),
 		).rejects.toThrow();

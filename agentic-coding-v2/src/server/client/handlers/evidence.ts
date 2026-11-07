@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { digest } from "../../../config.ts";
+import { imageMediaType } from "../../../evidence-format.ts";
 import type { Runtime } from "../../../runtime.ts";
 /** Read exact native-owned content bytes, never caller-supplied paths or URLs. */
 export async function readEvidence(app: Runtime, taskId: number, id: string) {
@@ -13,7 +14,9 @@ export async function readEvidence(app: Runtime, taskId: number, id: string) {
 		!item ||
 		item.taskId !== taskId ||
 		item.filename !== id ||
-		!["image/png", "image/jpeg"].includes(item.mediaType)
+		!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+			item.mediaType,
+		)
 	)
 		throw new Error("Evidence owner or format unavailable");
 	const root = path.join(fs.realpathSync(app.config.stateDir), "attachments"),
@@ -61,14 +64,7 @@ export async function readEvidence(app: Runtime, taskId: number, id: string) {
 		)
 			throw new Error("Evidence changed during read");
 		const body = bytes.subarray(0, used);
-		if (
-			digest(body) !== id ||
-			(item.mediaType === "image/png"
-				? !body
-						.subarray(0, 8)
-						.equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-				: body[0] !== 255 || body[1] !== 216 || body[2] !== 255)
-		)
+		if (digest(body) !== id || imageMediaType(body) !== item.mediaType)
 			throw new Error("Evidence digest or image signature mismatch");
 		const retained = await app.attachment(id);
 		if (

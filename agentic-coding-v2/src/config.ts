@@ -28,6 +28,8 @@ export type Skill = {
 	content: string;
 	digest: string;
 	readOnly: boolean;
+	/** Native-only source identity; never a client path selector. */
+	sourceFile?: string;
 };
 export type Config = {
 	profiles: Profile[];
@@ -161,6 +163,7 @@ export function loadConfig(
 				id: skill.name,
 				description: skill.description,
 				origin: "user",
+				sourceFile: fs.realpathSync(skill.filePath),
 				content,
 				digest: digest(content),
 				readOnly: false,

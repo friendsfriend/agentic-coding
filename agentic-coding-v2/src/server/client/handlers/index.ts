@@ -205,6 +205,22 @@ export async function dispatch(
 			return app.wiki.apply(input);
 		case "wiki.comment":
 			return app.wiki.comment(input);
+		case "skill-file.read":
+			fields(input, ["name"]);
+			return app.skillFiles.read(text(input.name, "skill slug", 64));
+		case "skill-file.preview":
+			fields(input, ["name", "baseRevision", "content"]);
+			return app.skillFiles.preview(
+				text(input.name, "skill slug", 64),
+				text(input.baseRevision, "skill file revision", 64),
+				text(input.content, "skill text", 64000),
+			);
+		case "skill-file.apply":
+			fields(input, ["id", "approval"]);
+			return app.skillFiles.apply(
+				text(input.id, "candidate identity", 80),
+				text(input.approval, "skill approval", 80),
+			);
 		case "skills.read":
 			fields(input, []);
 			return listSkills(app);
