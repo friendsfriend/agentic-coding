@@ -849,3 +849,11 @@ Promotion writes are fenced against configuration-directory replacement, non-reg
 ## Full checkpoint (promotion-write increment)
 
 Native suite **337 pass / 2379 assertions / 72 files**; Biome **188 files** zero diagnostics; native `type-check`, `build` and compiled `--help` pass; legacy `lint:boundaries` **71/278** and legacy type-check pass; Desloppify overall **20.6**, objective/verified **82.4**, strict **19.6**; subjective dimensions unassessed, exclusions unchanged. Historical intermittents and legacy full-baseline/TEST-005 remain unresolved, not fixed.
+
+## Provider namespace, auxiliary promotion and multi-replica diagnostics milestone
+
+Provider APIs live under `/api/providers/{name}` with receipted writes (`approve:<digest>`), proven over a loopback stub; HTTPS-only bases and env-var token refs hold. Promotion publishes staged auxiliary files beside the live document behind a `sourcesApprove` digest, never for repository-bound sources, with symlink plants failing closed. Kubernetes port forwards pin exactly one approved replica; endpoint/query/dispatch admission and per-call pod observation follow the pin, and `env_logs` selects one followed pod buffer by explicit `replica` while merged reads stay refused.
+
+Checkpoint gates for this milestone: affected Kubernetes suites pass (`test/kubernetes.test.ts`, `test/kubernetes-diagnostics.test.ts`, `test/kubernetes-sql.test.ts`: 9 pass / 81 expects; `test/kubernetes-replicas.test.ts`: 2 pass / 11 expects); Biome zero diagnostics; native `type-check` passes. Full native suite, `build`, legacy gates and Desloppify run at the next deferred-gates checkpoint. Historical intermittents, MySQL/Windows/PowerShell gaps, legacy full-baseline/TEST-005 and live verification remain unresolved, not fixed.
+
+Next recommended milestone: promotion beyond config files/auxiliaries, remaining Compose/Podman runtime behavior, MySQL/Windows/PowerShell (if provable), authorized live verification and TUI adaptation last.
