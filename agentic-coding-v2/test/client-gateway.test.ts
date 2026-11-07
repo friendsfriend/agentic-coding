@@ -37,6 +37,43 @@ test("authenticated client reads/subscribes, configures its native session and d
 			(state) => state !== null,
 		);
 		const state = client.state;
+		const skills = await client.call("skills.read", {});
+		expect(skills).toEqual([
+			{
+				id: "code",
+				origin: "system",
+				description: "test skill",
+				revision: config.skills[0]?.digest,
+				readOnly: false,
+			},
+		]);
+		const revision = skills[0]?.revision ?? "";
+		expect(
+			await client.call("skill.read", { id: "code", revision }),
+		).toMatchObject({ id: "code", content: "Implement the task", revision });
+		await expect(
+			client.call("skill.read", { id: "../../README.md", revision }),
+		).rejects.toThrow();
+		await expect(
+			client.call("skill.read", { id: "code", revision: "0".repeat(64) }),
+		).rejects.toThrow();
+		const unsupportedSkillRead = {
+			id: "code",
+			revision,
+			path: config.repositories[0],
+		};
+		await expect(
+			client.call("skill.read", unsupportedSkillRead),
+		).rejects.toThrow();
+		expect((await client.call("state.read", {})).tasks).toEqual([]);
+		const loadedSkill = config.skills[0];
+		if (!loadedSkill) throw new Error("Fixture skill missing");
+		const originalInstructions = loadedSkill.content;
+		loadedSkill.content = "Changed content without updating loaded digest";
+		await expect(
+			client.call("skill.read", { id: "code", revision }),
+		).rejects.toThrow();
+		loadedSkill.content = originalInstructions;
 		expect(state?.sessions[0]?.title).toBe("Orchestrator");
 		const id = Number(app.home.id);
 		expect(await client.call("session.read", { id })).toMatchObject({

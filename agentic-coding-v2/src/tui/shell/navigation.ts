@@ -9,6 +9,7 @@ export type Page =
 	| "environments"
 	| "providers"
 	| "profiles"
+	| "skills"
 	| "observability"
 	| "schedules"
 	| "wiki"

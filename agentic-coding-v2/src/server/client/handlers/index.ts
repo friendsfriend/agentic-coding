@@ -5,6 +5,7 @@ import type { Data, Request } from "../../../protocol/index.ts";
 import type { Runtime } from "../../../runtime.ts";
 import { inspectProvider } from "./providers.ts";
 import { clientSession, clientSnapshot, readSession } from "./sessions.ts";
+import { listSkills, readSkill } from "./skills.ts";
 import { readTask } from "./tasks.ts";
 
 function fields(input: Data, allowed: string[]) {
@@ -131,6 +132,12 @@ export async function dispatch(
 		case "environment.logs":
 			fields(input, ["app"]);
 			return app.environments.logs(text(input.app, "app", 64));
+		case "skills.read":
+			fields(input, []);
+			return listSkills(app);
+		case "skill.read":
+			fields(input, ["id", "revision"]);
+			return readSkill(app, input.id, input.revision);
 		case "settings.read":
 			fields(input, []);
 			return app.settings.read();

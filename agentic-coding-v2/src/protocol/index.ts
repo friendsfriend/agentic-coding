@@ -65,6 +65,14 @@ export type Transcript = {
 		cost: number;
 	};
 };
+export type SkillSummary = {
+	id: string;
+	origin: "system" | "user";
+	description: string;
+	revision: string;
+	readOnly: boolean;
+};
+export type SkillDocument = SkillSummary & { content: string };
 export type SettingsDefinition = {
 	profiles: Record<
 		string,
@@ -195,6 +203,11 @@ export type Methods = {
 		output: { taskId: number };
 	};
 	"environment.logs": { input: { app: string }; output: unknown };
+	"skills.read": { input: Data; output: SkillSummary[] };
+	"skill.read": {
+		input: { id: string; revision: string };
+		output: SkillDocument;
+	};
 	"settings.read": { input: Data; output: SettingsDocument };
 	"settings.preview": {
 		input: { baseRevision: string; settings: SettingsDefinition };
@@ -249,6 +262,8 @@ export const methods: Method[] = [
 	"schedule.delete",
 	"environment.action",
 	"environment.logs",
+	"skills.read",
+	"skill.read",
 	"settings.read",
 	"settings.preview",
 	"settings.apply",

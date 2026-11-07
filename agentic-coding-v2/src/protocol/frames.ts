@@ -202,7 +202,34 @@ export function result<M extends Method>(
 	method: M,
 	value: unknown,
 ): Methods[M]["output"] {
-	if (method === "settings.read") {
+	if (method === "skills.read" || method === "skill.read") {
+		const entries = method === "skills.read" ? list(value) : [record(value)];
+		if (
+			entries.length > 128 ||
+			new Set(entries.map((entry) => entry.id)).size !== entries.length
+		)
+			throw new Error("Invalid skill catalog");
+		for (const entry of entries) {
+			if (
+				typeof entry.id !== "string" ||
+				!entry.id ||
+				entry.id.length > 128 ||
+				!["system", "user"].includes(String(entry.origin)) ||
+				typeof entry.description !== "string" ||
+				entry.description.length > 2048 ||
+				typeof entry.revision !== "string" ||
+				entry.revision.length !== 64 ||
+				!/^[a-f0-9]{64}$/.test(entry.revision) ||
+				typeof entry.readOnly !== "boolean"
+			)
+				throw new Error("Invalid skill metadata");
+			if (
+				method === "skill.read" &&
+				(typeof entry.content !== "string" || entry.content.length > 64000)
+			)
+				throw new Error("Invalid skill instructions");
+		}
+	} else if (method === "settings.read") {
 		const data = record(value),
 			settings = record(data.settings);
 		if (
