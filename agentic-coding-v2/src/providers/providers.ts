@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import { type Config, digest, object, text } from "../config.ts";
+import { boundedFetch } from "../http/admission.ts";
 import {
 	type Change,
 	type Client,
@@ -17,7 +18,6 @@ import {
 	type ProviderConfig,
 	providerProjection,
 	providerToken,
-	readProviders,
 } from "./config.ts";
 import {
 	ProviderWrites,
@@ -26,8 +26,13 @@ import {
 	writeKey,
 } from "./receipts.ts";
 
-export type { ProviderConfig };
-export { readProviders };
+export type FileChange = {
+	path: string;
+	additions: number | null;
+	deletions: number | null;
+	patch: string;
+};
+export type Version = { id: string; sha: string; message: string };
 
 type Store = () => Harness;
 const isList = (value: unknown): value is Record<string, unknown>[] =>
@@ -59,9 +64,9 @@ export class ProviderApis {
 		return encodeURIComponent(text(path, "repository reference", 256));
 	}
 	private num(value: unknown, name: string): number {
-		if (!Number.isSafeInteger(value) || Number(value) < 1)
-			throw new Error(`Invalid ${name}`);
-		return Number(value);
+		const n = typeof value === "number" ? value : Number(value);
+		if (!Number.isSafeInteger(n) || n < 1) throw new Error(`Invalid ${name}`);
+		return n;
 	}
 	async searchRepos(provider: string, query: unknown) {
 		const resolved = this.resolve(provider),
@@ -204,36 +209,192 @@ export class ProviderApis {
 			? mapGitHubIssue(raw)
 			: mapGitLabIssue(raw);
 	}
-	async jobs(provider: string, repo: unknown) {
+	async jobs(provider: string, repo: unknown, run: unknown) {
+		const resolved = this.resolve(provider),
+			client = this.client(resolved),
+			reference = this.ref(String(repo));
+		if (resolved.type === "github") {
+			if (run === undefined || run === null)
+				throw new Error("GitHub job listing requires a run ID");
+			const raw = await client.get(
+				`/repos/${reference}/actions/runs/${this.num(run, "run ID")}/jobs?per_page=30`,
+			);
+			const items = (raw as Record<string, unknown>).jobs as unknown;
+			if (!isList(items))
+				throw new Error("Upstream provider returned invalid data");
+			return items.map(
+				(item): Job => ({
+					id: `github-job-${String(item.id ?? 0)}`,
+					name: typeof item.name === "string" ? item.name : "",
+					status: typeof item.status === "string" ? item.status : "",
+					url: typeof item.html_url === "string" ? item.html_url : "",
+				}),
+			);
+		}
+		const raw = await client.get(
+			`/projects/${reference}/pipelines?per_page=30`,
+		);
+		if (!isList(raw))
+			throw new Error("Upstream provider returned invalid data");
+		return raw.map(
+			(item): Job => ({
+				id: `gitlab-pipeline-${String(item.id ?? 0)}`,
+				name: typeof item.ref === "string" ? item.ref : "",
+				status: typeof item.status === "string" ? item.status : "",
+				url: typeof item.web_url === "string" ? item.web_url : "",
+			}),
+		);
+	}
+	async jobLogs(provider: string, repo: unknown, job: unknown) {
+		const resolved = this.resolve(provider),
+			client = this.client(resolved),
+			reference = this.ref(String(repo)),
+			id = this.num(job, "job ID");
+		if (resolved.type === "github") {
+			const first = await client.raw(
+				`/repos/${reference}/actions/jobs/${id}/logs`,
+				{ redirect: "manual" },
+			);
+			if (first.status === 301 || first.status === 302) {
+				const location = first.headers.get("location") ?? "";
+				if (!location.startsWith("https://") && !location.startsWith("http://"))
+					throw new Error("Upstream provider returned an invalid log location");
+				// Signed artifact URL: fetched without credentials.
+				const { status, body, truncated } = await boundedFetch(
+					fetch,
+					location,
+					{
+						redirect: "follow",
+						headers: { Accept: "text/plain" },
+						maxBytes: 262144,
+						onTooLarge: "truncate",
+					},
+				);
+				if (status < 200 || status >= 300)
+					throw new Error(`Upstream provider refused the request (${status})`);
+				return { log: body, truncated };
+			}
+			if (first.status < 200 || first.status >= 300)
+				throw new Error(
+					`Upstream provider refused the request (${first.status})`,
+				);
+			return { log: first.body, truncated: first.truncated };
+		}
+		const result = await client.raw(`/projects/${reference}/jobs/${id}/trace`, {
+			accept: "text/plain",
+		});
+		if (result.status < 200 || result.status >= 300)
+			throw new Error(
+				`Upstream provider refused the request (${result.status})`,
+			);
+		return { log: result.body, truncated: result.truncated };
+	}
+	async changeFiles(
+		provider: string,
+		repo: unknown,
+		number: unknown,
+	): Promise<FileChange[]> {
+		const resolved = this.resolve(provider),
+			client = this.client(resolved),
+			reference = this.ref(String(repo)),
+			n = this.num(number, "change number");
+		if (resolved.type === "github") {
+			const raw = await client.get(
+				`/repos/${reference}/pulls/${n}/files?per_page=100`,
+			);
+			if (!isList(raw))
+				throw new Error("Upstream provider returned invalid data");
+			return raw.map(
+				(item): FileChange => ({
+					path: typeof item.filename === "string" ? item.filename : "",
+					additions: typeof item.additions === "number" ? item.additions : null,
+					deletions: typeof item.deletions === "number" ? item.deletions : null,
+					patch: typeof item.patch === "string" ? item.patch : "",
+				}),
+			);
+		}
+		const raw = (await client.get(
+			`/projects/${reference}/merge_requests/${n}/changes`,
+		)) as Record<string, unknown>;
+		const items = raw.changes as unknown;
+		if (!isList(items))
+			throw new Error("Upstream provider returned invalid data");
+		return items.map(
+			(item): FileChange => ({
+				path: typeof item.new_path === "string" ? item.new_path : "",
+				additions: null,
+				deletions: null,
+				patch: typeof item.diff === "string" ? item.diff : "",
+			}),
+		);
+	}
+	async changeVersions(
+		provider: string,
+		repo: unknown,
+		number: unknown,
+	): Promise<Version[]> {
+		const resolved = this.resolve(provider),
+			client = this.client(resolved),
+			reference = this.ref(String(repo)),
+			n = this.num(number, "change number");
+		if (resolved.type === "github") {
+			const raw = await client.get(
+				`/repos/${reference}/pulls/${n}/commits?per_page=100`,
+			);
+			if (!isList(raw))
+				throw new Error("Upstream provider returned invalid data");
+			return raw.map(
+				(item): Version => ({
+					id: `github-commit-${typeof item.sha === "string" ? item.sha.slice(0, 12) : "0"}`,
+					sha: typeof item.sha === "string" ? item.sha : "",
+					message:
+						typeof (item.commit as Record<string, unknown> | undefined)
+							?.message === "string"
+							? ((item.commit as Record<string, unknown>).message as string)
+							: "",
+				}),
+			);
+		}
+		const raw = await client.get(
+			`/projects/${reference}/merge_requests/${n}/versions?per_page=100`,
+		);
+		if (!isList(raw))
+			throw new Error("Upstream provider returned invalid data");
+		return raw.map(
+			(item): Version => ({
+				id: `gitlab-version-${String(item.id ?? 0)}`,
+				sha:
+					typeof item.head_commit_sha === "string" ? item.head_commit_sha : "",
+				message: "",
+			}),
+		);
+	}
+	async repoLabels(provider: string, repo: unknown) {
 		const resolved = this.resolve(provider),
 			client = this.client(resolved),
 			reference = this.ref(String(repo));
 		const raw =
 			resolved.type === "github"
-				? await client.get(`/repos/${reference}/actions/runs?per_page=30`)
-				: await client.get(`/projects/${reference}/pipelines?per_page=30`);
-		const items = (
-			resolved.type === "github"
-				? (raw as Record<string, unknown>).workflow_runs
-				: raw
-		) as unknown;
-		if (!isList(items))
+				? await client.get(`/repos/${reference}/labels?per_page=100`)
+				: await client.get(`/projects/${reference}/labels?per_page=100`);
+		if (!isList(raw))
 			throw new Error("Upstream provider returned invalid data");
-		return items.map(
-			(item): Job =>
-				resolved.type === "github"
-					? {
-							id: `github-run-${String(item.id ?? 0)}`,
-							name: typeof item.name === "string" ? item.name : "",
-							status: typeof item.status === "string" ? item.status : "",
-							url: typeof item.html_url === "string" ? item.html_url : "",
-						}
-					: {
-							id: `gitlab-pipeline-${String(item.id ?? 0)}`,
-							name: typeof item.ref === "string" ? item.ref : "",
-							status: typeof item.status === "string" ? item.status : "",
-							url: typeof item.web_url === "string" ? item.web_url : "",
-						},
+		return raw.map((item) => pick(item, ["name", "color"]));
+	}
+	async repoCollaborators(provider: string, repo: unknown) {
+		const resolved = this.resolve(provider),
+			client = this.client(resolved),
+			reference = this.ref(String(repo));
+		const raw =
+			resolved.type === "github"
+				? await client.get(`/repos/${reference}/collaborators?per_page=100`)
+				: await client.get(`/projects/${reference}/members?per_page=100`);
+		if (!isList(raw))
+			throw new Error("Upstream provider returned invalid data");
+		return raw.map((item) =>
+			resolved.type === "github"
+				? pick(item, ["login", "role_name"])
+				: pick(item, ["username", "access_level"]),
 		);
 	}
 	private approval(body: Record<string, unknown>): {
@@ -402,6 +563,201 @@ export class ProviderApis {
 						unknown
 					>,
 					["id", "status"],
+				);
+			},
+		);
+	}
+	private splitThread(target: string): [string, string, string] {
+		const [repo, number] = this.splitTarget(target),
+			hash = number.indexOf("#");
+		if (hash < 1 || hash === number.length - 1)
+			throw new Error("Invalid write target");
+		return [repo, number.slice(0, hash), number.slice(hash + 1)];
+	}
+	async cancelJob(name: unknown, body: Record<string, unknown>) {
+		return this.write(
+			name,
+			body,
+			"cancel-job",
+			async (provider, client, target) => {
+				const [repo, id] = this.splitTarget(target);
+				if (provider.type === "github")
+					return pick(
+						(await client.post(
+							`/repos/${repo}/actions/runs/${id}/cancel`,
+						)) as Record<string, unknown>,
+						["id", "status"],
+					);
+				return pick(
+					(await client.post(`/projects/${repo}/jobs/${id}/cancel`)) as Record<
+						string,
+						unknown
+					>,
+					["id", "status"],
+				);
+			},
+		);
+	}
+	async unapproveChange(name: unknown, body: Record<string, unknown>) {
+		return this.write(
+			name,
+			body,
+			"unapprove-change",
+			async (provider, client, target) => {
+				const [repo, number] = this.splitTarget(target);
+				if (provider.type === "github") {
+					const reviews = await client.get(
+						`/repos/${repo}/pulls/${number}/reviews?per_page=100`,
+					);
+					if (!isList(reviews))
+						throw new Error("Upstream provider returned invalid data");
+					const mine = reviews.find(
+						(review) =>
+							review.state === "APPROVED" &&
+							(review.user as Record<string, unknown> | undefined)?.login ===
+								provider.username,
+					);
+					if (!mine || typeof mine.id !== "number")
+						throw new Error("No approval by this provider user to dismiss");
+					return pick(
+						(await client.post(
+							`/repos/${repo}/pulls/${number}/reviews/${mine.id}/dismissals`,
+							{ message: "dismissed" },
+						)) as Record<string, unknown>,
+						["id", "state"],
+					);
+				}
+				return pick(
+					(await client.post(
+						`/projects/${repo}/merge_requests/${number}/unapprove`,
+					)) as Record<string, unknown>,
+					["id", "title"],
+				);
+			},
+		);
+	}
+	async rebaseChange(name: unknown, body: Record<string, unknown>) {
+		return this.write(
+			name,
+			body,
+			"rebase-change",
+			async (provider, client, target) => {
+				if (provider.type !== "gitlab")
+					throw new Error("Rebase is unsupported for this provider type");
+				const [repo, number] = this.splitTarget(target);
+				return pick(
+					(await client.post(
+						`/projects/${repo}/merge_requests/${number}/rebase`,
+					)) as Record<string, unknown>,
+					["id", "rebase_in_progress"],
+				);
+			},
+		);
+	}
+	async replyDiscussion(name: unknown, body: Record<string, unknown>) {
+		return this.write(
+			name,
+			body,
+			"reply-discussion",
+			async (provider, client, target, payload) => {
+				const [repo, change, thread] = this.splitThread(target),
+					comment = text(payload.body, "comment body", 65536);
+				if (provider.type === "github")
+					return pick(
+						(await client.post(`/repos/${repo}/pulls/${change}/comments`, {
+							body: comment,
+							in_reply_to: Number(thread),
+						})) as Record<string, unknown>,
+						["id", "html_url"],
+					);
+				return pick(
+					(await client.post(
+						`/projects/${repo}/merge_requests/${change}/discussions/${thread}/notes`,
+						{ body: comment },
+					)) as Record<string, unknown>,
+					["id", "body"],
+				);
+			},
+		);
+	}
+	async resolveDiscussion(name: unknown, body: Record<string, unknown>) {
+		return this.write(
+			name,
+			body,
+			"resolve-discussion",
+			async (provider, client, target, payload) => {
+				if (provider.type !== "gitlab")
+					throw new Error(
+						"Discussion resolution is unsupported for this provider type",
+					);
+				const [repo, change, thread] = this.splitThread(target),
+					resolved = payload.resolved !== false;
+				return pick(
+					(await client.post(
+						`/projects/${repo}/merge_requests/${change}/discussions/${thread}`,
+						{ resolved },
+					)) as Record<string, unknown>,
+					["id", "resolved"],
+				);
+			},
+		);
+	}
+	async setIssueLabels(name: unknown, body: Record<string, unknown>) {
+		return this.write(
+			name,
+			body,
+			"set-issue-labels",
+			async (provider, client, target, payload) => {
+				const [repo, number] = this.splitTarget(target);
+				if (!Array.isArray(payload.labels))
+					throw new Error("Issue labels must be an array");
+				const labels = payload.labels.map((label) =>
+					text(label, "issue label", 64),
+				);
+				if (provider.type === "github")
+					return pick(
+						(await client.patch(`/repos/${repo}/issues/${number}`, {
+							labels,
+						})) as Record<string, unknown>,
+						["id", "labels"],
+					);
+				return pick(
+					(await client.post(`/projects/${repo}/issues/${number}`, {
+						labels: labels.join(","),
+					})) as Record<string, unknown>,
+					["id", "labels"],
+				);
+			},
+		);
+	}
+	async setIssueAssignees(name: unknown, body: Record<string, unknown>) {
+		return this.write(
+			name,
+			body,
+			"set-issue-assignees",
+			async (provider, client, target, payload) => {
+				const [repo, number] = this.splitTarget(target);
+				if (!Array.isArray(payload.assignees))
+					throw new Error("Issue assignees must be an array");
+				if (provider.type === "github") {
+					const assignees = payload.assignees.map((login) =>
+						text(login, "assignee login", 128),
+					);
+					return pick(
+						(await client.patch(`/repos/${repo}/issues/${number}`, {
+							assignees,
+						})) as Record<string, unknown>,
+						["id", "assignees"],
+					);
+				}
+				const assignee_ids = payload.assignees.map((id) =>
+					this.num(id, "assignee ID"),
+				);
+				return pick(
+					(await client.post(`/projects/${repo}/issues/${number}`, {
+						assignee_ids,
+					})) as Record<string, unknown>,
+					["id", "assignees"],
 				);
 			},
 		);

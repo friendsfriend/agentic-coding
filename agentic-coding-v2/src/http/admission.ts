@@ -19,12 +19,22 @@ export function exactId(value: unknown, name: string, prefix: string): string {
 		throw new Error(`Invalid ${name}`);
 	return id;
 }
-/** Bounded server-side fetch: timeout, size cap, no credential echo. */
+/** Bounded server-side fetch: timeout, size cap, no credential echo. With
+ * `onTooLarge: "truncate"` the body is cut at the cap and flagged. */
 export async function boundedFetch(
 	fetchImpl: typeof fetch,
 	url: string,
-	init: RequestInit & { timeoutMs?: number; maxBytes?: number },
-): Promise<{ status: number; body: string }> {
+	init: RequestInit & {
+		timeoutMs?: number;
+		maxBytes?: number;
+		onTooLarge?: "throw" | "truncate";
+	},
+): Promise<{
+	status: number;
+	headers: Headers;
+	body: string;
+	truncated: boolean;
+}> {
 	const timeoutMs = init.timeoutMs ?? 15000,
 		maxBytes = init.maxBytes ?? 65536;
 	const controller = new AbortController(),
@@ -35,18 +45,36 @@ export async function boundedFetch(
 			signal: controller.signal,
 		});
 		const reader = response.body?.getReader();
-		if (!reader) return { status: response.status, body: "" };
+		if (!reader)
+			return {
+				status: response.status,
+				headers: response.headers,
+				body: "",
+				truncated: false,
+			};
 		const chunks: Uint8Array[] = [];
-		let length = 0;
+		let length = 0,
+			truncated = false;
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			length += value.length;
-			if (length > maxBytes) throw new Error("Upstream response too large");
+			if (length > maxBytes) {
+				if (init.onTooLarge === "truncate") {
+					truncated = true;
+					break;
+				}
+				throw new Error("Upstream response too large");
+			}
 			chunks.push(value);
 		}
 		const body = Buffer.concat(chunks).toString("utf8");
-		return { status: response.status, body };
+		return {
+			status: response.status,
+			headers: response.headers,
+			body,
+			truncated,
+		};
 	} catch (error) {
 		if (
 			error instanceof Error &&

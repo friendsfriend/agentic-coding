@@ -90,6 +90,15 @@ export type Client = {
 	get: (path: string) => Promise<unknown>;
 	post: (path: string, body?: unknown) => Promise<unknown>;
 	patch: (path: string, body?: unknown) => Promise<unknown>;
+	raw: (
+		path: string,
+		init?: { redirect?: RequestRedirect; accept?: string; maxBytes?: number },
+	) => Promise<{
+		status: number;
+		headers: Headers;
+		body: string;
+		truncated: boolean;
+	}>;
 };
 /** Outbound client. Auth headers are set here; the token never leaves. */
 export function providerClient(
@@ -140,6 +149,18 @@ export function providerClient(
 		get: (path) => call("GET", path),
 		post: (path, body) => call("POST", path, body),
 		patch: (path, body) => call("PATCH", path, body),
+		raw: async (path, init) => {
+			if (!path.startsWith("/")) throw new Error("Invalid provider path");
+			return boundedFetch(fetchImpl, `${provider.baseUrl}${path}`, {
+				headers: {
+					...headers,
+					...(init?.accept ? { Accept: init.accept } : {}),
+				},
+				redirect: init?.redirect,
+				maxBytes: init?.maxBytes ?? 262144,
+				onTooLarge: "truncate",
+			});
+		},
 	};
 }
 /** Redact a token-bearing value for logs and error envelopes. */

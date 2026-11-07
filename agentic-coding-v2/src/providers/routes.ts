@@ -30,12 +30,24 @@ export async function providerRoute(
 		queryOnly(url.searchParams, []);
 		return readBody(body);
 	};
+	const changeTarget = (): [unknown, unknown] => {
+		readQuery(["repo", "number"]);
+		return [url.searchParams.get("repo"), changeNumber(url)];
+	};
 	if (parts[0] === "repos" && parts[1] === "search" && parts.length === 2) {
 		if (method !== "POST") throw new Error("Unsupported provider request");
 		const input = writeBody();
 		if (Object.keys(input).some((key) => key !== "query"))
 			throw new Error("Unsupported repository search field");
 		return { status: 200, value: await apis.searchRepos(name, input.query) };
+	}
+	if (parts[0] === "repos" && parts.length === 2 && method === "GET") {
+		readQuery(["repo"]);
+		const repo = url.searchParams.get("repo");
+		if (parts[1] === "labels")
+			return { status: 200, value: await apis.repoLabels(name, repo) };
+		if (parts[1] === "collaborators")
+			return { status: 200, value: await apis.repoCollaborators(name, repo) };
 	}
 	if (parts[0] === "repos" && parts[1] === "branches" && parts.length === 3) {
 		if (method !== "GET") throw new Error("Unsupported provider request");
@@ -56,6 +68,30 @@ export async function providerRoute(
 			),
 		};
 	}
+	if (
+		parts[0] === "changes" &&
+		parts[1] === "files" &&
+		parts.length === 2 &&
+		method === "GET"
+	) {
+		const [repo, number] = changeTarget();
+		return {
+			status: 200,
+			value: await apis.changeFiles(name, repo, number),
+		};
+	}
+	if (
+		parts[0] === "changes" &&
+		parts[1] === "versions" &&
+		parts.length === 2 &&
+		method === "GET"
+	) {
+		const [repo, number] = changeTarget();
+		return {
+			status: 200,
+			value: await apis.changeVersions(name, repo, number),
+		};
+	}
 	if (parts[0] === "changes" && parts.length === 2 && method === "GET") {
 		readQuery(["repo", "number"]);
 		return {
@@ -73,16 +109,34 @@ export async function providerRoute(
 		parts.length === 2 &&
 		method === "GET"
 	) {
-		readQuery(["repo", "number"]);
+		const [repo, number] = changeTarget();
 		return {
 			status: 200,
-			value: await apis.discussions(
-				name,
-				url.searchParams.get("repo"),
-				changeNumber(url),
-			),
+			value: await apis.discussions(name, repo, number),
 		};
 	}
+	if (
+		parts[0] === "changes" &&
+		parts[1] === "discussions" &&
+		parts[2] === "reply" &&
+		parts.length === 3 &&
+		method === "POST"
+	)
+		return {
+			status: 200,
+			value: await apis.replyDiscussion(name, writeBody()),
+		};
+	if (
+		parts[0] === "changes" &&
+		parts[1] === "discussions" &&
+		parts[2] === "resolve" &&
+		parts.length === 3 &&
+		method === "POST"
+	)
+		return {
+			status: 200,
+			value: await apis.resolveDiscussion(name, writeBody()),
+		};
 	if (
 		parts[0] === "changes" &&
 		parts[1] === "comment" &&
@@ -100,6 +154,23 @@ export async function providerRoute(
 		method === "POST"
 	)
 		return { status: 200, value: await apis.approveChange(name, writeBody()) };
+	if (
+		parts[0] === "changes" &&
+		parts[1] === "unapprove" &&
+		parts.length === 2 &&
+		method === "POST"
+	)
+		return {
+			status: 200,
+			value: await apis.unapproveChange(name, writeBody()),
+		};
+	if (
+		parts[0] === "changes" &&
+		parts[1] === "rebase" &&
+		parts.length === 2 &&
+		method === "POST"
+	)
+		return { status: 200, value: await apis.rebaseChange(name, writeBody()) };
 	if (parts[0] === "issues" && parts.length === 1 && method === "GET") {
 		readQuery(["repo", "state"]);
 		return {
@@ -117,7 +188,10 @@ export async function providerRoute(
 		parts.length === 2 &&
 		method === "POST"
 	)
-		return { status: 200, value: await apis.commentOnIssue(name, writeBody()) };
+		return {
+			status: 200,
+			value: await apis.commentOnIssue(name, writeBody()),
+		};
 	if (
 		parts[0] === "issues" &&
 		parts[1] === "close" &&
@@ -126,15 +200,58 @@ export async function providerRoute(
 	)
 		return { status: 200, value: await apis.closeIssue(name, writeBody()) };
 	if (
+		parts[0] === "issues" &&
+		parts[1] === "labels" &&
+		parts.length === 2 &&
+		method === "POST"
+	)
+		return {
+			status: 200,
+			value: await apis.setIssueLabels(name, writeBody()),
+		};
+	if (
+		parts[0] === "issues" &&
+		parts[1] === "assignees" &&
+		parts.length === 2 &&
+		method === "POST"
+	)
+		return {
+			status: 200,
+			value: await apis.setIssueAssignees(name, writeBody()),
+		};
+	if (
 		parts[0] === "pipelines" &&
 		parts[1] === "jobs" &&
 		parts.length === 2 &&
 		method === "GET"
 	) {
-		readQuery(["repo"]);
+		readQuery(["repo", "run"]);
 		return {
 			status: 200,
-			value: await apis.jobs(name, url.searchParams.get("repo")),
+			value: await apis.jobs(
+				name,
+				url.searchParams.get("repo"),
+				url.searchParams.get("run") ?? undefined,
+			),
+		};
+	}
+	if (
+		parts[0] === "pipelines" &&
+		parts[1] === "jobs" &&
+		parts[2] === "logs" &&
+		parts.length === 3 &&
+		method === "GET"
+	) {
+		readQuery(["repo", "job"]);
+		const job = url.searchParams.get("job");
+		if (job === null || !/^\d+$/.test(job)) throw new Error("Invalid job ID");
+		return {
+			status: 200,
+			value: await apis.jobLogs(
+				name,
+				url.searchParams.get("repo"),
+				Number(job),
+			),
 		};
 	}
 	if (
@@ -144,6 +261,13 @@ export async function providerRoute(
 		method === "POST"
 	)
 		return { status: 200, value: await apis.retryJob(name, writeBody()) };
+	if (
+		parts[0] === "pipelines" &&
+		parts[1] === "cancel" &&
+		parts.length === 2 &&
+		method === "POST"
+	)
+		return { status: 200, value: await apis.cancelJob(name, writeBody()) };
 	throw new Error("Unknown provider route");
 }
 function changeNumber(url: URL): number {
