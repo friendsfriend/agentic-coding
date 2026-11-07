@@ -7,7 +7,14 @@ import { Acquisitions } from "./acquisitions.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
 import { loadProjects, projectView } from "./catalog.ts";
 import { CleanupUncertain, cleanupSchedule } from "./cleanup.ts";
-import { inspectCluster, loadClusters, prepareCluster } from "./cluster.ts";
+import {
+	createClusterNamespace,
+	deleteClusterNamespace,
+	inspectCluster,
+	loadClusters,
+	namespaceName,
+	prepareCluster,
+} from "./cluster.ts";
 import type { ClusterInspection } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
@@ -182,6 +189,59 @@ export class Environments {
 		} finally {
 			this.pending.delete(operation);
 		}
+	}
+	private async clusterNamespaceOperation(
+		owner: TaskInfo,
+		batch: string,
+		effect: (signal?: AbortSignal) => Promise<unknown>,
+		signal?: AbortSignal,
+	) {
+		const operation = (async () => {
+			await this.store.commit(async (tx) => {
+				this.check(owner.id, signal, batch);
+				const task = await tx.task(owner.id as TaskId);
+				if (!task || task.abortRequested || task.state.status === "terminal")
+					throw new Error("Cluster operation task has ended");
+			}, background);
+			this.check(owner.id, signal, batch);
+			return effect(signal);
+		})();
+		this.pending.set(operation, { owner: owner.id, batch });
+		try {
+			return await operation;
+		} finally {
+			this.pending.delete(operation);
+		}
+	}
+	async createClusterNamespace(
+		owner: TaskInfo,
+		inspection: ClusterInspection,
+		raw: unknown,
+		signal?: AbortSignal,
+	) {
+		const namespace = namespaceName(raw);
+		return this.clusterNamespaceOperation(
+			owner,
+			"cluster-namespace",
+			(signal) =>
+				createClusterNamespace(this.config, inspection, namespace, signal),
+			signal,
+		);
+	}
+	async deleteClusterNamespace(
+		owner: TaskInfo,
+		inspection: ClusterInspection,
+		raw: unknown,
+		signal?: AbortSignal,
+	) {
+		const namespace = namespaceName(raw);
+		return this.clusterNamespaceOperation(
+			owner,
+			"cluster-namespace",
+			(signal) =>
+				deleteClusterNamespace(this.config, inspection, namespace, signal),
+			signal,
+		);
 	}
 	private get store() {
 		if (!this.engine) throw new Error("Environment manager not initialized");

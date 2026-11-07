@@ -10,6 +10,7 @@ import { requestReview } from "../reviews.ts";
 import type { TaskInfo } from "../state.ts";
 import { environmentApproval } from "./approval.ts";
 import { resolvePlans } from "./catalog.ts";
+import { namespaceName } from "./cluster.ts";
 import { createHttpTools } from "./http-tools.ts";
 import { type Lifetime, validateLifetime } from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
@@ -214,6 +215,65 @@ export function createEnvironmentTools(
 							inspection,
 							context.abortSignal,
 						),
+					);
+				},
+			}),
+			defineTool({
+				name: "env_cluster_namespace",
+				description:
+					"Request human approval to create or delete one DNS-label namespace (outside default and kube-*) in one explicitly configured local Kubernetes context. Each operation needs its own exact approval and never runs implicitly in app start; an existing name is never adopted and a missing name is never treated as deleted. Credential plugins and inline credentials are unsupported.",
+				parameters: Type.Object({
+					cluster: Type.String({ maxLength: 64 }),
+					op: Type.Union([Type.Literal("create"), Type.Literal("delete")]),
+					namespace: Type.String({ maxLength: 63 }),
+				}),
+				replay: "safe",
+				executionMode: "sequential",
+				execute: async (args, api, context) => {
+					const owner = await ownerOf(api.conversationId);
+					if (!owner)
+						throw new Error("Cluster operation requires a native skill task");
+					// Reserved and malformed names are refused before any review.
+					namespaceName(args.namespace);
+					const inspection = manager.prepareCluster(owner, args.cluster),
+						snapshot = JSON.stringify(
+							{
+								inspection,
+								op: args.op,
+								namespace: args.namespace,
+								authority: `Explicit Kubernetes namespace ${args.op} using kubectl ${args.op} namespace. Only the displayed HTTPS numeric loopback server and explicit context are used. Credential file references may be read by kubectl; inline credentials, exec/auth plugins, insecure TLS and proxy settings are rejected. An existing namespace fails creation without adoption; a missing namespace fails deletion. Reserved system namespaces (default, kube-*) are refused before any client call. No secret inspection, workload, cleanup or adoption authority. CLI observations stay private. Not an OS sandbox.`,
+							},
+							null,
+							2,
+						);
+					const review = await requestReview(
+						owner,
+						{
+							title: `Cluster namespace ${args.op}: ${args.namespace}`,
+							path: owner.workspace,
+							snapshot,
+						},
+						api,
+						context,
+					);
+					if (review.state !== "approved" || review.snapshot !== snapshot)
+						throw new Error(
+							"Exact current cluster namespace operation was not approved",
+						);
+					return environmentResult(
+						await (args.op === "create"
+							? manager.createClusterNamespace(
+									owner,
+									inspection,
+									args.namespace,
+									context.abortSignal,
+								)
+							: manager.deleteClusterNamespace(
+									owner,
+									inspection,
+									args.namespace,
+									context.abortSignal,
+								)),
 					);
 				},
 			}),

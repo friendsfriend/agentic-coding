@@ -393,3 +393,120 @@ export async function inspectCluster(
 		client.close();
 	}
 }
+const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
+	reservedNamespace = /^(default|kube-.*)$/;
+/** Operator namespaces are DNS labels outside the reserved system set. An
+ * existing namespace is never adopted: creation reports the API's own
+ * refusal, and deletion of a missing namespace reports the API's own miss. */
+export function namespaceName(raw: unknown) {
+	const name = text(raw, "cluster namespace", 63);
+	if (
+		!/^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name) ||
+		reservedNamespace.test(name)
+	)
+		throw new Error(
+			"Cluster namespaces must be DNS labels outside the reserved system set (default, kube-*)",
+		);
+	return name;
+}
+/** Explicit operator-approved namespace creation. Approval of the reference
+ * never invents the namespace: an existing name fails at the API. */
+export async function createClusterNamespace(
+	config: Config,
+	inspection: ClusterInspection,
+	namespace: string,
+	signal?: AbortSignal,
+) {
+	signal?.throwIfAborted();
+	const client = openClusterClient(config, inspection);
+	try {
+		const raw = await client.commands.checked(
+			["create", "namespace", namespace, "-o", "json"],
+			{ timeoutMs: 15000, signal, machine: true },
+		);
+		try {
+			const resource = object(JSON.parse(raw)),
+				metadata = object(resource.metadata);
+			if (
+				resource.kind !== "Namespace" ||
+				metadata.name !== namespace ||
+				typeof metadata.uid !== "string" ||
+				!uuid.test(metadata.uid)
+			)
+				throw new Error();
+			return {
+				cluster: inspection.cluster.id,
+				namespace,
+				status: "created",
+				namespaceUid: metadata.uid,
+				observedAt: Date.now(),
+				scope:
+					"Explicitly approved namespace creation; an existing name fails at the API and is never adopted",
+			};
+		} catch {
+			throw new Error(
+				"Invalid private Kubernetes namespace observation; creation is unverified",
+			);
+		}
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			/changed after approval|Unsupported or unavailable explicit local kubeconfig/.test(
+				error.message,
+			)
+		)
+			throw error;
+		throw new Error(
+			"Kubernetes namespace creation failed; an existing namespace is never adopted",
+		);
+	} finally {
+		client.close();
+	}
+}
+/** Explicit operator-approved namespace deletion. Deleting a missing
+ * namespace fails at the API; reserved system namespaces never reach it. */
+export async function deleteClusterNamespace(
+	config: Config,
+	inspection: ClusterInspection,
+	namespace: string,
+	signal?: AbortSignal,
+) {
+	signal?.throwIfAborted();
+	const client = openClusterClient(config, inspection);
+	try {
+		const raw = await client.commands.checked(
+			["delete", "namespace", namespace, "-o", "json"],
+			{ timeoutMs: 15000, signal, machine: true },
+		);
+		try {
+			const status = object(JSON.parse(raw));
+			if (status.kind !== "Status" || status.status !== "Success")
+				throw new Error();
+			return {
+				cluster: inspection.cluster.id,
+				namespace,
+				status: "deleted",
+				observedAt: Date.now(),
+				scope:
+					"Explicitly approved namespace deletion; a missing namespace fails at the API",
+			};
+		} catch {
+			throw new Error(
+				"Invalid private Kubernetes deletion observation; deletion is unverified",
+			);
+		}
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			/changed after approval|Unsupported or unavailable explicit local kubeconfig/.test(
+				error.message,
+			)
+		)
+			throw error;
+		throw new Error(
+			"Kubernetes namespace deletion failed; a missing namespace is never treated as deleted",
+		);
+	} finally {
+		client.close();
+	}
+}

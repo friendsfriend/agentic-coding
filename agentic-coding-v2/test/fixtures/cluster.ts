@@ -75,3 +75,17 @@ if(method==="get"){const filter=url.searchParams.get("fieldSelector");if(!filter
 else{const body=JSON.parse(fs.readFileSync(0,"utf8"));if(method==="create"){const podName=body.metadata.name;if(s.pods[podName])process.exit(1);body.metadata.uid="11111111-2222-3333-4444-"+String(++s.serial).padStart(12,"0");body.metadata.resourceVersion=String(s.serial);body.status={phase:"Running",conditions:[{type:"Ready",status:"True"}],containerStatuses:[]};s.pods[podName]=body;result=body;}
 else if(method==="delete"){const pod=s.pods[name];if(!pod||body.preconditions?.uid!==pod.metadata.uid||body.preconditions?.resourceVersion!==pod.metadata.resourceVersion)process.exit(1);delete s.pods[name];result={kind:"Status",status:"Success"};}else process.exit(2);}
 if(method!=="get")fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify(result));}`;
+/** Bounded namespace create/delete client: creation assigns a UUID identity,
+ * recreating an existing name fails, deleting a missing name fails. No
+ * scheduler, workload or cluster networking. */
+export const namespaceClient = `import fs from "node:fs";
+const file=process.env.FIXTURE_STATE,s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{namespaces:{},serial:0};
+const args=process.argv.slice(2);
+if(process.env.FIXTURE_CALLS)fs.appendFileSync(process.env.FIXTURE_CALLS,args.join(" ")+"\\n");
+const verb=args.find((v)=>v==="create"||v==="delete");
+if(!verb||process.env.FIXTURE_DOWN==="yes")process.exit(1);
+const at=args.indexOf("namespace"),name=args[at+1];
+if(at<0||!name)process.exit(2);
+console.error("private-api-output");
+if(verb==="create"){if(s.namespaces[name])process.exit(1);const uid="11111111-2222-3333-4444-"+String(++s.serial).padStart(12,"0");s.namespaces[name]={uid};fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify({kind:"Namespace",metadata:{name,uid}}));}
+else{if(!s.namespaces[name])process.exit(1);delete s.namespaces[name];fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify({kind:"Status",status:"Success"}));}`;
