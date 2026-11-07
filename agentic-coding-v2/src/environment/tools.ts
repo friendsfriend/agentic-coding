@@ -214,6 +214,53 @@ export function createEnvironmentTools(
 				},
 			}),
 			defineTool({
+				name: "env_draft_source",
+				description:
+					"Stage one Compose or auxiliary source file onto a private native draft this task staged, for later developer review and promotion. The app/target must already be declared in the staged document: the call stages the target's declared Compose file or, once that is staged, one bounded relative auxiliary path, and never invents targets or displaces declared files. Staged bytes are inert until the developer reviews and promotes them; this cannot validate runtime behavior, resolve secrets or read repositories. Revising needs the exact current revision; foreign and developer-staged drafts are refused. Each draft holds at most 4 source files within 128 KiB.",
+				parameters: Type.Object(
+					{
+						requestId: Type.String({ minLength: 1, maxLength: 128 }),
+						id: Type.String({ maxLength: 80 }),
+						revision: Type.Integer({ minimum: 1 }),
+						app: Type.String({ minLength: 1, maxLength: 128 }),
+						target: Type.String({ minLength: 1, maxLength: 128 }),
+						content: Type.String({ minLength: 1, maxLength: 65536 }),
+						auxiliary: Type.Optional(Type.Boolean()),
+						file: Type.Optional(Type.String({ maxLength: 200 })),
+					},
+					{ additionalProperties: false },
+				),
+				replay: "safe",
+				executionMode: "sequential",
+				execute: async (args, api) => {
+					const owner = await ownerOf(api.conversationId);
+					if (!owner)
+						throw new Error("Source staging requires a native skill task");
+					const sourced = await manager.drafts.saveSource(
+						{
+							requestId: args.requestId,
+							id: args.id,
+							revision: args.revision,
+							app: args.app,
+							target: args.target,
+							content: args.content,
+							...(args.auxiliary === undefined
+								? {}
+								: { auxiliary: args.auxiliary }),
+							...(args.file === undefined ? {} : { file: args.file }),
+						},
+						owner.id,
+					);
+					const current = await manager.drafts.staged(sourced.id);
+					return environmentResult({
+						sourced,
+						schema: current.schema,
+						authority:
+							"Staged bytes are inert until the developer reviews and promotes them; schema acceptance is not runtime validation or approval.",
+					});
+				},
+			}),
+			defineTool({
 				name: "env_cluster_status",
 				description:
 					"Request human approval to inspect the API identity of one explicitly configured local Kubernetes context. No default context, cluster creation, app start, secret inspection or cleanup/adoption authority. Credential plugins and inline credentials are unsupported.",

@@ -116,6 +116,7 @@ export function stageSource(
 	config: Config,
 	doc: DraftData,
 	body: Record<string, unknown>,
+	origin?: number,
 ) {
 	if (
 		Object.keys(body).some(
@@ -183,6 +184,10 @@ export function stageSource(
 	const raw = doc.drafts[id];
 	if (!raw) throw new Error("Unknown definition draft");
 	const previous = stored<Draft>(raw);
+	if (origin !== undefined && previous.stagedBy !== origin)
+		throw new Error(
+			"Native tasks may stage sources only onto their own staged drafts; ask the developer to edit anything else",
+		);
 	if (previous.revision !== body.revision)
 		throw new Error(
 			"Draft revision conflict; load current before saving source",
@@ -402,6 +407,7 @@ export function removeSource(
 	config: Config,
 	doc: DraftData,
 	body: Record<string, unknown>,
+	origin?: number,
 ) {
 	if (
 		Object.keys(body).some(
@@ -450,15 +456,20 @@ export function removeSource(
 		key = digest(requestId),
 		receipt = recordedReceipt(doc, key, request);
 	if (receipt) return receipt;
-	const previous = currentDraft(doc, id, Number(body.revision)),
-		binding = selection.bindingDigest
-			? null
-			: sourceBinding(
-					config,
-					previous.content,
-					text(selection.app, "source app", 128),
-					text(selection.target, "source target", 128),
-				),
+	const previous = currentDraft(doc, id, Number(body.revision));
+	if (origin !== undefined && previous.stagedBy !== origin)
+		throw new Error(
+			"Native tasks may remove sources only from their own staged drafts; ask the developer to edit anything else",
+		);
+	const binding: { repository: string; file: string } | null =
+			selection.bindingDigest
+				? null
+				: sourceBinding(
+						config,
+						previous.content,
+						text(selection.app, "source app", 128),
+						text(selection.target, "source target", 128),
+					),
 		selectedDigest =
 			selection.bindingDigest ??
 			(binding && sourceBindingDigest(binding.repository, binding.file)),

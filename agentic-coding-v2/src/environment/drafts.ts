@@ -610,18 +610,20 @@ export class DefinitionDrafts {
 			background,
 		);
 	}
-	async saveSource(body: Record<string, unknown>) {
+	async saveSource(body: Record<string, unknown>, origin?: number) {
 		privateState(this.config);
 		return this.engine().commit(
-			async (tx) => stageSource(this.config, await tx.doc(DraftState), body),
+			async (tx) =>
+				stageSource(this.config, await tx.doc(DraftState), body, origin),
 			background,
 		);
 	}
 	/** Explicit private cleanup only: no repository, live-config or report change. */
-	async removeSource(body: Record<string, unknown>) {
+	async removeSource(body: Record<string, unknown>, origin?: number) {
 		privateState(this.config);
 		return this.engine().commit(
-			async (tx) => removeSource(this.config, await tx.doc(DraftState), body),
+			async (tx) =>
+				removeSource(this.config, await tx.doc(DraftState), body, origin),
 			background,
 		);
 	}
