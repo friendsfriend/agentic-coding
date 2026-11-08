@@ -455,10 +455,28 @@ content and bindings, not permission to replace the original presentation.
   need work and interaction verification. No visual acceptance or renderer tests
   are claimed.
 
+## Deferred saved transcript placement
+
+- Keep requested numeric scroll restoration pending instead of letting a loading
+  placeholder clamp/consume it. Place after layout only when the selected native
+  transcript projection and its mounted anchor registry are available.
+- Fence pending placement to page/resource and, when already resolved, native
+  session identity. A route/session mismatch drops it; cached matching native
+  projections may be displayed without claiming fresh/atomic observation.
+- Preserve the requested position during rapid back/forward navigation before
+  data arrives. Explicit row reveal supersedes pending numeric placement;
+  help/palette defer it and cleanup discards it. Reading-anchor/bottom sampling
+  is suspended while placement waits, then starts from the restored position.
+- Clamp only against the rendered current window. This does not load older
+  history, persist a text-line/follow-mode anchor, restore every asynchronous
+  resource screen, or establish original frozen-window/timeline parity.
+- Draft, native ingress, ownership, provider and protocol bindings are unchanged.
+  No renderer/mounting/snapshot/presenter tests or visual acceptance are claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
-  navigation/focus key catalogs, including keyboard breadcrumb focus.
+  navigation/focus key catalogs. Keyboard breadcrumb focus is already restored.
 - Remaining original modal components, selection/clipboard interactions and
   notification placement; the restored read-only help frame is not general
   modal parity.

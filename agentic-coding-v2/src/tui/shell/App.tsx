@@ -238,6 +238,24 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const cursorBlink = createPromptCursorBlink();
 	const renderer = useRenderer();
 	let pendingReveal: BoxRenderable | undefined;
+	let pendingTranscriptRestore: {
+		page: Page;
+		resource: string | null;
+		id: number | null;
+		top: number;
+	} | null =
+		navigation.current.page === "orchestrator" ||
+		navigation.current.page === "session"
+			? {
+					page: navigation.current.page,
+					resource: navigation.current.resource,
+					id:
+						navigation.current.page === "session"
+							? Number(navigation.current.resource)
+							: null,
+					top: navigation.current.scroll,
+				}
+			: null;
 	let readingRows: ReadonlyMap<string, BoxRenderable> | null = null;
 	let readingAnchor: { key: string; offset: number } | null = null;
 	let followingBottom = false;
@@ -274,6 +292,36 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		let cursorFocused = false;
 		let paintedCursorVisible = true;
 		const paintCursor = (buffer: Parameters<typeof paintPromptCursor>[0]) => {
+			// A loading placeholder must not consume a saved numeric position.
+			const saved = pendingTranscriptRestore;
+			if (saved) {
+				const target = current();
+				const id = sessionId();
+				if (
+					target.page !== saved.page ||
+					target.resource !== saved.resource ||
+					(saved.id !== null && id !== null && saved.id !== id)
+				) {
+					pendingTranscriptRestore = null;
+					resetReadingPlace();
+				} else if (
+					scroll &&
+					!scroll.isDestroyed &&
+					readingRows &&
+					transcript() !== null &&
+					id !== null &&
+					!helpOpen() &&
+					!paletteOpen()
+				) {
+					const top = Math.min(
+						Math.max(0, saved.top),
+						Math.max(0, scroll.scrollHeight - scroll.viewport.height),
+					);
+					pendingTranscriptRestore = null;
+					resetReadingPlace();
+					if (scroll.scrollTop !== top) scroll.scrollTo(top);
+				}
+			}
 			// Layout and wrapping have settled before this post-process callback.
 			// A newer selection replaces the target; destroyed rows are never reused.
 			const node = pendingReveal;
@@ -314,6 +362,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				!scroll.isDestroyed &&
 				readingRows &&
 				readingRows.size > 0 &&
+				pendingTranscriptRestore === null &&
 				!helpOpen() &&
 				!paletteOpen()
 			) {
@@ -402,11 +451,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		onCleanup(() => {
 			clearInterval(blinkTimer);
 			pendingReveal = undefined;
+			pendingTranscriptRestore = null;
 			renderer.removePostProcessFn(paintCursor);
 		});
 	});
 	const reveal = (node: BoxRenderable) => {
 		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
+		pendingTranscriptRestore = null;
 		pendingReveal = node;
 		renderer.requestRender();
 	};
@@ -467,7 +518,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	};
 	const remember = () => {
 		if (prompt) navigation.current.draft = prompt.plainText;
-		if (scroll)
+		if (pendingTranscriptRestore)
+			navigation.current.scroll = pendingTranscriptRestore.top;
+		else if (scroll)
 			navigation.current.scroll = Math.max(0, Math.round(scroll.scrollTop));
 	};
 	const restore = () => {
@@ -483,8 +536,17 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		if (navigation.current.page === "settings")
 			setRefreshRevision((value) => value + 1);
 		writePrompt(navigation.current.draft);
-		scroll?.scrollTo(navigation.current.scroll);
+		pendingTranscriptRestore = isTranscript()
+			? {
+					page: navigation.current.page,
+					resource: navigation.current.resource,
+					id: sessionId(),
+					top: navigation.current.scroll,
+				}
+			: null;
+		if (!pendingTranscriptRestore) scroll?.scrollTo(navigation.current.scroll);
 		update();
+		renderer.requestRender();
 	};
 	const go = (page: Page, resource: string | null = null) => {
 		remember();
