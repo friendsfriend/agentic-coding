@@ -212,9 +212,29 @@ content and bindings, not permission to replace the original presentation.
   silently become a different Enter target. Pointer activation also rechecks
   that its retained identity still exists before invoking UI navigation.
 - No filter, pin preference, workflow phase or status is synthesized from legacy
-  observations. Native resource row families, filter composition, width animation
+  observations. Native resource row families, filter composition
   and sidebar preference persistence remain incomplete; this pass restores the
   fixed-pin structure and navigation, not the entire original sidebar.
+
+## Workspace expansion animation restoration pass
+
+- Port the original 150 ms cubic ease-out expansion in sixteen-millisecond
+  steps. Resize or mode/focus changes replace the one active interval, with
+  untracked width reads so animation frames cannot restart their own tween.
+- Preserve the current native responsive allocation (six compact columns, up to
+  thirty-four expanded columns). Full row/panel composition appears only when
+  expansion is requested and width reaches the original fourteen-column gate;
+  narrower allocations retain compact presentation rather than squeeze full rows.
+- Collapse immediately to six columns and stop the interval. State gates both
+  geometry and content, so delayed/stale expanded width cannot keep the full
+  surface visible after a collapse. Teardown cancels animation resources.
+- Restore original title-toggle active/hover tones and compact-strip hover fill;
+  the glyph reflects permanent versus auto-collapse mode even at narrow widths.
+  Background taps focus the sidebar through the original primary/non-drag rule,
+  while the nested toggle stops propagation.
+- Width changes feed the existing native panel allocation, and row reveal tracks
+  the compact/full presentation threshold. This is a UI animation, not execution
+  timing; no native mutation, preference persistence or draft replacement occurs.
 
 ## Still required before claiming parity
 

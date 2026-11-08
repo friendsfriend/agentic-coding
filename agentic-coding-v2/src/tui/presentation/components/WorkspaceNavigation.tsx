@@ -9,6 +9,7 @@ import {
 	on,
 	onCleanup,
 	Show,
+	untrack,
 } from "solid-js";
 import { bindings, type Keybind } from "../../ui/keybinds.ts";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
@@ -66,9 +67,44 @@ export function WorkspaceNavigation(props: {
 	const [permanent, setPermanent] = createSignal(false);
 	const [cursorValue, setCursorValue] = createSignal(props.selected);
 	let scroll: ScrollBoxRenderable | undefined;
-	const expanded = () => permanent() || props.active;
+	const expandedByState = () => permanent() || props.active;
+	const targetWidth = () => Math.min(34, Math.max(6, dimensions().width - 30));
+	const [animatedWidth, setAnimatedWidth] = createSignal(
+		expandedByState() ? targetWidth() : 6,
+	);
+	let timer: ReturnType<typeof setInterval> | undefined;
+	const stopAnimation = () => {
+		if (timer !== undefined) clearInterval(timer);
+		timer = undefined;
+	};
+	const animateTo = (target: number) => {
+		stopAnimation();
+		// The frame writes this signal; reading it untracked avoids restarting
+		// the tween on its own frames or leaving several competing intervals.
+		const start = untrack(animatedWidth);
+		if (start === target) return;
+		const startedAt = Date.now();
+		timer = setInterval(() => {
+			const progress = Math.min(1, (Date.now() - startedAt) / 150);
+			const eased = 1 - (1 - progress) ** 3;
+			setAnimatedWidth(Math.round(start + (target - start) * eased));
+			if (progress >= 1) stopAnimation();
+		}, 16);
+	};
+	createEffect(() => {
+		if (!expandedByState()) {
+			stopAnimation();
+			setAnimatedWidth(6);
+			return;
+		}
+		animateTo(targetWidth());
+	});
+	onCleanup(stopAnimation);
+	// State gates both surfaces: a delayed frame can never keep full rows or
+	// an expanded width on screen after focus/mode asks for the compact strip.
 	const width = () =>
-		expanded() ? Math.min(34, Math.max(6, dimensions().width - 30)) : 6;
+		expandedByState() ? Math.min(animatedWidth(), targetWidth()) : 6;
+	const expanded = () => expandedByState() && width() >= 14;
 	createEffect(() => props.onWidth(width()));
 	const entries = createMemo(() => props.entries);
 	const pinCount = () =>
@@ -122,8 +158,8 @@ export function WorkspaceNavigation(props: {
 	onCleanup(unregister);
 	createEffect(() => {
 		const index = cursor() - pinCount();
-		if (!scroll || index < 0) return;
 		const height = expanded() ? 2 : 1;
+		if (!scroll || index < 0) return;
 		const top = index * height;
 		if (top < scroll.scrollTop) scroll.scrollTo(top);
 		else if (top + height > scroll.scrollTop + scroll.viewport.height)
@@ -192,13 +228,25 @@ export function WorkspaceNavigation(props: {
 			flexDirection="column"
 			minHeight={0}
 			overflow="hidden"
+			{...useTap(props.focus)}
 		>
 			<Show
 				when={expanded()}
 				fallback={
 					<>
-						<box height={1} paddingLeft={1} {...toggle} {...hover}>
-							<text fg={uiColors.textMuted}>»</text>
+						<box
+							height={1}
+							flexShrink={0}
+							paddingLeft={1}
+							backgroundColor={hover.hovered() ? uiColors.bgHover : undefined}
+							{...toggle}
+							{...hover}
+						>
+							<text
+								fg={hover.hovered() ? uiColors.textPrimary : uiColors.textMuted}
+							>
+								{permanent() ? "«" : "»"}
+							</text>
 						</box>
 						{rows()}
 					</>
@@ -209,7 +257,18 @@ export function WorkspaceNavigation(props: {
 					active={props.active}
 					style={{ flexGrow: 1, minHeight: 0 }}
 					accessory={
-						<text fg={uiColors.textMuted} {...toggle} {...hover}>
+						<text
+							fg={
+								props.active
+									? uiColors.primary
+									: hover.hovered()
+										? uiColors.textPrimary
+										: uiColors.textMuted
+							}
+							bg={hover.hovered() ? uiColors.bgHover : undefined}
+							{...toggle}
+							{...hover}
+						>
 							{permanent() ? "«" : "»"}
 						</text>
 					}
