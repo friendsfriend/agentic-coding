@@ -195,6 +195,27 @@ content and bindings, not permission to replace the original presentation.
   aggregate usage. Cache-token totals remain native source data, not guessed
   current context. Remaining progress/context composition is tracked below.
 
+## Fixed workspace pins and identity navigation restoration pass
+
+- Restore the original fixed pinned section above the scrolling resources in
+  both expanded and compact sidebars. OpenCode → Pi → Pi Durable → Orchestrator
+  retain their order, two-line expanded/one-line compact PinRow composition and
+  the original muted divider with two-cell left inset.
+- Scroll only resources beneath the pins; selecting a pin preserves the resource
+  viewport. Reveal calculations use the resource offset and actual row height,
+  including the compact strip rather than an assumed two-line row.
+- Restore wraparound previous/next navigation across the complete visible entry
+  space. Empty lists remain inert; movement from an unavailable identity requires
+  an explicit key before choosing the first/last visible entry.
+- Keep the local cursor by native navigation identity, not a positional index.
+  Native updates/reordering preserve that identity; a removed entry does not
+  silently become a different Enter target. Pointer activation also rechecks
+  that its retained identity still exists before invoking UI navigation.
+- No filter, pin preference, workflow phase or status is synthesized from legacy
+  observations. Native resource row families, filter composition, width animation
+  and sidebar preference persistence remain incomplete; this pass restores the
+  fixed-pin structure and navigation, not the entire original sidebar.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

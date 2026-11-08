@@ -55,6 +55,8 @@ export const workspaceNavigationKeybinds: Keybind[] = [
 export function WorkspaceNavigation(props: {
 	active: boolean;
 	entries: { name: string; description: string; value: string }[];
+	/** Fixed leading UI pins, rendered outside the scrolling resource list. */
+	pinCount?: number;
 	selected: string;
 	open: (value: string) => void;
 	focus: () => void;
@@ -62,34 +64,42 @@ export function WorkspaceNavigation(props: {
 }) {
 	const dimensions = useTerminalDimensions();
 	const [permanent, setPermanent] = createSignal(false);
-	const [cursor, setCursor] = createSignal(0);
+	const [cursorValue, setCursorValue] = createSignal(props.selected);
 	let scroll: ScrollBoxRenderable | undefined;
 	const expanded = () => permanent() || props.active;
 	const width = () =>
 		expanded() ? Math.min(34, Math.max(6, dimensions().width - 30)) : 6;
 	createEffect(() => props.onWidth(width()));
 	const entries = createMemo(() => props.entries);
+	const pinCount = () =>
+		Math.min(entries().length, Math.max(0, Math.floor(props.pinCount ?? 0)));
+	const cursor = createMemo(() =>
+		entries().findIndex((entry) => entry.value === cursorValue()),
+	);
 	createEffect(
 		on(
 			() => props.selected,
-			(selected) => {
-				const index = entries().findIndex((entry) => entry.value === selected);
-				if (index >= 0) setCursor(index);
-			},
+			(selected) => setCursorValue(selected),
 		),
 	);
-	createEffect(() => {
-		const count = entries().length;
-		setCursor((value) => Math.max(0, Math.min(value, count - 1)));
-	});
 	const open = () => {
-		const entry = entries()[cursor()];
+		// A removed identity is deliberately not replaced by its old row index.
+		const entry = entries().find((entry) => entry.value === cursorValue());
 		if (entry) props.open(entry.value);
 	};
-	const move = (direction: number) =>
-		setCursor((value) =>
-			Math.max(0, Math.min(entries().length - 1, value + direction)),
-		);
+	const move = (direction: number) => {
+		const count = entries().length;
+		if (!count) return;
+		const index = cursor();
+		const next =
+			index < 0
+				? direction < 0
+					? count - 1
+					: 0
+				: (index + direction + count) % count;
+		const entry = entries()[next];
+		if (entry) setCursorValue(entry.value);
+	};
 	const unregister = useKeymap().registerLayer({
 		id: "v2.workspace-navigation",
 		priority: 15,
@@ -111,11 +121,13 @@ export function WorkspaceNavigation(props: {
 	});
 	onCleanup(unregister);
 	createEffect(() => {
-		const top = cursor() * (expanded() ? 2 : 1);
-		if (!scroll) return;
+		const index = cursor() - pinCount();
+		if (!scroll || index < 0) return;
+		const height = expanded() ? 2 : 1;
+		const top = index * height;
 		if (top < scroll.scrollTop) scroll.scrollTo(top);
-		else if (top + 2 > scroll.scrollTop + scroll.viewport.height)
-			scroll.scrollTo(Math.max(0, top + 2 - scroll.viewport.height));
+		else if (top + height > scroll.scrollTop + scroll.viewport.height)
+			scroll.scrollTo(Math.max(0, top + height - scroll.viewport.height));
 	});
 	const toggle = useTap(
 		() => {
@@ -127,34 +139,50 @@ export function WorkspaceNavigation(props: {
 	const hover = useHover(toggle.onMouseOut);
 	const glyph = (index: number) =>
 		index < 4 ? (["󱚞", "π", "∞", "⌂"][index] ?? "·") : "·";
-	const rows = () => (
-		<scrollbox
-			ref={(value) => {
-				scroll = value;
+	const renderRow = (
+		entry: { name: string; description: string; value: string },
+		index: () => number,
+	) => (
+		<PinRow
+			pin={{
+				glyph: glyph(index()),
+				label: entry.name,
+				meta: entry.description,
 			}}
-			flexGrow={1}
-			minHeight={0}
-			scrollY={true}
-		>
-			<For each={entries()}>
-				{(entry, index) => (
-					<PinRow
-						pin={{
-							glyph: glyph(index()),
-							label: entry.name,
-							meta: entry.description,
-						}}
-						selected={cursor() === index()}
-						height={expanded() ? 2 : 1}
-						onActivate={() => {
-							props.focus();
-							setCursor(index());
-							props.open(entry.value);
-						}}
-					/>
-				)}
-			</For>
-		</scrollbox>
+			selected={cursorValue() === entry.value}
+			height={expanded() ? 2 : 1}
+			onActivate={() => {
+				props.focus();
+				setCursorValue(entry.value);
+				// Recheck identity before navigating from a retained pointer callback.
+				if (entries().some((current) => current.value === entry.value))
+					props.open(entry.value);
+			}}
+		/>
+	);
+	const rows = () => (
+		<>
+			<For each={entries().slice(0, pinCount())}>{renderRow}</For>
+			<Show when={pinCount() > 0}>
+				<box height={1} flexShrink={0} paddingLeft={2}>
+					<text fg={uiColors.border}>
+						{"─".repeat(Math.max(0, width() - 4))}
+					</text>
+				</box>
+			</Show>
+			<scrollbox
+				ref={(value) => {
+					scroll = value;
+				}}
+				flexGrow={1}
+				minHeight={0}
+				scrollY={true}
+			>
+				<For each={entries().slice(pinCount())}>
+					{(entry, index) => renderRow(entry, () => index() + pinCount())}
+				</For>
+			</scrollbox>
+		</>
 	);
 	return (
 		<box
