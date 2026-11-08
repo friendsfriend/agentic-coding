@@ -1787,3 +1787,50 @@ type-check, build, help and 34 boundary tests (648 assertions) pass. No renderer
 helper, mounting, presenter or manual TTY acceptance is added. Visual/interactive
 parity, clipboard, Mermaid, real integrations and deployment remain unverified;
 no real provider/model/cluster/existing-app call, restart or migration is claimed.
+
+## Integrated supplied tool/transcript observation batch
+
+- Bound mounted replacement intents, questions, options, diagnostics and retained
+  content/image carriers to 20 per collection. Later records remain locally
+  searchable with their original display ordinals; navigation never reads native
+  history, resolves recorded browser refs or dispatches work. Keep existing card,
+  source/option folds, image previews and shell-output composition. Empty image
+  collections add no renderer wrapper. This is not a visual-parity assertion.
+- Arguments, details, script output, browser fields and nested completion summaries
+  now expose complete supplied data through bounded source windows (200 lines /
+  24000 UTF-16 units). The clipped structured explorer is explicitly a summary;
+  full supplied fields and text remain accessible separately. JSON serialization
+  is not original response/file bytes, and a summary is not linked child history,
+  current child status, completion proof or execution/approval permission.
+- Retained output browsing preserves each native part independently: no inserted
+  separators, discarded non-text metadata or invented structured multipart body.
+  The joined main preview and shell tail stay presentation-only; complete part
+  fields and exact supplied text are separate. Empty/null/absent content fields
+  are disclosed without conflation. Image preview ordinals never become evidence,
+  browser, tool, task or conversation targets.
+- Dialogue projection retains empty/whitespace strings, including option labels
+  and descriptions, rather than converting them into absence or fallback answers.
+  Recommendations remain passive stars, not selections. Complete unprojected
+  arguments remain available for unsupported/non-string fields. Unpaired results
+  and unsupported assistant parts disclose bounded supplied carriers; a serialized
+  presentation identity is explicitly not a native target or inferred pairing.
+- Capture source ownership independently of selected rows and fold state. Scope
+  retained/generated/live cards by the owning supplied message/session, native
+  call/result/progress and pairing observation. Replacement withdraws old source
+  choices even for repeated bytes. Shared source/record/tree controls honor parent
+  interaction/selection fences; readonly tree expansion resets on source-owner
+  replacement. No executable handles, native imports, active clarification editor
+  or child-relationship reconstruction is introduced.
+
+A new authenticated native faux-loopback fixture retains a long Unicode/combining-
+character/CRLF source, 27 replacement/record datasets, empty/opaque nested fields,
+27 ordered assistant text parts, unique native call/result links and complete
+retained read/patch observations. Reconnect preserves retained entries; an opaque
+`approved: true`/task/conversation/approval-shaped record does not grant a child
+write or admit another task. Fixture setup uses the public native admission service
+and disposable workspace, not storage surgery or injected transport messages.
+Biome (359 files, zero diagnostics), full unfiltered type-check, build, help and
+35 boundary tests (668 assertions) pass. No renderer/helper/mounting/presenter tests
+or manual TTY acceptance are added. Native nested-child transcript composition,
+timing/context/Mermaid completion and visual/interactive acceptance remain separate
+unfinished work; no real integration, deployment, restart or migration is claimed.

@@ -10,6 +10,7 @@ import { color } from "./theme/index.ts";
  * source windows never imply original file bytes or an approval digest. */
 export function SuppliedObservation(props: {
 	value: unknown;
+	interactive?: boolean;
 	label: string;
 	scope: unknown;
 	filetype?: string;
@@ -62,6 +63,7 @@ export function SuppliedObservation(props: {
 				<Show when={key()} keyed>
 					{(identity) => (
 						<SuppliedCode
+							interactive={props.interactive}
 							content={body()}
 							filetype={
 								typeof supplied().value === "string"

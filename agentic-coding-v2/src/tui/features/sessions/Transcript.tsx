@@ -31,10 +31,12 @@ import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { ImageView } from "../../ui/ImageView.tsx";
 import { bindings, transcriptKeybinds } from "../../ui/keybinds.ts";
 import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import type { PromptTimelineRow } from "./TimelinePicker.tsx";
 import { ToolCard } from "./ToolCard.tsx";
+import { ToolContentParts } from "./ToolContentParts.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 import { TranscriptRowsContext } from "./TranscriptRows.ts";
 
@@ -779,6 +781,11 @@ export function Transcript(props: {
 						);
 						onCleanup(() => messageTrack(null));
 						const contentParts = createMemo(() => parts(message()));
+						const rawParts = createMemo(() => dataList(message().content));
+						const messageObservation = createMemo(() => ({
+							scope: props.scope,
+							message: message(),
+						}));
 						const partSlots = createKeyedItems(
 							contentParts,
 							({ part, identity }) => JSON.stringify([identity, part.type]),
@@ -860,11 +867,18 @@ export function Transcript(props: {
 										return (
 											<Switch
 												fallback={
-													<text fg={color("textMuted")}>
-														Unsupported native assistant content part ·{" "}
-														{String(part().type ?? "type unavailable")} — not
-														interpreted.
-													</text>
+													<box ref={track} flexDirection="column" gap={1}>
+														<text fg={color("textMuted")}>
+															Unsupported supplied assistant part — not
+															interpreted or executed.
+														</text>
+														<SuppliedObservation
+															interactive={active()}
+															value={part()}
+															scope={messageObservation()}
+															label="Complete supplied unsupported part fields; serialized JSON, not authority"
+														/>
+													</box>
 												}
 											>
 												<Match when={part().type === "text"}>
@@ -961,6 +975,8 @@ export function Transcript(props: {
 												</Match>
 												<Match when={part().type === "toolCall"}>
 													<ToolCard
+														scope={messageObservation()}
+														interactive={active()}
 														identity={identity}
 														selected={props.selected === identity}
 														select={props.select}
@@ -1017,39 +1033,33 @@ export function Transcript(props: {
 											{String(message().toolCallId ?? "identity unavailable")} —
 											no unique mounted call in this local window.
 										</text>
-										<text wrapMode="word">
-											{text(message()) || "No text output retained."}
-										</text>
-										<Show when={message().details !== undefined}>
-											<code
-												content={JSON.stringify(message().details, null, 2)}
-												filetype="json"
-												syntaxStyle={syntax}
-												drawUnstyledText={true}
-												wrapMode="word"
-											/>
-										</Show>
+										<ToolContentParts
+											interactive={active()}
+											parts={rawParts()}
+											scope={messageObservation()}
+										/>
+										<SuppliedObservation
+											interactive={active()}
+											value={message()}
+											scope={messageObservation()}
+											label="Complete supplied unpaired presentation carrier; serialization includes UI identity, never a native target or inferred pairing"
+										/>
 									</box>
 								</Show>
-								<For
-									each={dataList(message().content).filter(
-										(part) =>
-											part.type === "image" &&
-											message().role !== "assistant" &&
-											(message().role !== "toolResult" ||
-												!associations().consumed.has(
-													String(message().identity),
-												)),
-									)}
+								<Show
+									when={
+										message().role !== "assistant" &&
+										(message().role !== "toolResult" ||
+											!associations().consumed.has(String(message().identity)))
+									}
 								>
-									{(part) => (
-										<ImageView
-											content={part.data}
-											mediaType={part.mimeType}
-											caption="Retained native transcript image"
-										/>
-									)}
-								</For>
+									<ToolContentParts
+										interactive={active()}
+										parts={rawParts()}
+										scope={messageObservation()}
+										imagesOnly
+									/>
+								</Show>
 							</>
 						);
 					}}
@@ -1057,6 +1067,8 @@ export function Transcript(props: {
 				<For each={standalone()}>
 					{(row) => (
 						<ToolCard
+							scope={props.scope}
+							interactive={active()}
 							identity={row.identity}
 							selected={props.selected === row.identity}
 							select={props.select}

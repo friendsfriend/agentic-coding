@@ -19,6 +19,7 @@ import { TranscriptRowsContext } from "./TranscriptRows.ts";
  * source discovery, execution observation or native history operation. */
 export function SuppliedCode(props: {
 	content: string;
+	interactive?: boolean;
 	identity?: string;
 	filetype?: string;
 	presentation?: "code" | "markdown";
@@ -130,7 +131,10 @@ export function SuppliedCode(props: {
 		return result;
 	});
 	const window = () => windows()[selected()] ?? windows()[0];
-	const interactive = () => !disposed && (choices?.interactive() ?? true);
+	const interactive = () =>
+		!disposed &&
+		props.interactive !== false &&
+		(choices?.interactive() ?? true);
 	const scope = createMemo(() => [
 		source(),
 		selected(),

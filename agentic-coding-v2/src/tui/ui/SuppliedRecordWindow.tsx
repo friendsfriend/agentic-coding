@@ -17,6 +17,7 @@ import { color } from "./theme/index.ts";
  * carriers only; they never replace native IDs or initiate another read. */
 export function SuppliedRecordWindow<T>(props: {
 	rows: readonly T[];
+	interactive?: boolean;
 	scope: unknown;
 	label: string;
 	title: (row: T, index: number) => string;
@@ -50,7 +51,10 @@ export function SuppliedRecordWindow<T>(props: {
 		disposed = true;
 	});
 	const controls = createMemo(() => [source(), start()]);
-	const active = () => !disposed && (choices?.interactive() ?? true);
+	const active = () =>
+		!disposed &&
+		props.interactive !== false &&
+		(choices?.interactive() ?? true);
 	const choose = () => {
 		if (!active() || !choices) return;
 		const saved = source();

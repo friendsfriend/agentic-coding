@@ -15,6 +15,8 @@ export type SuppliedToolSource = {
  * native pairing/status and disclosure state. No layout wrapper is added. */
 export function ToolRequestedSource(props: {
 	source: SuppliedToolSource | null;
+	identity: string;
+	interactive?: boolean;
 	phase: "Partial generated" | "Live slot" | "Requested";
 	syntax: SyntaxStyle;
 	open: (suffix: string) => boolean;
@@ -41,7 +43,8 @@ export function ToolRequestedSource(props: {
 									: "Retained requested source — not proof of execution or completion."}
 						</text>
 						<SuppliedCode
-							identity={`${props.phase}:${source().label}`}
+							interactive={props.interactive}
+							identity={`${props.identity}:${props.phase}:${source().label}`}
 							content={source().content}
 							filetype={source().filetype}
 							syntax={props.syntax}

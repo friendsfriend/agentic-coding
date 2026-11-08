@@ -3,7 +3,6 @@ import type { BoxRenderable, SyntaxStyle } from "@opentui/core";
 import {
 	createEffect,
 	createMemo,
-	For,
 	onCleanup,
 	Show,
 	useContext,
@@ -15,9 +14,10 @@ import type { RowGestureState } from "../../presentation/components/mouse/useRow
 import { useTap } from "../../presentation/components/mouse/useTap.ts";
 import { ToolCallHeader } from "../../presentation/components/ToolCallHeader.tsx";
 import { uiColors } from "../../presentation/theme/colors.ts";
-import { ImageView } from "../../ui/ImageView.tsx";
 import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { StructuredData } from "../../ui/StructuredData.tsx";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
 import {
@@ -29,6 +29,7 @@ import {
 	ToolShellBody,
 	ToolWriteBody,
 } from "./ToolByteBodies.tsx";
+import { ToolContentParts } from "./ToolContentParts.tsx";
 import { ToolDialogue } from "./ToolDialogue.tsx";
 import {
 	type SuppliedEditReplacement,
@@ -73,6 +74,19 @@ export function ToolCard(props: {
 		reading = useContext(TranscriptRowsContext);
 	let disposed = false;
 	const foldGestures = new Map<string, RowGestureState>();
+	let observationGeneration = 0;
+	// Captured supplied owner, independent of selection/fold state. This key is
+	// UI-only: repeated native bytes must not alias a replacement observation.
+	const observation = createMemo(() => ({
+		identity: `${props.identity}:supplied:${++observationGeneration}`,
+		scope: props.scope,
+		call: props.call,
+		result: props.result,
+		progress: props.progress,
+		partial: props.partial,
+		liveOnly: props.liveOnly,
+		pairing: props.pairing,
+	}));
 	const cardScope = createMemo(() => [
 		props.identity,
 		props.scope,
@@ -170,10 +184,12 @@ export function ToolCard(props: {
 			.filter((part) => part.type === "text")
 			.map((part) => string(part.text))
 			.join("\n");
-	const diagnostics = () =>
+	const contentParts = createMemo(() => dataList(props.result?.content));
+	const diagnostics = createMemo(() =>
 		props.result
 			? dataList(props.result.nativeDiagnostics)
-			: (props.progress?.diagnostics ?? []);
+			: (props.progress?.diagnostics ?? []),
+	);
 	const readOutput = () => {
 		const parts = dataList(props.result?.content);
 		const footer = `<harness>\n${diagnostics()
@@ -356,7 +372,7 @@ export function ToolCard(props: {
 		return items.flatMap((item: unknown, index: number) => {
 			const record = object(item);
 			const text = [record.question, record.description].find(
-				(value) => typeof value === "string" && value.trim().length > 0,
+				(value) => typeof value === "string",
 			);
 			const options = Array.isArray(record.options)
 				? record.options.flatMap((item: unknown, index: number) => {
@@ -364,15 +380,14 @@ export function ToolCard(props: {
 						const label = [option.title, option.label, option.value].find(
 							(value) => typeof value === "string",
 						);
-						if (typeof label !== "string" || label.length === 0) return [];
+						if (typeof label !== "string") return [];
 						return [
 							{
 								index,
 								label,
 								recommended: option.recommended === true,
 								description:
-									typeof option.description === "string" &&
-									option.description.trim().length > 0
+									typeof option.description === "string"
 										? option.description
 										: null,
 							},
@@ -381,7 +396,7 @@ export function ToolCard(props: {
 				: [];
 			const context =
 				typeof record.context === "string" ? record.context : null;
-			if (typeof text !== "string" && options.length === 0 && !context?.trim())
+			if (typeof text !== "string" && options.length === 0 && context === null)
 				return [];
 			return [
 				{
@@ -426,9 +441,7 @@ export function ToolCard(props: {
 		const value = browserResult();
 		if (!value) return [];
 		return (["observation", "matches"] as const).flatMap((key) =>
-			Object.hasOwn(value, key) && value[key] !== null
-				? [{ key, value: value[key] }]
-				: [],
+			Object.hasOwn(value, key) ? [{ key, value: value[key] }] : [],
 		);
 	});
 	const specialized = () =>
@@ -593,6 +606,9 @@ export function ToolCard(props: {
 						</Show>
 						<Show when={name() === "edit" && !patch()}>
 							<ToolEditRequest
+								interactive={active()}
+								scope={observation()}
+								identity={observation().identity}
 								replacements={requestedEdits()}
 								phase={
 									props.partial
@@ -616,6 +632,8 @@ export function ToolCard(props: {
 							/>
 						</Show>
 						<ToolRequestedSource
+							interactive={active()}
+							identity={observation().identity}
 							source={requestedSource()}
 							phase={
 								props.partial
@@ -629,6 +647,8 @@ export function ToolCard(props: {
 							fold={fold}
 						/>
 						<ToolDialogue
+							interactive={active()}
+							scope={observation()}
 							questions={requestedQuestions()}
 							phase={
 								props.partial
@@ -649,14 +669,19 @@ export function ToolCard(props: {
 											Explicit native script-output field — not a completion or
 											nested-call observation.
 										</text>
-										<text wrapMode="word">
-											{script().text || "No script text output retained."}
-										</text>
+										<SuppliedObservation
+											interactive={active()}
+											value={script().text}
+											scope={observation()}
+											label="Exact supplied native script-output field; empty remains empty"
+										/>
 									</Show>
 								</>
 							)}
 						</Show>
 						<ToolBrowserObservation
+							interactive={active()}
+							scope={observation()}
 							sections={browserSections()}
 							open={open}
 							fold={fold}
@@ -665,9 +690,12 @@ export function ToolCard(props: {
 							<Show
 								when={structured() !== null}
 								fallback={
-									<text wrapMode="word">
-										{output() || "No text output retained."}
-									</text>
+									<SuppliedObservation
+										interactive={active()}
+										value={output()}
+										scope={observation()}
+										label="Joined retained text preview; exact native part boundaries remain under Output"
+									/>
 								}
 							>
 								<text fg={color("textMuted")}>
@@ -675,28 +703,48 @@ export function ToolCard(props: {
 									observations, not UI permissions.
 								</text>
 								<StructuredData
+									interactive={active()}
+									scope={observation()}
 									value={structured()}
-									label={`${name()} · retained native result`}
+									label={`${name()} · bounded retained result summary; complete source under Output`}
 								/>
 							</Show>
 						</Show>
-						<For each={diagnostics()}>
-							{(item) => (
-								<text
-									wrapMode="word"
-									fg={
-										item.severity === "error"
-											? color("error")
-											: item.severity === "warn"
-												? color("warning")
-												: color("textMuted")
-									}
-								>
-									Native {String(item.severity ?? "diagnostic")} ·{" "}
-									{string(item.message)}
-								</text>
-							)}
-						</For>
+						<Show when={diagnostics().length > 0}>
+							<SuppliedRecordWindow
+								interactive={active()}
+								rows={diagnostics()}
+								scope={observation()}
+								label="supplied native diagnostics"
+								title={(item, index) =>
+									`Diagnostic ${index + 1} · ${String(item.severity ?? "severity not supplied")}`
+								}
+								search={(item) => JSON.stringify(item)}
+							>
+								{(item, index) => (
+									<>
+										<text
+											fg={
+												item.severity === "error"
+													? color("error")
+													: item.severity === "warn"
+														? color("warning")
+														: color("textMuted")
+											}
+										>
+											Native diagnostic {index() + 1} · observation, not a
+											completion signal
+										</text>
+										<SuppliedObservation
+											interactive={active()}
+											value={item}
+											scope={observation()}
+											label="Complete supplied diagnostic fields"
+										/>
+									</>
+								)}
+							</SuppliedRecordWindow>
+						</Show>
 						{fold(
 							":arguments",
 							props.partial
@@ -715,12 +763,11 @@ export function ToolCard(props: {
 									</text>
 								}
 							>
-								<code
-									content={JSON.stringify(props.call.arguments, null, 2)}
-									filetype="json"
-									syntaxStyle={props.syntax}
-									drawUnstyledText={true}
-									wrapMode="word"
+								<SuppliedObservation
+									interactive={active()}
+									value={props.call.arguments}
+									scope={observation()}
+									label="Complete supplied arguments; serialized JSON, not execution or approval"
 								/>
 							</Show>
 						</Show>
@@ -741,7 +788,12 @@ export function ToolCard(props: {
 								when={shellSource()}
 								fallback={
 									<Show when={open(":output")}>
-										<text wrapMode="word">{props.progress?.output}</text>
+										<SuppliedObservation
+											interactive={active()}
+											value={props.progress?.output}
+											scope={observation()}
+											label="Exact supplied live output; native dropped counters remain separate"
+										/>
 									</Show>
 								}
 							>
@@ -759,9 +811,19 @@ export function ToolCard(props: {
 								when={name() === "bash" && output().length > 0}
 								fallback={
 									<Show when={open(":output")}>
-										<text wrapMode="word">
-											{output() || "No text output retained."}
-										</text>
+										<ToolContentParts
+											interactive={active()}
+											parts={contentParts()}
+											scope={observation()}
+										/>
+										<Show when={contentParts().length === 0}>
+											<SuppliedObservation
+												interactive={active()}
+												value={props.result?.content}
+												scope={observation()}
+												label="Supplied empty/non-list content field; absent, null and empty remain distinct, with no inferred completion"
+											/>
+										</Show>
 									</Show>
 								}
 							>
@@ -772,29 +834,23 @@ export function ToolCard(props: {
 									failed={props.result?.isError === true}
 								/>
 							</Show>
-							<For
-								each={dataList(props.result?.content).filter(
-									(part) => part.type !== "text",
-								)}
+							<Show
+								when={
+									name() === "bash" && output().length > 0 && open(":output")
+								}
 							>
-								{(part) => (
-									<Show
-										when={part.type === "image"}
-										fallback={
-											<text fg={color("textMuted")}>
-												Retained {String(part.type ?? "non-text")} content ·{" "}
-												{JSON.stringify(part)}
-											</text>
-										}
-									>
-										<ImageView
-											content={part.data}
-											mediaType={part.mimeType}
-											caption="Retained native tool image"
-										/>
-									</Show>
-								)}
-							</For>
+								<ToolContentParts
+									interactive={active()}
+									parts={contentParts()}
+									scope={observation()}
+								/>
+							</Show>
+							<ToolContentParts
+								interactive={active()}
+								parts={contentParts()}
+								scope={observation()}
+								imagesOnly
+							/>
 						</Show>
 						<Show when={detailsValue() !== undefined}>
 							{fold(
@@ -804,20 +860,32 @@ export function ToolCard(props: {
 									: "Native live details",
 							)}
 							<Show when={open(":details")}>
-								<code
-									content={JSON.stringify(detailsValue(), null, 2)}
-									filetype="json"
-									syntaxStyle={props.syntax}
-									drawUnstyledText={true}
-									wrapMode="word"
+								<SuppliedObservation
+									interactive={active()}
+									value={detailsValue()}
+									scope={observation()}
+									label="Complete supplied details; not an inferred task or conversation relationship"
 								/>
 							</Show>
 						</Show>
 						<Show when={props.progress?.summary !== undefined && !props.result}>
-							<text fg={color("textMuted")}>
-								Native nested completion summary:{" "}
-								{JSON.stringify(props.progress?.summary)}
-							</text>
+							{fold(
+								":summary",
+								"Native nested completion summary — supplied observation only",
+							)}
+							<Show when={open(":summary")}>
+								<text fg={color("textMuted")} wrapMode="word">
+									Recorded summary only; not a linked child transcript, current
+									child status or permission to execute, resume, answer or
+									approve.
+								</text>
+								<SuppliedObservation
+									interactive={active()}
+									value={props.progress?.summary}
+									scope={observation()}
+									label="Complete supplied nested summary fields"
+								/>
+							</Show>
 						</Show>
 					</box>
 				</Show>

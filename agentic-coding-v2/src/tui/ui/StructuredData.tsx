@@ -1,7 +1,14 @@
 /** @jsxImportSource @opentui/solid */
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { ActionHeader } from "./ActionHeader.tsx";
 import { color } from "./theme/index.ts";
+
+const caption = (name: string) => {
+	const points = Array.from(name.replace(/\s+/g, " "));
+	return points.length > 200
+		? `${points.slice(0, 200).join("")} … [label clipped]`
+		: points.join("");
+};
 
 type Row = {
 	key: string;
@@ -12,8 +19,21 @@ type Row = {
 };
 /** Bounded read-only record explorer. Expansion never fetches files/resources,
  * submits commands or interprets authority fields as permissions. */
-export function StructuredData(props: { value: unknown; label?: string }) {
+export function StructuredData(props: {
+	value: unknown;
+	label?: string;
+	scope?: unknown;
+	interactive?: boolean;
+}) {
 	const [expanded, setExpanded] = createSignal<string[]>(["root"]);
+	const supplied = createMemo(() => ({
+		value: props.value,
+		scope: props.scope,
+	}));
+	createEffect(() => {
+		supplied();
+		setExpanded(["root"]);
+	});
 	const rows = createMemo(() => {
 		const output: Row[] = [];
 		const visit = (
@@ -58,12 +78,16 @@ export function StructuredData(props: { value: unknown; label?: string }) {
 							when={row.branch}
 							fallback={
 								<text wrapMode="word">
-									<span style={{ fg: color("textMuted") }}>{row.name}: </span>
+									<span style={{ fg: color("textMuted") }}>
+										{caption(row.name)}:{" "}
+									</span>
 									{row.text}
 								</text>
 							}
 						>
 							<ActionHeader
+								scope={supplied()}
+								interactive={props.interactive !== false}
 								onActivate={() =>
 									setExpanded((keys) =>
 										keys.includes(row.key)
@@ -73,8 +97,8 @@ export function StructuredData(props: { value: unknown; label?: string }) {
 								}
 							>
 								<text wrapMode="word" fg={color("accent")}>
-									{expanded().includes(row.key) ? "▾" : "▸"} {row.name} ·{" "}
-									{row.text}
+									{expanded().includes(row.key) ? "▾" : "▸"} {caption(row.name)}{" "}
+									· {row.text}
 									{row.depth >= 8 ? " · depth limit" : ""}
 								</text>
 							</ActionHeader>
@@ -84,8 +108,8 @@ export function StructuredData(props: { value: unknown; label?: string }) {
 			</For>
 			<text fg={color("textMuted")}>
 				Read-only display · 512 rows / 128 children per branch / depth 8 / 2,000
-				characters per value maximum. Clipping is presentation only, not
-				evidence of completeness.
+				characters per value / 200 code points per label maximum. Clipping is
+				presentation only, not evidence of completeness.
 			</text>
 		</box>
 	);
