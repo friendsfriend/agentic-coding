@@ -500,16 +500,34 @@ export function ToolCard(props: {
 							</Show>
 						</Show>
 						<Show when={name() === "write" && path()}>
-							<FileContent
-								path={path()}
-								content={string(args().content)}
-								syntax={props.syntax}
-								label={
-									props.partial
-										? "Partial requested write bytes — call still being generated"
-										: "Requested write bytes — not a live file snapshot"
+							<Show
+								when={typeof args().content === "string"}
+								fallback={
+									<text fg={color("textMuted")} wrapMode="word">
+										Write content unavailable as a supplied string. Complete
+										Arguments remain below; no empty write is inferred.
+									</text>
 								}
-							/>
+							>
+								<Show when={args().content === ""}>
+									<text fg={color("textMuted")} wrapMode="word">
+										Supplied write content is an explicit empty string — not
+										proof of an applied write.
+									</text>
+								</Show>
+								<FileContent
+									path={path()}
+									content={string(args().content)}
+									syntax={props.syntax}
+									label={
+										props.partial
+											? "Partial requested write bytes — call still being generated"
+											: props.liveOnly
+												? "Supplied current-round write bytes — no retained intent linked; not a live file snapshot"
+												: "Requested write bytes — not a live file snapshot"
+									}
+								/>
+							</Show>
 						</Show>
 						<Show when={name() === "edit" && path() && patch()}>
 							<FileContent

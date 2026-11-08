@@ -1020,6 +1020,19 @@ content and bindings, not permission to replace the original presentation.
   authority is inferred. Specialized/nested-call composition, integrated load-older
   and interactive/visual acceptance remain unfinished. No renderer/helper tests.
 
+## Supplied write-content fidelity
+
+- Render the specialized requested write body only for an explicit string
+  `arguments.content`. Missing, null and other non-string values remain in
+  complete Arguments and produce an unavailable-content caveat, not fabricated
+  empty write bytes. Explicit empty strings receive a distinct passive annotation.
+- Preserve the existing FileContent body, path-based syntax and partial/retained
+  labels. Label unlinked live-slot write bytes as supplied current-round content,
+  not retained intent or a live-file snapshot. None of these bytes prove a write.
+- Native status/pairing, file operations and disclosure authority are unchanged.
+  No renderer/helper tests or filesystem/provider operations are introduced;
+  integrated load-older and interactive/visual acceptance remain unfinished.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
