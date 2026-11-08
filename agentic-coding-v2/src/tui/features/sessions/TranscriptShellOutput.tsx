@@ -28,9 +28,15 @@ function shellOutputPreview(
 	const lines = output.split("\n");
 	if (lines.length <= maxLines && Array.from(output).length <= maxChars)
 		return output;
-	const count = Math.max(1, lines.length - (maxLines - 1));
-	const label = `(${count} earlier ${count === 1 ? "line" : "lines"})`;
+	const count = Math.max(0, lines.length - (maxLines - 1));
 	const tail = Array.from(lines.slice(-(maxLines - 1)).join("\n"));
+	let label =
+		count > 0
+			? `(${count} earlier ${count === 1 ? "line" : "lines"})`
+			: "(earlier text)";
+	// Width clipping may remove only part of a line. Do not present that
+	// character window as an exact count of omitted complete output lines.
+	if (tail.length > maxChars - label.length - 1) label = "(earlier text)";
 	return `${label}\n${tail.slice(-Math.max(0, maxChars - label.length - 1)).join("")}`;
 }
 

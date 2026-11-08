@@ -1105,6 +1105,20 @@ content and bindings, not permission to replace the original presentation.
   load-older, nested-call composition and interactive/visual acceptance remain
   unfinished; static checks do not establish presentation parity.
 
+## Compact shell-tail clipping annotation
+
+- Retain the original ten-row command/separator/output preview budget, compact
+  width handling and expanded supplied-byte presentation. Correct only its local
+  clipping annotation: a partially clipped long line is not a complete omitted
+  line, so character-clipped tails use `earlier text` rather than a fabricated
+  exact earlier-line count. Whole-line-only clipping keeps its local line count.
+- These annotations describe the display window, never native dropped lines or
+  capture truncation. Existing native dropped-byte/line notices, retained/live
+  provenance and error coloring remain independent and unchanged.
+- No renderer/helper tests, native calls or new interaction policy are added.
+  Integrated load-older, nested-call composition and interactive/visual acceptance
+  remain unfinished; static checks do not establish viewport behavior or parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
