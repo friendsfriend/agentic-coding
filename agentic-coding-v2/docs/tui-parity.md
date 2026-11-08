@@ -528,6 +528,25 @@ content and bindings, not permission to replace the original presentation.
   movement/publication still need work. No renderer/presenter tests or visual
   acceptance are claimed; no native permission/protocol/provider changes occur.
 
+## Explicit pointer reading intent
+
+- Observe eligible bubbling vertical wheel gestures and primary down/drag events
+  originating in the shared vertical scrollbar. Preserve OpenTUI's native pointer
+  handler: do not provide a scroll delta, prevent default or stop propagation.
+- Mark reader intent for the currently available native transcript identity.
+  Supersede pending latest/numeric/reveal placement; where already movable, hold
+  the bounded supplied retained window before the next layout publication.
+- The next eligible post-layout sample treats this as reader motion even if
+  geometry changed concurrently, so the prior anchor/bottom-follow correction
+  cannot overwrite the gesture. Resample the actual clamped position normally.
+- Latest, explicit reveal, identity/navigation/registry reset, overlays and cleanup
+  discard stale intent. Horizontal gestures and non-scrollbar primary taps do not
+  create it. No native work or authority is inferred from pointer activity.
+- This does not establish complete simultaneous-scroll/reflow parity: keyboard,
+  selection-autoscroll, non-bubbling gestures and text-line displacement still
+  need verification/work. No renderer/helper/presenter tests or visual acceptance
+  claims are added; native protocol, permissions and provider behavior are unchanged.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

@@ -240,6 +240,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const renderer = useRenderer();
 	let pendingReveal: BoxRenderable | undefined;
 	let pendingLatest: number | null = null;
+	let pendingReaderMotion: number | null = null;
 	const [awayFromBottom, setAwayFromBottom] = createSignal(false);
 	let pendingTranscriptRestore: {
 		page: Page;
@@ -269,6 +270,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		viewport: number;
 	} | null = null;
 	const resetReadingPlace = () => {
+		pendingReaderMotion = null;
 		pendingLatest = null;
 		setAwayFromBottom(false);
 		readingAnchor = null;
@@ -297,6 +299,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		let cursorFocused = false;
 		let paintedCursorVisible = true;
 		const paintCursor = (buffer: Parameters<typeof paintPromptCursor>[0]) => {
+			if (
+				pendingReaderMotion !== null &&
+				(pendingReaderMotion !== sessionId() ||
+					!isTranscript() ||
+					helpOpen() ||
+					paletteOpen())
+			)
+				pendingReaderMotion = null;
 			if (pendingLatest !== null && pendingLatest !== sessionId())
 				pendingLatest = null;
 			if (
@@ -397,8 +407,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						previous.width !== scroll.viewport.width ||
 						previous.viewport !== scroll.viewport.height);
 				const readerMoved =
+					(pendingReaderMotion !== null &&
+						pendingReaderMotion === sessionId()) ||
 					node !== undefined ||
 					(previous && !geometryChanged && previous.top !== scroll.scrollTop);
+				pendingReaderMotion = null;
 				if (readerMoved) {
 					readingAnchor = null;
 					followingBottom = false;
@@ -479,6 +492,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			pendingReveal = undefined;
 			pendingTranscriptRestore = null;
 			pendingLatest = null;
+			pendingReaderMotion = null;
 			renderer.removePostProcessFn(paintCursor);
 		});
 	});
@@ -497,13 +511,66 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		pendingTranscriptRestore = null;
 		pendingReveal = undefined;
 		readingAnchor = null;
+		pendingReaderMotion = null;
 		setAwayFromBottom(false);
 		pendingLatest = sessionId();
 		renderer.requestRender();
 		return true;
 	};
+	const observeReaderPointer = (event: import("@opentui/core").MouseEvent) => {
+		const id = sessionId();
+		if (
+			id === null ||
+			!isTranscript() ||
+			!available() ||
+			!readingRows ||
+			transcript() === null ||
+			!scroll ||
+			scroll.isDestroyed ||
+			helpOpen() ||
+			paletteOpen() ||
+			event.defaultPrevented ||
+			event.propagationStopped
+		)
+			return;
+		const direction =
+			event.type === "scroll" ? event.scroll?.direction : undefined;
+		const bottom = Math.max(0, scroll.scrollHeight - scroll.viewport.height);
+		const wheel =
+			(direction === "up" &&
+				(scroll.scrollTop > 0 || (sampledScroll?.top ?? 0) > 0)) ||
+			(direction === "down" &&
+				(scroll.scrollTop < bottom || (sampledScroll?.top ?? bottom) < bottom));
+		let barPointer = false;
+		if (
+			(event.type === "down" || event.type === "drag") &&
+			event.button === 0
+		) {
+			let target = event.target;
+			while (target && target !== scroll) {
+				if (target.isDestroyed || !target.visible) break;
+				if (target === scroll.verticalScrollBar) {
+					barPointer = true;
+					break;
+				}
+				target = target.parent;
+			}
+		}
+		if (!wheel && !barPointer) return;
+		// Preserve the native pointer handler: this observes intent, never supplies
+		// a delta, prevents default, dispatches work, or infers a layout-only change.
+		pendingReaderMotion = id;
+		pendingLatest = null;
+		pendingTranscriptRestore = null;
+		pendingReveal = undefined;
+		readingAnchor = null;
+		followingBottom = false;
+		if (wheel || scroll.scrollTop < bottom) setAwayFromBottom(true);
+		renderer.requestRender();
+	};
 	const reveal = (node: BoxRenderable) => {
 		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
+		pendingReaderMotion = null;
 		pendingLatest = null;
 		pendingTranscriptRestore = null;
 		pendingReveal = node;
@@ -2503,6 +2570,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					/>
 					<box height={1} flexShrink={0} />
 					<scrollbox
+						onMouse={observeReaderPointer}
 						ref={(value) => {
 							scroll = value;
 						}}
