@@ -11,6 +11,7 @@ import { ImageView } from "../../ui/ImageView.tsx";
 import { StructuredData } from "../../ui/StructuredData.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
+import { ToolDialogue } from "./ToolDialogue.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 import { TranscriptShellOutput } from "./TranscriptShellOutput.tsx";
 
@@ -548,75 +549,18 @@ export function ToolCard(props: {
 								</>
 							)}
 						</Show>
-						<For each={requestedQuestions()}>
-							{(question) => (
-								<>
-									{fold(
-										`:question:${question.index}`,
-										`${props.partial ? "Partial generated" : props.liveOnly ? "Live slot" : "Requested"} question ${question.index + 1}`,
-									)}
-									<Show when={open(`:question:${question.index}`)}>
-										<text fg={color("textMuted")} wrapMode="word">
-											Supplied question bytes — not an active clarification,
-											answer or approval control.
-										</text>
-										<text fg={color("text")} wrapMode="word">
-											{question.ident === null ? "" : `[${question.ident}] `}
-											{question.text ?? "Question text not supplied."}
-										</text>
-										<Show when={question.context !== null}>
-											<text fg={color("textMuted")}>
-												Supplied question context
-											</text>
-											<text wrapMode="word">{question.context ?? ""}</text>
-										</Show>
-										<Show when={question.options.length > 0}>
-											<text fg={color("textMuted")} wrapMode="word">
-												Supplied options — stars are recorded recommendations,
-												not selected answers.
-											</text>
-											<For each={question.options}>
-												{(option) => (
-													<box flexDirection="column" flexShrink={0}>
-														<text
-															fg={
-																option.recommended
-																	? color("accent")
-																	: color("textMuted")
-															}
-															wrapMode="word"
-														>
-															○{option.recommended ? " ★" : "  "} {option.label}
-														</text>
-														<Show when={option.description !== null}>
-															<box
-																paddingLeft={2}
-																flexShrink={0}
-																flexDirection="column"
-															>
-																{fold(
-																	`:question:${question.index}:option:${option.index}`,
-																	"Option description",
-																)}
-																<Show
-																	when={open(
-																		`:question:${question.index}:option:${option.index}`,
-																	)}
-																>
-																	<text fg={color("textMuted")} wrapMode="word">
-																		{option.description ?? ""}
-																	</text>
-																</Show>
-															</box>
-														</Show>
-													</box>
-												)}
-											</For>
-										</Show>
-									</Show>
-								</>
-							)}
-						</For>
+						<ToolDialogue
+							questions={requestedQuestions()}
+							phase={
+								props.partial
+									? "Partial generated"
+									: props.liveOnly
+										? "Live slot"
+										: "Requested"
+							}
+							open={open}
+							fold={fold}
+						/>
 						<Show when={scriptOutput()}>
 							{(script) => (
 								<>

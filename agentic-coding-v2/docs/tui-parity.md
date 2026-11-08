@@ -973,6 +973,21 @@ content and bindings, not permission to replace the original presentation.
 - Full dialogue response composition, nested-call layout, integrated load-older
   and interactive/visual acceptance remain unfinished. No renderer/helper tests.
 
+## Extracted local read-only ToolDialogue presentation
+
+- Move the supplied dialogue row/detail JSX into local `ToolDialogue`, with a
+  narrow readonly UI-byte shape and the owning card's phase/open/fold callbacks.
+  Keep the exact row order, markers, caveats, indentation, colors and disclosure
+  suffixes without an added layout wrapper or new pointer policy.
+- ToolCard still owns argument projection, header previews, native status/pairing
+  and disclosure state; ToolDialogue neither accepts native result records nor
+  parses/matches responses or routes clarification/approval operations.
+- Readonly question/option indexes are local presentation positions only. Existing
+  empty/missing text handling and explicit source bytes remain unchanged. No
+  legacy/runtime imports, global listeners or authority hooks are introduced.
+- Full response and nested-call composition, integrated load-older and interactive/
+  visual acceptance remain unfinished. No renderer/helper tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
