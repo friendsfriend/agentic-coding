@@ -129,7 +129,11 @@ export function ToolCard(props: {
 		const text = readOutput();
 		const truncation = object(details().truncation);
 		const supplied = truncation.content;
-		const line = typeof args().offset === "number" ? Number(args().offset) : 1;
+		const line = args().offset === undefined ? 1 : args().offset;
+		// Only an omitted SDK-default offset or a supplied valid file position
+		// can establish numbered read provenance. Never coerce invalid values.
+		if (typeof line !== "number" || !Number.isSafeInteger(line) || line < 1)
+			return { file: null, notice: text };
 		// SDK metadata may prove a file-prefix/notice split. Never strip a
 		// footer-shaped literal file line based on spelling alone.
 		if (

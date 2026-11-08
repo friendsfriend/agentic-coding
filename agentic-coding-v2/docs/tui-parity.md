@@ -1092,6 +1092,19 @@ content and bindings, not permission to replace the original presentation.
   No renderer/helper tests or native execution are added. Integrated load-older,
   nested-call composition and interactive/visual acceptance remain unfinished.
 
+## Invalid supplied read-offset provenance
+
+- Require an omitted SDK-default offset or an explicit positive safe integer
+  before showing read text with file-line numbering or splitting a matched
+  continuation annotation. Invalid supplied values are never coerced to line 1.
+- Preserve the retained read body verbatim and unnumbered when offset provenance
+  is unavailable, using the existing unavailable-provenance caveat. Error output,
+  exact separately recorded diagnostic-footer handling and complete Arguments/
+  output/Details remain unchanged. No live file read or continuation is requested.
+- No renderer/helper tests or native operations are introduced. Integrated
+  load-older, nested-call composition and interactive/visual acceptance remain
+  unfinished; static checks do not establish presentation parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
