@@ -166,6 +166,26 @@ export const paletteKeybinds: Keybind[] = [
 ];
 export const promptKeybinds: Keybind[] = [
 	{
+		key: "up",
+		cmd: "input.historyPrevious",
+		action:
+			"At first prompt line: recall only empty or unchanged recalled input",
+		standard: true,
+	},
+	{
+		key: "down",
+		cmd: "input.historyNext",
+		action:
+			"At last prompt line: advance recalled input or restore original draft",
+		standard: true,
+	},
+	{
+		key: "?",
+		cmd: "input.helpIfEmpty",
+		action: "Open help only when the prompt is empty; otherwise type literally",
+		standard: true,
+	},
+	{
 		key: "return",
 		cmd: "prompt.submit",
 		action: "Submit explicit prompt",

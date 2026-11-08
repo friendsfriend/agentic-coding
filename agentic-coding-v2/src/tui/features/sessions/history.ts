@@ -61,6 +61,11 @@ export class DraftHistory {
 			this.views.delete(first[0]);
 		}
 	}
+	/** Plain arrow navigation never overwrites newly typed or edited text.
+	 * Explicit Alt-arrow recall retains its existing draft-restoration contract. */
+	canBrowseArrows(key: string, draft: string): boolean {
+		return draft.length === 0 || this.views.get(key)?.recalled === draft;
+	}
 	recall(key: string, direction: -1 | 1, draft: string) {
 		if (draft.length > 16000)
 			throw new Error(

@@ -51,6 +51,28 @@ content and bindings, not permission to replace the original presentation.
 - Use original primary-button tap/drag classification for transcript header and
   section folding. Output selection/dragging does not collapse a tool card.
 
+## Prompt history and standalone conversation pass
+
+- Restore plain Up/Down history browsing only at the editor's first/last logical
+  line, and only for empty or unchanged recalled input. Newly typed/edited drafts
+  remain untouched. Explicit Alt-arrow recall keeps its separate native bounded
+  history contract and original-draft restoration; no confirmations or mutation
+  commands enter history.
+- Restore `?` help on an empty prompt; typed question marks stay literal otherwise.
+  Document these conditional input keys without adding global arrow bindings.
+- Bind standalone list rows to their independent native UUIDs, using original
+  Selectable chrome instead of enclosing each conversation in a full rectangle.
+- Reuse original UserPrompt/MarkdownViewer message surfaces in standalone views.
+  Unchanged retained messages survive observation polls, preserving local folds;
+  changed bytes/indexes replace rows, and the cache is pruned to the observed
+  window. Volatile partial output follows retained messages and remains explicitly
+  labeled as non-completion evidence.
+- Restore the original autocomplete's left-ruled raised surface, fourteen-cell
+  command column, selected colors and first-select/then-activate mouse gestures
+  for the explicit native command palette. Filtering/preparation remains native:
+  choosing never submits or overwrites an existing unsent draft. Selection is
+  clamped when the observed command catalog shrinks.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
@@ -59,8 +81,8 @@ content and bindings, not permission to replace the original presentation.
 - Remaining orchestrator/durable transcript composition: original ordered
   markdown block/cache flow, specialized tool/file/shell bodies, timestamps,
   usage/progress arrangement, prompt history/autocomplete and picker behavior.
-- Standalone message/list composition must reuse the same original conversation
-  surfaces without aliasing its independent native identities.
+- Remaining standalone detail/header, profile-picker and focus composition;
+  its independent native identities must never alias durable conversations.
 - Original settings/provider/wiki/schedules/environment list/detail composition;
   adapt only content and controls incompatible with native authority.
 - Interaction/lifecycle audit and terminal visual verification. Compilation,

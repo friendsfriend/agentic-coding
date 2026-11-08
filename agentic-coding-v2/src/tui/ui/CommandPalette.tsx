@@ -1,6 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { useKeymap } from "@opentui/keymap/solid";
-import { createMemo, createSignal, For, onCleanup } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	onCleanup,
+} from "solid-js";
+import { useRowMouse } from "../presentation/components/mouse/useRowMouse.ts";
+import { uiColors } from "../presentation/theme/colors.ts";
 import { bindings, paletteKeybinds } from "./keybinds.ts";
 import { color } from "./theme/index.ts";
 export type PaletteEntry = { command: string; description: string };
@@ -21,6 +29,11 @@ export function CommandPalette(props: {
 			)
 			.slice(0, 64),
 	);
+	createEffect(() => {
+		const count = entries().length;
+		setSelection((value) => Math.max(0, Math.min(value, count - 1)));
+	});
+	const offset = () => Math.max(0, selection() - 2);
 	const choose = () => {
 		const entry = entries()[selection()];
 		if (entry) props.choose(entry.command);
@@ -58,47 +71,77 @@ export function CommandPalette(props: {
 	});
 	onCleanup(unregister);
 	return (
-		<box flexDirection="column" border={true} padding={1} gap={1} height={12}>
-			<text fg={color("primary")}>
+		<box
+			flexDirection="column"
+			flexShrink={0}
+			border={["left"]}
+			borderColor={uiColors.accent}
+			backgroundColor={uiColors.bgMantle}
+		>
+			<text paddingLeft={2} paddingRight={1} fg={color("primary")}>
 				Command suggestions · filter and prepare only
 			</text>
-			<text fg={color("textMuted")}>
+			<text paddingLeft={2} paddingRight={1} fg={color("textMuted")}>
 				Existing unsent drafts are not replaced. No automatic submission,
 				approval, reconnect or backend action.
 			</text>
-			<input
-				focused={true}
-				value={filter()}
-				maxLength={256}
-				placeholder="Filter native commands"
-				onInput={(value) => {
-					setFilter(value);
-					setSelection(0);
-				}}
-			/>
-			<For
-				each={entries().slice(
-					Math.max(0, selection() - 2),
-					Math.max(0, selection() - 2) + 5,
-				)}
-			>
-				{(entry) => (
-					<box onMouseDown={() => props.choose(entry.command)}>
+			<box paddingLeft={2} paddingRight={1}>
+				<input
+					focused={true}
+					value={filter()}
+					maxLength={256}
+					placeholder="Filter native commands"
+					onInput={(value) => {
+						setFilter(value);
+						setSelection(0);
+					}}
+				/>
+			</box>
+			<For each={entries().slice(offset(), offset() + 5)}>
+				{(entry, index) => (
+					<box
+						flexDirection="row"
+						gap={2}
+						paddingLeft={2}
+						paddingRight={1}
+						backgroundColor={
+							offset() + index() === selection()
+								? uiColors.selectionBg
+								: undefined
+						}
+						{...useRowMouse({
+							index: () => offset() + index(),
+							selectedIndex: selection,
+							activatable: () => true,
+							onSelect: (row) =>
+								setSelection(Math.max(0, Math.min(row, entries().length - 1))),
+							onActivate: () => props.choose(entry.command),
+						})}
+					>
 						<text
-							wrapMode="word"
+							width={14}
+							flexShrink={0}
 							fg={
-								entries()[selection()] === entry
-									? color("accent")
-									: color("textMuted")
+								offset() + index() === selection()
+									? uiColors.selectionText
+									: uiColors.textPrimary
 							}
 						>
-							{entries()[selection()] === entry ? "›" : "·"} {entry.command} ·{" "}
+							{entry.command}
+						</text>
+						<text
+							fg={
+								offset() + index() === selection()
+									? uiColors.selectionText
+									: uiColors.textMuted
+							}
+						>
 							{entry.description}
 						</text>
 					</box>
 				)}
 			</For>
-			<text fg={color("textMuted")}>
+			<text paddingLeft={2} paddingRight={1} fg={color("textMuted")}>
 				{entries().length
 					? `${selection() + 1}/${entries().length}`
 					: "No native command matches"}

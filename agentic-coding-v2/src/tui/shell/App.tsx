@@ -704,7 +704,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		update();
 	};
 	const historyKey = () => `${current().page}:${current().resource ?? ""}`;
-	const recall = (direction: -1 | 1) => {
+	const recall = (direction: -1 | 1, quiet = false): boolean => {
 		if (
 			current().focus !== "content" ||
 			settingsEditing() ||
@@ -712,24 +712,29 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			helpOpen() ||
 			paletteOpen()
 		)
-			return;
+			return false;
 		remember();
 		try {
 			const recalled = history.recall(historyKey(), direction, current().draft);
 			if (!recalled) {
-				setNotice(
-					"No eligible local accepted-input history for this exact view/session",
-				);
-				return;
+				if (!quiet)
+					setNotice(
+						"No eligible local accepted-input history for this exact view/session",
+					);
+				return false;
 			}
 			navigation.current.draft = recalled.text;
 			prompt?.setText(recalled.text);
+			prompt?.gotoBufferEnd();
+			cursorBlink.reset();
 			setNotice(recalled.label);
 			update();
+			return true;
 		} catch (error) {
 			setNotice(
 				error instanceof Error ? error.message : "Local history refused",
 			);
+			return false;
 		}
 	};
 	const paletteEntries = () => [
@@ -2641,6 +2646,33 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									: "Prompt command (/help)…"
 							}
 							keyBindings={textareaBindings(promptKeybinds)}
+							onKeyDown={(event) => {
+								const name = event.name.toLowerCase();
+								const text = prompt?.plainText ?? current().draft;
+								if (name === "?" && text.length === 0) {
+									event.preventDefault();
+									setHelpOpen(true);
+									return;
+								}
+								if (
+									event.ctrl ||
+									event.meta ||
+									event.shift ||
+									!prompt ||
+									(name !== "up" && name !== "down")
+								)
+									return;
+								const edge =
+									name === "up"
+										? prompt.logicalCursor.row === 0
+										: prompt.logicalCursor.row >= prompt.lineCount - 1;
+								if (
+									edge &&
+									history.canBrowseArrows(historyKey(), text) &&
+									recall(name === "up" ? -1 : 1, true)
+								)
+									event.preventDefault();
+							}}
 							onContentChange={(value) => {
 								cursorBlink.reset();
 								navigation.current.draft =

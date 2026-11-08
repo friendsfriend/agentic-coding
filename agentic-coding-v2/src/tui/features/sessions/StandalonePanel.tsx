@@ -5,8 +5,9 @@ import type {
 	StandaloneMode,
 } from "../../../protocol/standalone.ts";
 import type { ClientConnection } from "../../client/connection.ts";
-import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { Selectable } from "../../presentation/components/Selectable.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { StandaloneTranscript } from "./StandaloneTranscript.tsx";
 /** A separate native identity space. No durable IDs, lease adoption or private backend URLs. */
 export function StandalonePanel(props: {
 	client: ClientConnection;
@@ -117,63 +118,46 @@ export function StandalonePanel(props: {
 			</text>
 			<For
 				each={
-					inventory()?.sessions.filter(
-						(session) => session.mode === props.mode,
-					) ?? []
+					inventory()
+						?.sessions.filter((session) => session.mode === props.mode)
+						.map((session) => session.id) ?? []
 				}
 			>
-				{(session) => (
-					<box
-						flexDirection="column"
-						gap={1}
-						border={true}
-						borderColor={
-							props.resource === session.id ? color("accent") : color("border")
-						}
-						padding={1}
+				{(id) => (
+					<Show
+						when={inventory()?.sessions.find(
+							(session) => session.id === id && session.mode === props.mode,
+						)}
 					>
-						<ActionHeader onActivate={() => props.select(session.id)}>
-							<text fg={color("primary")}>
-								{session.title} · {session.status} · {session.id}@
-								{session.revision}
-							</text>
-						</ActionHeader>
-						<Show when={props.resource === session.id}>
-							<text wrapMode="word" fg={color("textMuted")}>
-								Repository: {session.repository} · configured profile:{" "}
-								{session.profile} ·{" "}
-								{session.truncated
-									? "retained display window clipped"
-									: "retained display window"}
-								. No task/environment execution authority.
-							</text>
-							<Show
-								when={session.partial !== null && session.status === "busy"}
-							>
-								<text fg={color("warning")}>
-									Native in-flight text (volatile, clipped, not retained
-									completion evidence)
-								</text>
-								<text wrapMode="word">{session.partial ?? ""}</text>
-							</Show>
-							<For each={session.messages}>
-								{(message) => (
-									<box flexDirection="column">
-										<text
-											fg={
-												message.role === "user"
-													? color("accent")
-													: color("primary")
-											}
-										>
-											{message.role}
-										</text>
-										<text wrapMode="word">{message.content}</text>
-									</box>
-								)}
-							</For>
-						</Show>
-					</box>
+						{(session) => (
+							<box flexDirection="column" gap={1}>
+								<Selectable
+									selected={props.resource === id}
+									onMouseUp={() => props.select(id)}
+								>
+									<text fg={color("primary")} wrapMode="word">
+										{session().title} · {session().status} · {id}@
+										{session().revision}
+									</text>
+								</Selectable>
+								<Show when={props.resource === id}>
+									<text wrapMode="word" fg={color("textMuted")}>
+										Repository: {session().repository} · configured profile:{" "}
+										{session().profile} ·{" "}
+										{session().truncated
+											? "retained display window clipped"
+											: "retained display window"}
+										. No task/environment execution authority.
+									</text>
+									<StandaloneTranscript
+										messages={session().messages}
+										partial={session().partial}
+										busy={session().status === "busy"}
+									/>
+								</Show>
+							</box>
+						)}
+					</Show>
 				)}
 			</For>
 			<Show when={error()}>
