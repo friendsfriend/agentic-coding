@@ -21,12 +21,14 @@ export function HistoryPanel(props: {
 	let epoch = 0,
 		disposed = false;
 	createEffect(() => {
+		props.client;
 		props.id;
 		props.connected;
 		epoch++;
 		setEntries([]);
 		setCursor(null);
 		setLoaded(false);
+		setPending(false);
 		setError(null);
 	});
 	onCleanup(() => {
@@ -36,15 +38,26 @@ export function HistoryPanel(props: {
 	const load = async (older = false) => {
 		if (pending() || !props.connected || (older && !cursor())) return;
 		const generation = epoch,
-			id = props.id;
+			id = props.id,
+			client = props.client;
 		setPending(true);
 		setError(null);
 		try {
-			const page = await props.client.call("session.history", {
+			const page = await client.call("session.history", {
 				id,
 				...(older && cursor() ? { cursor: cursor() ?? undefined } : {}),
 			});
-			if (!disposed && generation === epoch && page.id === id) {
+			if (
+				!disposed &&
+				generation === epoch &&
+				props.id === id &&
+				props.client === client &&
+				props.connected
+			) {
+				if (page.id !== id)
+					throw new Error(
+						"Wrong native history response identity; retained page not adopted",
+					);
 				const combined = older ? [...page.entries, ...entries()] : page.entries;
 				const seen = new Set<unknown>();
 				setEntries(
@@ -61,12 +74,26 @@ export function HistoryPanel(props: {
 				setOpen(true);
 			}
 		} catch (cause) {
-			if (!disposed && generation === epoch)
+			if (
+				!disposed &&
+				generation === epoch &&
+				props.id === id &&
+				props.client === client &&
+				props.connected
+			)
 				setError(
 					cause instanceof Error ? cause.message : "History read refused",
 				);
 		} finally {
-			if (!disposed) setPending(false);
+			// A retired request cannot clear another scope's explicit read latch.
+			if (
+				!disposed &&
+				generation === epoch &&
+				props.id === id &&
+				props.client === client &&
+				props.connected
+			)
+				setPending(false);
 		}
 	};
 	return (

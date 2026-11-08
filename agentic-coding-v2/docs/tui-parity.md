@@ -661,6 +661,24 @@ content and bindings, not permission to replace the original presentation.
   complete selection/text-line parity still remain open; no renderer/helper tests,
   live provider/environment activity or visual acceptance are introduced.
 
+## Retired history-read scope handling
+
+- Existing explicit retained-history explorer clears its local pending latch on
+  connection/client/conversation scope changes together with entries and cursor.
+  A new scope may initiate its own explicit read without waiting for a retired
+  scope's network request to settle.
+- Capture client identity, native conversation ID and local epoch for each read.
+  Only a still-connected matching scope may publish entries/cursor/errors or clear
+  its pending latch. A retired completion cannot unlock a newer pending read.
+  A current-scope response with the wrong native ID refuses instead of silently
+  adopting it or leaving an unexplained result.
+- Scope changes do not cancel native work, retry requests, page automatically,
+  adopt contexts or merge history into the main transcript. Existing bounded
+  retention and explicit newest/older controls remain unchanged.
+- No helper/renderer/mounting tests are added. Existing authenticated functional
+  gates are rerun; interactive request-order behavior remains unverified. This is
+  explorer scope safety, not original integrated load-older/timeline parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
