@@ -5,8 +5,7 @@ import type { Data, ToolProgress } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { useHover } from "../../presentation/components/mouse/useHover.ts";
 import { useTap } from "../../presentation/components/mouse/useTap.ts";
-import { Spinner } from "../../presentation/components/Spinner.tsx";
-import { Stamp } from "../../presentation/components/Stamp.tsx";
+import { ToolCallHeader } from "../../presentation/components/ToolCallHeader.tsx";
 import { uiColors } from "../../presentation/theme/colors.ts";
 import { ImageView } from "../../ui/ImageView.tsx";
 import { StructuredData } from "../../ui/StructuredData.tsx";
@@ -110,7 +109,7 @@ export function ToolCard(props: {
 	const summary = () =>
 		["read", "edit", "write"].includes(name())
 			? path()
-			: name() === "bash"
+			: name() === "bash" || name() === "shell"
 				? string(args().command)
 				: string(args().app) || string(args().title) || string(args().query);
 	const structured = createMemo(() => {
@@ -176,53 +175,24 @@ export function ToolCard(props: {
 					toggle={props.toggle}
 					anchor={props.anchor}
 				>
-					<box flexDirection="row">
-						<box
-							width={name().startsWith("browser_") ? 3 : 2}
-							flexShrink={0}
-							flexDirection="row"
-						>
-							<Show when={name().startsWith("browser_")}>
-								<text fg={color("textMuted")}>{"\uf488"}</text>
-							</Show>
-							<Show
-								when={
-									!props.partial &&
-									!props.result &&
-									props.progress?.status === "running"
-								}
-								fallback={
-									<text
-										fg={
-											props.result?.isError === true
-												? color("error")
-												: color("textMuted")
-										}
-									>
-										{icons[name()] ?? "•"}
-									</text>
-								}
-							>
-								<Spinner color={color("textMuted")} />
-							</Show>
-						</box>
-						<text
-							fg={
-								props.result?.isError === true ? color("error") : color("text")
-							}
-							flexGrow={1}
-							minWidth={0}
-							wrapMode="word"
-						>
-							{name()}
-							{summary() ? ` · ${summary()}` : ""}
-						</text>
-						<Stamp
-							timestamp={props.result?.timestamp}
-							durationMs={props.result?.durationMs}
-							clockLabel="result"
-						/>
-					</box>
+					<ToolCallHeader
+						failed={props.result?.isError === true}
+						pending={
+							!props.partial &&
+							!props.result &&
+							props.progress?.status === "running"
+						}
+						browser={name().startsWith("browser_")}
+						icon={icons[name()] ?? "•"}
+						label={summary() || name()}
+						hint={summary() ? name() : undefined}
+						timestamp={props.result?.timestamp}
+						durationMs={props.result?.durationMs}
+						onToggle={() => {
+							props.select(props.identity);
+							props.toggle(props.identity);
+						}}
+					/>
 					<text
 						fg={
 							props.result?.isError === true

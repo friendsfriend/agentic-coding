@@ -357,6 +357,28 @@ content and bindings, not permission to replace the original presentation.
   UI-only viewpoints. Preferences/persistence remain unfinished. No presenter,
   renderer, navigation-matrix tests or visual acceptance claims are added.
 
+## Tool-call header label/hint restoration pass
+
+- Port the original pure ToolCallHeader composition locally: two-cell action
+  gutter (three for the browser family glyph), error/muted icon tones, full
+  word-wrapping call label, flexible muted hint limited to forty-five percent,
+  and the existing recorded result stamp. No legacy block/store import.
+- Native file paths and bash/shell commands now occupy the main label instead
+  of a generic tool-name prefix consuming the call's space. Keep the exact
+  native tool name visible as the secondary hint; calls without a meaningful
+  supplied summary still use their own native name as the main label.
+- Bind the spinner only to a supplied running native slot with no retained
+  result and no generated partial call. Existing explicit status caveats remain
+  below the header, including waiting-on-owned-work/review and unlinked results.
+  Only paired result errors set error tone; no inferred start, timer or finish.
+- Use the shared tap-vs-drag contract and stop propagation for header-line folds,
+  so the containing header does not toggle a second time. Existing argument,
+  output/detail folds, anchors, output bodies and pairing fences remain intact.
+- Result clocks stay explicitly labelled result and use only validated recorded
+  fields. Browser action families, specialized argument/section layouts and
+  viewport anchoring remain unfinished. No presenter/rendering tests or visual
+  acceptance claims are introduced.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
