@@ -2929,6 +2929,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					</SessionPrompt>
 				</box>
 				<NativeAgentNavigation
+					interactive={!paletteOpen() && !helpOpen()}
 					onWidth={setAgentWidth}
 					sessions={state()?.sessions ?? []}
 					tasks={state()?.tasks ?? []}

@@ -13,6 +13,18 @@ import { AgentSidebar } from "../../presentation/components/AgentSidebar.tsx";
 import { bindings, type Keybind } from "../../ui/keybinds.ts";
 export const nativeAgentNavigationKeybinds: Keybind[] = [
 	{
+		key: "f",
+		cmd: "agents.filter",
+		action: "Switch Active/All agent filter",
+		short: "filter",
+	},
+	{
+		key: "e",
+		cmd: "agents.size",
+		action: "Toggle expanding/permanent sidebar",
+		short: "size",
+	},
+	{
 		key: "up",
 		cmd: "agents.previous",
 		action: "Previous native agent",
@@ -44,6 +56,8 @@ export function NativeAgentNavigation(props: {
 	sessions: Session[];
 	tasks: Data[];
 	active: boolean;
+	/** Unfocused sidebars accept focus taps; covered sidebars must not. */
+	interactive?: boolean;
 	connected: boolean;
 	widthLimit: number;
 	onWidth?: (width: number) => void;
@@ -52,11 +66,16 @@ export function NativeAgentNavigation(props: {
 	open: (id: number) => void;
 }) {
 	const [permanent, setPermanent] = createSignal(false);
+	const [filter, setFilter] = createSignal<"active" | "all">("active");
+	const interactive = () => props.interactive !== false;
+	const toggleSize = () => {
+		if (interactive()) setPermanent((value) => !value);
+	};
 	const [selected, setSelected] = createSignal<string>();
 	const sessions = createMemo(() =>
 		props.sessions.filter((session) => session.parent !== null),
 	);
-	const rows = createMemo<AgentSidebarRow[]>(() =>
+	const sourceRows = createMemo<AgentSidebarRow[]>(() =>
 		sessions().map((session) => {
 			const task = props.tasks.find((value) => value.id === session.task);
 			const result =
@@ -65,18 +84,17 @@ export function NativeAgentNavigation(props: {
 				!Array.isArray(task.result)
 					? (task.result as Data)
 					: null;
-			const status =
-				result?.status === "completed" || result?.status === "success"
-					? "completed"
-					: result?.status === "failed"
-						? "failed"
-						: result?.status === "cancelled"
-							? "expired"
-							: task?.detail === "awaiting review"
-								? "blocked"
-								: task?.activity && task.activity !== "idle"
-									? "working"
-									: "unknown";
+			let status = "unknown";
+			if (result?.status === "completed" || result?.status === "success")
+				status = "completed";
+			else if (result?.status === "failed") status = "failed";
+			else if (result?.status === "cancelled") status = "expired";
+			else if (props.connected) {
+				if (task?.detail === "awaiting review") status = "blocked";
+				else if (task?.activity === "running") status = "working";
+				else if (task?.activity === "idle" && task.detail === "queued")
+					status = "pending";
+			}
 			return {
 				key: String(session.id),
 				role: session.title,
@@ -89,6 +107,15 @@ export function NativeAgentNavigation(props: {
 				status,
 			};
 		}),
+	);
+	// The original active filter is run-status-only. Unknown/blocked/terminal
+	// observations remain available under All, never inferred to be active.
+	const rows = createMemo(() =>
+		filter() === "all"
+			? sourceRows()
+			: sourceRows().filter(
+					(row) => row.status === "pending" || row.status === "working",
+				),
 	);
 	createEffect(
 		on(
@@ -104,6 +131,7 @@ export function NativeAgentNavigation(props: {
 	});
 	const index = () => rows().findIndex((row) => row.key === selected());
 	const move = (direction: number) => {
+		if (!props.active || !interactive()) return;
 		const current = index();
 		const next =
 			current < 0
@@ -115,18 +143,38 @@ export function NativeAgentNavigation(props: {
 		if (row) setSelected(row.key);
 	};
 	const openKey = (key: string) => {
-		if (sessions().some((session) => String(session.id) === key))
+		if (
+			interactive() &&
+			rows().some((row) => row.key === key) &&
+			sessions().some((session) => String(session.id) === key)
+		)
 			props.open(Number(key));
 	};
 	const open = () => {
+		if (!props.active || !interactive()) return;
 		const key = selected();
 		if (key !== undefined) openKey(key);
 	};
 	const unregister = useKeymap().registerLayer({
 		id: "v2.native-agent-navigation",
 		priority: 15,
-		enabled: () => props.active,
+		enabled: () => props.active && interactive(),
 		commands: [
+			{
+				id: "agents.filter",
+				name: "Switch Active/All filter",
+				run: () => {
+					if (props.active && interactive())
+						setFilter((value) => (value === "active" ? "all" : "active"));
+				},
+			},
+			{
+				id: "agents.size",
+				name: "Toggle sidebar size",
+				run: () => {
+					if (props.active) toggleSize();
+				},
+			},
 			{
 				id: "agents.previous",
 				name: "Previous native agent",
@@ -147,13 +195,16 @@ export function NativeAgentNavigation(props: {
 			rows={rows()}
 			selectedIndex={index()}
 			sourceState={props.connected ? "fresh" : "stale"}
-			onToggleMode={() => setPermanent(!permanent())}
+			onToggleMode={toggleSize}
 			onSelectIndex={(value) => {
+				if (!interactive()) return;
 				const row = rows()[value];
 				if (row) setSelected(row.key);
 			}}
 			onOpen={(row) => openKey(row.key)}
-			onFocus={props.focus}
+			onFocus={() => {
+				if (interactive()) props.focus();
+			}}
 		/>
 	);
 }

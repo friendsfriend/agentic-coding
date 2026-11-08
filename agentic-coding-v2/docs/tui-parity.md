@@ -305,6 +305,33 @@ content and bindings, not permission to replace the original presentation.
   Existing shell shortcuts are retained. No navigation-matrix/presenter tests or
   visual acceptance claims accompany this pass.
 
+## Native agent Active/All and size-key restoration pass
+
+- Restore the original focused-agent F Active/All toggle, initially Active, and
+  E expanding/permanent size toggle. The existing original sidebar composition,
+  row geometry, pointer size control and clamped navigation remain unchanged.
+  The agent help catalog/footer now advertises filter and size keys.
+- Project pending only from reported idle/queued work and working only from
+  reported running activity. Unfamiliar activity values, missing task metadata,
+  child observations without a catalog task and writability never imply an
+  active run.
+  Awaiting-review observations stay blocked rather than running.
+- Active contains pending/working rows only; All exposes blocked, terminal and
+  unknown observations. Disconnected nonterminal observations become unknown,
+  not current running/queued claims; retained reported terminal outcomes remain
+  displayable. This filter is local UI state, not a fresh native inspection.
+- Preserve preferred identity across filters without selecting a fallback row.
+  Hidden/missing preferences have no Enter target; explicit movement can choose
+  another visible entry, and switching back restores a still-present preference.
+  Pointer and Enter opening require current visible membership as well as the
+  current native child identity. No hidden selection bypasses Active.
+- Distinguish unfocused from covered interaction: normal pointer taps still focus
+  the sidebar, but help/palette suppress pointer focus, selection, opening and
+  size changes, as well as keyboard filter/size controls.
+- No native activity/authority API, provider call, workflow projection, saved-view
+  schema, persistence or draft changes. Workspace filter families/persistence and
+  full picker composition remain unfinished; no visual acceptance is claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
