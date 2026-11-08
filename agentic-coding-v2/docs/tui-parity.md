@@ -1078,6 +1078,20 @@ content and bindings, not permission to replace the original presentation.
   introduced. Integrated load-older, nested-call composition and interactive/
   visual acceptance remain unfinished; structural checks do not establish parity.
 
+## Extracted local requested-edit presentation
+
+- Move the supplied replacement rows into `ToolEditRequest`, with readonly
+  display keys/labels/old/new bytes and owner-created phase/syntax/open/fold inputs.
+  Preserve row order, fragment bytes, empty-string annotations, plain-text syntax,
+  caveats and exact disclosure suffixes without a new layout wrapper or listener.
+- ToolCard retains argument projection, array/single-object/top-level distinctions,
+  native diff gating/warning and scoped disclosure state. The component receives
+  no result/progress records, native file identities or edit-operation handles;
+  it neither parses repairs nor infers an applied diff, file range or outcome.
+- Complete Arguments/output/Details and retained native diffs are unchanged.
+  No renderer/helper tests or native execution are added. Integrated load-older,
+  nested-call composition and interactive/visual acceptance remain unfinished.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

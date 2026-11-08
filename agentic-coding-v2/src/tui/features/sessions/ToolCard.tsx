@@ -13,6 +13,10 @@ import { color } from "../../ui/theme/index.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
 import { ToolDialogue } from "./ToolDialogue.tsx";
 import {
+	type SuppliedEditReplacement,
+	ToolEditRequest,
+} from "./ToolEditRequest.tsx";
+import {
 	type SuppliedToolSource,
 	ToolRequestedSource,
 } from "./ToolRequestedSource.tsx";
@@ -247,7 +251,7 @@ export function ToolCard(props: {
 			return null;
 		}
 	});
-	const requestedEdits = createMemo(() => {
+	const requestedEdits = createMemo<readonly SuppliedEditReplacement[]>(() => {
 		if (name() !== "edit") return [];
 		const value = args();
 		const edits = value.edits;
@@ -553,48 +557,19 @@ export function ToolCard(props: {
 							</text>
 						</Show>
 						<Show when={name() === "edit" && !patch()}>
-							<For each={requestedEdits()}>
-								{(edit) => (
-									<>
-										{fold(
-											`:replacement:${edit.key}`,
-											`${props.partial ? "Partial generated" : props.liveOnly ? "Live slot" : "Requested"} ${edit.label}`,
-										)}
-										<Show when={open(`:replacement:${edit.key}`)}>
-											<text fg={color("textMuted")} wrapMode="word">
-												Supplied replacement intent — not an applied diff, live
-												file snapshot or file-line range.
-											</text>
-											<text fg={color("textMuted")}>
-												Requested old text ·{" "}
-												{edit.oldText.length === 0
-													? "empty string"
-													: "supplied fragment"}
-											</text>
-											<code
-												content={edit.oldText}
-												filetype="text"
-												syntaxStyle={props.syntax}
-												drawUnstyledText={true}
-												wrapMode="word"
-											/>
-											<text fg={color("textMuted")}>
-												Requested new text ·{" "}
-												{edit.newText.length === 0
-													? "empty string"
-													: "supplied fragment"}
-											</text>
-											<code
-												content={edit.newText}
-												filetype="text"
-												syntaxStyle={props.syntax}
-												drawUnstyledText={true}
-												wrapMode="word"
-											/>
-										</Show>
-									</>
-								)}
-							</For>
+							<ToolEditRequest
+								replacements={requestedEdits()}
+								phase={
+									props.partial
+										? "Partial generated"
+										: props.liveOnly
+											? "Live slot"
+											: "Requested"
+								}
+								syntax={props.syntax}
+								open={open}
+								fold={fold}
+							/>
 						</Show>
 						<Show when={shellSource()}>
 							<text fg={color("textMuted")} wrapMode="word">
