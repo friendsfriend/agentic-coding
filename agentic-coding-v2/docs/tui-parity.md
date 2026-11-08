@@ -332,6 +332,31 @@ content and bindings, not permission to replace the original presentation.
   schema, persistence or draft changes. Workspace filter families/persistence and
   full picker composition remain unfinished; no visual acceptance is claimed.
 
+## Workspace size-key and retained-row restoration pass
+
+- Restore the original focused-workspace E expanding/permanent size key through
+  the same local mode setter used by the pointer toggle. Keep the existing
+  150 ms expansion, immediate collapse, responsive width, fixed four leading
+  pins, divider, scroll reveal and wrapped identity navigation.
+- Key both fixed and scrolling row families by native entry value, not each
+  freshly projected object. A live value-to-entry/index map updates labels,
+  descriptions and position without remounting unchanged PinRow interaction
+  state during metadata refreshes. Removed identities are evicted; this does
+  not promise retention across compact/expanded branch changes.
+- Recheck current identity membership before retained pointer activation can
+  focus the sidebar, select a cursor or navigate. Missing entries do not mutate
+  those UI states and never inherit another row's positional target.
+- Separate unfocused from covered interaction. Normal background/row/toggle
+  taps can focus the workspace; help and the palette suppress pointer focus,
+  activation, mode changes and keyboard commands without changing stored mode.
+- Restore the original visible Enter/open footer hint for both workspace and
+  agent sidebars, alongside their size key. No native execution/delete/session
+  management command is added, and no backend method is invoked by E.
+- Workspace filter families still need a native-appropriate resource projection;
+  legacy workflow statuses are not fabricated for mode pins, page links or
+  UI-only viewpoints. Preferences/persistence remain unfinished. No presenter,
+  renderer, navigation-matrix tests or visual acceptance claims are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

@@ -47,7 +47,7 @@ export const nativeAgentNavigationKeybinds: Keybind[] = [
 		key: "enter",
 		cmd: "agents.open",
 		action: "Open native agent transcript",
-		standard: true,
+		short: "open",
 	},
 ];
 /** Native catalog binding for the original agent sidebar. Unknown observation

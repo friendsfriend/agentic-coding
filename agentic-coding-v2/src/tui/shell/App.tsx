@@ -2180,6 +2180,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			</box>
 			<box flexDirection="row" flexGrow={1} minHeight={0}>
 				<WorkspaceNavigation
+					interactive={!paletteOpen() && !helpOpen()}
 					pinCount={4}
 					active={
 						current().focus === "sessions" && !paletteOpen() && !helpOpen()

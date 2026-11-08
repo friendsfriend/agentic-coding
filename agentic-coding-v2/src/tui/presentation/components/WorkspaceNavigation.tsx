@@ -21,6 +21,12 @@ import { PinRow } from "./PinRow.tsx";
 
 export const workspaceNavigationKeybinds: Keybind[] = [
 	{
+		key: "e",
+		cmd: "workspace.size",
+		action: "Toggle expanding/permanent sidebar",
+		short: "size",
+	},
+	{
 		key: "up",
 		cmd: "workspace.previous",
 		action: "Previous workspace entry",
@@ -48,13 +54,15 @@ export const workspaceNavigationKeybinds: Keybind[] = [
 		key: "enter",
 		cmd: "workspace.open",
 		action: "Open workspace entry",
-		standard: true,
+		short: "open",
 	},
 ];
 /** Original workspace pin-row presentation and expanding/permanent geometry,
  * adapted to native navigation entries. Focus/activation never dispatch a task. */
 export function WorkspaceNavigation(props: {
 	active: boolean;
+	/** Covered surfaces must not accept focus taps or retained activations. */
+	interactive?: boolean;
 	entries: { name: string; description: string; value: string }[];
 	/** Fixed leading UI pins, rendered outside the scrolling resource list. */
 	pinCount?: number;
@@ -65,6 +73,13 @@ export function WorkspaceNavigation(props: {
 }) {
 	const dimensions = useTerminalDimensions();
 	const [permanent, setPermanent] = createSignal(false);
+	const interactive = () => props.interactive !== false;
+	const focus = () => {
+		if (interactive()) props.focus();
+	};
+	const toggleSize = () => {
+		if (interactive()) setPermanent((value) => !value);
+	};
 	const [cursorValue, setCursorValue] = createSignal(props.selected);
 	let scroll: ScrollBoxRenderable | undefined;
 	const expandedByState = () => permanent() || props.active;
@@ -107,6 +122,10 @@ export function WorkspaceNavigation(props: {
 	const expanded = () => expandedByState() && width() >= 14;
 	createEffect(() => props.onWidth(width()));
 	const entries = createMemo(() => props.entries);
+	const entriesByKey = createMemo(
+		() =>
+			new Map(entries().map((entry, index) => [entry.value, { entry, index }])),
+	);
 	const pinCount = () =>
 		Math.min(entries().length, Math.max(0, Math.floor(props.pinCount ?? 0)));
 	const cursor = createMemo(() =>
@@ -119,11 +138,13 @@ export function WorkspaceNavigation(props: {
 		),
 	);
 	const open = () => {
+		if (!props.active || !interactive()) return;
 		// A removed identity is deliberately not replaced by its old row index.
 		const entry = entries().find((entry) => entry.value === cursorValue());
 		if (entry) props.open(entry.value);
 	};
 	const move = (direction: number) => {
+		if (!props.active || !interactive()) return;
 		const count = entries().length;
 		if (!count) return;
 		const index = cursor();
@@ -139,8 +160,15 @@ export function WorkspaceNavigation(props: {
 	const unregister = useKeymap().registerLayer({
 		id: "v2.workspace-navigation",
 		priority: 15,
-		enabled: () => props.active,
+		enabled: () => props.active && interactive(),
 		commands: [
+			{
+				id: "workspace.size",
+				name: "Toggle sidebar size",
+				run: () => {
+					if (props.active) toggleSize();
+				},
+			},
 			{
 				id: "workspace.previous",
 				name: "Previous workspace entry",
@@ -167,38 +195,46 @@ export function WorkspaceNavigation(props: {
 	});
 	const toggle = useTap(
 		() => {
-			props.focus();
-			setPermanent(!permanent());
+			if (!interactive()) return;
+			focus();
+			toggleSize();
 		},
 		{ stopPropagation: true },
 	);
 	const hover = useHover(toggle.onMouseOut);
 	const glyph = (index: number) =>
 		index < 4 ? (["󱚞", "π", "∞", "⌂"][index] ?? "·") : "·";
-	const renderRow = (
-		entry: { name: string; description: string; value: string },
-		index: () => number,
-	) => (
-		<PinRow
-			pin={{
-				glyph: glyph(index()),
-				label: entry.name,
-				meta: entry.description,
-			}}
-			selected={cursorValue() === entry.value}
-			height={expanded() ? 2 : 1}
-			onActivate={() => {
-				props.focus();
-				setCursorValue(entry.value);
-				// Recheck identity before navigating from a retained pointer callback.
-				if (entries().some((current) => current.value === entry.value))
-					props.open(entry.value);
-			}}
-		/>
+	const renderRow = (key: string) => (
+		<Show when={entriesByKey().get(key)}>
+			{(slot) => (
+				<PinRow
+					pin={{
+						glyph: glyph(slot().index),
+						label: slot().entry.name,
+						meta: slot().entry.description,
+					}}
+					selected={cursorValue() === key}
+					height={expanded() ? 2 : 1}
+					onActivate={() => {
+						// Stable presentation identity, but always read current membership.
+						if (!interactive() || !entriesByKey().has(key)) return;
+						focus();
+						setCursorValue(key);
+						props.open(key);
+					}}
+				/>
+			)}
+		</Show>
 	);
 	const rows = () => (
 		<>
-			<For each={entries().slice(0, pinCount())}>{renderRow}</For>
+			<For
+				each={entries()
+					.slice(0, pinCount())
+					.map((entry) => entry.value)}
+			>
+				{renderRow}
+			</For>
 			<Show when={pinCount() > 0}>
 				<box height={1} flexShrink={0} paddingLeft={2}>
 					<text fg={uiColors.border}>
@@ -214,8 +250,12 @@ export function WorkspaceNavigation(props: {
 				minHeight={0}
 				scrollY={true}
 			>
-				<For each={entries().slice(pinCount())}>
-					{(entry, index) => renderRow(entry, () => index() + pinCount())}
+				<For
+					each={entries()
+						.slice(pinCount())
+						.map((entry) => entry.value)}
+				>
+					{renderRow}
 				</For>
 			</scrollbox>
 		</>
@@ -228,7 +268,7 @@ export function WorkspaceNavigation(props: {
 			flexDirection="column"
 			minHeight={0}
 			overflow="hidden"
-			{...useTap(props.focus)}
+			{...useTap(focus)}
 		>
 			<Show
 				when={expanded()}
