@@ -679,6 +679,23 @@ content and bindings, not permission to replace the original presentation.
   gates are rerun; interactive request-order behavior remains unverified. This is
   explorer scope safety, not original integrated load-older/timeline parity.
 
+## Shared original read-only modal frame
+
+- Extract the already ported GenericModal read-only frame from HelpModal into
+  local `ReadOnlyModalFrame`: same absolute portal/z-index, dim backdrop,
+  centered mantle surface, padding, header/content/footer order and footer box.
+  Caller-provided width/height and footer budget retain HelpModal's sizing.
+- Preserve exact primary backdrop tap classification, down/up ownership checks,
+  dialog mouse-up suppression and backdrop wheel suppression. HelpModal retains
+  its original header, wrapped rows, wheel behavior and help-chip callbacks.
+- The frame owns no keymap, drafts, confirmation state, command dispatch, global
+  selection-copy hooks, timer or native runtime references. It is presentation
+  groundwork for the original list/timeline picker rather than a new design.
+- Timeline items/filtering/selection, native identity-bound prompt jumps and the
+  remaining ScrollableList behavior are not implemented by this extraction.
+  No renderer/helper tests or visual acceptance are claimed; existing functional
+  gates are rerun, not used as evidence of presentation parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { type MouseEvent, RGBA, TextAttributes } from "@opentui/core";
-import { Portal } from "@opentui/solid";
+import { TextAttributes } from "@opentui/core";
 import { createEffect, createMemo, For } from "solid-js";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors.ts";
@@ -10,13 +9,9 @@ import {
 	helpModalRows,
 	type KeybindSection,
 } from "./keybinds.ts";
-import {
-	classifyPointerGesture,
-	isPrimaryPointerButton,
-	type PointerSample,
-} from "./mouse/clickSemantics.ts";
 import { useKeybindChips } from "./mouse/useKeybindChips.ts";
 import { useWheelScroll } from "./mouse/useWheelScroll.ts";
+import { ReadOnlyModalFrame } from "./ReadOnlyModalFrame.tsx";
 import { SearchHeader } from "./SearchHeader.tsx";
 
 /** Original HelpModal and GenericModal's read-only framing branch. Catalog,
@@ -107,125 +102,70 @@ export function HelpModal(props: {
 				),
 			),
 	});
-	const onBackdropArea = (event: MouseEvent) =>
-		event.target === undefined || event.target === event.currentTarget;
-	let backdropDown: PointerSample | undefined;
-	const backdropMouseDown = (event: MouseEvent) => {
-		backdropDown = undefined;
-		if (!isPrimaryPointerButton(event.button) || !onBackdropArea(event)) return;
-		backdropDown = { x: event.x, y: event.y };
-	};
-	const backdropMouseUp = (event: MouseEvent) => {
-		const start = backdropDown;
-		backdropDown = undefined;
-		if (!isPrimaryPointerButton(event.button) || !onBackdropArea(event)) return;
-		if (classifyPointerGesture(start, { x: event.x, y: event.y }) !== "tap")
-			return;
-		props.close();
-		event.stopPropagation();
-	};
 	return (
-		<Portal
-			ref={(el) => {
-				const portal = el as { position?: string; zIndex?: number };
-				portal.position = "absolute";
-				portal.zIndex = 100;
-			}}
+		<ReadOnlyModalFrame
+			width={width()}
+			height={height()}
+			close={props.close}
+			footerHeight={footer().length}
+			footer={
+				<For each={footer()}>
+					{(line) => (
+						<HelpText
+							entries={line}
+							onActivate={chips.onActivate}
+							activatable={chips.activatable}
+						/>
+					)}
+				</For>
+			}
+			header={
+				<SearchHeader>
+					<box width="100%" justifyContent="flex-start" flexDirection="row">
+						<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
+							{props.title}
+						</text>
+					</box>
+				</SearchHeader>
+			}
 		>
 			<box
-				position="absolute"
-				top={0}
-				left={0}
-				width={dimensions().width}
-				height={dimensions().height}
+				width="100%"
 				flexDirection="column"
-				justifyContent="center"
-				alignItems="center"
-				backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-				onMouseDown={backdropMouseDown}
-				onMouseUp={backdropMouseUp}
-				onMouseScroll={(event) => {
-					event.preventDefault();
-					event.stopPropagation();
-				}}
+				flexGrow={1}
+				flexShrink={1}
+				minHeight={0}
+				overflow="hidden"
+				{...wheel}
 			>
-				<box
-					backgroundColor={uiColors.bgMantle}
-					width={width()}
-					height={height()}
-					flexDirection="column"
-					paddingTop={1}
-					paddingBottom={1}
-					paddingLeft={2}
-					paddingRight={2}
-					onMouseUp={(event) => event.stopPropagation()}
-				>
-					<SearchHeader>
-						<box width="100%" justifyContent="flex-start" flexDirection="row">
-							<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
-								{props.title}
+				<For each={visible()}>
+					{(row) =>
+						"title" in row ? (
+							<text
+								fg={uiColors.textPrimary}
+								attributes={TextAttributes.BOLD}
+								flexShrink={0}
+							>
+								{row.title}
 							</text>
-						</box>
-					</SearchHeader>
-					<box
-						width="100%"
-						flexDirection="column"
-						flexGrow={1}
-						flexShrink={1}
-						minHeight={0}
-						overflow="hidden"
-						{...wheel}
-					>
-						<For each={visible()}>
-							{(row) =>
-								"title" in row ? (
-									<text
-										fg={uiColors.textPrimary}
-										attributes={TextAttributes.BOLD}
-										flexShrink={0}
-									>
-										{row.title}
-									</text>
-								) : (
-									<box
-										flexDirection="row"
-										paddingLeft={1}
-										flexShrink={0}
-										height={1}
-									>
-										<text
-											fg={uiColors.primary}
-											attributes={TextAttributes.BOLD}
-										>
-											{row.key.padEnd(14)}
-										</text>
-										<text fg={uiColors.textPrimary} wrapMode="none">
-											{row.action}
-										</text>
-									</box>
-								)
-							}
-						</For>
-					</box>
-					<box
-						width="100%"
-						height={footer().length}
-						justifyContent="flex-start"
-						flexDirection="column"
-						flexShrink={0}
-					>
-						<For each={footer()}>
-							{(line) => (
-								<HelpText
-									entries={line}
-									onActivate={chips.onActivate}
-									activatable={chips.activatable}
-								/>
-							)}
-						</For>
-					</box>
-				</box>
+						) : (
+							<box
+								flexDirection="row"
+								paddingLeft={1}
+								flexShrink={0}
+								height={1}
+							>
+								<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
+									{row.key.padEnd(14)}
+								</text>
+								<text fg={uiColors.textPrimary} wrapMode="none">
+									{row.action}
+								</text>
+							</box>
+						)
+					}
+				</For>
 			</box>
-		</Portal>
+		</ReadOnlyModalFrame>
 	);
 }
