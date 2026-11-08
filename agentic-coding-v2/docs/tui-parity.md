@@ -118,6 +118,33 @@ content and bindings, not permission to replace the original presentation.
   are not used; viewport caching and the complete ordered block flow remain work
   below, rather than being claimed restored by these body ports.
 
+## Assistant order and markdown block restoration pass
+
+- Render assistant text, thinking, tool calls and images in their recorded
+  content-part order. Text no longer jumps ahead of every thinking/tool card or
+  joins across intervening parts. Plain-string assistant content remains readable;
+  unsupported assistant part types receive a muted, non-interpreting notice.
+- Keep unique native call/result pairing and partial-versus-retained fences intact.
+  Retained byte changes replace the presentation row. A live generation keeps its
+  carrier only under the same native conversation/task/attempt identity; its
+  content-part carriers keep thinking folds and markdown resources mounted as
+  supplied partial bytes change.
+- Port original AssistantMarkdown, markdown block splitting, streaming-tail
+  holdback and keyed part slots locally. Code/prose rendering modes and one-row
+  inter-block margins follow the original flow. This is a display transformation;
+  source messages and retained bytes are not edited or committed by the renderer.
+- Restore original 240-document per-view markdown LRU, prune it to observed text
+  parts and release it on teardown. That UI cap does not expand the native history
+  window or authorize reads. Syntax style ownership remains with the renderer.
+- Use the same block composition for standalone retained and volatile text.
+  Retained cache keys are scoped to the native standalone UUID and UI row index,
+  never a durable task/session alias. The standalone projection supplies no
+  generation/attempt ID: volatile text is re-lexed rather than carrying a settled
+  parse cache across an inferred attempt.
+- Mermaid's custom diagram render node and transcript viewport/window anchoring
+  are not restored by these ports. Mermaid remains readable fenced source; no
+  render service, provider, shell or runtime authority is introduced.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
@@ -125,8 +152,8 @@ content and bindings, not permission to replace the original presentation.
 - Remaining original modal components, selection/clipboard interactions and
   notification placement; the restored read-only help frame is not general
   modal parity.
-- Remaining orchestrator/durable transcript composition: original ordered
-  markdown block/cache/viewport flow, remaining specialized tool families and
+- Remaining orchestrator/durable transcript composition: original viewport/window
+  anchoring, Mermaid diagram rendering, remaining specialized tool families and
   file/shell header/section composition, timestamps, usage/progress arrangement,
   prompt history/autocomplete and picker behavior.
 - Remaining standalone detail/header, profile-picker and focus composition;

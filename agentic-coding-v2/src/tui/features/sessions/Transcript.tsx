@@ -5,8 +5,10 @@ import {
 	createEffect,
 	createMemo,
 	For,
+	Match,
 	onCleanup,
 	Show,
+	Switch,
 	untrack,
 } from "solid-js";
 import type {
@@ -15,13 +17,16 @@ import type {
 	Transcript as TranscriptData,
 } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
+import { AssistantMarkdown } from "../../presentation/components/AssistantMarkdown.tsx";
 import { MarkdownViewer } from "../../presentation/components/MarkdownViewer.tsx";
 import { useMarkdownSyntaxStyle } from "../../presentation/components/markdownSyntax.ts";
 import { Spinner } from "../../presentation/components/Spinner.tsx";
 import { UserPrompt } from "../../presentation/components/UserPrompt.tsx";
+import { createKeyedItems } from "../../presentation/components/utils/keyedItems.ts";
 import { ImageView } from "../../ui/ImageView.tsx";
 import { bindings, transcriptKeybinds } from "../../ui/keybinds.ts";
 import { color } from "../../ui/theme/index.ts";
+import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import { ToolCard } from "./ToolCard.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 
@@ -58,6 +63,7 @@ export function Transcript(props: {
 	// Equal retained records keep their render identity across progress publications.
 	// Changed bytes always replace the cached value; cache is pruned with the window.
 	let retainedCache = new Map<string, { signature: string; value: Data }>();
+	const retainedRenderKeys = new WeakMap<Data, string>();
 	const messages = createMemo<Data[]>(() => {
 		const nextCache = new Map<string, { signature: string; value: Data }>();
 		const retained = (props.value?.entries ?? []).flatMap((entry) =>
@@ -81,6 +87,7 @@ export function Transcript(props: {
 				const cached =
 					previous?.signature === signature ? previous : { signature, value };
 				nextCache.set(value.identity, cached);
+				retainedRenderKeys.set(cached.value, cached.signature);
 				return cached.value;
 			}),
 		);
@@ -100,10 +107,33 @@ export function Transcript(props: {
 			: retained;
 	});
 	const parts = (message: Data) =>
-		dataList(message.content).map((part, index) => ({
+		(typeof message.content === "string"
+			? [{ type: "text", text: message.content }]
+			: dataList(message.content)
+		).map((part, index) => ({
 			part,
 			identity: `${message.identity}:${index}`,
 		}));
+	// Retained byte changes replace their row. Only a live generation with the
+	// same native task/attempt identity updates its mounted presentation carrier.
+	const messageSlots = createKeyedItems(messages, (message) =>
+		message.nativePartial === true
+			? JSON.stringify([message.identity, "live"])
+			: (retainedRenderKeys.get(message) ?? JSON.stringify(message)),
+	);
+	const markdownCache = new SessionMarkdownCache();
+	createEffect(() => {
+		markdownCache.retain(
+			new Set(
+				messages()
+					.filter((message) => message.role === "assistant")
+					.flatMap(parts)
+					.filter(({ part }) => part.type === "text")
+					.map(({ identity }) => identity),
+			),
+		);
+	});
+	onCleanup(() => markdownCache.clear());
 	const liveLinks = createMemo(() => {
 		const slots = progress()?.tools ?? [];
 		const owner = progress()?.run?.taskId;
@@ -376,189 +406,267 @@ export function Transcript(props: {
 					unknown outside this history window.
 				</text>
 			</Show>
-			<For each={messages()}>
-				{(message) => (
-					<>
-						<Show when={text(message) && message.role !== "toolResult"}>
+			<For each={messageSlots()}>
+				{(messageSlot) => {
+					const message = messageSlot.value;
+					const contentParts = createMemo(() => parts(message()));
+					const partSlots = createKeyedItems(
+						contentParts,
+						({ part, identity }) => JSON.stringify([identity, part.type]),
+					);
+					const firstText = () =>
+						contentParts().find(
+							({ part }) =>
+								part.type === "text" &&
+								typeof part.text === "string" &&
+								part.text.length > 0,
+						)?.identity;
+					return (
+						<>
 							<Show
-								when={message.role === "user"}
-								fallback={
-									<box
-										flexDirection="column"
-										paddingLeft={3}
-										paddingRight={1}
-										flexShrink={0}
-									>
-										<Show when={message.role !== "assistant"}>
-											<text fg={color("textMuted")}>
-												{String(message.role)}
-											</text>
-										</Show>
-										<Show when={message.nativePartial === true}>
-											<text fg={color("textMuted")}>
-												Native in-flight committed partial
-											</text>
-										</Show>
-										<MarkdownViewer
-											content={text(message)}
-											fg={color("text")}
-											streaming={message.nativePartial === true}
-										/>
-									</box>
+								when={
+									text(message()) &&
+									message().role !== "toolResult" &&
+									message().role !== "assistant"
 								}
 							>
-								<UserPrompt
-									text={text(message)}
-									expanded={props.expanded.includes(String(message.identity))}
-									onToggle={() => props.toggle(String(message.identity))}
-								/>
-							</Show>
-						</Show>
-						<For
-							each={parts(message).filter(
-								({ part }) =>
-									message.role === "assistant" &&
-									(part.type === "thinking" || part.type === "toolCall"),
-							)}
-						>
-							{({ part, identity }) => {
-								const track = anchor(identity);
-								return (
-									<Show
-										when={part.type === "toolCall"}
-										fallback={
-											<box
-												flexDirection="column"
-												paddingLeft={3}
-												paddingRight={1}
-												flexShrink={0}
-											>
-												<TranscriptHeader
-													identity={identity}
-													select={props.select}
-													toggle={props.toggle}
-													anchor={track}
-												>
-													<box flexDirection="row">
-														<Show when={message.nativePartial === true}>
-															<Spinner
-																color={color("textMuted")}
-																attributes={TextAttributes.DIM}
-															/>
-															<text fg={color("textMuted")}> </text>
-														</Show>
-														<text
-															fg={
-																message.nativePartial === true
-																	? color("textMuted")
-																	: color("warning")
-															}
-															attributes={
-																message.nativePartial === true
-																	? TextAttributes.DIM
-																	: undefined
-															}
-														>
-															{props.selected === identity ? "› " : ""}
-															{props.expanded.includes(identity) ? "▾" : "▸"}{" "}
-															{message.nativePartial === true
-																? "Thinking… · committed partial"
-																: "Thinking… · retained"}
-														</text>
-													</box>
-												</TranscriptHeader>
-												<Show when={props.expanded.includes(identity)}>
-													<text
-														fg={color("textMuted")}
-														attributes={
-															TextAttributes.ITALIC |
-															(message.nativePartial === true
-																? TextAttributes.DIM
-																: 0)
-														}
-													>
-														{typeof part.thinking === "string"
-															? part.thinking
-															: ""}
-													</text>
-												</Show>
-											</box>
-										}
-									>
-										<ToolCard
-											identity={identity}
-											selected={props.selected === identity}
-											select={props.select}
-											anchor={track}
-											call={part}
-											partial={message.nativePartial === true}
-											progress={liveLinks().linked.get(identity)}
-											result={
-												associations().links.get(identity)?.result ?? null
-											}
-											pairing={
-												associations().links.get(identity)?.pairing ?? "missing"
-											}
-											expanded={props.expanded}
-											toggle={props.toggle}
-											syntax={syntax}
-										/>
-									</Show>
-								);
-							}}
-						</For>
-						<Show
-							when={
-								message.role === "toolResult" &&
-								!associations().consumed.has(String(message.identity))
-							}
-						>
-							<box
-								flexDirection="column"
-								border={["left"]}
-								borderColor={
-									message.isError === true ? color("error") : color("border")
-								}
-								paddingLeft={1}
-							>
-								<text fg={color("warning")}>
-									Unpaired retained result ·{" "}
-									{String(message.toolName ?? "tool")} ·{" "}
-									{String(message.toolCallId ?? "identity unavailable")} — no
-									unique call in this window.
-								</text>
-								<text wrapMode="word">
-									{text(message) || "No text output retained."}
-								</text>
-								<Show when={message.details !== undefined}>
-									<code
-										content={JSON.stringify(message.details, null, 2)}
-										filetype="json"
-										syntaxStyle={syntax}
-										drawUnstyledText={true}
-										wrapMode="word"
+								<Show
+									when={message().role === "user"}
+									fallback={
+										<box
+											flexDirection="column"
+											paddingLeft={3}
+											paddingRight={1}
+											flexShrink={0}
+										>
+											<Show when={message().role !== "assistant"}>
+												<text fg={color("textMuted")}>
+													{String(message().role)}
+												</text>
+											</Show>
+											<Show when={message().nativePartial === true}>
+												<text fg={color("textMuted")}>
+													Native in-flight committed partial
+												</text>
+											</Show>
+											<MarkdownViewer
+												content={text(message())}
+												fg={color("text")}
+												streaming={message().nativePartial === true}
+											/>
+										</box>
+									}
+								>
+									<UserPrompt
+										text={text(message())}
+										expanded={props.expanded.includes(
+											String(message().identity),
+										)}
+										onToggle={() => props.toggle(String(message().identity))}
 									/>
 								</Show>
-							</box>
-						</Show>
-						<For
-							each={dataList(message.content).filter(
-								(part) =>
-									part.type === "image" &&
-									(message.role !== "toolResult" ||
-										!associations().consumed.has(String(message.identity))),
-							)}
-						>
-							{(part) => (
-								<ImageView
-									content={part.data}
-									mediaType={part.mimeType}
-									caption="Retained native transcript image"
-								/>
-							)}
-						</For>
-					</>
-				)}
+							</Show>
+							<For each={message().role === "assistant" ? partSlots() : []}>
+								{(partSlot) => {
+									const part = () => partSlot.value().part;
+									const prose = () => {
+										const value = part().text;
+										return typeof value === "string" ? value : "";
+									};
+									const thinking = () => {
+										const value = part().thinking;
+										return typeof value === "string" ? value : "";
+									};
+									const identity = partSlot.value().identity;
+									const track = anchor(identity);
+									return (
+										<Switch
+											fallback={
+												<text fg={color("textMuted")}>
+													Unsupported native assistant content part ·{" "}
+													{String(part().type ?? "type unavailable")} — not
+													interpreted.
+												</text>
+											}
+										>
+											<Match when={part().type === "text"}>
+												<Show when={prose().length > 0}>
+													<box
+														flexDirection="column"
+														paddingLeft={3}
+														paddingRight={1}
+														flexShrink={0}
+													>
+														<Show
+															when={
+																message().nativePartial === true &&
+																identity === firstText()
+															}
+														>
+															<text fg={color("textMuted")}>
+																Native in-flight committed partial
+															</text>
+														</Show>
+														<AssistantMarkdown
+															transcript={(key, text) =>
+																markdownCache.parts(key, text)
+															}
+															partKey={identity}
+															text={prose()}
+															fg={color("text")}
+															live={message().nativePartial === true}
+														/>
+													</box>
+												</Show>
+											</Match>
+											<Match when={part().type === "thinking"}>
+												<box
+													flexDirection="column"
+													paddingLeft={3}
+													paddingRight={1}
+													flexShrink={0}
+												>
+													<TranscriptHeader
+														identity={identity}
+														select={props.select}
+														toggle={props.toggle}
+														anchor={track}
+													>
+														<box flexDirection="row">
+															<Show when={message().nativePartial === true}>
+																<Spinner
+																	color={color("textMuted")}
+																	attributes={TextAttributes.DIM}
+																/>
+																<text fg={color("textMuted")}> </text>
+															</Show>
+															<text
+																fg={
+																	message().nativePartial === true
+																		? color("textMuted")
+																		: color("warning")
+																}
+																attributes={
+																	message().nativePartial === true
+																		? TextAttributes.DIM
+																		: undefined
+																}
+															>
+																{props.selected === identity ? "› " : ""}
+																{props.expanded.includes(identity) ? "▾" : "▸"}{" "}
+																{message().nativePartial === true
+																	? "Thinking… · committed partial"
+																	: "Thinking… · retained"}
+															</text>
+														</box>
+													</TranscriptHeader>
+													<Show when={props.expanded.includes(identity)}>
+														<text
+															fg={color("textMuted")}
+															attributes={
+																TextAttributes.ITALIC |
+																(message().nativePartial === true
+																	? TextAttributes.DIM
+																	: 0)
+															}
+														>
+															{thinking()}
+														</text>
+													</Show>
+												</box>
+											</Match>
+											<Match when={part().type === "toolCall"}>
+												<ToolCard
+													identity={identity}
+													selected={props.selected === identity}
+													select={props.select}
+													anchor={track}
+													call={part()}
+													partial={message().nativePartial === true}
+													progress={liveLinks().linked.get(identity)}
+													result={
+														associations().links.get(identity)?.result ?? null
+													}
+													pairing={
+														associations().links.get(identity)?.pairing ??
+														"missing"
+													}
+													expanded={props.expanded}
+													toggle={props.toggle}
+													syntax={syntax}
+												/>
+											</Match>
+											<Match when={part().type === "image"}>
+												<ImageView
+													content={part().data}
+													mediaType={part().mimeType}
+													caption={
+														message().nativePartial === true
+															? "Native committed partial image — not retained completion evidence"
+															: "Retained native transcript image"
+													}
+												/>
+											</Match>
+										</Switch>
+									);
+								}}
+							</For>
+							<Show
+								when={
+									message().role === "toolResult" &&
+									!associations().consumed.has(String(message().identity))
+								}
+							>
+								<box
+									flexDirection="column"
+									border={["left"]}
+									borderColor={
+										message().isError === true
+											? color("error")
+											: color("border")
+									}
+									paddingLeft={1}
+								>
+									<text fg={color("warning")}>
+										Unpaired retained result ·{" "}
+										{String(message().toolName ?? "tool")} ·{" "}
+										{String(message().toolCallId ?? "identity unavailable")} —
+										no unique call in this window.
+									</text>
+									<text wrapMode="word">
+										{text(message()) || "No text output retained."}
+									</text>
+									<Show when={message().details !== undefined}>
+										<code
+											content={JSON.stringify(message().details, null, 2)}
+											filetype="json"
+											syntaxStyle={syntax}
+											drawUnstyledText={true}
+											wrapMode="word"
+										/>
+									</Show>
+								</box>
+							</Show>
+							<For
+								each={dataList(message().content).filter(
+									(part) =>
+										part.type === "image" &&
+										message().role !== "assistant" &&
+										(message().role !== "toolResult" ||
+											!associations().consumed.has(String(message().identity))),
+								)}
+							>
+								{(part) => (
+									<ImageView
+										content={part.data}
+										mediaType={part.mimeType}
+										caption="Retained native transcript image"
+									/>
+								)}
+							</For>
+						</>
+					);
+				}}
 			</For>
 			<For each={standalone()}>
 				{(row) => (

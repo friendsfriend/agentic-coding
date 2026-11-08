@@ -150,6 +150,7 @@ export function StandalonePanel(props: {
 										. No task/environment execution authority.
 									</text>
 									<StandaloneTranscript
+										sessionId={session().id}
 										messages={session().messages}
 										partial={session().partial}
 										busy={session().status === "busy"}
