@@ -833,6 +833,21 @@ content and bindings, not permission to replace the original presentation.
   Integrated load-older and interactive/visual acceptance remain outstanding;
   no renderer/helper/mounting tests are added.
 
+## Shared list gesture retirement across pauses/replacements
+
+- Retire the shared list's local pending press and last-tap record when its
+  active state changes, its item array is replaced, or the list unmounts. A tap
+  begun before an overlay pause cannot regain activation meaning after resume.
+- Ordinary selected-index and window-start changes do not retire the holder;
+  keep the original row-instance/cell rules across window movement. Current-item
+  equality and native timeline captured-row/reveal fences remain unchanged.
+- This is local pointer bookkeeping only: no global selection/clipboard hooks,
+  native cancellation, command, retry, fetch or persisted state is introduced.
+- Load-older remains a separate unfinished path: the original local expansion
+  of supplied blocks must not be misrepresented as permission for automatic
+  native `session.history` reads on scrolling. No renderer/helper tests or
+  interactive/visual acceptance are claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

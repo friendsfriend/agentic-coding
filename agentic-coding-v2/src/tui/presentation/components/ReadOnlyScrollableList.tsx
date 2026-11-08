@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { For, type JSX, Show } from "solid-js";
+import { createEffect, For, type JSX, onCleanup, Show } from "solid-js";
 import { uiColors } from "../theme/colors.ts";
 import { useHover } from "./mouse/useHover.ts";
 import { type RowGestureState, useRowMouse } from "./mouse/useRowMouse.ts";
@@ -21,6 +21,19 @@ export function ReadOnlyScrollableList<T>(props: {
 	renderItem: (item: T, selected: () => boolean) => JSX.Element;
 	emptyContent: JSX.Element;
 }) {
+	const gesture = props.gesture;
+	const retireGesture = () => {
+		gesture.down = undefined;
+		gesture.lastTap = undefined;
+	};
+	createEffect(() => {
+		// Mode pauses and replacement item sets retire a press; ordinary window
+		// movement/selection deliberately does not. No global pointer state.
+		props.active;
+		props.items;
+		retireGesture();
+	});
+	onCleanup(retireGesture);
 	const lines = () => Math.max(1, props.availableLines);
 	const start = () =>
 		Math.max(
@@ -85,7 +98,7 @@ export function ReadOnlyScrollableList<T>(props: {
 							const selected = () =>
 								index() >= 0 && index() === props.selectedIndex;
 							const mouse = useRowMouse({
-								gesture: props.gesture,
+								gesture,
 								index,
 								selectedIndex: () => props.selectedIndex,
 								activatable: () => props.active && index() >= 0,
