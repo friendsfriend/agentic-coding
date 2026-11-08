@@ -24,7 +24,30 @@ export const shellKeybinds: Keybind[] = [
 		action: "Next workspace",
 		standard: true,
 	},
-	{ key: "ctrl+q", cmd: "shell.quit", action: "Quit", short: "quit" },
+	{
+		key: "ctrl+q",
+		cmd: "shell.quit",
+		action: "Confirm local client exit",
+		short: "quit",
+	},
+	{
+		key: "ctrl+alt+n",
+		cmd: "shell.notifications",
+		action: "Read cached local client diagnostics",
+		standard: true,
+	},
+	{
+		key: "ctrl+shift+c",
+		cmd: "shell.copySelection",
+		action: "Explicitly copy selected terminal text",
+		standard: true,
+	},
+	{
+		key: "meta+c",
+		cmd: "shell.copySelection",
+		action: "Explicitly copy selected terminal text",
+		standard: true,
+	},
 	{
 		key: "f1",
 		cmd: "shell.help",
@@ -88,7 +111,8 @@ export const shellKeybinds: Keybind[] = [
 	{
 		key: "escape",
 		cmd: "shell.content",
-		action: "Close editor/palette/help and focus content",
+		action:
+			"Close innermost dialog/help/filter/editor/selection/notice, then focus content",
 		standard: true,
 	},
 	{

@@ -1,0 +1,107 @@
+/** @jsxImportSource @opentui/solid */
+import type { ScrollBoxRenderable } from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
+import { useKeymap } from "@opentui/keymap/solid";
+import { onCleanup } from "solid-js";
+import { HelpText } from "../presentation/components/HelpText.tsx";
+import { ReadOnlyModalFrame } from "../presentation/components/ReadOnlyModalFrame.tsx";
+import { SearchHeader } from "../presentation/components/SearchHeader.tsx";
+import { useTerminalDimensions } from "../presentation/hooks/useTerminalDimensions.ts";
+import { uiColors } from "../presentation/theme/colors.ts";
+import type { LocalNotice } from "./notifications.ts";
+
+/** Original error-dialog sizing/header/scroll presentation over a local immutable
+ * report. Dismissal never resolves a review, retries an operation or approves. */
+export function MessageDialog(props: {
+	item: LocalNotice;
+	active: boolean;
+	close: (item: LocalNotice) => void;
+}) {
+	const dimensions = useTerminalDimensions();
+	const item = props.item;
+	let disposed = false;
+	let scroll: ScrollBoxRenderable | undefined;
+	const enabled = () => !disposed && props.active && props.item === item;
+	const close = () => {
+		if (enabled())
+			queueMicrotask(() => {
+				if (enabled()) props.close(item);
+			});
+	};
+	const move = (dy: number) => {
+		if (enabled()) scroll?.scrollBy(dy);
+	};
+	const unregister = useKeymap().registerLayer({
+		id: `v2.diagnostic.${item.id}`,
+		priority: 200,
+		enabled,
+		bindings: [
+			{ key: "escape", cmd: close },
+			...[
+				["j", 1],
+				["down", 1],
+				["k", -1],
+				["up", -1],
+				["pagedown", 8],
+				["pageup", -8],
+			].map(([key, dy]) => ({ key: String(key), cmd: () => move(Number(dy)) })),
+		],
+	});
+	onCleanup(() => {
+		disposed = true;
+		unregister();
+		scroll = undefined;
+	});
+	return (
+		<ReadOnlyModalFrame
+			width={Math.max(1, Math.floor(dimensions().width * 0.7))}
+			height={Math.max(1, Math.floor(dimensions().height * 0.55))}
+			close={close}
+			active={enabled()}
+			footerHeight={2}
+			header={
+				<SearchHeader>
+					<text
+						fg={item.type === "error" ? uiColors.error : uiColors.primary}
+						attributes={TextAttributes.BOLD}
+					>
+						{item.type === "error" ? "✗ " : "ℹ "}Local client diagnostic
+					</text>
+				</SearchHeader>
+			}
+			footer={
+				<>
+					<HelpText
+						entries={[
+							{ key: "j/k", action: "Scroll" },
+							{ key: "Esc", action: "Close" },
+						]}
+						activatable={() => true}
+						onActivate={(entry) => (entry.key === "Esc" ? close() : move(1))}
+					/>
+					<text fg={uiColors.textMuted} truncate>
+						Read-only display; no native acknowledgement, retry or approval.
+					</text>
+				</>
+			}
+		>
+			<scrollbox
+				ref={(node) => {
+					scroll = node;
+				}}
+				flexGrow={1}
+				minHeight={0}
+				width="100%"
+				paddingTop={1}
+			>
+				<text fg={uiColors.textMuted} wrapMode="word">
+					Origin: {item.origin} · received locally {item.receivedAt} (epoch ms).
+					Cached report, not current native state or an authoritative receipt.
+				</text>
+				<text fg={uiColors.textPrimary} wrapMode="word">
+					{item.message}
+				</text>
+			</scrollbox>
+		</ReadOnlyModalFrame>
+	);
+}

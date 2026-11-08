@@ -457,6 +457,65 @@ test("disconnect makes an in-flight native mutation uncertain; reconnect only re
 	}
 });
 
+test("closing an authenticated client retains mutation uncertainty without replay or client revival", async () => {
+	const { app, fake } = await fixture();
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const observer = new ClientConnection(host.client);
+	const release = Promise.withResolvers<void>();
+	const configure = app.home.configure.bind(app.home);
+	let calls = 0;
+	let applied = false;
+	app.home.configure = async (change, context) => {
+		calls++;
+		await release.promise;
+		await configure(change, context);
+		applied = true;
+	};
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		const outcome = client
+			.call("session.configure", { id: Number(app.home.id), profile: "test" })
+			.catch((error: unknown) => error);
+		await eventually(
+			async () => calls,
+			(value) => value === 1,
+		);
+		client.close();
+		expect(await outcome).toBeInstanceOf(CommandUncertain);
+		expect(client.status).toBe("closed");
+		expect(client.stateFresh).toBe(false);
+		expect(client.observation).toBe("none");
+		client.connect();
+		client.reconnectNow();
+		expect(client.status).toBe("closed");
+		release.resolve();
+		await eventually(async () => applied, Boolean);
+		observer.connect();
+		await eventually(async () => observer.stateFresh, Boolean);
+		expect(
+			await observer.call("session.read", { id: Number(app.home.id) }),
+		).toMatchObject({ thinking: "off" });
+		expect(calls).toBe(1);
+		expect(fake.state.callCount).toBe(0);
+		expect(client.status).toBe("closed");
+		expect(client.stateFresh).toBe(false);
+		await expect(
+			client.call("session.configure", {
+				id: Number(app.home.id),
+				profile: "test",
+			}),
+		).rejects.toThrow();
+		expect(calls).toBe(1);
+	} finally {
+		release.resolve();
+		client.close();
+		observer.close();
+		await host.stop();
+	}
+});
+
 test("native progress watch resynchronizes without replay or duplicate retained messages", async () => {
 	const { app, fake } = await fixture(false, undefined, {
 		tokensPerSecond: 30,

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { type MouseEvent, RGBA } from "@opentui/core";
 import { Portal } from "@opentui/solid";
-import type { JSX } from "solid-js";
+import { createEffect, type JSX, onCleanup } from "solid-js";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors.ts";
 import {
@@ -21,20 +21,42 @@ export function ReadOnlyModalFrame(props: {
 	footerHeight: number;
 	children: JSX.Element;
 	close: () => void;
+	active?: boolean;
 }) {
 	const dimensions = useTerminalDimensions();
 	const onBackdropArea = (event: MouseEvent) =>
 		event.target === undefined || event.target === event.currentTarget;
 	let backdropDown: PointerSample | undefined;
+	let disposed = false;
+	const enabled = () => !disposed && props.active !== false;
+	createEffect(() => {
+		props.active;
+		dimensions();
+		backdropDown = undefined;
+	});
+	onCleanup(() => {
+		disposed = true;
+		backdropDown = undefined;
+	});
 	const backdropMouseDown = (event: MouseEvent) => {
 		backdropDown = undefined;
-		if (!isPrimaryPointerButton(event.button) || !onBackdropArea(event)) return;
+		if (
+			!enabled() ||
+			!isPrimaryPointerButton(event.button) ||
+			!onBackdropArea(event)
+		)
+			return;
 		backdropDown = { x: event.x, y: event.y };
 	};
 	const backdropMouseUp = (event: MouseEvent) => {
 		const start = backdropDown;
 		backdropDown = undefined;
-		if (!isPrimaryPointerButton(event.button) || !onBackdropArea(event)) return;
+		if (
+			!enabled() ||
+			!isPrimaryPointerButton(event.button) ||
+			!onBackdropArea(event)
+		)
+			return;
 		if (classifyPointerGesture(start, { x: event.x, y: event.y }) !== "tap")
 			return;
 		props.close();

@@ -1543,14 +1543,73 @@ content and bindings, not permission to replace the original presentation.
   remain outstanding; this is an integrated functionality/lifecycle increment,
   not a claim of visual parity.
 
+## Notification, diagnostic, selection and exit lifecycle pass
+
+- Port the original right-two/bottom-one corner notification, two-cell horizontal
+  padding, semantic tone/icon, bold text and hover/tap presentation locally. Toasts
+  expire after three seconds without consuming a permanent notice row. Selection
+  drags, inactive-overlay presses and disposed/replaced toast gestures do not
+  dismiss a different report; expiry checks the exact mounted report identity.
+  The connection warning remains a separate persistent row and is no longer hidden
+  indefinitely by an old notice.
+- Keep a per-mounted-client diagnostic archive, not a module-global notification
+  service: last 32 reports, at most 128000 message UTF-16 units, with each message
+  bounded to 64000 units and explicitly marked if truncated at a surrogate-safe
+  boundary. Compact toast/choice labels do not replace the retained message.
+  Ctrl+Alt+N searches this local archive and opens an immutable read-only report.
+  Origins and receive times are local UI metadata, not native receipts, current
+  state, provenance, admission or authority. Dismissal preserves the archive;
+  terminal cleanup clears it and cancels its timer. No disk persistence is added.
+- Retain submitted-command failures in a non-expiring read-only diagnostic dialog,
+  using the original error-dialog 70% width / 55% height and header/scroll framing.
+  Capture the submit origin before awaiting work. Preserve the existing uncertain
+  settings-apply warning and never retry, redeem a confirmation, acknowledge a
+  review or decide a native outcome from a displayed error. A later error is
+  archived rather than substituted under a reader of the first report. This is
+  a client diagnostic viewer, not the native receipt or task-review surface.
+- Restore original warning-confirmation chrome for Ctrl+Q terminal exit, with
+  explicit local y/n and Escape/backdrop cancellation. Drafts and UI history stay
+  intact when cancelling. This dialog has no native command/approval parameters;
+  y only invokes the existing renderer quit callback. CLI teardown may close an
+  owned host, so neither exit nor continued local display proves completion or
+  cancellation. External process signals retain their existing teardown path.
+- Fence underlying prompt, workspace, resource, editor and chooser interactions
+  while either higher-priority dialog owns the shell. Preserve underlying help
+  and local chooser state rather than making their dismissal an implicit action.
+  Diagnostic/exit closure is deferred until native keymap dispatch completes and
+  checks the exact surviving dialog before mutating local state. The shared modal
+  backdrop retires held presses on inactive state and disposal.
+- Extend the ordered local Escape path after dialog/help/picker handling:
+  breadcrumb focus, editing focus (without discarding the draft), selection,
+  current toast, then content focus. Escape never aborts, approves or submits.
+  Retire global terminal selection when its view/page/resource or dialog/chooser
+  owner changes, without clearing it on unrelated retained transcript updates.
+- Restore explicit Ctrl+Shift+C / Meta+C terminal-selection copy with the original
+  platform helper order, silent unavailable-helper handling, no shell and bounded
+  one-second helper attempts. Only an explicit copy key exports selected text;
+  there is no automatic mouse-release export or backend/provider/model request.
+  A 256000-byte UTF-8 limit refuses oversized selections without exporting them.
+  A zero helper exit means helper acceptance, not verified clipboard contents;
+  Linux/Unix terminal OSC 52 fallback is explicitly unverified (including tmux).
+  Failed/refused copies retain selection. A destroyed renderer cannot copy.
+- Add one authenticated disposable loopback fixture proving client closure leaves
+  an accepted in-flight mutation uncertain: it neither revives/replays that client
+  nor prevents the owned host from completing the admitted mutation. A separate
+  explicitly connected observer reads the result; no faux model invocation occurs.
+  This checks the public client/gateway boundary, not terminal exit or rendering.
+  No actual clipboard helper/OSC 52, TTY, provider, cluster, deployment, restart or
+  credentials are used in verification. Full appearance, platform clipboard
+  integration and original automatic selection-copy behavior remain unverified;
+  no renderer/helper/snapshot/navigation-matrix tests or parity claims are added.
+
 ## Still required before claiming parity
 
 - Remaining workspace resource filters/pin customization, global preference persistence beyond
   explicitly saved viewpoints and the remaining navigation/focus key catalogs.
   Side/mode viewpoint restoration and keyboard breadcrumb focus are restored.
-- Remaining original modal components, selection/clipboard interactions and
-  notification placement; the restored read-only help frame is not general
-  modal parity.
+- Remaining original modal components and selection/clipboard interactions;
+  the local notification/diagnostic/exit pass does not establish general modal,
+  automatic-copy or terminal-placement parity.
 - Remaining orchestrator/durable transcript composition: text-line/source-offset
   anchoring beyond the integrated bounded local expansion, native-history merge,
   Mermaid diagram rendering, remaining specialized tool families and

@@ -84,6 +84,7 @@ import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { WikiPanel } from "../features/wiki/WikiPanel.tsx";
 import { Badge } from "../presentation/components/Badge.tsx";
 import { JumpToLatest } from "../presentation/components/JumpToLatest.tsx";
+import { NotificationOverlay } from "../presentation/components/Notification.tsx";
 import { PromptSuggestions } from "../presentation/components/PromptSuggestions.tsx";
 import {
 	createPromptCursorBlink,
@@ -104,6 +105,7 @@ import { BreadcrumbRow } from "../presentation/navigation/BreadcrumbRow.tsx";
 import { type Route, routeKey } from "../presentation/routes.ts";
 import { ActionScope } from "../ui/ActionScope.tsx";
 import { CommandPalette } from "../ui/CommandPalette.tsx";
+import { copyToClipboard } from "../ui/clipboard.ts";
 import {
 	actionKeybinds,
 	bindings,
@@ -120,6 +122,9 @@ import {
 	transcriptViewportKeybinds,
 } from "../ui/keybinds.ts";
 import { type LocalChoice, LocalChoiceContext } from "../ui/LocalChoice.ts";
+import { MessageDialog } from "../ui/MessageDialog.tsx";
+import { createNotifications, type LocalNotice } from "../ui/notifications.ts";
+import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
 import { Navigation, type Page, type View, view } from "./navigation.ts";
@@ -209,7 +214,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			mutation: "save",
 		});
 	const [revision, setRevision] = createSignal(0),
-		[notice, setNotice] = createSignal<string | null>(null),
 		[wikiData, setWikiData] = createSignal<Data[]>([]),
 		[wikiDocument, setWikiDocument] = createSignal<{
 			page: Data;
@@ -252,9 +256,38 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[settingsCandidate, setSettingsCandidate] =
 			createSignal<SettingsCandidate | null>(null),
 		[settingsEditing, setSettingsEditing] = createSignal(false),
-		[helpOpen, setHelpOpen] = createSignal(false),
+		[helpRequested, setHelpOpen] = createSignal(false),
 		[paletteOpen, setPaletteOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
+	const [messageDialog, setMessageDialog] = createSignal<LocalNotice | null>(
+		null,
+	);
+	const [quitConfirmation, setQuitConfirmation] = createSignal(false);
+	// Existing helpOpen guards are shell interaction fences, including the two
+	// higher-priority local dialogs. Actual help rendering uses helpRequested.
+	const helpOpen = () =>
+		helpRequested() || messageDialog() !== null || quitConfirmation();
+	const notifications = createNotifications(() =>
+		`${navigation.current.page} ${navigation.current.resource ?? ""}`.trim(),
+	);
+	const setNotice = (message: string | null) => {
+		if (renderer.isDestroyed) return;
+		if (message === null) notifications.clear();
+		else notifications.publish(message);
+	};
+	const reportError = (message: string, origin?: string) => {
+		if (renderer.isDestroyed) return;
+		const item = notifications.publish(message, "error", origin);
+		if (!item) return;
+		notifications.clear(item);
+		// A later report is retained in the archive, not substituted under a
+		// developer who is already reading the first immutable diagnostic.
+		if (!messageDialog()) setMessageDialog(item);
+	};
+	const requestQuit = () => {
+		remember();
+		setQuitConfirmation(true);
+	};
 	const [breadcrumbFocused, setBreadcrumbFocused] = createSignal(false);
 	const [crumbKey, setCrumbKey] = createSignal<string>();
 	const [promptText, setPromptText] = createSignal(navigation.current.draft);
@@ -2029,7 +2062,93 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							: binding,
 				)
 			: promptKeybinds;
+	function chooseNotifications() {
+		const records = [...notifications.records()];
+		if (records.length === 0) {
+			setNotice("No retained local client diagnostics");
+			return;
+		}
+		openLocalChoice({
+			title: "Local client diagnostics (cached, read-only)",
+			rows: records.toReversed().map((item) => ({
+				key: item.id,
+				label: `${item.type} · ${Array.from(item.message.replace(/\s+/g, " ")).slice(0, 80).join("")}`,
+				detail: `${item.origin} · locally received ${item.receivedAt}${item.truncated ? " · display truncated" : ""}`,
+				search: `${item.message} ${item.origin}`,
+			})),
+			note: "Client-memory only: last 32 reports / 128000 UTF-16 units. Not native history, receipts, state or approval.",
+			valid: () =>
+				records.some((item) => notifications.records().includes(item)),
+			choose: (key) => {
+				const item = records.find((record) => record.id === key);
+				if (!item || !notifications.records().includes(item)) return false;
+				setMessageDialog(item);
+				return true;
+			},
+		});
+	}
+	function copySelection() {
+		if (renderer.isDestroyed) return;
+		const selection = renderer.getSelection();
+		const text = selection?.getSelectedText() ?? "";
+		if (!text) {
+			notifications.publish("No selection to copy", "warning");
+			return;
+		}
+		const result = copyToClipboard(text);
+		notifications.publish(
+			result === "accepted"
+				? "Clipboard helper accepted selection"
+				: result === "sent-unverified"
+					? "OSC 52 selection request queued; clipboard contents unverified"
+					: result === "too-large"
+						? "Selection exceeds the 256000-byte clipboard limit; select a smaller range"
+						: "Clipboard unavailable; selection retained",
+			result === "accepted" ? "success" : "warning",
+		);
+		if (
+			(result === "accepted" || result === "sent-unverified") &&
+			renderer.getSelection() === selection
+		)
+			renderer.clearSelection();
+	}
+	let selectionOwner: readonly unknown[] | undefined;
+	createEffect(() => {
+		const owner = [
+			current(),
+			current().page,
+			current().resource,
+			sessionId(),
+			helpRequested(),
+			paletteOpen(),
+			localChoice(),
+			messageDialog(),
+			quitConfirmation(),
+		];
+		if (
+			selectionOwner &&
+			owner.some((value, index) => value !== selectionOwner?.[index])
+		)
+			renderer.clearSelection();
+		selectionOwner = owner;
+	});
 	const keymap = useKeymap();
+	const unregisterCopy = keymap.registerLayer({
+		id: "v2.explicitSelectionCopy",
+		priority: 205,
+		commands: [
+			{
+				id: "shell.copySelection",
+				name: "Explicitly copy selected terminal text",
+				run: copySelection,
+			},
+		],
+		bindings: [
+			{ key: "ctrl+shift+c", cmd: "shell.copySelection" },
+			{ key: "meta+c", cmd: "shell.copySelection" },
+		],
+	});
+	onCleanup(unregisterCopy);
 	const unregisterViewport = keymap.registerLayer({
 		id: "v2.transcriptViewport",
 		priority: 35,
@@ -2060,8 +2179,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const unregister = keymap.registerLayer({
 		id: "v2.shell",
 		priority: 10,
+		enabled: () => messageDialog() === null && !quitConfirmation(),
 		commands: [
-			{ id: "shell.quit", name: "Quit", run: () => props.quit() },
+			{
+				id: "shell.quit",
+				name: "Confirm local terminal exit",
+				run: requestQuit,
+			},
+			{
+				id: "shell.notifications",
+				name: "Read local client diagnostics",
+				run: chooseNotifications,
+			},
 			{
 				id: "shell.workspaceToggle",
 				name: "Toggle workspace/content focus",
@@ -2165,13 +2294,36 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			},
 			{
 				id: "shell.content",
-				name: "Focus content",
+				name: "Close innermost local interaction",
 				run: () => {
+					if (helpRequested()) {
+						setHelpOpen(false);
+						return;
+					}
+					if (paletteOpen()) {
+						setPaletteOpen(false);
+						return;
+					}
+					if (crumbActive()) {
+						setBreadcrumbFocused(false);
+						navigation.current.focus = "content";
+						update();
+						return;
+					}
+					if (settingsEditing()) {
+						setSettingsEditing(false);
+						return;
+					}
+					if (renderer.getSelection()) {
+						renderer.clearSelection();
+						return;
+					}
+					if (notifications.active()) {
+						notifications.clear();
+						return;
+					}
 					setBreadcrumbFocused(false);
 					navigation.current.focus = "content";
-					setSettingsEditing(false);
-					setHelpOpen(false);
-					setPaletteOpen(false);
 					update();
 				},
 			},
@@ -2202,7 +2354,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				run: () => go(page as Page),
 			})),
 		],
-		bindings: bindings(shellKeybinds),
+		bindings: bindings(
+			shellKeybinds.filter((binding) => binding.cmd !== "shell.copySelection"),
+		),
 	});
 	onCleanup(unregister);
 	let pendingSubmissions = 0;
@@ -2219,6 +2373,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		const origin = navigation.current;
 		const content = origin.draft;
 		const admittedHistoryKey = historyKey();
+		const diagnosticOrigin = `${origin.page} ${origin.resource ?? ""}`.trim();
 		if (!content.trim()) return;
 		if (content.trim() === "/input-history") {
 			origin.draft = "";
@@ -3282,10 +3437,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		} catch (error) {
 			const message =
 				error instanceof Error ? error.message : "Command refused";
-			setNotice(
+			reportError(
 				/^\/settings-apply(?:\s|$)/.test(content)
 					? `${message}. If apply was sent, the file may already have changed; refresh its revision before creating a new confirmation. No automatic retry.`
 					: message,
+				diagnosticOrigin,
 			);
 		} finally {
 			pendingSubmissions--;
@@ -4629,20 +4785,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						.map((binding) => ({ ...binding, key: keyLabel(binding.key) }))}
 					showHelp={!paletteOpen()}
 				/>
-				<Show when={notice() || connectionError()}>
-					<text
-						height={1}
-						fg={
-							notice() || connectionError()
-								? color("warning")
-								: color("textMuted")
-						}
-					>
+				<Show when={connectionError()}>
+					<text height={1} fg={color("warning")} truncate>
 						{" "}
-						{notice() ?? connectionError()}
+						{connectionError()}
 					</text>
 				</Show>
-				<Show when={helpOpen()}>
+				<NotificationOverlay
+					active={notifications.active}
+					dismiss={notifications.clear}
+					interactive={() => !helpOpen() && !paletteOpen()}
+				/>
+				<Show when={helpRequested() && !messageDialog() && !quitConfirmation()}>
 					<HelpOverlay
 						close={() => setHelpOpen(false)}
 						sections={[
@@ -4667,6 +4821,26 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							})),
 						]}
 					/>
+				</Show>
+				<Show when={quitConfirmation() && !messageDialog()}>
+					<QuitDialog
+						active={quitConfirmation() && !messageDialog()}
+						resolve={(exit) => {
+							setQuitConfirmation(false);
+							if (exit) props.quit();
+						}}
+					/>
+				</Show>
+				<Show when={messageDialog()} keyed>
+					{(item) => (
+						<MessageDialog
+							item={item}
+							active={messageDialog() === item}
+							close={(expected) => {
+								if (messageDialog() === expected) setMessageDialog(null);
+							}}
+						/>
+					)}
 				</Show>
 			</box>
 		</LocalChoiceContext.Provider>
