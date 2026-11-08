@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { Show } from "solid-js";
+import { createEffect, onCleanup, Show } from "solid-js";
 import { uiColors } from "../theme/colors.ts";
+import type { RowGestureState } from "./mouse/useRowMouse.ts";
 import { useTap } from "./mouse/useTap.ts";
 import { Spinner } from "./Spinner.tsx";
 import { Stamp } from "./Stamp.tsx";
@@ -9,6 +10,8 @@ import { Stamp } from "./Stamp.tsx";
  * bindings. This presentation component cannot infer execution or start clocks. */
 export function ToolCallHeader(props: {
 	failed: boolean;
+	scope?: unknown;
+	interactive?: boolean;
 	pending: boolean;
 	browser: boolean;
 	icon: string;
@@ -18,11 +21,35 @@ export function ToolCallHeader(props: {
 	durationMs?: unknown;
 	onToggle: () => void;
 }) {
+	let disposed = false;
+	const gesture: RowGestureState = {};
+	const retire = () => {
+		gesture.down = undefined;
+		gesture.lastTap = undefined;
+	};
+	createEffect(() => {
+		props.scope;
+		props.interactive;
+		retire();
+	});
+	onCleanup(() => {
+		disposed = true;
+		retire();
+	});
 	const iconFg = () => (props.failed ? uiColors.error : uiColors.textMuted);
 	return (
 		<box
 			flexDirection="row"
-			{...useTap(props.onToggle, { stopPropagation: true })}
+			{...useTap(
+				() => {
+					if (!disposed && props.interactive !== false) props.onToggle();
+				},
+				{
+					gesture,
+					enabled: () => !disposed && props.interactive !== false,
+					stopPropagation: true,
+				},
+			)}
 		>
 			<box width={props.browser ? 3 : 2} flexShrink={0} flexDirection="row">
 				<Show when={props.browser}>

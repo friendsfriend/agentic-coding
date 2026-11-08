@@ -1,13 +1,22 @@
 /** @jsxImportSource @opentui/solid */
 import type { BoxRenderable, SyntaxStyle } from "@opentui/core";
-import { createMemo, For, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	For,
+	onCleanup,
+	Show,
+	useContext,
+} from "solid-js";
 import type { Data, ToolProgress } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { useHover } from "../../presentation/components/mouse/useHover.ts";
+import type { RowGestureState } from "../../presentation/components/mouse/useRowMouse.ts";
 import { useTap } from "../../presentation/components/mouse/useTap.ts";
 import { ToolCallHeader } from "../../presentation/components/ToolCallHeader.tsx";
 import { uiColors } from "../../presentation/theme/colors.ts";
 import { ImageView } from "../../ui/ImageView.tsx";
+import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { StructuredData } from "../../ui/StructuredData.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
@@ -30,6 +39,7 @@ import {
 	ToolRequestedSource,
 } from "./ToolRequestedSource.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
+import { TranscriptRowsContext } from "./TranscriptRows.ts";
 import { TranscriptShellOutput } from "./TranscriptShellOutput.tsx";
 
 const object = (value: unknown): Data =>
@@ -43,6 +53,8 @@ const string = (value: unknown) => (typeof value === "string" ? value : "");
  * An in-flight model call is explicitly not an execution observation. */
 export function ToolCard(props: {
 	identity: string;
+	scope?: unknown;
+	interactive?: boolean;
 	selected: boolean;
 	select: (id: string) => void;
 	anchor: (node: BoxRenderable | null) => void;
@@ -56,7 +68,52 @@ export function ToolCard(props: {
 	toggle: (id: string) => void;
 	syntax: SyntaxStyle;
 }) {
-	const hover = useHover();
+	const hover = useHover(),
+		choices = useContext(LocalChoiceContext),
+		reading = useContext(TranscriptRowsContext);
+	let disposed = false;
+	const foldGestures = new Map<string, RowGestureState>();
+	const cardScope = createMemo(() => [
+		props.identity,
+		props.scope,
+		props.interactive,
+		props.call,
+		props.progress,
+		props.result,
+		props.partial,
+		props.expanded,
+		choices?.scope(),
+		choices?.interactive(),
+	]);
+	const active = () =>
+		!disposed &&
+		props.interactive !== false &&
+		(choices?.interactive() ?? true) &&
+		(reading?.selectable(props.identity) ?? true);
+	const retire = () => {
+		for (const gesture of foldGestures.values()) {
+			gesture.down = undefined;
+			gesture.lastTap = undefined;
+		}
+	};
+	createEffect(() => {
+		cardScope();
+		retire();
+	});
+	onCleanup(() => {
+		disposed = true;
+		retire();
+		foldGestures.clear();
+	});
+	const activate = (suffix = "") => {
+		if (active()) {
+			if (reading) reading.activate(props.identity, suffix);
+			else {
+				props.select(props.identity);
+				props.toggle(`${props.identity}${suffix}`);
+			}
+		}
+	};
 	// Icon gutter from the original tool-call header; unknown tools keep its dot.
 	const browserActions = new Set([
 		"browser_open",
@@ -381,21 +438,23 @@ export function ToolCard(props: {
 					name() === "write" ||
 					(name() === "edit" && patch())),
 		) || shellSource();
-	const fold = (suffix: string, label: string) => (
-		<box
-			{...useTap(
-				() => {
-					props.select(props.identity);
-					props.toggle(`${props.identity}${suffix}`);
-				},
-				{ stopPropagation: true },
-			)}
-		>
-			<text fg={color("accent")}>
-				{open(suffix) ? "▾" : "▸"} {label}
-			</text>
-		</box>
-	);
+	const fold = (suffix: string, label: string) => {
+		const gesture = foldGestures.get(suffix) ?? {};
+		foldGestures.set(suffix, gesture);
+		return (
+			<box
+				{...useTap(() => activate(suffix), {
+					gesture,
+					enabled: active,
+					stopPropagation: true,
+				})}
+			>
+				<text fg={color("accent")}>
+					{open(suffix) ? "▾" : "▸"} {label}
+				</text>
+			</box>
+		);
+	};
 	return (
 		<box
 			flexDirection="column"
@@ -420,12 +479,16 @@ export function ToolCard(props: {
 		>
 			<ToolSurfaceHoverContext.Provider value={hover.hovered}>
 				<TranscriptHeader
+					scope={cardScope()}
+					interactive={props.interactive}
 					identity={props.identity}
 					select={props.select}
 					toggle={props.toggle}
 					anchor={props.anchor}
 				>
 					<ToolCallHeader
+						scope={cardScope()}
+						interactive={props.interactive}
 						failed={props.result?.isError === true}
 						pending={
 							!props.partial &&
@@ -438,10 +501,7 @@ export function ToolCard(props: {
 						hint={headerLabel() !== name() ? name() : undefined}
 						timestamp={props.result?.timestamp}
 						durationMs={props.result?.durationMs}
-						onToggle={() => {
-							props.select(props.identity);
-							props.toggle(props.identity);
-						}}
+						onToggle={() => activate()}
 					/>
 					<text
 						fg={

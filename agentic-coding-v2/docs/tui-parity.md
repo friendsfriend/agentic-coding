@@ -1465,6 +1465,46 @@ content and bindings, not permission to replace the original presentation.
   These gates establish native boundary behavior, not UI partition/rendering or
   terminal acceptance. No renderer/helper/navigation-matrix tests are added.
 
+## Integrated transcript navigation and reader lifecycle batch
+
+- Mounted thinking/tool cards share explicit scoped selection/toggle/reveal guards.
+  A searchable local chooser and documented Ctrl+Alt+G / Left / Right commands
+  navigate supplied cards and uniquely linked parents/children. Parent links need
+  both supplied task and call pointers; ambiguity, clipping and missing metadata
+  never synthesize a hierarchy or adopt another native task. Multiple children use
+  the existing local chooser. Added shortcuts appear in help without extending the
+  original footer catalog presentation.
+- Live slot keys now encode the full session/run/task/entry/call/name/parent tuple
+  instead of choosing whichever numeric pointer is present. Repeated exact tuples
+  remain nonselectable observations, with distinct display carriers and an explicit
+  warning; their ordinal is not a native identity or a fallback navigation target.
+  Saved old/unavailable selection strings remain inert rather than being migrated.
+- Add a presentation-only native transcript reading context. Supplied text windows
+  register independent local rendered anchors and explicit range navigation queues
+  an exact key/node reveal after layout. Source replacement changes its local
+  anchor generation; append-only updates preserve the existing reader. No renderer
+  reference or synthetic source identity is stored in native data or viewpoints.
+- Queued reveal captures the exact view, scroll box, session, registry, key and node.
+  Oversized targets show their start rather than jumping to an unreadable bottom.
+  Reading offsets retain the exact rendered node, not merely a reused logical key;
+  byte replacement, unmount and stale registries withdraw old offsets.
+- Pointer tool/thinking/prompt folds mark deliberate reading intent without forcing
+  a header jump. Source/range and keyboard selection reveal explicitly. Layout
+  shrinkage, selection autoscroll or an explicit source reveal reaching the physical
+  bottom does not silently resume following. An explicit saved reader mode survives
+  Back/Forward restoration; ordinary intentional scrolling and `/latest` retain
+  their existing behavior. Reader hold intent is scoped and retired on interruption.
+- Header, icon-gutter and independent section gestures retire on source/scope,
+  interactivity and disposal changes; section fold state changes retire held taps.
+  Native transcript commands are suppressed under help, chooser and busy overlays.
+  Timers, row registrations, queued reader/reveal references and caches have bounded
+  cleanup. Standalone UUIDs gain no native task or reading-context identity.
+- Extend the existing authenticated streaming fixture: detach while work is live,
+  verify late durable completion cannot repopulate the detached client, then explicitly
+  reobserve the exact session without another faux-model invocation. Full boundary
+  gates do not establish rendering, parent-link presentation, viewport geometry or
+  visual acceptance; no helper/renderer/navigation-matrix tests are added.
+
 ## Still required before claiming parity
 
 - Remaining workspace resource filters/pin customization, global preference persistence beyond

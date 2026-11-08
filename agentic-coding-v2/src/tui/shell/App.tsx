@@ -265,6 +265,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const renderer = useRenderer();
 	let pendingReveal: BoxRenderable | undefined;
 	let pendingRevealTop = false;
+	let pendingRevealView: View | null = null;
+	let pendingRevealBox: ScrollBoxRenderable | undefined;
 	let pendingRevealScope: {
 		id: number;
 		page: Page;
@@ -312,6 +314,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		createSignal<ProfilePickerState | null>(null);
 	let pendingLatest: number | null = null;
 	let pendingReaderMotion: number | null = null;
+	let pendingReaderHold: { id: number; view: View } | null = null;
 	let pendingOlderMotion: number | null = null;
 	let readerSelection: import("@opentui/core").Selection | null = null;
 	let readerSelectionId: number | null = null;
@@ -357,7 +360,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			pendingLocalLoad = null;
 		};
 	};
-	let readingAnchor: { key: string; offset: number } | null = null;
+	let readingAnchor: {
+		key: string;
+		node: BoxRenderable;
+		offset: number;
+	} | null = null;
 	let followingBottom = false;
 	let sampledScroll: {
 		top: number;
@@ -366,6 +373,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		viewport: number;
 	} | null = null;
 	const resetReadingPlace = () => {
+		pendingReaderHold = null;
+		pendingRevealView = null;
+		pendingRevealBox = undefined;
 		pendingLocalLoad = null;
 		pendingOlderMotion = null;
 		if (pendingRevealScope) {
@@ -457,8 +467,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					!isTranscript() ||
 					helpOpen() ||
 					paletteOpen())
-			)
+			) {
 				pendingReaderMotion = null;
+				pendingReaderHold = null;
+			}
 			if (pendingLatest !== null && pendingLatest !== sessionId())
 				pendingLatest = null;
 			if (
@@ -560,17 +572,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			// Layout and wrapping have settled before this post-process callback.
 			// A newer selection replaces the target; destroyed rows are never reused.
 			const scope = pendingRevealScope;
-			const node =
-				scope &&
-				(scope.id !== sessionId() ||
-					scope.page !== current().page ||
-					scope.resource !== current().resource ||
-					readingRows !== scope.registry ||
-					scope.registry.get(scope.key) !== pendingReveal ||
-					!available())
+			const revealOwnerValid =
+				pendingRevealView === navigation.current && pendingRevealBox === scroll;
+			const node = !revealOwnerValid
+				? undefined
+				: scope &&
+						(scope.id !== sessionId() ||
+							scope.page !== current().page ||
+							scope.resource !== current().resource ||
+							readingRows !== scope.registry ||
+							scope.registry.get(scope.key) !== pendingReveal ||
+							!available())
 					? undefined
 					: pendingReveal;
 			pendingRevealScope = null;
+			pendingRevealView = null;
+			pendingRevealBox = undefined;
 			const revealTop = pendingRevealTop;
 			pendingReveal = undefined;
 			pendingRevealTop = false;
@@ -599,7 +616,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				Number.isFinite(scroll.viewport.screenY)
 			) {
 				const top = node.screenY - scroll.viewport.screenY + scroll.scrollTop;
-				if (revealTop || top < scroll.scrollTop)
+				if (
+					revealTop ||
+					node.height > scroll.viewport.height ||
+					top < scroll.scrollTop
+				)
 					scroll.scrollTo(Math.max(0, top));
 				else if (top + node.height > scroll.scrollTop + scroll.viewport.height)
 					scroll.scrollTo(
@@ -634,6 +655,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				// including its final release frame. Never inspect selected text.
 				readerSelection = ownedDrag ? selection : null;
 				readerSelectionId = ownedDrag ? sessionId() : null;
+				const heldReaderMode =
+					pendingReaderHold?.id === sessionId() &&
+					pendingReaderHold?.view === navigation.current;
+				pendingReaderHold = null;
 				const olderRequested =
 					pendingOlderMotion === sessionId() &&
 					pendingReaderMotion === sessionId();
@@ -658,7 +683,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						if (scroll.scrollTop !== bottom) scroll.scrollTo(bottom);
 					} else if (readingAnchor) {
 						const held = readingRows.get(readingAnchor.key);
-						if (held && isReadingRow(held)) {
+						if (held && held === readingAnchor.node && isReadingRow(held)) {
 							const offset = held.screenY - scroll.viewport.screenY;
 							if (Number.isFinite(offset) && offset !== readingAnchor.offset) {
 								const desired =
@@ -673,9 +698,23 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						} else readingAnchor = null;
 					}
 				}
-				followingBottom =
+				const atBottom =
 					scroll.scrollTop >=
 					Math.max(0, scroll.scrollHeight - scroll.viewport.height);
+				// A shrinking body or selection autoscroll reaching the physical end
+				// does not opt a reader back into following new observations.
+				if (heldReaderMode || node !== undefined || selectionMoved || ownedDrag)
+					followingBottom = false;
+				else if (
+					readerMoved ||
+					followingBottom ||
+					(previous === null &&
+						!(
+							current().detail.transcriptFollowId === sessionId() &&
+							current().detail.transcriptFollowing === false
+						))
+				)
+					followingBottom = atBottom;
 				if (awayFromBottom() !== !followingBottom)
 					setAwayFromBottom(!followingBottom);
 				if (followingBottom) readingAnchor = null;
@@ -693,6 +732,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					if (candidate)
 						readingAnchor = {
 							key: candidate[0],
+							node: candidate[1],
 							offset: candidate[1].screenY - scroll.viewport.screenY,
 						};
 				}
@@ -757,6 +797,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		onCleanup(() => {
 			clearInterval(blinkTimer);
 			pendingReveal = undefined;
+			pendingRevealView = null;
+			pendingRevealBox = undefined;
+			pendingReaderHold = null;
 			pendingTranscriptRestore = null;
 			pendingLatest = null;
 			pendingReaderMotion = null;
@@ -790,6 +833,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		return true;
 	};
 	const markReaderMotion = (id: number, freeze: boolean) => {
+		pendingReaderHold = null;
 		pendingOlderMotion = null;
 		readerSelection = null;
 		readerSelectionId = null;
@@ -907,6 +951,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		pendingLatest = null;
 		pendingTranscriptRestore = null;
 		pendingReveal = node;
+		pendingRevealView = navigation.current;
+		pendingRevealBox = scroll;
 		pendingRevealTop = readingTarget !== undefined;
 		pendingRevealScope =
 			readingTarget && id !== null
@@ -3617,11 +3663,25 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											connected={status() === "connected"}
 										/>
 										<Transcript
+											scope={workspaceScope()}
+											interactive={!busy() && !helpOpen() && !paletteOpen()}
+											onReadIntent={() => {
+												const id = sessionId();
+												if (id !== null && isTranscript()) {
+													markReaderMotion(id, true);
+													pendingReaderHold = { id, view: navigation.current };
+												}
+											}}
 											value={transcript()}
 											freezeWindow={awayFromBottom()}
 											observation={observation()}
 											observationError={observationError()}
-											enabled={contentFocused() && !helpOpen()}
+											enabled={
+												contentFocused() &&
+												!busy() &&
+												!helpOpen() &&
+												!paletteOpen()
+											}
 											selected={
 												typeof current().detail.transcriptSelection === "string"
 													? String(current().detail.transcriptSelection)
@@ -3634,7 +3694,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 												};
 												update();
 											}}
-											reveal={reveal}
+											reveal={(node, key) => {
+												if (readingRows)
+													reveal(node, { key, registry: readingRows });
+											}}
 											registerReadingRows={registerReadingRows}
 											registerLocalPaging={registerLocalPaging}
 											onPromptTimeline={(rows, items) => {

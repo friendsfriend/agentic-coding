@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
-import type { SyntaxStyle } from "@opentui/core";
+import type { BoxRenderable, SyntaxStyle } from "@opentui/core";
 import {
 	createEffect,
 	createMemo,
 	createSignal,
+	createUniqueId,
 	onCleanup,
 	Show,
 	useContext,
@@ -11,6 +12,7 @@ import {
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { color } from "../../ui/theme/index.ts";
+import { TranscriptRowsContext } from "./TranscriptRows.ts";
 
 /** Bounded local windows over exactly supplied text. Never a file read, patch,
  * source discovery, execution observation or native history operation. */
@@ -24,7 +26,11 @@ export function SuppliedCode(props: {
 	fg?: string;
 	lineNumberFg?: string;
 }) {
-	const choices = useContext(LocalChoiceContext);
+	const choices = useContext(LocalChoiceContext),
+		reading = useContext(TranscriptRowsContext),
+		localId = createUniqueId();
+	const [node, setNode] = createSignal<BoxRenderable>(),
+		[anchorEpoch, setAnchorEpoch] = createSignal(0);
 	const [selected, setSelected] = createSignal(0);
 	let disposed = false;
 	const source = createMemo(
@@ -55,8 +61,22 @@ export function SuppliedCode(props: {
 			previous.filetype === current.filetype &&
 			previous.startLine === current.startLine &&
 			current.content.startsWith(previous.content);
-		if (!appended) setSelected(0);
+		if (!appended) {
+			setSelected(0);
+			setAnchorEpoch((value) => value + 1);
+		}
 		previous = current;
+	});
+	createEffect(() => {
+		const row = node(),
+			generation = anchorEpoch();
+		if (row && reading)
+			onCleanup(
+				reading.register(
+					JSON.stringify(["ui-source-window", localId, generation]),
+					row,
+				),
+			);
 	});
 	onCleanup(() => {
 		disposed = true;
@@ -112,6 +132,15 @@ export function SuppliedCode(props: {
 		choices?.scope(),
 		interactive(),
 	]);
+	const applyWindow = (index: number) => {
+		setSelected(index);
+		const row = node();
+		if (row && !row.isDestroyed)
+			reading?.reveal(
+				JSON.stringify(["ui-source-window", localId, anchorEpoch()]),
+				row,
+			);
+	};
 	const move = (index: number) => {
 		if (
 			interactive() &&
@@ -119,7 +148,7 @@ export function SuppliedCode(props: {
 			index >= 0 &&
 			index < windows().length
 		)
-			setSelected(index);
+			applyWindow(index);
 	};
 	const choose = () => {
 		if (!interactive() || !choices) return;
@@ -151,7 +180,7 @@ export function SuppliedCode(props: {
 					next >= windows().length
 				)
 					return false;
-				setSelected(next);
+				applyWindow(next);
 				return true;
 			},
 		});
@@ -167,7 +196,7 @@ export function SuppliedCode(props: {
 		/>
 	);
 	return (
-		<>
+		<box flexDirection="column" flexShrink={0} ref={setNode}>
 			<Show when={windows().length > 1}>
 				<text fg={color("textMuted")} wrapMode="word">
 					Supplied text window {selected() + 1}/{windows().length} · body line{" "}
@@ -224,6 +253,6 @@ export function SuppliedCode(props: {
 					{code()}
 				</line_number>
 			</Show>
-		</>
+		</box>
 	);
 }

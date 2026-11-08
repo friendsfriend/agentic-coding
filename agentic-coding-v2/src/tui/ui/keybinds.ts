@@ -162,6 +162,27 @@ export const transcriptViewportKeybinds: Keybind[] = [
 ];
 export const transcriptKeybinds: Keybind[] = [
 	{
+		key: "ctrl+alt+g",
+		cmd: "transcript.choose",
+		action: "Choose a mounted thinking/tool card without native reads",
+		short: "choose card",
+		standard: true,
+	},
+	{
+		key: "ctrl+alt+left",
+		cmd: "transcript.parent",
+		action: "Select uniquely linked supplied parent card",
+		short: "parent card",
+		standard: true,
+	},
+	{
+		key: "ctrl+alt+right",
+		cmd: "transcript.child",
+		action: "Select uniquely linked child, or choose among supplied children",
+		short: "child card",
+		standard: true,
+	},
+	{
 		key: "ctrl+up",
 		cmd: "transcript.previous",
 		action: "Select previous observed card",

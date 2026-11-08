@@ -531,7 +531,16 @@ test("native progress watch resynchronizes without replay or duplicate retained 
 			Boolean,
 		);
 		expect(fake.state.callCount).toBe(1);
+		const detachedObservation = client.transcript;
+		expect(detachedObservation?.id).toBe(id);
+		client.selectSession(null);
+		expect(client.transcript).toBeNull();
 		await app.home.waitForIdle(context);
+		// Late native completion may remain durable, but cannot repopulate the
+		// detached presentation or cause another model invocation.
+		expect(client.transcript).toBeNull();
+		expect(fake.state.callCount).toBe(1);
+		client.selectSession(id);
 		await eventually(
 			async () => client.transcript,
 			(value) =>
@@ -547,6 +556,7 @@ test("native progress watch resynchronizes without replay or duplicate retained 
 				),
 		);
 		expect(client.transcript?.progress.generation).toBeNull();
+		expect(client.transcript?.id).toBe(id);
 		const entries = client.transcript?.entries ?? [];
 		expect(new Set(entries.map((entry) => entry.id)).size).toBe(entries.length);
 		expect(
