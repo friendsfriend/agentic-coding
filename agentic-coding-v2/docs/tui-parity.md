@@ -565,6 +565,24 @@ content and bindings, not permission to replace the original presentation.
   visual interaction verification remain unfinished. Public-boundary checks are
   not visual acceptance; no renderer/helper/presenter tests are added.
 
+## Complete message-block reading registry
+
+- Register existing user-prompt, non-assistant message and assistant prose boxes
+  in the bounded transcript reading registry, alongside thinking/tool headers.
+  User rows use a separate reading identity namespace; prose uses its existing
+  native part identity. No extra wrapper, spacing, border or render service is
+  introduced, and no reading-only row enters the card selection/Enter catalog.
+- Dispose refs with their message/part owners and guard replacement cleanup by
+  mounted-node identity. Missing or replaced identities do not silently select
+  a successor or adopt any native conversation/task.
+- Sampling and held-anchor correction require a positive-height, finite-position
+  row attached to the current scrollbox through visible, non-destroyed ancestors.
+  Detached rows and hidden ancestor subtrees cannot anchor the current viewport.
+- This improves block-level anchoring while reading prose/user messages; it does
+  not provide text-line/source-offset anchoring, timeline/load-older or visual
+  acceptance. No renderer/presenter/helper tests are added, and native protocol,
+  permissions, pairing, draft/admission and provider behavior remain unchanged.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

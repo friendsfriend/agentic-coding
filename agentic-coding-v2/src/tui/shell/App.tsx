@@ -287,6 +287,24 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			resetReadingPlace();
 		};
 	};
+	const isReadingRow = (row: BoxRenderable) => {
+		if (
+			!scroll ||
+			scroll.isDestroyed ||
+			row.isDestroyed ||
+			row.height <= 0 ||
+			!Number.isFinite(row.screenY) ||
+			!Number.isFinite(scroll.viewport.screenY)
+		)
+			return false;
+		let ancestor: BoxRenderable | BoxRenderable["parent"] = row;
+		while (ancestor) {
+			if (ancestor.isDestroyed || !ancestor.visible) return false;
+			if (ancestor === scroll) return true;
+			ancestor = ancestor.parent;
+		}
+		return false;
+	};
 	// The mirror wakes only presentation; native admission still reads the actual
 	// editor buffer. Programmatic restores/clears synchronize both surfaces.
 	const writePrompt = (text: string) => {
@@ -426,7 +444,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						if (scroll.scrollTop !== bottom) scroll.scrollTo(bottom);
 					} else if (readingAnchor) {
 						const held = readingRows.get(readingAnchor.key);
-						if (held && !held.isDestroyed && held.visible) {
+						if (held && isReadingRow(held)) {
 							const offset = held.screenY - scroll.viewport.screenY;
 							if (Number.isFinite(offset) && offset !== readingAnchor.offset) {
 								const desired =
@@ -451,13 +469,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					const viewportTop = scroll.viewport.screenY;
 					const viewportBottom = viewportTop + scroll.viewport.height;
 					const rows = [...readingRows]
-						.filter(
-							([, row]) =>
-								!row.isDestroyed &&
-								row.visible &&
-								row.height > 0 &&
-								Number.isFinite(row.screenY),
-						)
+						.filter(([, row]) => isReadingRow(row))
 						.sort((a, b) => a[1].screenY - b[1].screenY);
 					const preceding = rows
 						.filter(([, row]) => row.screenY <= viewportTop)

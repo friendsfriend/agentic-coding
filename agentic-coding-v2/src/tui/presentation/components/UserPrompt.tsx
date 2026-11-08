@@ -1,5 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
+import type { BoxRenderable } from "@opentui/core";
+import { onCleanup } from "solid-js";
 import { uiColors } from "../theme/colors.ts";
 import { useHover } from "./mouse/useHover.ts";
 import { useTap } from "./mouse/useTap.ts";
@@ -12,11 +14,15 @@ export function UserPrompt(props: {
 	timestamp?: unknown;
 	expanded: boolean;
 	onToggle: () => void;
+	anchor?: (node: BoxRenderable | null) => void;
 }) {
+	const anchor = props.anchor;
+	onCleanup(() => anchor?.(null));
 	const tap = useTap(props.onToggle, { stopPropagation: true });
 	const hover = useHover(tap.onMouseOut);
 	return (
 		<box
+			ref={(node) => anchor?.(node)}
 			border={["left"]}
 			borderColor={uiColors.accent}
 			backgroundColor={hover.hovered() ? uiColors.bgHover : uiColors.bgMantle}

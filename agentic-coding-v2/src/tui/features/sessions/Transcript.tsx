@@ -448,6 +448,10 @@ export function Transcript(props: {
 			<For each={messageSlots()}>
 				{(messageSlot) => {
 					const message = messageSlot.value;
+					const messageTrack = anchor(
+						JSON.stringify(["reading-message", message().identity]),
+					);
+					onCleanup(() => messageTrack(null));
 					const contentParts = createMemo(() => parts(message()));
 					const partSlots = createKeyedItems(
 						contentParts,
@@ -473,6 +477,7 @@ export function Transcript(props: {
 									when={message().role === "user"}
 									fallback={
 										<box
+											ref={messageTrack}
 											flexDirection="column"
 											paddingLeft={3}
 											paddingRight={1}
@@ -497,6 +502,7 @@ export function Transcript(props: {
 									}
 								>
 									<UserPrompt
+										anchor={messageTrack}
 										text={text(message())}
 										timestamp={message().timestamp}
 										expanded={props.expanded.includes(
@@ -519,6 +525,7 @@ export function Transcript(props: {
 									};
 									const identity = partSlot.value().identity;
 									const track = anchor(identity);
+									onCleanup(() => track(null));
 									return (
 										<Switch
 											fallback={
@@ -532,6 +539,7 @@ export function Transcript(props: {
 											<Match when={part().type === "text"}>
 												<Show when={prose().length > 0}>
 													<box
+														ref={track}
 														flexDirection="column"
 														paddingLeft={3}
 														paddingRight={1}
