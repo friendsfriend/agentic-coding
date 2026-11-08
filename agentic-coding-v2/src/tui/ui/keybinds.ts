@@ -80,6 +80,42 @@ export const shellKeybinds: Keybind[] = [
 		short: mode,
 	})),
 ];
+export const pageFocusKeybinds: Keybind[] = [
+	{
+		key: "tab",
+		cmd: "page.focusNext",
+		action: "Cycle breadcrumb/content focus on supported pages",
+		short: "focus",
+	},
+	{
+		key: "shift+tab",
+		cmd: "page.focusPrevious",
+		action: "Cycle page focus backwards",
+		standard: true,
+	},
+];
+export const breadcrumbKeybinds: Keybind[] = [
+	...["h", "k", "left", "up"].map((key) => ({
+		key,
+		cmd: "breadcrumb.previous",
+		action: "Previous structural ancestor",
+		short: "previous",
+		standard: key !== "h",
+	})),
+	...["l", "j", "right", "down"].map((key) => ({
+		key,
+		cmd: "breadcrumb.next",
+		action: "Next structural ancestor",
+		short: "next",
+		standard: key !== "l",
+	})),
+	{
+		key: "enter",
+		cmd: "breadcrumb.open",
+		action: "Open selected structural ancestor",
+		short: "open",
+	},
+];
 export const transcriptKeybinds: Keybind[] = [
 	{
 		key: "ctrl+up",
@@ -233,6 +269,8 @@ export const keybindCatalogs = {
 	Transcript: transcriptKeybinds,
 	Controls: actionKeybinds,
 	Suggestions: paletteKeybinds,
+	"Page focus": pageFocusKeybinds,
+	Breadcrumbs: breadcrumbKeybinds,
 	Prompt: promptKeybinds,
 	Editor: editorKeybinds,
 };

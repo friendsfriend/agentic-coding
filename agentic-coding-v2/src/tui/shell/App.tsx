@@ -85,15 +85,17 @@ import {
 	workspaceNavigationKeybinds,
 } from "../presentation/components/WorkspaceNavigation.tsx";
 import { BreadcrumbRow } from "../presentation/navigation/BreadcrumbRow.tsx";
-import type { Route } from "../presentation/routes.ts";
+import { type Route, routeKey } from "../presentation/routes.ts";
 import { ActionScope } from "../ui/ActionScope.tsx";
 import { CommandPalette } from "../ui/CommandPalette.tsx";
 import {
 	actionKeybinds,
 	bindings,
+	breadcrumbKeybinds,
 	editorKeybinds,
 	keybindCatalogs,
 	keyLabel,
+	pageFocusKeybinds,
 	paletteKeybinds,
 	promptKeybinds,
 	shellKeybinds,
@@ -227,6 +229,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[helpOpen, setHelpOpen] = createSignal(false),
 		[paletteOpen, setPaletteOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
+	const [breadcrumbFocused, setBreadcrumbFocused] = createSignal(false);
+	const [crumbKey, setCrumbKey] = createSignal<string>();
 	const [promptText, setPromptText] = createSignal(navigation.current.draft);
 	const [suggestionIndex, setSuggestionIndex] = createSignal(0);
 	let prompt: TextareaRenderable | undefined,
@@ -276,6 +280,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		revision();
 		return navigation.current;
 	};
+	const crumbActive = () =>
+		current().focus === "content" && breadcrumbFocused();
+	const contentFocused = () =>
+		current().focus === "content" && !breadcrumbFocused();
+	let crumbLocation = JSON.stringify([
+		navigation.current.page,
+		navigation.current.resource,
+	]);
+	createEffect(() => {
+		const selected = current();
+		const location = JSON.stringify([selected.page, selected.resource]);
+		if (location === crumbLocation) return;
+		crumbLocation = location;
+		setBreadcrumbFocused(false);
+		setCrumbKey(undefined);
+	});
 	const state = () => {
 		revision();
 		return client.state;
@@ -314,6 +334,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			navigation.current.scroll = Math.max(0, Math.round(scroll.scrollTop));
 	};
 	const restore = () => {
+		setBreadcrumbFocused(false);
+		setCrumbKey(undefined);
 		setProviderCandidate(null);
 		setEvidence(null);
 		setWikiCandidate(null);
@@ -482,6 +504,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	});
 	createEffect(() => {
 		if (current().focus !== "content") setSettingsEditing(false);
+		if (settingsEditing()) setBreadcrumbFocused(false);
 	});
 	let skillEpoch = 0;
 	createEffect(() => {
@@ -729,7 +752,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const historyKey = () => `${current().page}:${current().resource ?? ""}`;
 	const recall = (direction: -1 | 1, quiet = false): boolean => {
 		if (
-			current().focus !== "content" ||
+			!contentFocused() ||
 			settingsEditing() ||
 			busy() ||
 			helpOpen() ||
@@ -838,7 +861,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		);
 	});
 	const suggestionControlsActive = () =>
-		current().focus === "content" &&
+		contentFocused() &&
 		!settingsEditing() &&
 		!busy() &&
 		!helpOpen() &&
@@ -937,6 +960,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				id: "shell.prompt",
 				name: "Focus command/message prompt",
 				run: () => {
+					setBreadcrumbFocused(false);
 					setSettingsEditing(false);
 					setHelpOpen(false);
 					navigation.current.focus = "content";
@@ -966,6 +990,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				id: "shell.sessions",
 				name: "Focus sessions",
 				run: () => {
+					setBreadcrumbFocused(false);
 					navigation.current.focus = "sessions";
 					update();
 				},
@@ -974,6 +999,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				id: "shell.viewpoints",
 				name: "Focus native agents",
 				run: () => {
+					setBreadcrumbFocused(false);
 					remember();
 					navigation.current.focus = "viewpoints";
 					update();
@@ -983,6 +1009,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				id: "shell.content",
 				name: "Focus content",
 				run: () => {
+					setBreadcrumbFocused(false);
 					navigation.current.focus = "content";
 					setSettingsEditing(false);
 					setHelpOpen(false);
@@ -1022,6 +1049,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	onCleanup(unregister);
 	let pendingSubmissions = 0;
 	async function submit() {
+		if (crumbActive()) return;
 		if (busy() && !/^\/(?:abort|refresh)\s*$/.test(navigation.current.draft))
 			return;
 		remember();
@@ -1991,6 +2019,105 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					]),
 		];
 	};
+	// Embedded conversations, workbenches and review/wiki/schedule bodies own Tab.
+	// Explicit breadcrumb pointer focus can always be left with Tab or Escape.
+	const pageFocusEnabled = () =>
+		current().focus === "content" &&
+		!settingsEditing() &&
+		!helpOpen() &&
+		!paletteOpen() &&
+		!busy() &&
+		!suggestionsOpen() &&
+		(crumbActive() ||
+			["providers", "profiles", "skills", "observability", "settings"].includes(
+				current().page,
+			));
+	const crumbInteractionEnabled = () =>
+		!settingsEditing() && !helpOpen() && !paletteOpen() && !busy();
+	const crumbIndex = () =>
+		crumbKey() === undefined
+			? ancestors().length - 1
+			: ancestors().findIndex((route) => routeKey(route) === crumbKey());
+	const selectCrumb = (index: number) => {
+		if (!crumbInteractionEnabled()) return;
+		const route = ancestors()[index];
+		if (!route) return;
+		remember();
+		setCrumbKey(routeKey(route));
+		navigation.current.focus = "content";
+		setBreadcrumbFocused(true);
+		update();
+	};
+	const navigateCrumb = (route: Route) => {
+		if (!crumbInteractionEnabled()) return;
+		const target = ancestors().find(
+			(candidate) => routeKey(candidate) === routeKey(route),
+		);
+		if (
+			target &&
+			(target.page !== current().page || target.resource !== current().resource)
+		)
+			go(target.page, target.resource);
+	};
+	const cyclePageFocus = () => {
+		if (!pageFocusEnabled()) return;
+		if (crumbActive()) setBreadcrumbFocused(false);
+		else selectCrumb(crumbIndex() < 0 ? ancestors().length - 1 : crumbIndex());
+	};
+	const moveCrumb = (delta: number) => {
+		if (!crumbActive() || !crumbInteractionEnabled()) return;
+		const index = crumbIndex();
+		selectCrumb(
+			index < 0
+				? delta < 0
+					? ancestors().length - 1
+					: 0
+				: Math.max(0, Math.min(ancestors().length - 1, index + delta)),
+		);
+	};
+	const unregisterPageFocus = keymap.registerLayer({
+		id: "v2.page-focus",
+		priority: 25,
+		enabled: pageFocusEnabled,
+		commands: [
+			{ id: "page.focusNext", name: "Cycle page focus", run: cyclePageFocus },
+			{
+				id: "page.focusPrevious",
+				name: "Cycle page focus backwards",
+				run: cyclePageFocus,
+			},
+		],
+		bindings: bindings(pageFocusKeybinds),
+	});
+	const unregisterBreadcrumbs = keymap.registerLayer({
+		id: "v2.breadcrumbs",
+		priority: 25,
+		enabled: () => crumbActive() && crumbInteractionEnabled(),
+		commands: [
+			{
+				id: "breadcrumb.previous",
+				name: "Previous structural ancestor",
+				run: () => moveCrumb(-1),
+			},
+			{
+				id: "breadcrumb.next",
+				name: "Next structural ancestor",
+				run: () => moveCrumb(1),
+			},
+			{
+				id: "breadcrumb.open",
+				name: "Open structural ancestor",
+				run: () => {
+					if (!crumbActive()) return;
+					const route = ancestors()[crumbIndex()];
+					if (route) navigateCrumb(route);
+				},
+			},
+		],
+		bindings: bindings(breadcrumbKeybinds),
+	});
+	onCleanup(unregisterPageFocus);
+	onCleanup(unregisterBreadcrumbs);
 	const sidebarOptions = () => [
 		...["OpenCode", "Pi", "Pi Durable", "Orchestrator"].map((name, index) => ({
 			name,
@@ -2102,8 +2229,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							dimensions().width - workspaceWidth() - agentWidth() - 2,
 						)}
 						ancestors={ancestors()}
-						focusedIndex={-1}
-						onNavigate={(route) => go(route.page, route.resource)}
+						focusedIndex={crumbIndex()}
+						onSelectIndex={selectCrumb}
+						onNavigate={navigateCrumb}
 					/>
 					<box height={1} flexShrink={0} />
 					<scrollbox
@@ -2115,13 +2243,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						paddingLeft={1}
 						paddingRight={1}
 						scrollY={true}
-						focused={
-							current().focus === "content" && !isTranscript() && !helpOpen()
-						}
+						focused={contentFocused() && !isTranscript() && !helpOpen()}
 					>
 						<ActionScope
 							enabled={
-								current().focus === "content" &&
+								contentFocused() &&
 								!settingsEditing() &&
 								!busy() &&
 								!paletteOpen() &&
@@ -2156,7 +2282,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										value={transcript()}
 										observation={observation()}
 										observationError={observationError()}
-										enabled={current().focus === "content" && !helpOpen()}
+										enabled={contentFocused() && !helpOpen()}
 										selected={
 											typeof current().detail.transcriptSelection === "string"
 												? String(current().detail.transcriptSelection)
@@ -2396,7 +2522,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									selection={current().resource}
 									client={client}
 									connected={status() === "connected"}
-									focused={current().focus === "content" && !helpOpen()}
+									focused={contentFocused() && !helpOpen()}
 									editing={settingsEditing() && !helpOpen()}
 									edit={setSettingsEditing}
 									memory={skillFileDraft()}
@@ -2453,7 +2579,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									memory={environmentEditor()}
 									remember={setEnvironmentEditor}
 									focused={
-										current().focus === "content" &&
+										contentFocused() &&
 										!helpOpen() &&
 										resourceEditor() !== "diagnostics"
 									}
@@ -2481,7 +2607,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									sessions={state()?.sessions ?? []}
 									connected={status() === "connected"}
 									focused={
-										current().focus === "content" &&
+										contentFocused() &&
 										!helpOpen() &&
 										resourceEditor() !== "workbench"
 									}
@@ -2730,7 +2856,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								prompt = value;
 							}}
 							focused={
-								current().focus === "content" &&
+								contentFocused() &&
 								!settingsEditing() &&
 								!paletteOpen() &&
 								!helpOpen()
@@ -2829,11 +2955,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						? [...shellKeybinds, ...editorKeybinds]
 						: [
 								...shellKeybinds,
-								...actionKeybinds,
-								...(isTranscript() ? transcriptKeybinds : []),
-								...(current().focus === "content"
-									? promptFooterBindings()
-									: []),
+								...(crumbActive() ? breadcrumbKeybinds : actionKeybinds),
+								...(pageFocusEnabled() ? pageFocusKeybinds : []),
+								...(isTranscript() && !crumbActive() ? transcriptKeybinds : []),
+								...(contentFocused() ? promptFooterBindings() : []),
 								...(current().focus === "sessions"
 									? workspaceNavigationKeybinds
 									: []),

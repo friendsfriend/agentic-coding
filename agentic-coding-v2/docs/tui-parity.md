@@ -244,7 +244,8 @@ content and bindings, not permission to replace the original presentation.
   its two padding cells, rather than assuming it owns the full terminal.
 - Recalculate that budget during resize, workspace animation and agent sidebar
   mode/focus changes. No fixed guessed agent width, route-schema change or native
-  lookup/mutation is introduced. Breadcrumb keyboard focus remains unfinished.
+  lookup/mutation is introduced. Keyboard focus is covered in the subsequent
+  restoration pass below.
 - Preserve the native agent cursor's preferred identity during metadata updates.
   Only explicit route-selection changes synchronize the route preference; polling
   no longer resets an in-progress arrow selection to the displayed conversation.
@@ -277,6 +278,32 @@ content and bindings, not permission to replace the original presentation.
   Completion still goes through the existing unsent-draft refusal, and never
   submits, approves, reconnects, records accepted history or invokes a gateway
   mutation. No renderer/helper tests or visual acceptance are introduced.
+
+## Breadcrumb keyboard focus restoration pass
+
+- Restore the original two-region breadcrumb/content Tab and Shift+Tab cycle on
+  providers, profiles, skills, observability and settings pages. Embedded chats,
+  task/review, wiki, schedule and environment bodies retain their own Tab keys;
+  active bare-slash completion also keeps precedence over page focus cycling.
+- Explicit pointer breadcrumb focus can be left with Tab or Escape even on an
+  embedded page. Current-location taps/Enter no longer add duplicate history
+  entries. Restore the original bold/accent breadcrumb cursor, resting at the
+  current location until moved.
+- Restore h/k/Left/Up and l/j/Right/Down clamped ancestor movement and Enter
+  navigation over the structural chain, with native route-identity selection.
+  Missing identities have no Enter target; movement explicitly selects another
+  visible ancestor. Pointer and keyboard navigation recheck the current chain.
+- Breadcrumb focus disables the underlying prompt, history recall, autocomplete,
+  page controls, transcript controls and workbench/diagnostics focus. Help,
+  palette, busy and editor states suppress breadcrumb interaction. Starting a
+  native editor exits breadcrumb focus without modifying its existing draft.
+- Keep focus transient and local: no View/viewpoint protocol additions, inferred
+  execution identities, command dispatch, approval or history admission. Back,
+  forward and explicit route changes reset this local cursor while preserving
+  existing draft/scroll restoration. Enter cannot submit the underlying prompt.
+- Add accurate page-focus/breadcrumb help catalogs and contextual footer keys.
+  Existing shell shortcuts are retained. No navigation-matrix/presenter tests or
+  visual acceptance claims accompany this pass.
 
 ## Still required before claiming parity
 
