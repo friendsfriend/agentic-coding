@@ -93,6 +93,31 @@ content and bindings, not permission to replace the original presentation.
   by their wrapped visual rows so scrolling can reach all continuation lines;
   terminal resize updates the content budget and clamps the help offset.
 
+## File/diff and shell tool body restoration pass
+
+- Restore original TranscriptFile code composition: muted line-number gutter,
+  three-cell minimum width, one-cell separator, requested starting offset,
+  primary-colored word-wrapped code and original grammar aliases. Supplied
+  retained/requested text is not rewritten into a guessed live file snapshot.
+- Restore original native diff composition: line numbers, semantic red/green
+  backgrounds and signs, unified view through 120 content columns and split view
+  above that width. The tool card supplies the original hover context; lifting
+  the surface preserves the diff's red/green tint.
+- Keep non-unified/multi-file diff bytes readable as text rather than letting
+  OpenTUI's first-file-only diff renderer hide other retained files. No patch is
+  synthesized, no applied result is inferred, and there are no file/apply actions.
+- Port original TranscriptShellOutput compact tail, command-aware row budget,
+  muted/error tones, character wrapping and size tracking. Observed retained or
+  bounded slot output can appear while the card is folded; generated partial
+  tool intent alone cannot create a shell execution preview.
+- Preserve native argument/output/detail fold keys. Expanding the output shows
+  all supplied text without the preview's display cut, and removes the redundant
+  second shell-result body. Bounded slot output and native dropped-byte/line
+  counters remain explicitly labeled, not represented as a terminal result.
+- Syntax style lifetime remains renderer-owned. Legacy ToolView/viewport imports
+  are not used; viewport caching and the complete ordered block flow remain work
+  below, rather than being claimed restored by these body ports.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
@@ -101,8 +126,9 @@ content and bindings, not permission to replace the original presentation.
   notification placement; the restored read-only help frame is not general
   modal parity.
 - Remaining orchestrator/durable transcript composition: original ordered
-  markdown block/cache flow, specialized tool/file/shell bodies, timestamps,
-  usage/progress arrangement, prompt history/autocomplete and picker behavior.
+  markdown block/cache/viewport flow, remaining specialized tool families and
+  file/shell header/section composition, timestamps, usage/progress arrangement,
+  prompt history/autocomplete and picker behavior.
 - Remaining standalone detail/header, profile-picker and focus composition;
   its independent native identities must never alias durable conversations.
 - Original settings/provider/wiki/schedules/environment list/detail composition;
