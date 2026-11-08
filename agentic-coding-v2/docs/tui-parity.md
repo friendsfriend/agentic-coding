@@ -779,6 +779,23 @@ content and bindings, not permission to replace the original presentation.
 - Full scrollbar interaction and integrated load-older remain unfinished. No
   renderer/helper tests or interactive/visual acceptance are claimed.
 
+## Original passive timeline scrollbar and mouse-out composition
+
+- Restore the original one-column track/thumb beside the clipped row window,
+  only when filtered prompts overflow. Use the original floor-proportional thumb
+  top, ceil-proportional minimum-one-line height, theme colors and collapsing
+  lower track. Empty/nonoverflowing lists have no scrollbar.
+- The fixed-height list row owns wheel movement for both prompt rows and the
+  adjacent scrollbar. No thumb drag, track click, fetch or new selection/admission
+  behavior is invented: the original ScrollableList scrollbar is passive.
+- Match the original row handler composition: construct hover with the shared
+  row mouse-out callback and spread hover after row handlers. Leaving a row now
+  clears hover and retires its gesture together instead of overriding one handler.
+- Identity/refusal/reveal fences, filtered range and footer budgets are unchanged.
+  Integrated load-older, full original list extraction and interactive viewport
+  verification remain unfinished. No renderer/helper tests or visual acceptance
+  are claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

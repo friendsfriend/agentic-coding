@@ -109,6 +109,18 @@ export function TimelinePicker(props: {
 			Math.max(0, rows().length - lines()),
 			Math.max(0, offset(), selection() - lines() + 1),
 		);
+	const needsScrollbar = () => rows().length > lines();
+	const thumbTop = () =>
+		rows().length > 0 ? Math.floor((lines() * start()) / rows().length) : 0;
+	const thumbHeight = () =>
+		rows().length > 0
+			? Math.max(
+					1,
+					Math.ceil(
+						(lines() * Math.min(lines(), rows().length)) / rows().length,
+					),
+				)
+			: 1;
 	const select = (index: number) => {
 		if (!props.active) return;
 		const row = rows()[index];
@@ -261,7 +273,6 @@ export function TimelinePicker(props: {
 				flexShrink={1}
 				minHeight={0}
 				overflow="hidden"
-				{...wheel}
 			>
 				<Show
 					when={rows().length > 0}
@@ -269,68 +280,118 @@ export function TimelinePicker(props: {
 						<text fg={uiColors.textMuted}>No user messages to show.</text>
 					}
 				>
-					<For each={rows().slice(start(), start() + lines())}>
-						{(row) => {
-							const hover = useHover();
-							const mouse = useRowMouse({
-								index: () => rows().indexOf(row),
-								selectedIndex: selection,
-								gesture,
-								activatable: () => props.active,
-								onSelect: select,
-								onActivate: (index) => {
-									select(index);
-									choose();
-								},
-							});
-							return (
-								<box
-									width="100%"
-									flexDirection="row"
-									flexShrink={0}
-									height={1}
-									{...hover}
-									{...mouse}
-									backgroundColor={
-										hover.hovered()
-											? uiColors.bgHover
-											: selected() === row.key
-												? uiColors.bgSurface0
-												: undefined
-									}
-								>
-									<SelectionMarker selected={selected() === row.key} />
-									<box
-										flexDirection="row"
-										flexGrow={1}
-										minWidth={0}
-										overflow="hidden"
-									>
-										<text
-											fg={
-												selected() === row.key
-													? uiColors.primary
-													: uiColors.textSecondary
-											}
-											flexGrow={1}
-											minWidth={0}
-											wrapMode="none"
-											truncate
-										>
-											{row.label}
-										</text>
-										<Show when={row.detail}>
-											{(detail) => (
-												<text fg={uiColors.textMuted} flexShrink={0}>
-													{detail()}
-												</text>
-											)}
-										</Show>
-									</box>
-								</box>
-							);
+					<box
+						{...wheel}
+						style={{
+							width: "100%",
+							height: lines(),
+							flexGrow: 0,
+							flexShrink: 0,
+							minHeight: 0,
+							flexDirection: "row",
+							overflow: "hidden",
 						}}
-					</For>
+					>
+						<box
+							style={{
+								flexGrow: 1,
+								flexShrink: 1,
+								minWidth: 0,
+								minHeight: 0,
+								flexDirection: "column",
+								overflow: "hidden",
+							}}
+						>
+							<For each={rows().slice(start(), start() + lines())}>
+								{(row) => {
+									const mouse = useRowMouse({
+										index: () => rows().indexOf(row),
+										selectedIndex: selection,
+										gesture,
+										activatable: () => props.active,
+										onSelect: select,
+										onActivate: (index) => {
+											select(index);
+											choose();
+										},
+									});
+									const hover = useHover(mouse.onMouseOut);
+									return (
+										<box
+											width="100%"
+											flexDirection="row"
+											flexShrink={0}
+											height={1}
+											{...mouse}
+											{...hover}
+											backgroundColor={
+												hover.hovered()
+													? uiColors.bgHover
+													: selected() === row.key
+														? uiColors.bgSurface0
+														: undefined
+											}
+										>
+											<SelectionMarker selected={selected() === row.key} />
+											<box
+												flexDirection="row"
+												flexGrow={1}
+												minWidth={0}
+												overflow="hidden"
+											>
+												<text
+													fg={
+														selected() === row.key
+															? uiColors.primary
+															: uiColors.textSecondary
+													}
+													flexGrow={1}
+													minWidth={0}
+													wrapMode="none"
+													truncate
+												>
+													{row.label}
+												</text>
+												<Show when={row.detail}>
+													{(detail) => (
+														<text fg={uiColors.textMuted} flexShrink={0}>
+															{detail()}
+														</text>
+													)}
+												</Show>
+											</box>
+										</box>
+									);
+								}}
+							</For>
+						</box>
+						<Show when={needsScrollbar()}>
+							<box
+								style={{
+									width: 1,
+									flexShrink: 0,
+									flexDirection: "column",
+									minHeight: 0,
+									overflow: "hidden",
+								}}
+							>
+								<Show when={thumbTop() > 0}>
+									<box
+										style={{ width: 1, height: thumbTop(), flexShrink: 0 }}
+										backgroundColor={uiColors.scrollbarTrack}
+									/>
+								</Show>
+								<box
+									style={{ width: 1, height: thumbHeight(), flexShrink: 0 }}
+									backgroundColor={uiColors.scrollbarThumb}
+								/>
+								<box
+									style={{ width: 1, flexGrow: 1, minHeight: 0 }}
+									backgroundColor={uiColors.scrollbarTrack}
+								/>
+							</box>
+						</Show>
+					</box>
 				</Show>
 			</box>
 		</ReadOnlyModalFrame>
