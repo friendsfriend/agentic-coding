@@ -814,6 +814,25 @@ content and bindings, not permission to replace the original presentation.
   reopen/retry, model call or native admission is added. Integrated load-older
   and interactive/visual acceptance remain outstanding; no renderer/helper tests.
 
+## Shared original fixed-row read-only list branch
+
+- Extract the timeline's original fixed-row window, row mouse/hover composition,
+  wheel owner and passive scrollbar into local `ReadOnlyScrollableList`. The
+  calling picker still owns its bounded unique items, native-key selection,
+  start position, filter, gesture holder, modal chrome and range/footer budget.
+- Keep the same list/row box dimensions and child order; row rendering receives
+  a reactive selection accessor without an added layout wrapper. Timeline marker,
+  label/clock rendering, selected fill and empty content remain owned by the
+  timeline. No renderer, runtime or legacy delegation is introduced.
+- Retired items cannot activate through a stale row index; the current item at
+  that index must still be the rendered item. An absent item never becomes
+  selected merely because the owner has an unavailable (-1) selection.
+- This is the fixed-height, unique-item read-only branch, not the original full
+  variable-height/keyed-occurrence ScrollableList API. No editor, filter input,
+  data fetch, native command or persistence is owned by the shared component.
+  Integrated load-older and interactive/visual acceptance remain outstanding;
+  no renderer/helper/mounting tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
