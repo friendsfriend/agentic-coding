@@ -67,6 +67,8 @@ export interface AgentSidebarProps {
 	readonly rows: readonly AgentSidebarRow[];
 	readonly selectedIndex: number;
 	readonly sourceState: "loading" | "fresh" | "stale";
+	/** Report the same allocated width painted by this presentation surface. */
+	onWidth?: (width: number) => void;
 	onToggleMode: () => void;
 	onSelectIndex: (index: number) => void;
 	onOpen: (row: AgentSidebarRow) => void;
@@ -80,6 +82,7 @@ export function AgentSidebar(props: AgentSidebarProps) {
 		expandedByMode()
 			? Math.min(AGENT_SIDEBAR_WIDTH, Math.max(0, props.widthLimit))
 			: Math.min(AGENT_SIDEBAR_COLLAPSED_WIDTH, Math.max(0, props.widthLimit));
+	createEffect(() => props.onWidth?.(width()));
 	const expanded = () => expandedByMode() && width() >= EXPANDED_THRESHOLD;
 	const visibleLines = () =>
 		Math.max(ROW_HEIGHT, dimensions().height - PANEL_CHROME_LINES);

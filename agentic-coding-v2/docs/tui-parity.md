@@ -236,6 +236,26 @@ content and bindings, not permission to replace the original presentation.
   the compact/full presentation threshold. This is a UI animation, not execution
   timing; no native mutation, preference persistence or draft replacement occurs.
 
+## Center-column breadcrumbs and agent cursor restoration pass
+
+- Report the agent sidebar's actual allocated width through its local native
+  adapter, as the workspace sidebar already does. The breadcrumb's original
+  shortening/composition now receives terminal columns minus both sidebars and
+  its two padding cells, rather than assuming it owns the full terminal.
+- Recalculate that budget during resize, workspace animation and agent sidebar
+  mode/focus changes. No fixed guessed agent width, route-schema change or native
+  lookup/mutation is introduced. Breadcrumb keyboard focus remains unfinished.
+- Preserve the native agent cursor's preferred identity during metadata updates.
+  Only explicit route-selection changes synchronize the route preference; polling
+  no longer resets an in-progress arrow selection to the displayed conversation.
+- Establish a first visible cursor only when no preference exists. A missing
+  preferred key remains unselected, rather than becoming row zero; explicit
+  movement selects a visible boundary entry. Keep the existing clamped agent-row
+  movement (workspace navigation retains its separate wraparound behavior).
+- Enter and pointer opening recheck the selected native child identity against
+  current sessions before UI navigation. No missing row is adopted as another
+  session and no navigation action is treated as work admission.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

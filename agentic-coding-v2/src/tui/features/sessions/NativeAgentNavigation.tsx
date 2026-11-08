@@ -1,6 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { useKeymap } from "@opentui/keymap/solid";
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	on,
+	onCleanup,
+} from "solid-js";
 import type { Data, Session } from "../../../protocol/index.ts";
 import type { AgentSidebarRow } from "../../presentation/agent-sidebar-model.ts";
 import { AgentSidebar } from "../../presentation/components/AgentSidebar.tsx";
@@ -40,6 +46,7 @@ export function NativeAgentNavigation(props: {
 	active: boolean;
 	connected: boolean;
 	widthLimit: number;
+	onWidth?: (width: number) => void;
 	selected: string | null;
 	focus: () => void;
 	open: (id: number) => void;
@@ -83,26 +90,37 @@ export function NativeAgentNavigation(props: {
 			};
 		}),
 	);
+	createEffect(
+		on(
+			() => props.selected,
+			(key) => setSelected(key ?? undefined),
+		),
+	);
 	createEffect(() => {
-		if (
-			props.selected &&
-			sessions().some((session) => String(session.id) === props.selected)
-		)
-			setSelected(props.selected);
+		// Establish the original first-row cursor only when no preference exists.
+		// Polling must neither overwrite a keyboard choice nor replace a removed key.
+		const first = rows()[0];
+		if (selected() === undefined && first) setSelected(first.key);
 	});
-	const index = () =>
-		Math.max(
-			0,
-			rows().findIndex((row) => row.key === selected()),
-		);
+	const index = () => rows().findIndex((row) => row.key === selected());
 	const move = (direction: number) => {
-		const row =
-			rows()[Math.max(0, Math.min(rows().length - 1, index() + direction))];
+		const current = index();
+		const next =
+			current < 0
+				? direction < 0
+					? rows().length - 1
+					: 0
+				: Math.max(0, Math.min(rows().length - 1, current + direction));
+		const row = rows()[next];
 		if (row) setSelected(row.key);
 	};
+	const openKey = (key: string) => {
+		if (sessions().some((session) => String(session.id) === key))
+			props.open(Number(key));
+	};
 	const open = () => {
-		const row = rows()[index()];
-		if (row) props.open(Number(row.key));
+		const key = selected();
+		if (key !== undefined) openKey(key);
 	};
 	const unregister = useKeymap().registerLayer({
 		id: "v2.native-agent-navigation",
@@ -125,6 +143,7 @@ export function NativeAgentNavigation(props: {
 			active={props.active}
 			mode={permanent() ? "permanent" : "expanding"}
 			widthLimit={props.widthLimit}
+			onWidth={props.onWidth}
 			rows={rows()}
 			selectedIndex={index()}
 			sourceState={props.connected ? "fresh" : "stale"}
@@ -133,7 +152,7 @@ export function NativeAgentNavigation(props: {
 				const row = rows()[value];
 				if (row) setSelected(row.key);
 			}}
-			onOpen={(row) => props.open(Number(row.key))}
+			onOpen={(row) => openKey(row.key)}
 			onFocus={props.focus}
 		/>
 	);

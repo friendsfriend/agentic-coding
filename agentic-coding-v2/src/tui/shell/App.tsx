@@ -1946,6 +1946,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		}
 	}
 	const [workspaceWidth, setWorkspaceWidth] = createSignal(6);
+	const [agentWidth, setAgentWidth] = createSignal(0);
 	const ancestors = (): Route[] => {
 		const selected = current();
 		const title =
@@ -2096,6 +2097,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				/>
 				<box flexGrow={1} minWidth={0} flexDirection="column">
 					<BreadcrumbRow
+						width={Math.max(
+							0,
+							dimensions().width - workspaceWidth() - agentWidth() - 2,
+						)}
 						ancestors={ancestors()}
 						focusedIndex={-1}
 						onNavigate={(route) => go(route.page, route.resource)}
@@ -2798,6 +2803,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					</SessionPrompt>
 				</box>
 				<NativeAgentNavigation
+					onWidth={setAgentWidth}
 					sessions={state()?.sessions ?? []}
 					tasks={state()?.tasks ?? []}
 					active={

@@ -18,7 +18,7 @@ export interface BreadcrumbRowProps {
 	focusedIndex: number;
 	onSelectIndex?: (index: number) => void;
 	onNavigate?: (route: Route) => void;
-	/** Row width override for tests; defaults to the terminal width. */
+	/** Allocated content columns; defaults to terminal width minus row padding. */
 	width?: number;
 }
 
