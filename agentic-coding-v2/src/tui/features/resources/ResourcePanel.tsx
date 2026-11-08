@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
-import { For, Show } from "solid-js";
+import { For, type JSX, onCleanup, Show } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { Selectable } from "../../presentation/components/Selectable.tsx";
-import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { ActionHeader as NativeActionHeader } from "../../ui/ActionHeader.tsx";
+import type { LocalChoice } from "../../ui/LocalChoice.ts";
 import { color } from "../../ui/theme/index.ts";
 
 const object = (value: unknown): Data =>
@@ -17,6 +18,10 @@ const commandToken = (value: unknown) =>
 	!/\s/.test(value);
 /** Native resource overview. No engine probing, lease adoption or action execution. */
 export function ResourcePanel(props: {
+	scope: object;
+	interactive: boolean;
+	fresh: boolean;
+	choose: (choice: LocalChoice) => void;
 	kind: "schedules" | "environments";
 	rows: Data[];
 	selected: (row: Data, index: number) => boolean;
@@ -25,12 +30,86 @@ export function ResourcePanel(props: {
 	connected: boolean;
 	expanded: string[];
 	toggle: (key: string) => void;
-	prepare: (command: string) => void;
+	prepare: (command: string) => boolean;
 	openTask: (id: number) => void;
 }) {
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
+	const ActionHeader = (action: {
+		onActivate: () => void;
+		children: JSX.Element;
+	}) => (
+		<NativeActionHeader
+			scope={props.scope}
+			interactive={props.interactive}
+			onActivate={action.onActivate}
+		>
+			{action.children}
+		</NativeActionHeader>
+	);
+	const member = (row: Data) =>
+		!disposed &&
+		props.rows.filter((entry) => entry.id === row.id).length === 1 &&
+		props.rows.some(
+			(entry) =>
+				entry.id === row.id && JSON.stringify(entry) === JSON.stringify(row),
+		);
+	const select = (row: Data) => {
+		const index = props.rows.findIndex((entry) => entry.id === row.id);
+		if (props.interactive && member(row) && index >= 0)
+			props.select(row, index);
+	};
+	const prepare = (row: Data, command: string) =>
+		props.interactive && props.fresh && member(row) && props.prepare(command);
+	const targetChoice = (row: Data, action: string) => {
+		if (
+			!props.interactive ||
+			!props.fresh ||
+			!member(row) ||
+			row.kind === "infrastructure" ||
+			!commandToken(row.id)
+		)
+			return;
+		const scope = props.scope,
+			signature = JSON.stringify(row);
+		const targets = dataList(row.targets).filter(
+			(target, _index, all) =>
+				target.action === action &&
+				commandToken(target.id) &&
+				all.filter((entry) => entry.id === target.id).length === 1,
+		);
+		const valid = () =>
+			!disposed &&
+			props.fresh &&
+			props.scope === scope &&
+			member(row) &&
+			JSON.stringify(props.rows.find((entry) => entry.id === row.id)) ===
+				signature;
+		props.choose({
+			title: `Choose ${action} target · ${String(row.id)}`,
+			rows: targets.map((target) => ({
+				key: String(target.id),
+				label: String(target.id),
+				detail: `${String(target.runtime)} · profile: ${String(target.profile ?? "not supplied")} · availability: ${JSON.stringify(target.availability ?? "not supplied")}`,
+			})),
+			note: "Supplied runtime/profile bundle · command preparation only · native approval still required",
+			valid,
+			choose: (key) => {
+				if (!valid() || !targets.some((target) => target.id === key))
+					return false;
+				return props.prepare(`/${action} ${String(row.id)} ${key}`);
+			},
+		});
+	};
 	const details = (key: string, label: string, value: unknown) => (
 		<>
-			<ActionHeader onActivate={() => props.toggle(key)}>
+			<ActionHeader
+				onActivate={() => {
+					if (props.interactive && !disposed) props.toggle(key);
+				}}
+			>
 				<text fg={color("accent")}>
 					{props.expanded.includes(key) ? "▾" : "▸"} {label}
 				</text>
@@ -63,10 +142,10 @@ export function ResourcePanel(props: {
 				{(row, index) => (
 					<Selectable
 						selected={props.selected(row, index())}
-						onMouseUp={() => props.select(row, index())}
+						onMouseUp={() => select(row)}
 					>
 						<box flexDirection="column" gap={1}>
-							<ActionHeader onActivate={() => props.select(row, index())}>
+							<ActionHeader onActivate={() => select(row)}>
 								<text fg={color("primary")}>
 									{props.selected(row, index()) ? "▾" : "▸"} {String(row.id)} ·{" "}
 									{String(row.state ?? row.kind)}
@@ -89,7 +168,15 @@ export function ResourcePanel(props: {
 									</text>
 									<Show when={typeof row.activeTask === "number"}>
 										<ActionHeader
-											onActivate={() => props.openTask(Number(row.activeTask))}
+											onActivate={() => {
+												if (
+													props.interactive &&
+													member(row) &&
+													Number.isSafeInteger(row.activeTask) &&
+													Number(row.activeTask) > 0
+												)
+													props.openTask(Number(row.activeTask));
+											}}
 										>
 											<text fg={color("accent")}>
 												Open admitted task #{String(row.activeTask)}
@@ -121,7 +208,8 @@ export function ResourcePanel(props: {
 									>
 										<ActionHeader
 											onActivate={() =>
-												props.prepare(
+												prepare(
+													row,
 													`/delete-schedule ${String(row.id)}@${String(row.revision)}`,
 												)
 											}
@@ -133,6 +221,23 @@ export function ResourcePanel(props: {
 									</Show>
 								</Show>
 								<Show when={props.kind === "environments"}>
+									<For
+										each={["run", "build", "test"].filter((action) =>
+											dataList(row.targets).some(
+												(target) => target.action === action,
+											),
+										)}
+									>
+										{(action) => (
+											<ActionHeader
+												onActivate={() => targetChoice(row, action)}
+											>
+												<text fg={color("accent")}>
+													Choose {action} target/profile bundle (prepare only)
+												</text>
+											</ActionHeader>
+										)}
+									</For>
 									<text wrapMode="word">
 										Repository: {String(row.repository)} · prerequisites:{" "}
 										{JSON.stringify(row.requires ?? [])}
@@ -163,7 +268,8 @@ export function ResourcePanel(props: {
 												>
 													<ActionHeader
 														onActivate={() =>
-															props.prepare(
+															prepare(
+																row,
 																`/${String(target.action)} ${String(row.id)} ${String(target.id)}`,
 															)
 														}
@@ -201,7 +307,15 @@ export function ResourcePanel(props: {
 													</text>
 												</Show>
 												<ActionHeader
-													onActivate={() => props.openTask(Number(run.owner))}
+													onActivate={() => {
+														if (
+															props.interactive &&
+															member(row) &&
+															Number.isSafeInteger(run.owner) &&
+															Number(run.owner) > 0
+														)
+															props.openTask(Number(run.owner));
+													}}
 												>
 													<text fg={color("accent")}>
 														Inspect native owner task
@@ -226,9 +340,7 @@ export function ResourcePanel(props: {
 									)}
 									<Show when={props.connected && commandToken(row.id)}>
 										<ActionHeader
-											onActivate={() =>
-												props.prepare(`/logs ${String(row.id)}`)
-											}
+											onActivate={() => prepare(row, `/logs ${String(row.id)}`)}
 										>
 											<text fg={color("accent")}>
 												Prepare diagnostic logs read (does not stop or take over

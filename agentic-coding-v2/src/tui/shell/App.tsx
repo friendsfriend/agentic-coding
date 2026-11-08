@@ -117,9 +117,10 @@ import {
 	transcriptKeybinds,
 	transcriptViewportKeybinds,
 } from "../ui/keybinds.ts";
+import type { LocalChoice } from "../ui/LocalChoice.ts";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
-import { Navigation, type Page, view } from "./navigation.ts";
+import { Navigation, type Page, type View, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
 
 const pages: [Page, string][] = [
@@ -185,6 +186,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		null,
 	);
 	const [standaloneFresh, setStandaloneFresh] = createSignal(false);
+	const [localChoice, setLocalChoice] = createSignal<
+		(LocalChoice & { origin: View }) | null
+	>(null);
 	const [diagnosticDraft, setDiagnosticDraft] = createSignal<DiagnosticDraft>({
 		task: "",
 		kind: "http",
@@ -1019,6 +1023,34 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			];
 		});
 	};
+	const openLocalChoice = (choice: LocalChoice) => {
+		if (busy() || helpOpen() || paletteOpen() || !choice.valid()) return;
+		batch(() => {
+			setLocalChoice({
+				...choice,
+				origin: navigation.current,
+				rows: [...choice.rows],
+			});
+			setPaletteOpen(true);
+		});
+	};
+	const closeLocalChoice = () =>
+		batch(() => {
+			setLocalChoice(null);
+			setPaletteOpen(false);
+		});
+	createEffect(() => {
+		current();
+		const choice = localChoice();
+		if (
+			choice &&
+			(!paletteOpen() ||
+				choice.origin !== navigation.current ||
+				!choice.valid())
+		) {
+			closeLocalChoice();
+		}
+	});
 	const selectedStandalone = createMemo(() => {
 		const view = current();
 		if (view.page !== "pi" && view.page !== "opencode") return undefined;
@@ -3670,6 +3702,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								}
 							>
 								<ResourcePanel
+									scope={workspaceScope()}
+									interactive={workspaceInteractive() && !settingsEditing()}
+									fresh={snapshotFresh()}
+									choose={openLocalChoice}
 									kind={
 										current().page === "schedules"
 											? "schedules"
@@ -3686,7 +3722,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									connected={status() === "connected"}
 									expanded={current().expanded}
 									toggle={toggleDetail}
-									prepare={prepareCommand}
+									prepare={(command) => {
+										remember();
+										if (navigation.current.draft.trim()) return false;
+										prepareCommand(command);
+										return navigation.current.draft === command;
+									}}
 									openTask={(id) => {
 										if (state()?.tasks.some((task) => task.id === id))
 											go("tasks", String(id));
@@ -3793,6 +3834,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								}
 							>
 								<EnvironmentWorkbench
+									scope={workspaceScope()}
+									interactive={!helpOpen() && !paletteOpen() && !busy()}
+									fresh={snapshotFresh()}
+									projects={dataList(state()?.environments.projects)}
+									choose={openLocalChoice}
 									client={client}
 									memory={environmentEditor()}
 									remember={setEnvironmentEditor}
@@ -4038,7 +4084,35 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							choose={(entry) => prepareSuggestion(entry.text)}
 						/>
 					</Show>
-					<Show when={paletteOpen()}>
+					<Show when={paletteOpen() && localChoice()}>
+						{(saved) => (
+							<ReadOnlyChoicePicker
+								layerId="v2.local-choice"
+								title={saved().title}
+								rows={saved().rows}
+								initialKey={saved().initialKey}
+								note={saved().note}
+								empty="No unambiguous supplied choices."
+								refusal="Source changed or an unsent draft blocks preparation; choose explicitly."
+								active={!helpOpen() && !busy() && localChoice() === saved()}
+								close={closeLocalChoice}
+								choose={(key) => {
+									const choice = saved();
+									if (
+										localChoice() !== choice ||
+										navigation.current !== choice.origin ||
+										!choice.valid() ||
+										!choice.rows.some((row) => row.key === key) ||
+										!choice.choose(key)
+									)
+										return false;
+									closeLocalChoice();
+									return true;
+								}}
+							/>
+						)}
+					</Show>
+					<Show when={paletteOpen() && !localChoice()}>
 						<Show
 							when={profilePicker()}
 							fallback={

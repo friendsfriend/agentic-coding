@@ -1356,6 +1356,44 @@ content and bindings, not permission to replace the original presentation.
   closed observations and closed-client refusal. No renderer/helper/navigation
   tests, real model/provider calls, backend starts or visual acceptance are added.
 
+## Integrated native environment picker and editor batch
+
+- Reuse the original capped searchable choice frame for workbench operations,
+  configured app/target fields and run/build/test target selection. Runtime
+  profiles stay bundled with supplied target identities; no independent model,
+  runtime or thinking overrides are invented. The root owns the overlay so the
+  prompt, sidebar and underlying controls cannot acquire its keyboard input.
+- Keep picker callbacks local: select an operation, edit JSON or prepare an
+  explicit command. No discovery, inspection, task admission, backend start,
+  preview or apply occurs on opening/selecting a picker. Existing unsent prompt
+  drafts are not replaced. No request IDs, revisions, digests, inspection booleans
+  or approvals are synthesized. Changing app explicitly removes the old target;
+  other payload fields remain unvalidated and require separate review.
+- Fence choices by exact view, supplied row membership, source bytes, freshness,
+  local JSON/operation and pending state. Duplicate app/target IDs are not chooser
+  candidates. Removed, changed, filtered or disconnected source observations
+  cannot turn a retained choice into another target or owner. Inventory reads
+  remain last-observed metadata, not readiness or lease authority.
+- Scope workbench result/preview publication to client, resource, view and local
+  epoch. Preserve draft memory across mounts without persisting it in viewpoints.
+  Prevent unrelated cursor updates or editor-focus callbacks from invalidating
+  an active editor. Body/mode/operation changes retire confirmations and stale
+  results. Covered/pending editor and approval events cannot mutate local input;
+  Enter in the approval field only leaves editing and never applies an intention.
+- Correct the preview description: sealing stores exact immutable text, not a
+  validated native payload. Validation occurs only on separately confirmed apply;
+  even validation refusal consumes that intention. The manually typed exact
+  unexpired `approve:<digest>` check and all native inner approval/ownership fences
+  remain unchanged, with no automatic retry or restored approval.
+- Port shared ActionHeader pointer activation to the original primary-tap rule:
+  drags/non-primary buttons do not activate controls, nested row taps do not
+  duplicate activation, and cleanup/scoped interactivity retires gestures.
+  Keyboard registration remains presentation-only; callers retain all guards.
+- Extend the existing authenticated native fixture for unsupported read fields,
+  inert unvalidated sealing, consumed invalid payloads and changed-text digest
+  mismatch. No helper/renderer/navigation tests or actual app operations are added.
+  Full layout, lifecycle and terminal visual acceptance remain unfinished.
+
 ## Still required before claiming parity
 
 - Remaining workspace resource filters/pin customization, global preference persistence beyond

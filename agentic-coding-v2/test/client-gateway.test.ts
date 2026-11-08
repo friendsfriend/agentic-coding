@@ -36,10 +36,59 @@ test("authenticated native environment staging and retained history remain expli
 				selection: {},
 			}),
 		).toEqual([]);
+		await expect(
+			client.call("environment.inspect", {
+				operation: "drafts",
+				selection: { app: "not-a-list-filter", target: "not-a-list-filter" },
+			}),
+		).rejects.toThrow();
+		const unsupported = await client.call("environment.preview", {
+			operation: "save",
+			body: {
+				requestId: "ui-unsupported-field",
+				content: "{}",
+				app: "foreign",
+			},
+		});
+		expect(
+			await client.call("environment.inspect", {
+				operation: "drafts",
+				selection: {},
+			}),
+		).toEqual([]);
+		await expect(
+			client.call("environment.apply", {
+				id: unsupported.id,
+				approval: `approve:${unsupported.digest}`,
+			}),
+		).rejects.toThrow();
+		await expect(
+			client.call("environment.apply", {
+				id: unsupported.id,
+				approval: `approve:${unsupported.digest}`,
+			}),
+		).rejects.toThrow();
 		const sealed = await client.call("environment.preview", {
 			operation: "save",
 			body: { requestId: "ui-inert-draft", content: "{}" },
 		});
+		expect(
+			await client.call("environment.inspect", {
+				operation: "drafts",
+				selection: {},
+			}),
+		).toEqual([]);
+		const changed = await client.call("environment.preview", {
+			operation: "save",
+			body: { requestId: "ui-edited-draft", content: '{"edited":true}' },
+		});
+		expect(changed.digest).not.toBe(sealed.digest);
+		await expect(
+			client.call("environment.apply", {
+				id: changed.id,
+				approval: `approve:${sealed.digest}`,
+			}),
+		).rejects.toThrow();
 		expect(
 			await client.call("environment.inspect", {
 				operation: "drafts",
