@@ -250,6 +250,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		id: number;
 		page: Page;
 		resource: string | null;
+		key: string;
+		registry: ReadonlyMap<string, BoxRenderable>;
 	} | null = null;
 	const [promptTimeline, setPromptTimeline] = createSignal<PromptTimelineRow[]>(
 		[],
@@ -259,6 +261,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		page: Page;
 		resource: string | null;
 		rows: PromptTimelineRow[];
+		registry: ReadonlyMap<string, BoxRenderable>;
+		targets: ReadonlyMap<string, BoxRenderable>;
 	} | null>(null);
 	let pendingLatest: number | null = null;
 	let pendingReaderMotion: number | null = null;
@@ -448,6 +452,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				(scope.id !== sessionId() ||
 					scope.page !== current().page ||
 					scope.resource !== current().resource ||
+					readingRows !== scope.registry ||
+					scope.registry.get(scope.key) !== pendingReveal ||
 					!available())
 					? undefined
 					: pendingReveal;
@@ -710,21 +716,41 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		// a delta, prevents default, dispatches work, or infers a layout-only change.
 		markReaderMotion(id, wheel || scroll.scrollTop < bottom);
 	};
-	const reveal = (node: BoxRenderable, alignTop = false) => {
-		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
+	const reveal = (
+		node: BoxRenderable,
+		readingTarget?: {
+			key: string;
+			registry: ReadonlyMap<string, BoxRenderable>;
+		},
+	) => {
+		if (!scroll || scroll.isDestroyed || node.isDestroyed) return false;
+		const id = sessionId();
+		if (
+			readingTarget &&
+			(id === null ||
+				readingRows !== readingTarget.registry ||
+				readingTarget.registry.get(readingTarget.key) !== node ||
+				!isReadingRow(node))
+		)
+			return false;
 		pendingReaderMotion = null;
 		readerSelection = null;
 		readerSelectionId = null;
 		pendingLatest = null;
 		pendingTranscriptRestore = null;
 		pendingReveal = node;
-		pendingRevealTop = alignTop;
-		const id = sessionId();
+		pendingRevealTop = readingTarget !== undefined;
 		pendingRevealScope =
-			alignTop && id !== null
-				? { id, page: current().page, resource: current().resource }
+			readingTarget && id !== null
+				? {
+						id,
+						page: current().page,
+						resource: current().resource,
+						...readingTarget,
+					}
 				: null;
 		renderer.requestRender();
+		return true;
 	};
 	const update = () => setRevision((value) => value + 1);
 	const removeListener = client.onChange(update);
@@ -1726,9 +1752,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						throw new Error(
 							"Select a mounted available native transcript; /timeline does not open/adopt a conversation or fetch history",
 						);
+					const registry = readingRows;
+					const targets = new Map<string, BoxRenderable>();
 					const rows = promptTimeline().filter((row) => {
-						const node = readingRows?.get(row.key);
-						return node !== undefined && isReadingRow(node);
+						const node = registry.get(row.key);
+						if (!node || !isReadingRow(node)) return false;
+						targets.set(row.key, node);
+						return true;
 					});
 					batch(() => {
 						setTimeline({
@@ -1736,6 +1766,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							page: current().page,
 							resource: current().resource,
 							rows,
+							registry,
+							targets,
 						});
 						setPaletteOpen(true);
 					});
@@ -3431,20 +3463,23 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									}}
 									choose={(key) => {
 										const saved = target();
-										const node = readingRows?.get(key);
+										const node = saved.targets.get(key);
 										if (
 											!available() ||
 											sessionId() !== saved.id ||
 											current().page !== saved.page ||
 											current().resource !== saved.resource ||
 											!node ||
+											readingRows !== saved.registry ||
+											saved.registry.get(key) !== node ||
 											!isReadingRow(node) ||
 											!saved.rows.some((row) => row.key === key)
 										)
 											return false;
+										if (!reveal(node, { key, registry: saved.registry }))
+											return false;
 										setTimeline(null);
 										setPaletteOpen(false);
-										reveal(node, true);
 										return true;
 									}}
 								/>

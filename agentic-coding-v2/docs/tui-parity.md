@@ -796,6 +796,24 @@ content and bindings, not permission to replace the original presentation.
   verification remain unfinished. No renderer/helper tests or visual acceptance
   are claimed.
 
+## Timeline captured-row replacement fences
+
+- Capture the mounted reading registry and exact prompt row objects alongside
+  the bounded timeline labels when `/timeline` opens. The existing native key
+  remains necessary but is no longer sufficient: retained byte changes can
+  replace a mounted row while preserving that key.
+- Activation now requires the same registry, captured row and current registry
+  mapping, in addition to native ID/page/resource, attachment and availability.
+  A replacement refuses without adopting its new row or label.
+- Carry the registry/key fence into the deferred post-layout reveal and recheck
+  it before scrolling. Scope/reset retirement still clears queued reveals. A
+  reveal rejected before queueing does not dismiss the picker or clear reader
+  placement; ordinary card reveal callers retain their existing behavior.
+- Captured renderables are ephemeral UI-only references, not serialized bookmark
+  state, retained native data or execution authority. No history paging, implicit
+  reopen/retry, model call or native admission is added. Integrated load-older
+  and interactive/visual acceptance remain outstanding; no renderer/helper tests.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
