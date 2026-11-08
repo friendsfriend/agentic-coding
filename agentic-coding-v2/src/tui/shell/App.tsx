@@ -124,7 +124,7 @@ const help = [
 	"/help · /view tasks|environments|providers|schedules",
 	"/session ID · /back · /forward · /reconnect",
 	"/view skills · /skill SKILL_ID@DIGEST (loaded instructions only)",
-	"/model PROFILE · /abort · /compact [instructions]",
+	"/model PROFILE · /abort · /compact [instructions] · /latest",
 	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
 	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
@@ -484,6 +484,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	});
 	const jumpToLatest = () => {
 		if (
+			!scroll ||
+			scroll.isDestroyed ||
 			!isTranscript() ||
 			!available() ||
 			!readingRows ||
@@ -491,12 +493,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			helpOpen() ||
 			paletteOpen()
 		)
-			return;
+			return false;
 		pendingTranscriptRestore = null;
 		pendingReveal = undefined;
 		readingAnchor = null;
 		pendingLatest = sessionId();
 		renderer.requestRender();
+		return true;
 	};
 	const reveal = (node: BoxRenderable) => {
 		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
@@ -1068,6 +1071,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							"Configure selected conversation from a running-host profile (no in-flight replacement)",
 					},
 					{
+						command: "/latest",
+						description:
+							"Jump within the supplied native transcript window; no history fetch",
+					},
+					{
 						command: "/compact",
 						description: "Prepare native transcript compaction task",
 					},
@@ -1296,7 +1304,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	let pendingSubmissions = 0;
 	async function submit() {
 		if (crumbActive()) return;
-		if (busy() && !/^\/(?:abort|refresh)\s*$/.test(navigation.current.draft))
+		if (
+			busy() &&
+			!/^\/(?:abort|refresh|latest)\s*$/.test(
+				prompt?.plainText ?? navigation.current.draft,
+			)
+		)
 			return;
 		remember();
 		const origin = navigation.current;
@@ -1415,6 +1428,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						});
 					clear();
 					setRefreshRevision((value) => value + 1);
+				} else if (command === "latest") {
+					if (args) throw new Error("/latest accepts no arguments");
+					if (!jumpToLatest())
+						throw new Error(
+							"Select an available native transcript with supplied history; /latest does not open/adopt a conversation or fetch history",
+						);
+					clear();
 				} else if (command === "help") {
 					queueMicrotask(() => setHelpOpen(true));
 					clear();

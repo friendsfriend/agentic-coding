@@ -491,6 +491,25 @@ content and bindings, not permission to replace the original presentation.
   history and visual interaction verification remain unfinished. No renderer,
   snapshot, helper or navigation-matrix tests are added.
 
+## Preparation-only `/latest` command
+
+- Add `/latest` to the native transcript palette/suggestion catalog and help
+  command text. Palette, pointer, Enter/Tab preparation and draft protection
+  retain their existing behavior: selecting a suggestion does not jump or submit.
+- A later explicit `/latest` submission accepts no arguments and requires a
+  currently available native transcript with supplied data and mounted viewport.
+  It queues the same identity-fenced local jump as the pointer affordance, clears
+  only its accepted command text and records local accepted-input history.
+- Permit exact `/latest` while an earlier submission is pending, like the existing
+  narrow abort/refresh exception. This admits no native work and does not loosen
+  other busy/mutation guards; pending-submission accounting remains unchanged.
+- Invalid/missing scope and unsupported standalone UUID modes refuse without
+  adopting/opening a conversation, fetching history or forwarding the command as
+  model input. No protocol, provider, approval or environment behavior changes.
+- Keyboard/timeline controls, frozen/load-older windows and visual verification
+  remain unfinished. No renderer, snapshot, helper or navigation-matrix tests
+  are added; public-boundary checks do not establish visual parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
