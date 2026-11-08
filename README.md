@@ -16,6 +16,8 @@ Installer never installs agent runtimes, providers, or credentials. Configure Gi
 ./scripts/install.sh
 ```
 
+The installer builds both packages with their frozen lockfiles and links `agentic-coding` and `agentic-coding-v2` into `~/.local/bin` (add that directory to `PATH`). The original command uses its compiled executable; v2 uses its built JavaScript bundle with Bun and installed package-relative OpenTUI native dependencies. Keep the checkout in place. V2 has independent configuration and state; see [its README](agentic-coding-v2/README.md). Neither command starts during installation.
+
 Configuration installs at `~/.config/agentic-coding/config.json`. The shipped [`pi/herdr-workflow.json`](pi/herdr-workflow.json) is a portable defaults template and provides only the model-agnostic `use-default-model` preset. Custom profiles, routes, and presets belong in the user configuration at that location (or in an explicitly supplied project configuration). All other application configuration (`.env`, `providers/`, `tui.json`, `themes/`, `apps/`, `libraries/`, `infrastructure/`) lives in the same directory; `AGENTIC_CODING_CONFIG_DIR` overrides it.
 
 This build reads and writes the current formats only: `config.json` and `tui.json` under that directory, workflow stores at schema version 6, and environment state at its current version. An obsolete configuration file, an older workflow or environment database, or an old TUI preference file is ignored or refused with a clear error and is never converted or rewritten. Convert such data with the older build before updating this checkout.

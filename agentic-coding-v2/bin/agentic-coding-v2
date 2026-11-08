@@ -1,2 +1,16 @@
-#!/usr/bin/env bun
-import "../src/cli.ts";
+#!/usr/bin/env bash
+# Resolve installation symlinks without changing the caller's working directory.
+set -euo pipefail
+source_path=${BASH_SOURCE[0]}
+while [[ -L "$source_path" ]]; do
+	directory=$(cd -P "$(dirname "$source_path")" && pwd)
+	source_path=$(readlink "$source_path")
+	[[ "$source_path" = /* ]] || source_path="$directory/$source_path"
+done
+directory=$(cd -P "$(dirname "$source_path")" && pwd)
+bundle="$directory/../dist/agentic-coding-v2.js"
+if [[ ! -f "$bundle" ]]; then
+	printf '%s\n' 'agentic-coding-v2: built bundle missing; run scripts/install.sh from the checkout.' >&2
+	exit 1
+fi
+exec bun "$bundle" "$@"
