@@ -13,7 +13,7 @@ async function main() {
 	const args = process.argv.slice(2);
 	if (args.includes("--help")) {
 		console.log(
-			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui]\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\n--tui opens the OpenTUI/Solid client on the same authenticated native host.",
+			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui | --headless]\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\nThe OpenTUI/Solid client opens by default on the same authenticated native host.\n--tui explicitly selects the default. --headless starts only the local HTTP host.",
 		);
 		return;
 	}
@@ -25,8 +25,10 @@ async function main() {
 			throw new Error(`Missing value for ${name}`);
 		return value;
 	};
-	const tui = args.includes("--tui"),
-		valued = args.filter((arg) => arg !== "--tui");
+	if (args.includes("--tui") && args.includes("--headless"))
+		throw new Error("Choose either --tui or --headless, not both");
+	const tui = !args.includes("--headless"),
+		valued = args.filter((arg) => arg !== "--tui" && arg !== "--headless");
 	for (let index = 0; index < valued.length; index += 2)
 		if (!["--config-dir", "--state-dir", "--port"].includes(valued[index]))
 			throw new Error(`Unknown option ${valued[index]}`);
