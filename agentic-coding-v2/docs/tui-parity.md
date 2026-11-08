@@ -848,6 +848,18 @@ content and bindings, not permission to replace the original presentation.
   native `session.history` reads on scrolling. No renderer/helper tests or
   interactive/visual acceptance are claimed.
 
+## Timeline backdrop follows filter-first dismissal
+
+- Route a classified primary backdrop tap through the same guarded local Esc
+  action as the keyboard/footer chip. While filtering, it clears the query and
+  dismisses filtering first; a subsequent backdrop tap closes the picker.
+- Preserve the original picker backdrop hierarchy rather than calling the parent
+  close callback directly. An inactive picker cannot dismiss through this path.
+  Existing drag/nonprimary rejection remains owned by ReadOnlyModalFrame.
+- No native action, draft modification, history fetch or new pointer listener is
+  added. Integrated load-older and interactive/visual acceptance remain unfinished;
+  no renderer/helper tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

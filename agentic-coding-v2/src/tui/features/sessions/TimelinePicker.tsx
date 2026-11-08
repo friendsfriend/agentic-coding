@@ -195,7 +195,7 @@ export function TimelinePicker(props: {
 		<ReadOnlyModalFrame
 			width={width()}
 			height={height()}
-			close={props.close}
+			close={() => control("escape")}
 			footerHeight={footerHeight()}
 			header={
 				<SearchHeader
