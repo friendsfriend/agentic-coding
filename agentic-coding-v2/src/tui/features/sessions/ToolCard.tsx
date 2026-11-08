@@ -40,7 +40,28 @@ export function ToolCard(props: {
 }) {
 	const hover = useHover();
 	// Icon gutter from the original tool-call header; unknown tools keep its dot.
+	const browserActions = new Set([
+		"browser_open",
+		"browser_close",
+		"browser_click",
+		"browser_fill",
+		"browser_press",
+		"browser_select",
+		"browser_hover",
+		"browser_wait",
+		"browser_snapshot",
+		"browser_find",
+	]);
 	const icons: Record<string, string> = {
+		...Object.fromEntries([...browserActions].map((name) => [name, "→"])),
+		browser_run_script: "λ",
+		browser_eval: "λ",
+		browser_console: "≋",
+		browser_network: "≋",
+		db_query: "!",
+		browser_screenshot: "▧",
+		browser_record_start: "▧",
+		browser_record_stop: "▧",
 		read: "→",
 		write: "←",
 		edit: "←",
@@ -112,6 +133,33 @@ export function ToolCard(props: {
 			: name() === "bash" || name() === "shell"
 				? string(args().command)
 				: string(args().app) || string(args().title) || string(args().query);
+	const headerLabel = () => {
+		if (!browserActions.has(name())) return summary() || name();
+		const verb = name().slice("browser_".length).replaceAll("_", " ");
+		const target =
+			["ref", "selector", "url", "text", "key"]
+				.map((key) => string(args()[key]))
+				.find((value) => value.length > 0) || summary();
+		return `${verb.charAt(0).toUpperCase()}${verb.slice(1)}${target ? ` ${target}` : ""}`;
+	};
+	const requestedSource = createMemo(() => {
+		if (name() === "db_query" && typeof args().sql === "string")
+			return {
+				content: string(args().sql),
+				filetype: "sql",
+				label: "Requested SQL",
+			};
+		if (
+			["browser_run_script", "browser_eval"].includes(name()) &&
+			typeof args().code === "string"
+		)
+			return {
+				content: string(args().code),
+				filetype: "javascript",
+				label: "Requested JavaScript",
+			};
+		return null;
+	});
 	const structured = createMemo(() => {
 		const text = dataList(props.result?.content).find(
 			(part) => part.type === "text",
@@ -183,9 +231,9 @@ export function ToolCard(props: {
 							props.progress?.status === "running"
 						}
 						browser={name().startsWith("browser_")}
-						icon={icons[name()] ?? "•"}
-						label={summary() || name()}
-						hint={summary() ? name() : undefined}
+						icon={Object.hasOwn(icons, name()) ? (icons[name()] ?? "•") : "•"}
+						label={headerLabel()}
+						hint={headerLabel() !== name() ? name() : undefined}
 						timestamp={props.result?.timestamp}
 						durationMs={props.result?.durationMs}
 						onToggle={() => {
@@ -309,6 +357,36 @@ export function ToolCard(props: {
 								drawUnstyledText={true}
 								wrapMode="word"
 							/>
+						</Show>
+						<Show when={requestedSource()}>
+							{(source) => (
+								<>
+									{fold(
+										":source",
+										props.partial
+											? source().label.replace("Requested", "Partial")
+											: props.liveOnly
+												? source().label.replace("Requested", "Live slot")
+												: source().label,
+									)}
+									<Show when={open(":source")}>
+										<text fg={color("textMuted")} wrapMode="word">
+											{props.partial
+												? "Partial generated source — not an execution observation."
+												: props.liveOnly
+													? "Supplied current-round source — no retained intent linked; not proof of completion."
+													: "Retained requested source — not proof of execution or completion."}
+										</text>
+										<code
+											content={source().content}
+											filetype={source().filetype}
+											syntaxStyle={props.syntax}
+											drawUnstyledText={true}
+											wrapMode="word"
+										/>
+									</Show>
+								</>
+							)}
 						</Show>
 						<Show when={!specialized() && props.result}>
 							<Show

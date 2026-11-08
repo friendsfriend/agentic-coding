@@ -379,6 +379,29 @@ content and bindings, not permission to replace the original presentation.
   viewport anchoring remain unfinished. No presenter/rendering tests or visual
   acceptance claims are introduced.
 
+## Browser action and requested-source presentation pass
+
+- Restore the original browser-family action glyph for the known navigation,
+  input, wait and observation tools. Keep the three-cell browser gutter and
+  native tool-name hint; the wrapping main label now carries the action and
+  first supplied ref/selector/URL/text/key, falling back to existing argument
+  summary data. No current browser snapshot, URL discovery or action is invoked.
+- Restore original script, telemetry, evidence and database glyphs for the
+  corresponding explicit native names. Unknown names retain the generic glyph
+  and native-name fallback instead of being guessed into an action family.
+- Add an independently folded requested-source section for supplied
+  browser_run_script/browser_eval JavaScript and db_query SQL, using the shared
+  syntax style and original code-content primitive. This reads only string
+  arguments; it never evaluates JavaScript or submits a query.
+- Distinguish retained intent, generated partial source and unlinked current-round
+  source in the fold label and caveat. Neither source bytes nor a syntax-colored
+  preview establishes execution/completion. Keep the complete argument JSON,
+  retained output/detail folds, diagnostic display and native pairing/status
+  bindings; no protocol, provider, approval or environment behavior changes.
+- Browser observation/evidence body composition, other specialized sections,
+  Mermaid rendering and viewport anchoring remain unfinished. No rendering or
+  presenter tests are added and visual parity remains unverified.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
