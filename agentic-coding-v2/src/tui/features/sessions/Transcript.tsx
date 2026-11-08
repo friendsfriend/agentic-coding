@@ -4,6 +4,7 @@ import { useKeymap } from "@opentui/keymap/solid";
 import {
 	createEffect,
 	createMemo,
+	createSignal,
 	For,
 	Match,
 	onCleanup,
@@ -33,6 +34,15 @@ import type { PromptTimelineRow } from "./TimelinePicker.tsx";
 import { ToolCard } from "./ToolCard.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 
+/** Local mounted-entry paging only; never a native history reader. */
+export type LocalTranscriptPaging = {
+	token: () => object | null;
+	hasOlder: () => boolean;
+	loadOlder: () => boolean;
+	expandAll: () => boolean;
+	collapse: () => void;
+};
+
 type Link = {
 	result: Data | null;
 	pairing: "matched" | "missing" | "ambiguous";
@@ -44,6 +54,7 @@ export function Transcript(props: {
 	enabled: boolean;
 	selected: string | null;
 	freezeWindow?: boolean;
+	registerLocalPaging?: (paging: LocalTranscriptPaging) => () => void;
 	select: (id: string) => void;
 	reveal: (node: BoxRenderable) => void;
 	registerReadingRows?: (
@@ -61,6 +72,8 @@ export function Transcript(props: {
 	onMount(() => {
 		const unregister = props.registerReadingRows?.(anchors);
 		if (unregister) onCleanup(unregister);
+		const unregisterPaging = props.registerLocalPaging?.(localPaging);
+		if (unregisterPaging) onCleanup(unregisterPaging);
 	});
 	const anchor = (id: string) => {
 		let previous: BoxRenderable | undefined;
@@ -98,6 +111,42 @@ export function Transcript(props: {
 			};
 		return retainedWindow;
 	});
+	// Match the original 60/40 window/page cadence using supplied native entries.
+	// Pairing below still sees the complete bounded retained window.
+	const [localWindow, setLocalWindow] = createSignal<{
+		id: number;
+		count: number;
+	} | null>(null);
+	const mountCount = () =>
+		localWindow()?.id === window()?.id ? (localWindow()?.count ?? 60) : 60;
+	const localStart = () =>
+		Math.max(0, (window()?.entries.length ?? 0) - mountCount());
+	createEffect(() => {
+		if (localWindow()?.id !== window()?.id) setLocalWindow(null);
+	});
+	const expandLocal = (all: boolean) => {
+		const value = window();
+		const start = localStart();
+		if (!value || start <= 0 || (!all && !props.freezeWindow)) return false;
+		setLocalWindow({
+			id: value.id,
+			count: all ? 200 : Math.min(200, mountCount() + 40),
+		});
+		return true;
+	};
+	const localPaging: LocalTranscriptPaging = {
+		token: window,
+		hasOlder: () => localStart() > 0,
+		loadOlder: () => expandLocal(false),
+		expandAll: () => expandLocal(true),
+		collapse: () => setLocalWindow(null),
+	};
+	const visibleEntries = createMemo(
+		() =>
+			new Set<unknown>(
+				(window()?.entries ?? []).slice(localStart()).map((entry) => entry.id),
+			),
+	);
 	const messages = createMemo<Data[]>(() => {
 		const nextCache = new Map<string, { signature: string; value: Data }>();
 		const retained = (window()?.entries ?? []).flatMap((entry) =>
@@ -150,7 +199,14 @@ export function Transcript(props: {
 		}));
 	// Retained byte changes replace their row. Only a live generation with the
 	// same native task/attempt identity updates its mounted presentation carrier.
-	const messageSlots = createKeyedItems(messages, (message) =>
+	const visibleMessages = createMemo(() =>
+		messages().filter(
+			(message) =>
+				message.nativePartial === true ||
+				visibleEntries().has(message.nativeEntryId),
+		),
+	);
+	const messageSlots = createKeyedItems(visibleMessages, (message) =>
 		message.nativePartial === true
 			? JSON.stringify([message.identity, "live"])
 			: (retainedRenderKeys.get(message) ?? JSON.stringify(message)),
@@ -159,7 +215,7 @@ export function Transcript(props: {
 	createEffect(() => {
 		markdownCache.retain(
 			new Set(
-				messages()
+				visibleMessages()
 					.filter((message) => message.role === "assistant")
 					.flatMap(parts)
 					.filter(({ part }) => part.type === "text")
@@ -168,6 +224,19 @@ export function Transcript(props: {
 		);
 	});
 	onCleanup(() => markdownCache.clear());
+	const visibleCallIdentities = createMemo(
+		() =>
+			new Set(
+				visibleMessages()
+					.filter(
+						(message) =>
+							message.role === "assistant" && message.nativePartial !== true,
+					)
+					.flatMap(parts)
+					.filter(({ part }) => part.type === "toolCall")
+					.map(({ identity }) => identity),
+			),
+	);
 	const liveLinks = createMemo(() => {
 		const slots = progress()?.tools ?? [];
 		const owner = progress()?.run?.taskId;
@@ -197,7 +266,7 @@ export function Transcript(props: {
 				slots.filter((other) => other.callId === slot.callId).length === 1
 			) {
 				linked.set(match.identity, slot);
-				consumed.add(slot);
+				if (visibleCallIdentities().has(match.identity)) consumed.add(slot);
 			}
 		}
 		return { linked, consumed };
@@ -272,12 +341,13 @@ export function Transcript(props: {
 						? "ambiguous"
 						: "missing",
 			});
-			if (matched) consumed.add(String(matched.identity));
+			if (matched && visibleCallIdentities().has(identity))
+				consumed.add(String(matched.identity));
 		}
 		return { links, consumed };
 	});
 	const controls = createMemo(() => [
-		...messages()
+		...visibleMessages()
 			.filter((message) => message.role === "assistant")
 			.flatMap(parts)
 			.filter(
@@ -461,17 +531,24 @@ export function Transcript(props: {
 
 			<Show when={props.selected && !selected()}>
 				<text fg={color("warning")}>
-					Saved card is not in the currently observed transcript (clipped
-					history or ended/disconnected live activity). Selection is not
-					replaced automatically; choose an observed card explicitly.
+					Saved card is not mounted in the currently observed transcript (local
+					or clipped history or ended/disconnected live activity). Selection is
+					not replaced automatically; choose an observed card explicitly.
 				</text>
 			</Show>
 			<Show when={window()?.truncated}>
 				<text fg={color("warning")}>
 					{props.freezeWindow
 						? "Showing a frozen bounded native-entry window."
-						: "Showing the newest 200 native entries."}{" "}
+						: "Retaining the newest 200 native entries for this bounded view."}{" "}
 					Unpaired tool activity is unknown outside this history window.
+				</text>
+			</Show>
+			<Show when={localPaging.hasOlder()}>
+				<text fg={color("textMuted")} wrapMode="word">
+					{localStart()} older supplied native entries are not mounted. Scroll
+					upward to expand this local window; no native history read is
+					requested.
 				</text>
 			</Show>
 			<For each={messageSlots()}>
@@ -711,7 +788,7 @@ export function Transcript(props: {
 										Unpaired retained result ·{" "}
 										{String(message().toolName ?? "tool")} ·{" "}
 										{String(message().toolCallId ?? "identity unavailable")} —
-										no unique call in this window.
+										no unique mounted call in this local window.
 									</text>
 									<text wrapMode="word">
 										{text(message()) || "No text output retained."}

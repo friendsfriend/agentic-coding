@@ -64,7 +64,10 @@ import {
 	type PromptTimelineRow,
 	TimelinePicker,
 } from "../features/sessions/TimelinePicker.tsx";
-import { Transcript } from "../features/sessions/Transcript.tsx";
+import {
+	type LocalTranscriptPaging,
+	Transcript,
+} from "../features/sessions/Transcript.tsx";
 import { SettingsPanel } from "../features/settings/SettingsPanel.tsx";
 import {
 	type SkillFileDraft,
@@ -266,6 +269,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	} | null>(null);
 	let pendingLatest: number | null = null;
 	let pendingReaderMotion: number | null = null;
+	let pendingOlderMotion: number | null = null;
 	let readerSelection: import("@opentui/core").Selection | null = null;
 	let readerSelectionId: number | null = null;
 	const [awayFromBottom, setAwayFromBottom] = createSignal(false);
@@ -288,6 +292,28 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				}
 			: null;
 	let readingRows: ReadonlyMap<string, BoxRenderable> | null = null;
+	let localPaging: LocalTranscriptPaging | null = null;
+	let pendingLocalLoad: {
+		id: number;
+		page: Page;
+		resource: string | null;
+		registry: ReadonlyMap<string, BoxRenderable>;
+		paging: LocalTranscriptPaging;
+		token: object | null;
+		box: ScrollBoxRenderable;
+		height: number;
+		top: number;
+		anchor: { key: string; node: BoxRenderable; offset: number } | null;
+	} | null = null;
+	const registerLocalPaging = (paging: LocalTranscriptPaging) => {
+		localPaging = paging;
+		pendingLocalLoad = null;
+		return () => {
+			if (localPaging !== paging) return;
+			localPaging = null;
+			pendingLocalLoad = null;
+		};
+	};
 	let readingAnchor: { key: string; offset: number } | null = null;
 	let followingBottom = false;
 	let sampledScroll: {
@@ -297,6 +323,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		viewport: number;
 	} | null = null;
 	const resetReadingPlace = () => {
+		pendingLocalLoad = null;
+		pendingOlderMotion = null;
 		if (pendingRevealScope) {
 			pendingReveal = undefined;
 			pendingRevealTop = false;
@@ -435,13 +463,55 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					const follow =
 						target.detail.transcriptFollowId === id &&
 						target.detail.transcriptFollowing === true;
-					const top = follow
-						? bottom
-						: Math.min(Math.max(0, saved.top), bottom);
-					pendingTranscriptRestore = null;
-					resetReadingPlace();
-					followingBottom = follow;
-					if (scroll.scrollTop !== top) scroll.scrollTo(top);
+					if (!follow && saved.top > 0 && localPaging?.hasOlder()) {
+						// Restore old numeric positions against the same full supplied bound,
+						// not against the new smaller initial mount. No history read.
+						setAwayFromBottom(true);
+						if (localPaging.expandAll()) renderer.requestRender();
+					} else {
+						const top = follow
+							? bottom
+							: Math.min(Math.max(0, saved.top), bottom);
+						pendingTranscriptRestore = null;
+						resetReadingPlace();
+						followingBottom = follow;
+						if (scroll.scrollTop !== top) scroll.scrollTo(top);
+					}
+				}
+			}
+			// Settle a local prepend only in its captured UI/session/window scope.
+			const load = pendingLocalLoad;
+			pendingLocalLoad = null;
+			if (
+				load &&
+				scroll === load.box &&
+				!load.box.isDestroyed &&
+				load.id === sessionId() &&
+				load.page === current().page &&
+				load.resource === current().resource &&
+				readingRows === load.registry &&
+				localPaging === load.paging &&
+				load.token === load.paging.token() &&
+				available() &&
+				!helpOpen() &&
+				!paletteOpen() &&
+				!timeline() &&
+				!pendingReveal &&
+				pendingLatest === null &&
+				pendingTranscriptRestore === null
+			) {
+				const held = load.anchor;
+				if (
+					!held ||
+					(load.registry.get(held.key) === held.node && isReadingRow(held.node))
+				) {
+					const desired = held
+						? load.box.scrollTop +
+							held.node.screenY -
+							load.box.viewport.screenY -
+							held.offset
+						: load.top + load.box.scrollHeight - load.height;
+					if (Number.isFinite(desired)) load.box.scrollTo(Math.max(0, desired));
 				}
 			}
 			// Layout and wrapping have settled before this post-process callback.
@@ -497,7 +567,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				scroll &&
 				!scroll.isDestroyed &&
 				readingRows &&
-				readingRows.size > 0 &&
+				(readingRows.size > 0 || localPaging?.hasOlder()) &&
 				pendingTranscriptRestore === null &&
 				!helpOpen() &&
 				!paletteOpen()
@@ -521,6 +591,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				// including its final release frame. Never inspect selected text.
 				readerSelection = ownedDrag ? selection : null;
 				readerSelectionId = ownedDrag ? sessionId() : null;
+				const olderRequested =
+					pendingOlderMotion === sessionId() &&
+					pendingReaderMotion === sessionId();
+				pendingOlderMotion = null;
 				const readerMoved =
 					selectionMoved ||
 					(pendingReaderMotion !== null &&
@@ -585,6 +659,46 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					width: scroll.viewport.width,
 					viewport: scroll.viewport.height,
 				};
+				const id = sessionId();
+				if (
+					olderRequested &&
+					!load &&
+					scroll.scrollTop <= 0 &&
+					id !== null &&
+					isTranscript() &&
+					available() &&
+					!timeline() &&
+					!ownedDrag &&
+					localPaging?.hasOlder()
+				) {
+					setAwayFromBottom(true);
+					followingBottom = false;
+					const key = readingAnchor?.key;
+					const held = key === undefined ? undefined : readingRows.get(key);
+					const pending = {
+						id,
+						page: current().page,
+						resource: current().resource,
+						registry: readingRows,
+						paging: localPaging,
+						token: localPaging.token(),
+						box: scroll,
+						height: scroll.scrollHeight,
+						top: scroll.scrollTop,
+						anchor:
+							key !== undefined && held && isReadingRow(held)
+								? {
+										key,
+										node: held,
+										offset: held.screenY - scroll.viewport.screenY,
+									}
+								: null,
+					};
+					if (localPaging.loadOlder()) {
+						pendingLocalLoad = pending;
+						renderer.requestRender();
+					}
+				}
 			}
 			const focused = prompt?.focused ?? false;
 			if (focused && !cursorFocused) cursorBlink.reset();
@@ -626,12 +740,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		pendingReaderMotion = null;
 		readerSelection = null;
 		readerSelectionId = null;
+		localPaging?.collapse();
 		setAwayFromBottom(false);
 		pendingLatest = sessionId();
 		renderer.requestRender();
 		return true;
 	};
 	const markReaderMotion = (id: number, freeze: boolean) => {
+		pendingOlderMotion = null;
 		readerSelection = null;
 		readerSelectionId = null;
 		pendingReaderMotion = id;
@@ -660,10 +776,16 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		)
 			return false;
 		const bottom = Math.max(0, scroll.scrollHeight - scroll.viewport.height);
-		if (direction < 0 ? scroll.scrollTop <= 0 : scroll.scrollTop >= bottom)
+		if (direction < 0 ? scroll.scrollTop <= 0 : scroll.scrollTop >= bottom) {
+			if (direction < 0 && localPaging?.hasOlder()) {
+				markReaderMotion(id, true);
+				pendingOlderMotion = id;
+			}
 			return true;
+		}
 		// Original route step: one third of terminal height, at least one line.
-		markReaderMotion(id, direction < 0 && scroll.scrollTop > 0);
+		markReaderMotion(id, direction < 0);
+		pendingOlderMotion = direction < 0 ? id : null;
 		scroll.scrollBy(
 			direction * Math.max(1, Math.floor(dimensions().height / 3)),
 		);
@@ -693,7 +815,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		const bottom = Math.max(0, scroll.scrollHeight - scroll.viewport.height);
 		const wheel =
 			(direction === "up" &&
-				(scroll.scrollTop > 0 || (sampledScroll?.top ?? 0) > 0)) ||
+				(scroll.scrollTop > 0 ||
+					(sampledScroll?.top ?? 0) > 0 ||
+					localPaging?.hasOlder())) ||
 			(direction === "down" &&
 				(scroll.scrollTop < bottom || (sampledScroll?.top ?? bottom) < bottom));
 		let barPointer = false;
@@ -715,6 +839,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		// Preserve the native pointer handler: this observes intent, never supplies
 		// a delta, prevents default, dispatches work, or infers a layout-only change.
 		markReaderMotion(id, wheel || scroll.scrollTop < bottom);
+		pendingOlderMotion = direction === "up" ? id : null;
 	};
 	const reveal = (
 		node: BoxRenderable,
@@ -2925,6 +3050,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}}
 										reveal={reveal}
 										registerReadingRows={registerReadingRows}
+										registerLocalPaging={registerLocalPaging}
 										onPromptTimeline={(rows, items) => {
 											if (readingRows === rows) setPromptTimeline(items);
 										}}

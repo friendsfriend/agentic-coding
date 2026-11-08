@@ -1166,6 +1166,38 @@ content and bindings, not permission to replace the original presentation.
   No renderer/helper tests are introduced. Integrated load-older, nested-call
   composition and interactive/visual acceptance remain unfinished.
 
+## Integrated bounded local load-older batch
+
+- Port the original 60/40 window/page cadence in supplied native-entry units:
+  initially mount the newest 60, then expand by 40 within the existing last-200
+  retained bound. This is local presentation only; it cannot fetch, merge or
+  synthesize earlier native history. The independent HistoryPanel remains the
+  explicit native paging boundary.
+- Keep uniqueness and native call/result/live-slot matching over the entire
+  bounded retained window. Consume result rows and live slots only for mounted
+  calls: a retained result whose call is locally hidden remains visible as an
+  unpaired local row, and an observed live slot stays independently visible.
+  Mounted-card navigation, prose caches and prompt timeline membership use only
+  mounted rows; their exact target/node guards remain in force.
+- Upward keyboard/wheel intent at the scrollbox top expands locally, including
+  another upward gesture when already at zero. Layout-only changes, downward
+  motion, reveals, scrollbar taps, stopped events and owned selection drags do
+  not independently authorize expansion. No new keybindings, modal or native
+  command is added.
+- Capture prepend restoration before mounting, then settle after layout using
+  the exact surviving row/node and offset (height delta only without an anchor).
+  Fence by session/page/resource, registry, scrollbox, paging controller and exact
+  frozen window token. Latest, saved-position restore, modal state, replacement
+  scopes and stale/destroyed rows prevent a pending prepend from taking over.
+- Preserve an expanded local count across same-session updates, still capped at
+  200; `/latest` collapses to the initial mount. Expand the same supplied bound
+  before restoring a saved non-following numeric scroll position, so the smaller
+  initial mount cannot silently clamp a previously expanded reading position.
+- Labels distinguish retained bounds from mounted rows. This completes the local
+  expansion/owner/viewport integration in one batch, not native-history merge,
+  text-line/source-offset restoration or visual/interactive acceptance. No
+  renderer, presenter or navigation-matrix tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
@@ -1173,8 +1205,9 @@ content and bindings, not permission to replace the original presentation.
 - Remaining original modal components, selection/clipboard interactions and
   notification placement; the restored read-only help frame is not general
   modal parity.
-- Remaining orchestrator/durable transcript composition: original viewport/window
-  anchoring, Mermaid diagram rendering, remaining specialized tool families and
+- Remaining orchestrator/durable transcript composition: text-line/source-offset
+  anchoring beyond the integrated bounded local expansion, native-history merge,
+  Mermaid diagram rendering, remaining specialized tool families and
   file/shell header/section composition, remaining timing coverage and
   progress/context arrangement,
   remaining prompt history details and model/thinking/argument picker behavior.
