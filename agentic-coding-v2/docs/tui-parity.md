@@ -988,6 +988,22 @@ content and bindings, not permission to replace the original presentation.
 - Full response and nested-call composition, integrated load-older and interactive/
   visual acceptance remain unfinished. No renderer/helper tests are added.
 
+## Missing-diff edit request fragments
+
+- Restore supplied edit-request detail when no native diff is retained: each
+  record in an explicit `arguments.edits` array with string old/new fields gets
+  an independent local replacement fold. Keep original positions through omitted
+  invalid/incomplete records; never default missing fields to empty strings.
+- Render old/new fragments verbatim in separate source blocks, including explicit
+  empty-string annotations. Unlike an applied unified diff, these blocks have no
+  inferred hunk headers, file positions, current-file reads or execution claims.
+- Label partial/live-slot/retained requested intent distinctly. Existing no-diff
+  warning, native status/pairing, complete Arguments/output/Details and supplied
+  native diff presentation remain unchanged. No edit operation is dispatched.
+- Direct single-replacement schemas, full specialized/nested-call composition,
+  integrated load-older and visual/interactive acceptance remain unfinished.
+  No renderer/helper tests or native/provider calls are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

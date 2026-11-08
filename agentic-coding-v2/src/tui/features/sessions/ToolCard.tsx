@@ -239,6 +239,17 @@ export function ToolCard(props: {
 			return null;
 		}
 	});
+	const requestedEdits = createMemo(() => {
+		const edits = args().edits;
+		if (name() !== "edit" || !Array.isArray(edits)) return [];
+		return edits.flatMap((item: unknown, index: number) => {
+			const entry = object(item);
+			return typeof entry.oldText === "string" &&
+				typeof entry.newText === "string"
+				? [{ index, oldText: entry.oldText, newText: entry.newText }]
+				: [];
+		});
+	});
 	const requestedQuestions = createMemo(() => {
 		if (!["developer_question", "agent_ask"].includes(name())) return [];
 		const value = args();
@@ -501,6 +512,50 @@ export function ToolCard(props: {
 								No native diff retained. Requested replacements are available
 								under Arguments; no applied diff is inferred.
 							</text>
+						</Show>
+						<Show when={name() === "edit" && !patch()}>
+							<For each={requestedEdits()}>
+								{(edit) => (
+									<>
+										{fold(
+											`:replacement:${edit.index}`,
+											`${props.partial ? "Partial generated" : props.liveOnly ? "Live slot" : "Requested"} replacement ${edit.index + 1}`,
+										)}
+										<Show when={open(`:replacement:${edit.index}`)}>
+											<text fg={color("textMuted")} wrapMode="word">
+												Supplied replacement intent — not an applied diff, live
+												file snapshot or file-line range.
+											</text>
+											<text fg={color("textMuted")}>
+												Requested old text ·{" "}
+												{edit.oldText.length === 0
+													? "empty string"
+													: "supplied fragment"}
+											</text>
+											<code
+												content={edit.oldText}
+												filetype="text"
+												syntaxStyle={props.syntax}
+												drawUnstyledText={true}
+												wrapMode="word"
+											/>
+											<text fg={color("textMuted")}>
+												Requested new text ·{" "}
+												{edit.newText.length === 0
+													? "empty string"
+													: "supplied fragment"}
+											</text>
+											<code
+												content={edit.newText}
+												filetype="text"
+												syntaxStyle={props.syntax}
+												drawUnstyledText={true}
+												wrapMode="word"
+											/>
+										</Show>
+									</>
+								)}
+							</For>
 						</Show>
 						<Show
 							when={name() === "bash" && props.call.arguments !== undefined}
