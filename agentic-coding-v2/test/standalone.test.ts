@@ -5,6 +5,130 @@ import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
+test("authenticated OpenCode cancellation interrupts queued send/compact and fences late backend success", async () => {
+	const oldURL = process.env.AGENTIC_CODING_V2_OPENCODE_URL,
+		oldToken = process.env.AGENTIC_CODING_V2_OPENCODE_TOKEN;
+	let gate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+	let entered = false,
+		creates = 0,
+		aborts = 0,
+		dispatches = 0;
+	const native = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: async (request) => {
+			expect(request.headers.get("authorization")).toBe(
+				"Bearer fake-cancel-secret",
+			);
+			const url = new URL(request.url);
+			if (url.pathname === "/session")
+				return Response.json({ id: `ses_cancel${++creates}` });
+			if (url.pathname.endsWith("/abort")) {
+				aborts++;
+				gate?.resolve();
+				return new Response(null, { status: 204 });
+			}
+			if (
+				url.pathname.endsWith("/message") ||
+				url.pathname.endsWith("/summarize")
+			) {
+				const pending = gate;
+				if (!pending) throw new Error("Missing fixture gate");
+				dispatches++;
+				entered = true;
+				await pending.promise;
+				// Deliberately ignore cancellation and report backend success.
+				return Response.json(
+					url.pathname.endsWith("/summarize")
+						? true
+						: {
+								parts: [
+									{ type: "text", text: "Do not publish cancelled success" },
+								],
+							},
+				);
+			}
+			return new Response(null, { status: 404 });
+		},
+	});
+	let host: ReturnType<typeof serve> | undefined;
+	let client: ClientConnection | undefined;
+	try {
+		process.env.AGENTIC_CODING_V2_OPENCODE_URL = native.url.origin;
+		process.env.AGENTIC_CODING_V2_OPENCODE_TOKEN = "fake-cancel-secret";
+		const { app, config } = await fixture();
+		host = serve(app, 0);
+		const connection = new ClientConnection(host.client);
+		client = connection;
+		connection.connect();
+		await eventually(
+			() => Promise.resolve(connection.status),
+			(status) => status === "connected",
+		);
+		const profile = config.profiles[0]?.id,
+			repository = config.repositories[0];
+		if (!profile || !repository)
+			throw new Error("Missing fixture profile/repository");
+		for (const method of ["standalone.send", "standalone.compact"] as const) {
+			gate = Promise.withResolvers<void>();
+			entered = false;
+			const session = await connection.call("standalone.create", {
+				mode: "opencode",
+				title: method,
+				profile,
+				repository,
+			});
+			const input = {
+				id: session.id,
+				revision: session.revision,
+				requestId: method,
+				...(method === "standalone.send"
+					? { content: "Cancel owned operation" }
+					: {}),
+			};
+			const sending = connection.call(method, input).then(
+				() => "ready",
+				() => "uncertain",
+			);
+			await eventually(
+				() => Promise.resolve(entered),
+				(value) => value,
+			);
+			const priorAborts = aborts;
+			await expect(
+				connection.call("standalone.abort", { id: "ses_foreign" }),
+			).rejects.toThrow();
+			expect(aborts).toBe(priorAborts);
+			await connection.call("standalone.abort", { id: session.id });
+			expect(await sending).toBe("uncertain");
+			const retained = (
+				await connection.call("standalone.read", { id: session.id })
+			).sessions.find((value) => value.id === session.id);
+			expect(retained?.status).toBe("uncertain");
+			expect(
+				retained?.messages.some((value) => value.role === "assistant"),
+			).toBe(false);
+			await expect(
+				connection.call(method, {
+					...input,
+					revision: retained?.revision ?? 0,
+				}),
+			).rejects.toThrow();
+		}
+		expect(dispatches).toBe(2);
+		expect(aborts).toBe(2);
+	} finally {
+		gate?.resolve();
+		client?.close();
+		host?.stop();
+		native.stop(true);
+		if (oldURL === undefined) delete process.env.AGENTIC_CODING_V2_OPENCODE_URL;
+		else process.env.AGENTIC_CODING_V2_OPENCODE_URL = oldURL;
+		if (oldToken === undefined)
+			delete process.env.AGENTIC_CODING_V2_OPENCODE_TOKEN;
+		else process.env.AGENTIC_CODING_V2_OPENCODE_TOKEN = oldToken;
+	}
+});
 test("authenticated standalone bridge retains its own identities and consumes uncertain attempts without replay", async () => {
 	const oldURL = process.env.AGENTIC_CODING_V2_OPENCODE_URL,
 		oldToken = process.env.AGENTIC_CODING_V2_OPENCODE_TOKEN;

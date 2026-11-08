@@ -281,6 +281,16 @@ export class Standalone {
 			catalog.records[id] = JSON.stringify(value);
 		}, context);
 		let dispose: (() => void) | undefined;
+		let abortRequested = false;
+		let finishing = false;
+		const requestAbort = async (abort: () => Promise<void>) => {
+			if (finishing)
+				throw new Error(
+					"Standalone dispatch already settled; inspect retained status",
+				);
+			abortRequested = true;
+			await abort();
+		};
 		this.live.set(id, {
 			abort: async () => {
 				throw new Error(
@@ -328,7 +338,9 @@ export class Standalone {
 					resourceLoader: loader,
 				});
 				dispose = () => session.dispose();
-				this.live.set(id, { abort: () => session.abort() });
+				// SDK abort already cancels manual/automatic compaction and awaits idle.
+				// Keep our admission receipt conservative even if prompt returns normally.
+				this.live.set(id, { abort: () => requestAbort(() => session.abort()) });
 				session.subscribe((event) => {
 					if (
 						event.type === "message_update" &&
@@ -351,6 +363,8 @@ export class Standalone {
 				const messages = session.state.messages.filter(
 					(message) => message.role === "user" || message.role === "assistant",
 				);
+				if (abortRequested)
+					throw new Error("Standalone cancellation requested");
 				value.context = store.inspect(value.id, value.backend);
 				const last = [...messages]
 					.reverse()
@@ -367,13 +381,14 @@ export class Standalone {
 				if (!value.backend)
 					throw new Error("OpenCode session creation uncertain");
 				this.live.set(id, {
-					abort: async () => {
-						await this.request(
-							value,
-							"POST",
-							`/session/${value.backend}/abort`,
-						);
-					},
+					abort: () =>
+						requestAbort(async () => {
+							await this.request(
+								value,
+								"POST",
+								`/session/${value.backend}/abort`,
+							);
+						}),
 				});
 				if (compact) {
 					const result = await this.request(
@@ -413,6 +428,10 @@ export class Standalone {
 						.join("\n");
 				}
 			}
+			if (abortRequested) throw new Error("Standalone cancellation requested");
+			// No more backend dispatch remains. Reject late aborts during receipt commit
+			// rather than acknowledging cancellation after a ready result was chosen.
+			finishing = true;
 			if (answer.length > 64000) value.truncated = true;
 			value.messages.push({
 				role: "assistant",
@@ -430,6 +449,7 @@ export class Standalone {
 			await this.save(value);
 			return this.public(value, true);
 		} catch {
+			finishing = true;
 			value.status = "uncertain";
 			value.revision++;
 			await this.save(value);

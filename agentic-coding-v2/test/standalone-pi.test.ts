@@ -14,6 +14,104 @@ import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup, apps } = createFixtures();
 afterEach(cleanup);
+test("authenticated Pi abort keeps a cancelled attempt uncertain without publishing a reply or resending", async () => {
+	const { config, fake } = await fixture();
+	const models = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: null,
+		modelsStorePath: path.join(config.stateDir, "fake-abort-model-cache"),
+		allowModelNetwork: false,
+		refreshOnCreate: false,
+	});
+	models.registerNativeProvider(fake.provider);
+	const app = await Runtime.open(config, models, new MemoryStorage());
+	apps.push(app);
+	const repository = config.repositories[0];
+	if (!repository) throw new Error("Missing fixture repository");
+	const gate = Promise.withResolvers<void>();
+	let entered = false;
+	let observedAbort = false;
+	fake.setResponses([
+		fauxAssistantMessage("Earlier ready reply"),
+		async (_context, options) => {
+			if (!options?.signal)
+				throw new Error("Missing native cancellation signal");
+			options.signal.addEventListener(
+				"abort",
+				() => {
+					observedAbort = true;
+					gate.resolve();
+				},
+				{ once: true },
+			);
+			entered = true;
+			await gate.promise;
+			return fauxAssistantMessage("Do not publish this cancelled reply");
+		},
+	]);
+	const host = serve(app, 0),
+		client = new ClientConnection(host.client);
+	client.connect();
+	try {
+		await eventually(
+			() => Promise.resolve(client.status),
+			(status) => status === "connected",
+		);
+		const session = await client.call("standalone.create", {
+			mode: "pi",
+			profile: "test",
+			repository,
+			title: "Cancel owned Pi",
+		});
+		const first = await client.call("standalone.send", {
+			id: session.id,
+			revision: session.revision,
+			requestId: "abort-first",
+			content: "Retain a prior reply",
+		});
+		const sending = client
+			.call("standalone.send", {
+				id: session.id,
+				revision: first.revision,
+				requestId: "abort-second",
+				content: "Cancel this request",
+			})
+			.then(
+				() => "ready",
+				() => "uncertain",
+			);
+		await eventually(
+			() => Promise.resolve(entered),
+			(value) => value,
+		);
+		await client.call("standalone.abort", { id: session.id });
+		expect(observedAbort).toBe(true);
+		expect(await sending).toBe("uncertain");
+		const retained = (
+			await client.call("standalone.read", { id: session.id })
+		).sessions.find((value) => value.id === session.id);
+		expect(retained?.status).toBe("uncertain");
+		expect(
+			retained?.messages.filter((value) => value.role === "assistant"),
+		).toEqual([{ role: "assistant", content: "Earlier ready reply" }]);
+		await expect(
+			client.call("standalone.send", {
+				id: session.id,
+				revision: retained?.revision ?? 0,
+				requestId: "abort-second",
+				content: "Cancel this request",
+			}),
+		).rejects.toThrow();
+		await expect(
+			client.call("standalone.abort", { id: session.id }),
+		).rejects.toThrow();
+		expect(fake.state.callCount).toBe(2);
+	} finally {
+		gate.resolve();
+		client.close();
+		host.stop();
+	}
+});
 test("authenticated native Pi retains SDK identity/context without tools or project discovery and refuses changed private sources", async () => {
 	const { config, fake } = await fixture();
 	const models = await ModelRuntime.create({

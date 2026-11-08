@@ -88,7 +88,9 @@ Native session submission identities deduplicate according to pi-durable's submi
 
 Reconnect uses bounded exponential delay (1–30 seconds); explicit `/reconnect` requests the same synchronization path. New requests get new correlation IDs, but no old mutation is reissued. The functional disconnect test holds a native mutation in flight, reconnects the same client, observes its uncertain outcome and proves that only one native mutation occurred. The deletion scenario also reopens persistent native storage and proves that the retired schedule ID cannot be recreated.
 
-Closing a connection discards queued work that has not started and retires its watch/timer. Already-running work may finish. Host shutdown stops polling, closes clients and waits for running request chains and watch/setup cleanup before stopping the listener/runtime. Stopping observation does not abort native work. TUI renderer/client/signal handlers are cleaned up on exit; no legacy window launcher is involved.
+Requests remain ordered per connection except authenticated `standalone.abort`: cancellation must be able to interrupt an awaited standalone send/compaction rather than wait behind it. This narrow exception retains strict input validation, duplicate/in-flight limits and dispatch ownership checks; it cannot interrupt a foreign or adopted handle. Interrupted attempts remain uncertain and consumed even if a backend later reports success. Abort acknowledgement does not establish remote termination; settled dispatches reject late aborts.
+
+Closing a connection discards queued work that has not started and retires its watch/timer. Already-running work may finish. Host shutdown stops polling, closes clients and waits for running request chains, cancellation interrupts and watch/setup cleanup before stopping the listener/runtime. Stopping observation does not abort native work. TUI renderer/client/signal handlers are cleaned up on exit; no legacy window launcher is involved.
 
 ## Task and resource presentation
 

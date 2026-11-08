@@ -16,6 +16,7 @@ export type Connection = {
 	subscribed: boolean;
 	pending: Set<string>;
 	chain: Promise<void>;
+	interrupts: Set<Promise<void>>;
 	sequence: number;
 	watchId: string | null;
 	watch: SessionWatch | null;
@@ -30,7 +31,11 @@ export function clientGateway(app: Runtime) {
 		const watch = socket.data.watch;
 		socket.data.watch = null;
 		// Setup in flight notices the removed socket and releases its own watch.
-		const end = Promise.all([watch?.stop(), socket.data.chain]).then(() => {});
+		const end = Promise.all([
+			watch?.stop(),
+			socket.data.chain,
+			...socket.data.interrupts,
+		]).then(() => {});
 		closing.add(end);
 		void end.finally(() => closing.delete(end));
 	}
@@ -126,7 +131,7 @@ export function clientGateway(app: Runtime) {
 				return;
 			}
 			socket.data.pending.add(value.id);
-			socket.data.chain = socket.data.chain.then(async () => {
+			const execute = async () => {
 				if (stopped || !sockets.has(socket)) return;
 				try {
 					let result: unknown;
@@ -209,7 +214,18 @@ export function clientGateway(app: Runtime) {
 				} finally {
 					socket.data.pending.delete(value.id);
 				}
-			});
+			};
+			// Only cancellation interrupts an awaited standalone send/compaction.
+			// It still uses validated ingress, bounded pending IDs and normal dispatch
+			// ownership checks. All admissions/configuration retain ordered execution.
+			if (value.method === "standalone.abort") {
+				const interrupt = execute();
+				socket.data.interrupts.add(interrupt);
+				void interrupt.then(
+					() => socket.data.interrupts.delete(interrupt),
+					() => socket.data.interrupts.delete(interrupt),
+				);
+			} else socket.data.chain = socket.data.chain.then(execute);
 		},
 		close(socket) {
 			retire(socket);
@@ -226,6 +242,7 @@ export function clientGateway(app: Runtime) {
 			subscribed: false,
 			pending: new Set(),
 			chain: Promise.resolve(),
+			interrupts: new Set(),
 			sequence: 0,
 			watchId: null,
 			watch: null,
