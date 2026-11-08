@@ -42,6 +42,7 @@ export function Transcript(props: {
 	observationError: string | null;
 	enabled: boolean;
 	selected: string | null;
+	freezeWindow?: boolean;
 	select: (id: string) => void;
 	reveal: (node: BoxRenderable) => void;
 	registerReadingRows?: (
@@ -73,9 +74,28 @@ export function Transcript(props: {
 	// Changed bytes always replace the cached value; cache is pruned with the window.
 	let retainedCache = new Map<string, { signature: string; value: Data }>();
 	const retainedRenderKeys = new WeakMap<Data, string>();
+	let retainedWindow: {
+		id: number;
+		entries: TranscriptData["entries"];
+		truncated: boolean;
+	} | null = null;
+	const window = createMemo(() => {
+		const value = props.value;
+		if (!value) {
+			retainedWindow = null;
+			return null;
+		}
+		if (!props.freezeWindow || retainedWindow?.id !== value.id)
+			retainedWindow = {
+				id: value.id,
+				entries: value.entries.slice(-200),
+				truncated: value.truncated || value.entries.length > 200,
+			};
+		return retainedWindow;
+	});
 	const messages = createMemo<Data[]>(() => {
 		const nextCache = new Map<string, { signature: string; value: Data }>();
-		const retained = (props.value?.entries ?? []).flatMap((entry) =>
+		const retained = (window()?.entries ?? []).flatMap((entry) =>
 			dataList(entry.model).map((message, index) => {
 				const value = {
 					...message,
@@ -359,6 +379,14 @@ export function Transcript(props: {
 					: `Native activity unknown · observation ${props.observation}`}
 				{props.observationError ? ` · ${props.observationError}` : ""}
 			</text>
+			<Show when={props.freezeWindow && window()}>
+				<text fg={color("warning")} wrapMode="word">
+					Frozen bounded retained-history window while reading. Newer commits
+					may be outside this display; header usage/counters and live activity
+					below describe the separately supplied current projection, not this
+					frozen window. Jump to latest to release the window.
+				</text>
+			</Show>
 			<Show when={progress()}>
 				{(live) => (
 					<>
@@ -409,10 +437,12 @@ export function Transcript(props: {
 					replaced automatically; choose an observed card explicitly.
 				</text>
 			</Show>
-			<Show when={props.value?.truncated}>
+			<Show when={window()?.truncated}>
 				<text fg={color("warning")}>
-					Showing the newest 200 native entries. Unpaired tool activity is
-					unknown outside this history window.
+					{props.freezeWindow
+						? "Showing a frozen bounded native-entry window."
+						: "Showing the newest 200 native entries."}{" "}
+					Unpaired tool activity is unknown outside this history window.
 				</text>
 			</Show>
 			<For each={messageSlots()}>

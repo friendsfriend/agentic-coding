@@ -510,6 +510,24 @@ content and bindings, not permission to replace the original presentation.
   remain unfinished. No renderer, snapshot, helper or navigation-matrix tests
   are added; public-boundary checks do not establish visual parity.
 
+## Bounded frozen retained window
+
+- While the sampled viewport is away from the bottom, retain the already supplied
+  native entry window rather than replacing it on incoming commits. Cache at
+  most 200 entries, reset on missing projection/native identity change and release
+  when following resumes. No older entries are fetched or fabricated.
+- Keep current native progress separate from held retained history. Explicitly
+  label the frozen window and explain that header usage/counters and live activity
+  describe the separately supplied current projection. Pairing remains unique,
+  identity/name-fenced and confined to the displayed retained window.
+- Latest releases the held window before its requested layout jump. Existing
+  native selection is not silently replaced if its row is absent after release;
+  the supplied window's existing missing-selection warning remains authoritative.
+- This is bounded in-memory presentation, not persisted native history or an
+  adopted session. Original load-older/timeline behavior and simultaneous reader
+  movement/publication still need work. No renderer/presenter tests or visual
+  acceptance are claimed; no native permission/protocol/provider changes occur.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

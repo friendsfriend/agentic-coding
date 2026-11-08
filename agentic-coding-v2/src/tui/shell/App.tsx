@@ -497,6 +497,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		pendingTranscriptRestore = null;
 		pendingReveal = undefined;
 		readingAnchor = null;
+		setAwayFromBottom(false);
 		pendingLatest = sessionId();
 		renderer.requestRender();
 		return true;
@@ -2547,6 +2548,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									/>
 									<Transcript
 										value={transcript()}
+										freezeWindow={awayFromBottom()}
 										observation={observation()}
 										observationError={observationError()}
 										enabled={contentFocused() && !helpOpen()}
