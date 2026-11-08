@@ -29,10 +29,11 @@ test("native wiki saves exact revision-fenced snapshots and binds one read-only 
 			(state) => state !== null,
 		);
 		expect(await client.call("wiki.list", {})).toEqual([]);
+		const exactContent = `# Guide\r\n${Array.from({ length: 360 }, (_, index) => `Line ${index}: supplied 🧭 text\r\n`).join("")}\nTrailing blank line\n\n`;
 		const page = {
 			id: "guide",
 			title: "Guide",
-			content: "# Guide\nOriginal content",
+			content: exactContent,
 			baseRevision: 0,
 		};
 		const candidate = await client.call("wiki.preview", page);
@@ -53,6 +54,12 @@ test("native wiki saves exact revision-fenced snapshots and binds one read-only 
 			id: candidate.id,
 			approval: `approve:${candidate.digest}`,
 		});
+		expect((await client.call("wiki.read", { id: "guide" })).page.content).toBe(
+			exactContent,
+		);
+		expect((await client.call("wiki.read", { id: "guide" })).page.digest).toBe(
+			digest(exactContent),
+		);
 		expect(saved).toMatchObject({
 			id: "guide",
 			revision: 1,

@@ -11,7 +11,12 @@ import { ReadOnlyScrollableList } from "./ReadOnlyScrollableList.tsx";
 import { SearchHeader } from "./SearchHeader.tsx";
 import { SelectionMarker } from "./SelectionMarker.tsx";
 
-export type ReadOnlyChoiceRow = { key: string; label: string; detail?: string };
+export type ReadOnlyChoiceRow = {
+	key: string;
+	label: string;
+	detail?: string;
+	search?: string;
+};
 /** Original cap-sized, single-row model/thinking/timeline modal presentation.
  * Activation is a bounded callback; no client, command routing or admission. */
 export function ReadOnlyChoicePicker(props: {
@@ -42,7 +47,8 @@ export function ReadOnlyChoicePicker(props: {
 			? source().filter(
 					(row) =>
 						row.label.toLowerCase().includes(filter) ||
-						(row.detail ?? "").toLowerCase().includes(filter),
+						(row.detail ?? "").toLowerCase().includes(filter) ||
+						(row.search ?? "").toLowerCase().includes(filter),
 				)
 			: source();
 	});

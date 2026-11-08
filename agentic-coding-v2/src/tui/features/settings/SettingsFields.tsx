@@ -1,7 +1,15 @@
 /** @jsxImportSource @opentui/solid */
-import { createMemo, createSignal, For, Show } from "solid-js";
+import {
+	createMemo,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+	useContext,
+} from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { color } from "../../ui/theme/index.ts";
 
 const object = (value: unknown): Data =>
@@ -17,6 +25,8 @@ export function SettingsFields(props: {
 	connected: boolean;
 }) {
 	const [active, setActive] = createSignal<string | null>(null);
+	const choices = useContext(LocalChoiceContext);
+	const interactive = () => props.connected && (choices?.interactive() ?? true);
 	const parsed = createMemo(() => {
 		try {
 			const value: unknown = JSON.parse(props.draft);
@@ -33,7 +43,7 @@ export function SettingsFields(props: {
 	};
 	const mutate = (change: (draft: Data) => void) => {
 		const draft = parsed();
-		if (!draft || !props.connected) return;
+		if (!draft || !interactive()) return;
 		const next = structuredClone(draft);
 		change(next);
 		props.change(JSON.stringify(next, null, 2));
@@ -44,31 +54,46 @@ export function SettingsFields(props: {
 		value: () => unknown,
 		change: (value: string) => void,
 		maxLength = 4096,
-	) => (
-		<box flexDirection="column">
-			<ActionHeader
-				onActivate={() => {
-					setActive(id);
-					props.edit(true);
-				}}
-			>
-				<text fg={color("accent")}>{label} · edit draft field</text>
-			</ActionHeader>
-			<input
-				value={typeof value() === "string" ? String(value()) : ""}
-				focused={props.editing && props.connected && active() === id}
-				maxLength={maxLength}
-				onMouseDown={() => {
-					setActive(id);
-					props.edit(true);
-				}}
-				onInput={(inputText) => {
-					if (inputText !== value()) change(inputText);
-				}}
-				onSubmit={() => props.edit(false)}
-			/>
-		</box>
-	);
+	) => {
+		let disposed = false;
+		onCleanup(() => {
+			disposed = true;
+		});
+		const enter = () => {
+			if (disposed || !interactive()) return;
+			setActive(id);
+			props.edit(true);
+		};
+		return (
+			<box flexDirection="column">
+				<ActionHeader onActivate={enter}>
+					<text fg={color("accent")}>{label} · edit draft field</text>
+				</ActionHeader>
+				<input
+					value={typeof value() === "string" ? String(value()) : ""}
+					focused={
+						!disposed && props.editing && interactive() && active() === id
+					}
+					maxLength={maxLength}
+					onMouseDown={enter}
+					onInput={(inputText) => {
+						if (
+							!disposed &&
+							interactive() &&
+							props.editing &&
+							active() === id &&
+							inputText !== value()
+						)
+							change(inputText);
+					}}
+					onSubmit={() => {
+						if (!disposed && interactive() && active() === id)
+							props.edit(false);
+					}}
+				/>
+			</box>
+		);
+	};
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>

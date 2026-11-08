@@ -1,14 +1,15 @@
 /** @jsxImportSource @opentui/solid */
-import { SyntaxStyle, type TextareaRenderable } from "@opentui/core";
+import { SyntaxStyle } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, onCleanup, Show } from "solid-js";
 import type {
 	SettingsCandidate,
 	SettingsDocument,
 } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
+import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { SuppliedCode } from "../sessions/SuppliedCode.tsx";
 import { SettingsFields } from "./SettingsFields.tsx";
 
 /** Ephemeral editable JSON and immutable native preview. Never writes through a rendering callback. */
@@ -24,16 +25,11 @@ export function SettingsPanel(props: {
 	prepare: (command: string) => void;
 }) {
 	const [structured, setStructured] = createSignal(false);
-	let editor: TextareaRenderable | undefined;
 	const syntax = SyntaxStyle.fromStyles(
 		{ default: { fg: color("text") } },
 		useRenderer().nativeScene,
 	);
 	onCleanup(() => syntax.destroy());
-	createEffect(() => {
-		const draft = props.draft;
-		if (editor && editor.plainText !== draft) editor.setText(draft);
-	});
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
@@ -81,14 +77,16 @@ export function SettingsPanel(props: {
 							: "Switch to field-specific draft editor"}
 					</text>
 				</ActionHeader>
-				<Show when={structured()}>
-					<SettingsFields
-						draft={props.draft}
-						change={props.change}
-						editing={props.editing}
-						edit={props.edit}
-						connected={props.connected}
-					/>
+				<Show when={structured() && props.document?.revision} keyed>
+					{(_revision) => (
+						<SettingsFields
+							draft={props.draft}
+							change={props.change}
+							editing={props.editing}
+							edit={props.edit}
+							connected={props.connected}
+						/>
+					)}
 				</Show>
 				<Show when={!structured()}>
 					<ActionHeader onActivate={() => props.edit(!props.editing)}>
@@ -96,21 +94,13 @@ export function SettingsPanel(props: {
 							{props.editing ? "Leave JSON editor" : "Edit JSON settings"}
 						</text>
 					</ActionHeader>
-					<textarea
-						ref={(value) => {
-							editor = value;
-						}}
-						initialValue={props.draft}
-						focused={props.editing && props.connected}
-						height={12}
-						width="100%"
-						keyBindings={textareaBindings(editorKeybinds)}
-						onMouseDown={() => props.edit(true)}
-						onContentChange={(value) =>
-							props.change(
-								typeof value === "string" ? value : (editor?.plainText ?? ""),
-							)
-						}
+					<LocalJsonEditor
+						value={props.draft}
+						scope={`settings:${props.document?.revision ?? "absent"}`}
+						editing={props.editing}
+						interactive={props.connected}
+						enter={() => props.edit(true)}
+						change={props.change}
 					/>
 				</Show>
 				<Show when={props.connected && !props.error}>
@@ -145,12 +135,11 @@ export function SettingsPanel(props: {
 					Base {props.candidate?.baseRevision} · expires{" "}
 					{props.candidate?.expiresAt} (epoch ms)
 				</text>
-				<code
+				<SuppliedCode
 					content={props.candidate?.snapshot ?? ""}
+					identity={props.candidate?.id}
 					filetype="json"
-					syntaxStyle={syntax}
-					drawUnstyledText={true}
-					wrapMode="word"
+					syntax={syntax}
 				/>
 				<text wrapMode="word">
 					Exact snapshot digest: {props.candidate?.digest}

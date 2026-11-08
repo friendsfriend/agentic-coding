@@ -1,11 +1,22 @@
 /** @jsxImportSource @opentui/solid */
+import { createHash } from "node:crypto";
 import { SyntaxStyle } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { For, onCleanup, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+	useContext,
+} from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { color } from "../../ui/theme/index.ts";
+import { SuppliedCode } from "../sessions/SuppliedCode.tsx";
 
 export function ProviderPanel(props: {
 	rows: Data[];
@@ -28,13 +39,79 @@ export function ProviderPanel(props: {
 	onCleanup(() => syntax.destroy());
 	const open = (key: string) => props.expanded.includes(key);
 	const selectedName = () => props.rows.find(props.selected)?.name;
-	const values = () => {
-		const value = props.inspection?.value;
+	const choices = useContext(LocalChoiceContext);
+	const [start, setStart] = createSignal(0);
+	const inspection = createMemo(() => props.inspection);
+	const values = createMemo(() => {
+		const value = inspection()?.value;
 		return Array.isArray(value)
 			? dataList(value)
 			: value && typeof value === "object"
 				? [value as Data]
 				: [];
+	});
+	let generation = 0;
+	const source = createMemo(() => {
+		inspection();
+		return ++generation;
+	});
+	createEffect(() => {
+		source();
+		setStart(0);
+	});
+	const visible = createMemo(() => values().slice(start(), start() + 20));
+	const title = (item: Data) =>
+		String(
+			item.title ??
+				item.full_name ??
+				item.path_with_namespace ??
+				item.path ??
+				item.name ??
+				item.id ??
+				item.sha ??
+				"Record",
+		);
+	// UI fold identity only, never an approval digest or native/provider identity.
+	const responseKey = createMemo(() =>
+		createHash("sha256").update(JSON.stringify(inspection())).digest("hex"),
+	);
+	const recordKey = (index: number) =>
+		`provider-inspection:${responseKey()}:row:${index}`;
+	const chooseRecord = () => {
+		if (!choices?.interactive()) return;
+		const saved = inspection();
+		const owner = choices.scope();
+		const version = source();
+		const records = values();
+		choices.choose({
+			title: "Search supplied provider response records",
+			rows: records.map((item, index) => ({
+				key: String(index),
+				label: `${index + 1}. ${Array.from(title(item).replace(/\s+/g, " ")).slice(0, 240).join("")}`,
+				detail: `${String(item.state ?? item.status ?? "")} · supplied response only`,
+				search: JSON.stringify(item),
+			})),
+			note: "Local cached response only; choosing mounts and expands the supplied record, never inspects upstream, opens a URL or prepares an approval.",
+			valid: () =>
+				inspection() === saved &&
+				source() === version &&
+				choices.scope() === owner,
+			choose: (key) => {
+				const index = Number(key);
+				if (
+					inspection() !== saved ||
+					source() !== version ||
+					choices.scope() !== owner ||
+					!/^\d+$/.test(key) ||
+					!Number.isSafeInteger(index) ||
+					!records[index]
+				)
+					return false;
+				setStart(Math.floor(index / 20) * 20);
+				if (!open(recordKey(index))) props.toggle(recordKey(index));
+				return true;
+			},
+		});
 	};
 	return (
 		<box flexDirection="column" gap={1}>
@@ -150,14 +227,43 @@ export function ProviderPanel(props: {
 					not upstream revision). Read arguments:{" "}
 					{JSON.stringify(props.inspection?.input)}
 				</text>
-				<For each={values()}>
+				<Show when={values().length > 0}>
+					<text fg={color("textMuted")}>
+						Supplied records {start() + 1}–
+						{Math.min(start() + 20, values().length)} of {values().length}; no
+						upstream pagination runs here.
+					</text>
+					<ActionHeader scope={source()} onActivate={chooseRecord}>
+						<text fg={color("accent")}>Search supplied records</text>
+					</ActionHeader>
+					<Show when={start() > 0}>
+						<ActionHeader
+							scope={`${source()}:${start()}`}
+							onActivate={() => setStart(Math.max(0, start() - 20))}
+						>
+							<text fg={color("accent")}>Previous supplied records</text>
+						</ActionHeader>
+					</Show>
+					<Show when={start() + 20 < values().length}>
+						<ActionHeader
+							scope={`${source()}:${start()}`}
+							onActivate={() => setStart(start() + 20)}
+						>
+							<text fg={color("accent")}>Next supplied records</text>
+						</ActionHeader>
+					</Show>
+				</Show>
+				<For each={visible()}>
 					{(item, index) => {
-						const key = `provider:${String(props.inspection?.provider)}:${String(props.inspection?.operation)}:${JSON.stringify(props.inspection?.input)}:row:${String(item.id ?? item.number ?? item.path ?? item.name ?? index())}`;
+						const key = () => recordKey(start() + index());
 						return (
 							<box flexDirection="column" gap={1} paddingLeft={1}>
-								<ActionHeader onActivate={() => props.toggle(key)}>
+								<ActionHeader
+									scope={`${source()}:${key()}`}
+									onActivate={() => props.toggle(key())}
+								>
 									<text fg={color("primary")}>
-										{open(key) ? "▾" : "▸"}{" "}
+										{open(key()) ? "▾" : "▸"}{" "}
 										{String(
 											item.title ??
 												item.full_name ??
@@ -171,25 +277,31 @@ export function ProviderPanel(props: {
 										· {String(item.state ?? item.status ?? "")}
 									</text>
 								</ActionHeader>
-								<Show when={open(key)}>
+								<Show when={open(key())}>
 									<Show when={typeof item.patch === "string"}>
-										<code
-											content={
-												String(item.patch) ||
-												"No patch bytes returned by upstream"
+										<Show
+											when={String(item.patch).length > 0}
+											fallback={
+												<text fg={color("textMuted")}>
+													Upstream supplied an empty patch string; this is not
+													proof of no changes.
+												</text>
 											}
-											filetype="diff"
-											syntaxStyle={syntax}
-											drawUnstyledText={true}
-											wrapMode="word"
-										/>
+										>
+											<code
+												content={String(item.patch)}
+												filetype="diff"
+												syntaxStyle={syntax}
+												drawUnstyledText={true}
+												wrapMode="word"
+											/>
+										</Show>
 									</Show>
-									<code
+									<SuppliedCode
 										content={JSON.stringify(item, null, 2)}
+										identity={key()}
 										filetype="json"
-										syntaxStyle={syntax}
-										drawUnstyledText={true}
-										wrapMode="word"
+										syntax={syntax}
 									/>
 								</Show>
 							</box>

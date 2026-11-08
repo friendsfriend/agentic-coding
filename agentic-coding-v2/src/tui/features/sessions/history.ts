@@ -19,12 +19,14 @@ export class DraftHistory {
 		string,
 		{
 			entries: string[];
+			version: number;
 			index: number | null;
 			draft: string;
 			recalled: string | null;
 		}
 	>();
 	private bytes = 0;
+	private version = 0;
 	private readonly entryLimit = 40;
 	private readonly viewLimit = 32;
 	private readonly byteLimit = 64000;
@@ -39,13 +41,20 @@ export class DraftHistory {
 		if (!text.trim() || text.length > 16000 || this.sensitive(text)) return;
 		let view = this.views.get(key);
 		if (!view) {
-			view = { entries: [], index: null, draft: "", recalled: null };
+			view = {
+				entries: [],
+				version: 0,
+				index: null,
+				draft: "",
+				recalled: null,
+			};
 			this.views.set(key, view);
 		}
 		if (view.entries.at(-1) !== text) {
 			view.entries.push(text);
 			this.bytes += text.length;
 		}
+		view.version = ++this.version;
 		view.index = null;
 		view.draft = "";
 		view.recalled = null;
@@ -60,6 +69,33 @@ export class DraftHistory {
 			);
 			this.views.delete(first[0]);
 		}
+	}
+	/** Copies of eligible accepted text only. Versions retire a picker after admission/eviction. */
+	snapshot(key: string) {
+		const view = this.views.get(key);
+		return view ? { version: view.version, entries: [...view.entries] } : null;
+	}
+	choose(key: string, version: number, index: number, draft: string) {
+		const view = this.views.get(key);
+		if (
+			!view ||
+			view.version !== version ||
+			!Number.isSafeInteger(index) ||
+			index < 0 ||
+			index >= view.entries.length
+		)
+			return null;
+		if (draft.length > 16000 || this.sensitive(draft))
+			throw new Error(
+				"Long or confirmation/mutation drafts are preserved; local history cannot replace them",
+			);
+		if (view.index === null || view.recalled !== draft) view.draft = draft;
+		view.index = index;
+		view.recalled = view.entries[index] ?? "";
+		return {
+			text: view.recalled,
+			label: `Local accepted input ${index + 1}/${view.entries.length}; nothing submitted. Advancing past latest restores the original draft.`,
+		};
 	}
 	/** Plain arrow navigation never overwrites newly typed or edited text.
 	 * Explicit Alt-arrow recall retains its existing draft-restoration contract. */

@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import type { RowGestureState } from "../presentation/components/mouse/useRowMouse.ts";
 import { useTap } from "../presentation/components/mouse/useTap.ts";
+import { LocalChoiceContext } from "./LocalChoice.ts";
 import { color } from "./theme/index.ts";
 export type ActionAnchor = {
 	id: string;
@@ -30,6 +31,7 @@ export function ActionHeader(props: {
 	children: JSX.Element;
 }) {
 	const scope = useContext(ActionRegistry),
+		choices = useContext(LocalChoiceContext),
 		id = createUniqueId();
 	let node: BoxRenderable | undefined;
 	let disposed = false;
@@ -42,10 +44,16 @@ export function ActionHeader(props: {
 	createEffect(() => {
 		props.scope;
 		props.interactive;
+		choices?.scope();
+		choices?.interactive();
 		retire();
 	});
+	const enabled = () =>
+		!disposed &&
+		props.interactive !== false &&
+		(choices?.interactive() ?? true);
 	const activate = () => {
-		if (!disposed && props.interactive !== false) {
+		if (enabled()) {
 			scope?.select(id);
 			props.onActivate();
 		}
@@ -53,7 +61,7 @@ export function ActionHeader(props: {
 	const tap = useTap(activate, {
 		gesture,
 		stopPropagation: true,
-		enabled: () => !disposed && props.interactive !== false,
+		enabled,
 	});
 	onMount(() => {
 		unregister = scope?.register({

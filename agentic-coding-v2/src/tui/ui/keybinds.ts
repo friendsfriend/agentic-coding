@@ -38,6 +38,12 @@ export const shellKeybinds: Keybind[] = [
 		short: "commands",
 	},
 	{
+		key: "ctrl+alt+h",
+		cmd: "shell.historyChoose",
+		action: "Search local accepted inputs (restore text only)",
+		standard: true,
+	},
+	{
 		key: "alt+up",
 		cmd: "shell.historyPrevious",
 		action: "Recall previous accepted input",

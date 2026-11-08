@@ -1,14 +1,15 @@
 /** @jsxImportSource @opentui/solid */
-import { SyntaxStyle, type TextareaRenderable } from "@opentui/core";
+import { SyntaxStyle } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createEffect, For, onCleanup, Show } from "solid-js";
+import { For, onCleanup, Show } from "solid-js";
 import type {
 	ProviderActionCandidate,
 	ProviderActionReceipt,
 } from "../../../protocol/provider-actions.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
+import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { SuppliedCode } from "../sessions/SuppliedCode.tsx";
 /** Mutable local intention editor; immutable approval candidate; read-only native attempt journal. */
 export function ProviderWritePanel(props: {
 	draft: string;
@@ -21,16 +22,11 @@ export function ProviderWritePanel(props: {
 	attempts: ProviderActionReceipt[];
 	prepare: (command: string) => void;
 }) {
-	let editor: TextareaRenderable | undefined;
 	const syntax = SyntaxStyle.fromStyles(
 		{ default: { fg: color("text") } },
 		useRenderer().nativeScene,
 	);
 	onCleanup(() => syntax.destroy());
-	createEffect(() => {
-		const draft = props.draft;
-		if (editor && editor.plainText !== draft) editor.setText(draft);
-	});
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
@@ -63,21 +59,14 @@ export function ProviderWritePanel(props: {
 						: "Edit local provider intention"}
 				</text>
 			</ActionHeader>
-			<textarea
-				ref={(value) => {
-					editor = value;
-				}}
-				initialValue={props.draft}
-				focused={props.editing}
+			<LocalJsonEditor
+				value={props.draft}
+				scope="provider-intention"
+				editing={props.editing}
+				interactive={props.connected}
 				height={10}
-				width="100%"
-				keyBindings={textareaBindings(editorKeybinds)}
-				onMouseDown={() => props.edit(true)}
-				onContentChange={(value) =>
-					props.change(
-						typeof value === "string" ? value : (editor?.plainText ?? ""),
-					)
-				}
+				enter={() => props.edit(true)}
+				change={props.change}
 			/>
 			<Show when={props.connected}>
 				<ActionHeader
@@ -117,12 +106,11 @@ export function ProviderWritePanel(props: {
 					Immutable candidate {props.candidate?.id} · expires{" "}
 					{props.candidate?.expiresAt} (epoch ms)
 				</text>
-				<code
+				<SuppliedCode
 					content={props.candidate?.snapshot ?? ""}
+					identity={props.candidate?.id}
 					filetype="json"
-					syntaxStyle={syntax}
-					drawUnstyledText={true}
-					wrapMode="word"
+					syntax={syntax}
 				/>
 				<text wrapMode="word">Snapshot digest: {props.candidate?.digest}</text>
 				<text fg={color("warning")}>
@@ -178,12 +166,11 @@ export function ProviderWritePanel(props: {
 							current account or configuration): {attempt.destination}
 						</text>
 						<Show when={attempt.result}>
-							<code
+							<SuppliedCode
 								content={JSON.stringify(attempt.result, null, 2)}
+								identity={attempt.id}
 								filetype="json"
-								syntaxStyle={syntax}
-								drawUnstyledText={true}
-								wrapMode="word"
+								syntax={syntax}
 							/>
 						</Show>
 					</box>

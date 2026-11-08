@@ -1505,6 +1505,44 @@ content and bindings, not permission to replace the original presentation.
   gates do not establish rendering, parent-link presentation, viewport geometry or
   visual acceptance; no helper/renderer/navigation-matrix tests are added.
 
+## Integrated local editing and supplied workspace inspection
+
+- Settings JSON, provider intentions and wiki page/comment JSON now share a scoped
+  local editor. View/source replacement disposes its old widget while preserving
+  the parent-owned draft. Mirroring supplied text is not a user edit; delayed
+  callbacks, background editing under a chooser/help/busy overlay and callbacks
+  from disposed widgets cannot change drafts or invalidate immutable candidates.
+  Structured settings fields retire on document revision replacement and guard
+  focus/input/disposal against the same local overlay interactivity.
+- Resource action headers retire held gestures on view/overlay changes and guard
+  keyboard and pointer activation consistently. None of these local callbacks
+  validates a candidate, grants approval, sends a provider request or writes a file.
+- Immutable settings/provider/wiki snapshots, wiki page text, provider JSON records
+  and receipt result JSON use exact supplied source windows rather than mounting
+  arbitrarily tall full bodies. Source replacement also retires range choices;
+  native candidate IDs and page revision metadata label source identity only.
+  Nonempty provider diffs retain their existing diff presentation; an explicitly
+  empty patch is separately described, never replaced with invented patch text.
+- Provider cached responses mount at most twenty records. Previous/next and full
+  supplied-record search operate only on that retained response; no remote page,
+  URL, refresh or approval is requested. Fold keys fingerprint the complete cached
+  response plus ordinal and remain presentation-only, not approval/native IDs.
+  Response replacement withdraws old picker choices and resets the local range.
+- Ctrl+Alt+H and `/input-history` search bounded eligible accepted inputs in this
+  exact local view/session. Full text remains searchable behind compact row labels;
+  selecting only restores prompt text, with the original eligible draft recoverable
+  through forward recall. Admission/eviction, view/session changes or draft edits
+  retire a pending choice. Confirmation/mutation and oversized drafts are preserved.
+  The submission's original history key is captured before awaited work; a late
+  native admission notice is not presented as belonging to a different current view.
+- Extend the existing authenticated wiki boundary fixture with a 360-line CRLF,
+  supplementary-Unicode and trailing-blank-line document. Exact sealed snapshot,
+  applied read and digest remain intact before later revision/approval tests.
+  No editor/helper/renderer/snapshot tests or terminal acceptance claims are added.
+  Clipboard, notification placement and full original workspace/modal composition
+  remain outstanding; this is an integrated functionality/lifecycle increment,
+  not a claim of visual parity.
+
 ## Still required before claiming parity
 
 - Remaining workspace resource filters/pin customization, global preference persistence beyond

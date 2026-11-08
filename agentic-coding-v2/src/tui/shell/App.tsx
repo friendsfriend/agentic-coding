@@ -1768,7 +1768,71 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		prepareCommand(command);
 		return true;
 	};
-	const historyKey = () => `${current().page}:${current().resource ?? ""}`;
+	const historyKey = () =>
+		JSON.stringify([current().page, current().resource, sessionId()]);
+	const chooseHistory = () => {
+		if (
+			!contentFocused() ||
+			settingsEditing() ||
+			busy() ||
+			helpOpen() ||
+			paletteOpen()
+		)
+			return;
+		remember();
+		const origin = navigation.current;
+		const key = historyKey();
+		const draft = origin.draft;
+		const saved = history.snapshot(key);
+		if (!saved?.entries.length) {
+			setNotice(
+				"No eligible local accepted-input history for this exact view/session",
+			);
+			return;
+		}
+		const valid = () =>
+			navigation.current === origin &&
+			historyKey() === key &&
+			origin.draft === draft &&
+			history.snapshot(key)?.version === saved.version;
+		openLocalChoice({
+			title: "Search local accepted inputs",
+			rows: saved.entries
+				.map((text, index) => ({
+					key: String(index),
+					label: `${index + 1}. ${Array.from(text.replace(/\s+/g, " ")).slice(0, 240).join("")}`,
+					detail: `${text.length} UTF-16 units · accepted locally, not active context`,
+					search: text,
+				}))
+				.reverse(),
+			note: "This exact view/session only; no native history read or replay. Choosing restores text into the prompt only. Long or confirmation/mutation drafts are never replaced; advancing past latest restores the original eligible draft.",
+			valid,
+			choose: (selected) => {
+				if (!valid() || !/^\d+$/.test(selected)) return false;
+				try {
+					const recalled = history.choose(
+						key,
+						saved.version,
+						Number(selected),
+						draft,
+					);
+					if (!recalled) return false;
+					origin.draft = recalled.text;
+					writePrompt(recalled.text);
+					prompt?.gotoBufferEnd();
+					cursorBlink.reset();
+					setNotice(recalled.label);
+					update();
+					return true;
+				} catch (error) {
+					setNotice(
+						error instanceof Error ? error.message : "Local history refused",
+					);
+					return false;
+				}
+			},
+		});
+	};
 	const recall = (direction: -1 | 1, quiet = false): boolean => {
 		if (
 			!contentFocused() ||
@@ -1813,6 +1877,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		})),
 		...[
 			"/help",
+			"/input-history",
 			"/models",
 			"/thinking",
 			"/workspace expanding left",
@@ -2035,6 +2100,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				},
 			},
 			{
+				id: "shell.historyChoose",
+				name: "Search local accepted inputs (restore text only)",
+				run: chooseHistory,
+			},
+			{
 				id: "shell.historyPrevious",
 				name: "Recall previous local accepted input",
 				run: () => recall(-1),
@@ -2148,7 +2218,17 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		remember();
 		const origin = navigation.current;
 		const content = origin.draft;
+		const admittedHistoryKey = historyKey();
 		if (!content.trim()) return;
+		if (content.trim() === "/input-history") {
+			origin.draft = "";
+			origin.focus = "content";
+			writePrompt("");
+			update();
+			chooseHistory();
+			update();
+			return;
+		}
 		pendingSubmissions++;
 		setBusy(true);
 		setNotice(null);
@@ -2158,7 +2238,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					command = match?.[1] ?? "",
 					args = match?.[2]?.trim() ?? "";
 				const clear = () => {
-					history.admitted(`${origin.page}:${origin.resource ?? ""}`, content);
+					history.admitted(admittedHistoryKey, content);
 					if (
 						navigation.current === origin &&
 						prompt &&
@@ -3175,7 +3255,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						content: content.startsWith("//") ? content.slice(1) : content,
 						requestId: crypto.randomUUID(),
 					});
-					history.admitted(`${origin.page}:${origin.resource ?? ""}`, content);
+					history.admitted(admittedHistoryKey, content);
 					if (navigation.current === origin && current().draft === content) {
 						navigation.current.draft = "";
 						writePrompt("");
@@ -3191,12 +3271,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					content: content.startsWith("//") ? content.slice(1) : content,
 					requestId: crypto.randomUUID(),
 				});
-				history.admitted(`${origin.page}:${origin.resource ?? ""}`, content);
+				history.admitted(admittedHistoryKey, content);
 				if (navigation.current === origin && current().draft === content) {
 					navigation.current.draft = "";
 					writePrompt("");
 				}
-				setNotice(`Admitted submission #${result.submissionId}`);
+				if (navigation.current === origin)
+					setNotice(`Admitted submission #${result.submissionId}`);
 			}
 		} catch (error) {
 			const message =
@@ -4100,8 +4181,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											setProviderWriteDraft(draft);
 											setProviderCandidate(null);
 										}}
-										editing={settingsEditing() && !helpOpen()}
-										edit={setSettingsEditing}
+										editing={
+											settingsEditing() && contentFocused() && !helpOpen()
+										}
+										edit={(value) => {
+											navigation.current.focus = "content";
+											setSettingsEditing(value);
+											update();
+										}}
 										connected={status() === "connected"}
 										error={providerWriteError()}
 										candidate={providerCandidate()}
@@ -4143,7 +4230,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 												setSettingsCandidate(null);
 											}
 										}}
-										editing={settingsEditing() && !helpOpen()}
+										editing={
+											settingsEditing() && contentFocused() && !helpOpen()
+										}
 										edit={(value) => {
 											navigation.current.focus = "content";
 											setSettingsEditing(value);
@@ -4175,7 +4264,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											}
 										}}
 										changeComment={setWikiCommentDraft}
-										editing={settingsEditing() && !helpOpen()}
+										editing={
+											settingsEditing() && contentFocused() && !helpOpen()
+										}
 										edit={(mode) => {
 											setWikiMode(mode);
 											navigation.current.focus = "content";

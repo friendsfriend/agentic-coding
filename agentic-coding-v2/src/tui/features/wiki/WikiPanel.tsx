@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/solid */
-import { SyntaxStyle, type TextareaRenderable } from "@opentui/core";
+import { SyntaxStyle } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createEffect, For, onCleanup, Show } from "solid-js";
+import { For, onCleanup, Show } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
+import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { SuppliedCode } from "../sessions/SuppliedCode.tsx";
 export function WikiPanel(props: {
 	rows: Data[];
 	document: { page: Data; comments: Data[] } | null;
@@ -29,7 +30,6 @@ export function WikiPanel(props: {
 	prepare: (command: string) => void;
 	openTask: (id: number) => void;
 }) {
-	let editor: TextareaRenderable | undefined;
 	const syntax = SyntaxStyle.fromStyles(
 		{ default: { fg: color("text") } },
 		useRenderer().nativeScene,
@@ -37,10 +37,6 @@ export function WikiPanel(props: {
 	onCleanup(() => syntax.destroy());
 	const draft = () =>
 		props.mode === "page" ? props.pageDraft : props.commentDraft;
-	createEffect(() => {
-		const value = draft();
-		if (editor && editor.plainText !== value) editor.setText(value);
-	});
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
@@ -80,13 +76,23 @@ export function WikiPanel(props: {
 					{String(props.document?.page.revision)} · content digest{" "}
 					{String(props.document?.page.digest)}
 				</text>
-				<code
-					content={String(props.document?.page.content ?? "")}
-					filetype="markdown"
-					syntaxStyle={syntax}
-					drawUnstyledText={true}
-					wrapMode="word"
-				/>
+				<Show
+					when={typeof props.document?.page.content === "string"}
+					fallback={
+						<text fg={color("warning")}>Page content was not supplied.</text>
+					}
+				>
+					<SuppliedCode
+						content={String(props.document?.page.content ?? "")}
+						identity={JSON.stringify([
+							props.document?.page.id,
+							props.document?.page.revision,
+							props.document?.page.digest,
+						])}
+						filetype="markdown"
+						syntax={syntax}
+					/>
+				</Show>
 				<For each={props.document?.comments ?? []}>
 					{(comment) => (
 						<box flexDirection="column">
@@ -130,20 +136,15 @@ export function WikiPanel(props: {
 			<ActionHeader onActivate={() => props.edit("comment")}>
 				<text fg={color("accent")}>Edit read-only comment-task JSON</text>
 			</ActionHeader>
-			<textarea
-				ref={(value) => {
-					editor = value;
-				}}
-				initialValue={draft()}
-				height={12}
-				width="100%"
-				focused={props.editing && props.connected}
-				keyBindings={textareaBindings(editorKeybinds)}
-				onContentChange={(value) => {
-					const text =
-						typeof value === "string" ? value : (editor?.plainText ?? "");
-					if (props.mode === "page") props.changePage(text);
-					else props.changeComment(text);
+			<LocalJsonEditor
+				value={draft()}
+				scope={`wiki:${props.mode}:${String(props.document?.page.id)}:${String(props.document?.page.revision)}`}
+				editing={props.editing}
+				interactive={props.connected}
+				enter={() => props.edit(props.mode)}
+				change={(value) => {
+					if (props.mode === "page") props.changePage(value);
+					else props.changeComment(value);
 				}}
 			/>
 			<Show when={props.connected && !props.error}>
@@ -197,12 +198,11 @@ export function WikiPanel(props: {
 					Candidate {props.candidate?.id} · expires {props.candidate?.expiresAt}{" "}
 					· exact snapshot digest {props.candidate?.digest}
 				</text>
-				<code
+				<SuppliedCode
 					content={props.candidate?.snapshot ?? ""}
+					identity={props.candidate?.id}
 					filetype="json"
-					syntaxStyle={syntax}
-					drawUnstyledText={true}
-					wrapMode="word"
+					syntax={syntax}
 				/>
 				<text fg={color("warning")}>
 					Inspect the exact snapshot and manually type approve:DIGEST.
