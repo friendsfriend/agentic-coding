@@ -9,6 +9,7 @@ import {
 	Show,
 	useContext,
 } from "solid-js";
+import { MarkdownViewer } from "../../presentation/components/MarkdownViewer.tsx";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { color } from "../../ui/theme/index.ts";
@@ -20,6 +21,7 @@ export function SuppliedCode(props: {
 	content: string;
 	identity?: string;
 	filetype?: string;
+	presentation?: "code" | "markdown";
 	syntax: SyntaxStyle;
 	lineNumbers?: boolean;
 	startLine?: number;
@@ -38,6 +40,7 @@ export function SuppliedCode(props: {
 			identity: props.identity,
 			content: props.content,
 			filetype: props.filetype,
+			presentation: props.presentation,
 			startLine: props.startLine,
 			scope: choices?.scope(),
 		}),
@@ -47,6 +50,7 @@ export function SuppliedCode(props: {
 				a.identity === b.identity &&
 				a.content === b.content &&
 				a.filetype === b.filetype &&
+				a.presentation === b.presentation &&
 				a.startLine === b.startLine &&
 				a.scope === b.scope,
 		},
@@ -59,6 +63,7 @@ export function SuppliedCode(props: {
 			previous.scope === current.scope &&
 			previous.identity === current.identity &&
 			previous.filetype === current.filetype &&
+			previous.presentation === current.presentation &&
 			previous.startLine === current.startLine &&
 			current.content.startsWith(previous.content);
 		if (!appended) {
@@ -186,14 +191,27 @@ export function SuppliedCode(props: {
 		});
 	};
 	const code = () => (
-		<code
-			content={props.content.slice(window()?.start ?? 0, window()?.end ?? 0)}
-			filetype={props.filetype}
-			syntaxStyle={props.syntax}
-			drawUnstyledText
-			fg={props.fg}
-			wrapMode="word"
-		/>
+		<Show
+			when={props.presentation === "markdown"}
+			fallback={
+				<code
+					content={props.content.slice(
+						window()?.start ?? 0,
+						window()?.end ?? 0,
+					)}
+					filetype={props.filetype}
+					syntaxStyle={props.syntax}
+					drawUnstyledText
+					fg={props.fg}
+					wrapMode="word"
+				/>
+			}
+		>
+			<MarkdownViewer
+				content={props.content.slice(window()?.start ?? 0, window()?.end ?? 0)}
+				fg={props.fg}
+			/>
+		</Show>
 	);
 	return (
 		<box flexDirection="column" flexShrink={0} ref={setNode}>
@@ -203,7 +221,9 @@ export function SuppliedCode(props: {
 					{window()?.line} · UTF-16 positions {(window()?.start ?? 0) + 1}–
 					{window()?.end} of {props.content.length}. Other windows remain
 					available locally; highlighting is window-local, not a complete syntax
-					or execution observation.
+					or execution observation. Rendering is window-local; markdown fences
+					or structure may cross a window boundary. No missing context is
+					synthesized.
 					{window()?.continued
 						? " This window starts within a continued line."
 						: ""}
@@ -236,7 +256,10 @@ export function SuppliedCode(props: {
 					</ActionHeader>
 				</Show>
 			</Show>
-			<Show when={props.lineNumbers} fallback={code()}>
+			<Show
+				when={props.lineNumbers && props.presentation !== "markdown"}
+				fallback={code()}
+			>
 				<line_number
 					fg={props.lineNumberFg ?? color("textMuted")}
 					minWidth={3}

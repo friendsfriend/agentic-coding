@@ -12,6 +12,7 @@ export function SuppliedObservation(props: {
 	value: unknown;
 	label: string;
 	scope: unknown;
+	filetype?: string;
 }) {
 	const syntax = SyntaxStyle.fromStyles(
 		{
@@ -62,7 +63,11 @@ export function SuppliedObservation(props: {
 					{(identity) => (
 						<SuppliedCode
 							content={body()}
-							filetype={typeof supplied().value === "string" ? "text" : "json"}
+							filetype={
+								typeof supplied().value === "string"
+									? (props.filetype ?? "text")
+									: "json"
+							}
 							syntax={syntax}
 							identity={identity}
 						/>

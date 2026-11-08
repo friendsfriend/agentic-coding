@@ -525,7 +525,15 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		"R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
 		"base64",
 	);
-	const report = Buffer.from(`Native disposable report\n${"x".repeat(384010)}`);
+	// Put supplementary UTF-8 across the native byte boundary deliberately.
+	// Local text windows must retain the whole decoded response, but cannot
+	// turn chunk-boundary replacement glyphs into original byte provenance.
+	const reportHeader = Buffer.from("Native disposable report\r\n");
+	const report = Buffer.concat([
+		reportHeader,
+		Buffer.alloc(383999 - reportHeader.length, "x"),
+		Buffer.from("😀\r\n<script>inert</script>\r\nretained tail\r\n"),
+	]);
 	const image = `![Screenshot](/attachments/${digest(png)})`;
 	fake.setResponses([
 		fauxAssistantMessage(
@@ -733,6 +741,16 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 			offset: firstWindow.nextOffset ?? -1,
 		});
 		expect(secondWindow.nextOffset).toBeNull();
+		const firstBytes = Buffer.from(firstWindow.content, "base64"),
+			secondBytes = Buffer.from(secondWindow.content, "base64");
+		expect(firstBytes).toEqual(report.subarray(0, 384000));
+		expect(secondBytes).toEqual(report.subarray(384000));
+		expect(firstBytes.toString("utf8").length).toBeGreaterThan(64000);
+		expect(firstBytes.toString("utf8").endsWith("\uFFFD")).toBe(true);
+		expect(secondBytes.toString("utf8").startsWith("\uFFFD")).toBe(true);
+		expect(secondBytes.toString("utf8").endsWith("retained tail\r\n")).toBe(
+			true,
+		);
 		expect(
 			Buffer.concat([
 				Buffer.from(firstWindow.content, "base64"),

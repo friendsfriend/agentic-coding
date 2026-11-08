@@ -1,87 +1,143 @@
 /** @jsxImportSource @opentui/solid */
-import { SyntaxStyle } from "@opentui/core";
-import { useRenderer } from "@opentui/solid";
-import { For, onCleanup, Show } from "solid-js";
+import { createMemo, onCleanup, Show } from "solid-js";
 import type { EvidenceDocument } from "../../../protocol/evidence.ts";
 import type { Data, TaskDetails } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { EvidenceView } from "../../ui/EvidenceView.tsx";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { TaskObservation, taskIdentity } from "./TaskObservation.tsx";
 
-/** Read-only native detail presentation. Action headers prepare an unsent command only. */
+/** Supplied catalog navigation and explicit detail only. Window search is local,
+ * not an implicit task/review read; native worker IDs never alias app tasks. */
 export function TaskPanel(props: {
 	evidence: EvidenceDocument | null;
 	rows: Data[];
+	catalog: Data[];
 	selectedId: number | null;
 	select: (id: number) => void;
 	details: TaskDetails | null;
 	error: string | null;
 	connected: boolean;
+	fresh: boolean;
 	reviews: Data[];
 	expanded: string[];
 	toggle: (id: string) => void;
 	prepare: (command: string) => void;
 	openSession: (() => void) | null;
 }) {
-	const syntax = SyntaxStyle.fromStyles(
-		{
-			default: { fg: color("text") },
-			"markup.heading": { fg: color("primary"), bold: true },
-			"markup.strong": { fg: color("text"), bold: true },
-			"markup.raw": { fg: color("accent") },
-		},
-		useRenderer().nativeScene,
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
+	const source = createMemo(() => ({
+		rows: props.rows,
+		catalog: props.catalog,
+		details: props.details,
+		selected: props.selectedId,
+		reviews: props.reviews,
+		connected: props.connected,
+		fresh: props.fresh,
+		error: props.error,
+	}));
+	const member = (id: unknown): id is number =>
+		!disposed &&
+		taskIdentity(id) &&
+		props.catalog.filter((row) => row.id === id).length === 1;
+	const rowMember = (row: Data) =>
+		member(row.id) &&
+		props.rows.filter((entry) => entry.id === row.id).length === 1 &&
+		props.rows.some((entry) => entry === row);
+	const select = (id: unknown) => {
+		if (member(id)) props.select(id);
+	};
+	const pending = createMemo(() =>
+		props.reviews.filter(
+			(review) =>
+				review.state === "pending" && review.taskId !== props.selectedId,
+		),
 	);
-	onCleanup(() => syntax.destroy());
-	const open = (id: string) => props.expanded.includes(id);
-	const fold = (id: string, label: string) => (
-		<ActionHeader onActivate={() => props.toggle(id)}>
-			<text fg={color("accent")}>
-				{open(id) ? "▾" : "▸"} {label}
-			</text>
-		</ActionHeader>
+	const details = createMemo(() =>
+		props.details &&
+		props.details.id === props.selectedId &&
+		member(props.details.id)
+			? props.details
+			: null,
 	);
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
 				Native tasks · {props.rows.length} matching
 			</text>
-			<For each={props.rows}>
-				{(row) => (
-					<ActionHeader onActivate={() => props.select(Number(row.id))}>
-						<text
-							fg={
-								Number(row.id) === props.selectedId
-									? color("accent")
-									: color("textMuted")
-							}
-						>
-							{Number(row.id) === props.selectedId ? "›" : "·"} #
-							{String(row.id)} · {String(row.skill)} · {String(row.detail)}
-						</text>
-					</ActionHeader>
-				)}
-			</For>
-			<Show
-				when={
-					props.reviews.filter(
-						(review) =>
-							review.state === "pending" && review.taskId !== props.selectedId,
-					).length
+			<SuppliedRecordWindow
+				rows={props.rows}
+				scope={source()}
+				label="task catalog records"
+				title={(row) =>
+					`#${String(row.id ?? "not supplied")} · ${String(row.skill ?? "not supplied")} · ${String(row.detail ?? "not supplied")}`
 				}
+				search={(row) => JSON.stringify(row)}
+				selected={(row) => row.id === props.selectedId}
 			>
+				{(row) => (
+					<box flexDirection="column">
+						<ActionHeader
+							scope={source()}
+							interactive={rowMember(row)}
+							onActivate={() => {
+								if (rowMember(row)) select(row.id);
+							}}
+						>
+							<text
+								fg={
+									row.id === props.selectedId
+										? color("accent")
+										: color("textMuted")
+								}
+							>
+								{row.id === props.selectedId ? "›" : "·"} #
+								{String(row.id ?? "not supplied")} ·{" "}
+								{String(row.skill ?? "not supplied")} ·{" "}
+								{String(row.detail ?? "not supplied")}
+							</text>
+						</ActionHeader>
+						<Show when={!rowMember(row)}>
+							<text fg={color("warning")}>
+								Missing or ambiguous app-task identity; no navigation or
+								arbitrary worker adoption.
+							</text>
+						</Show>
+					</box>
+				)}
+			</SuppliedRecordWindow>
+			<Show when={pending().length}>
 				<text fg={color("warning")}>
-					Other pending native reviews (select owner to inspect)
+					Other pending native reviews (explicitly select supplied owner to
+					inspect)
 				</text>
-				<For
-					each={props.reviews.filter(
-						(review) =>
-							review.state === "pending" && review.taskId !== props.selectedId,
-					)}
+				<SuppliedRecordWindow
+					rows={pending()}
+					scope={source()}
+					label="pending review observations"
+					title={(review) =>
+						`#${String(review.taskId)} · ${String(review.title)} · ${String(review.id)}@${String(review.revision)}`
+					}
+					search={(review) => JSON.stringify(review)}
 				>
 					{(review) => (
 						<ActionHeader
-							onActivate={() => props.select(Number(review.taskId))}
+							scope={source()}
+							interactive={
+								member(review.taskId) &&
+								props.reviews.filter((entry) => entry.id === review.id)
+									.length === 1
+							}
+							onActivate={() => {
+								if (
+									props.reviews.filter((entry) => entry.id === review.id)
+										.length === 1
+								)
+									select(review.taskId);
+							}}
 						>
 							<text fg={color("warning")}>
 								#{String(review.taskId)} · {String(review.title)} ·{" "}
@@ -89,269 +145,35 @@ export function TaskPanel(props: {
 							</text>
 						</ActionHeader>
 					)}
-				</For>
+				</SuppliedRecordWindow>
 			</Show>
 			<Show when={props.error}>
 				<text fg={color("warning")}>{props.error}</text>
 			</Show>
-			<Show when={props.details}>
-				{(details) => (
-					<box
-						flexDirection="column"
-						gap={1}
-						border={["top"]}
-						borderColor={color("border")}
-						paddingTop={1}
-					>
-						<text fg={color("primary")}>
-							Task #{details().id} ·{" "}
-							{props.connected
-								? "last observed native detail (non-atomic)"
-								: "cached detail; current activity unknown"}
-						</text>
-						<text fg={color("textMuted")}>
-							Native status: {details().native?.status ?? "missing"} · abort
-							requested: {String(details().native?.abortRequested ?? "unknown")}
-						</text>
-						<text wrapMode="word">
-							Skill {String(details().metadata.skill)} · profile{" "}
-							{String(details().metadata.profile)} · policy{" "}
-							{String(details().metadata.policy)}
-						</text>
-						<text wrapMode="word">
-							Topic {String(details().metadata.topicId)} · related task{" "}
-							{String(details().metadata.relatedTo ?? "none")} · base{" "}
-							{String(details().metadata.baseCommit ?? "not retained")}
-						</text>
-						<text wrapMode="word">
-							Repository: {String(details().metadata.repository)}
-							{"\n"}Workspace:{" "}
-							{String(details().metadata.workspace || "not prepared")}
-						</text>
-						<Show when={props.openSession}>
-							<ActionHeader onActivate={() => props.openSession?.()}>
-								<text fg={color("accent")}>
-									Open recorded native child transcript
-								</text>
-							</ActionHeader>
-						</Show>
-						<Show
-							when={
-								props.connected &&
-								!props.error &&
-								details().native &&
-								details().native?.status !== "terminal"
-							}
-						>
-							<ActionHeader
-								onActivate={() => props.prepare(`/cancel ${details().id}`)}
-							>
-								<text fg={color("warning")}>
-									Prepare cancellation command (does not submit)
-								</text>
-							</ActionHeader>
-						</Show>
-						<Show when={details().native?.outcome}>
-							{(outcome) => (
-								<>
-									<text fg={color("primary")}>
-										Recorded terminal outcome · {String(outcome().status)}
-									</text>
-									<Show when={typeof outcome().result === "string"}>
-										<markdown
-											content={String(outcome().result)}
-											syntaxStyle={syntax}
-											conceal={true}
-										/>
-									</Show>
-									{fold(
-										`task:${details().id}:outcome`,
-										"Complete native outcome",
-									)}
-									<Show when={open(`task:${details().id}:outcome`)}>
-										<code
-											content={JSON.stringify(outcome(), null, 2)}
-											filetype="json"
-											syntaxStyle={syntax}
-											drawUnstyledText={true}
-											wrapMode="word"
-										/>
-									</Show>
-								</>
-							)}
-						</Show>
-						<text fg={color("primary")}>
-							Reviews · {details().reviews.length}
-						</text>
-						<For each={details().reviews}>
-							{(review) => {
-								const key = `task:${details().id}:review:${String(review.id)}`;
-								return (
-									<box
-										flexDirection="column"
-										border={true}
-										borderColor={
-											review.state === "pending"
-												? color("warning")
-												: color("border")
-										}
-										padding={1}
-										gap={1}
-									>
-										<text fg={color("primary")}>
-											{String(review.title)} · {String(review.state)}
-										</text>
-										<text wrapMode="word">
-											{String(review.id)}@{String(review.revision)} · path{" "}
-											{String(review.path)}
-											{"\n"}Immutable snapshot digest: {String(review.digest)}
-										</text>
-										{fold(
-											`${key}:snapshot`,
-											"Inspect exact immutable review snapshot",
-										)}
-										<Show when={open(`${key}:snapshot`)}>
-											<code
-												content={String(review.snapshot)}
-												filetype="diff"
-												syntaxStyle={syntax}
-												drawUnstyledText={true}
-												wrapMode="word"
-											/>
-										</Show>
-										<Show when={Boolean(review.comments)}>
-											<text wrapMode="word">
-												Recorded decision comments: {String(review.comments)}
-											</text>
-										</Show>
-										<Show
-											when={
-												props.connected &&
-												!props.error &&
-												review.state === "pending" &&
-												details().native &&
-												details().native?.status !== "terminal" &&
-												!details().native?.abortRequested
-											}
-										>
-											<text fg={color("textMuted")}>
-												Prepare only; edit comments in the prompt, then
-												explicitly submit. The backend rechecks revision and
-												ownership.
-											</text>
-											<For each={["approve", "changes", "reject"]}>
-												{(decision) => (
-													<ActionHeader
-														onActivate={() =>
-															props.prepare(
-																`/${decision} ${String(review.id)}@${String(review.revision)} `,
-															)
-														}
-													>
-														<text fg={color("accent")}>
-															Prepare {decision} command
-														</text>
-													</ActionHeader>
-												)}
-											</For>
-										</Show>
-									</box>
-								);
-							}}
-						</For>
-						<text fg={color("primary")}>
-							Current owned native worker tree · non-atomic bounded inspection
-						</text>
-						<text fg={color("textMuted")}>
-							Native worker IDs are diagnostic identities, not app-task
-							navigation or permission. No checkpoint/input bytes or arbitrary
-							conversation adoption. Missing/terminal worker records are not
-							reconstructed.
-						</text>
-						<For each={details().ownedWork.items}>
-							{(work) => (
-								<box
-									flexDirection="column"
-									paddingLeft={work.parent === null ? 0 : 2}
-								>
-									<text wrapMode="word">
-										#{work.id} · parent {work.parent ?? "app task root"} ·
-										conversation #{work.conversationId} · {work.state}
-										{work.until === null
-											? ""
-											: ` · sleeping until ${work.until} (epoch ms)`}
-									</text>
-									<Show when={work.reason}>
-										<text wrapMode="word" fg={color("warning")}>
-											{work.reason}
-											{work.reasonTruncated ? " (reason clipped)" : ""}
-										</text>
-									</Show>
-								</box>
-							)}
-						</For>
-						<Show when={details().ownedWork.truncated}>
-							<text fg={color("warning")}>
-								Owned worker inspection clipped at 128 records.
-							</text>
-						</Show>
-						<text fg={color("primary")}>
-							Retained task-owned evidence · {details().attachments.length}
-						</text>
-						<For each={details().attachments}>
-							{(item) => (
-								<box flexDirection="column" paddingLeft={1}>
-									<text wrapMode="word">
-										{item.caption} · {item.mediaType} · owner #{item.taskId}
-									</text>
-									<text fg={color("textMuted")} wrapMode="word">
-										Content identity: {item.id}
-										{"\n"}Metadata is not process or visual proof. Explicit byte
-										reads are owner/digest-fenced and bounded; no arbitrary file
-										or external URL is opened.
-									</text>
-									<ActionHeader
-										onActivate={() =>
-											props.prepare(`/evidence ${item.taskId} ${item.id}`)
-										}
-									>
-										<text fg={color("accent")}>
-											Prepare explicit retained evidence read
-										</text>
-									</ActionHeader>
-									<Show
-										when={
-											props.evidence?.id === item.id &&
-											props.evidence?.taskId === details().id
-										}
-									>
-										<Show when={props.evidence}>
-											{(evidence) => (
-												<EvidenceView
-													document={evidence()}
-													syntax={syntax}
-													prepare={props.prepare}
-												/>
-											)}
-										</Show>
-									</Show>
-								</box>
-							)}
-						</For>
-						{fold(
-							`task:${details().id}:metadata`,
-							"Complete retained task metadata",
-						)}
-						<Show when={open(`task:${details().id}:metadata`)}>
-							<code
-								content={JSON.stringify(details().metadata, null, 2)}
-								filetype="json"
-								syntaxStyle={syntax}
-								drawUnstyledText={true}
-								wrapMode="word"
-							/>
-						</Show>
-					</box>
+			<Show when={props.details && !details()}>
+				<text fg={color("warning")}>
+					Detail owner does not match a unique selected catalog task; cached
+					controls withheld.
+				</text>
+			</Show>
+			<Show when={details()} keyed>
+				{(saved) => (
+					<TaskObservation
+						details={saved}
+						current={() => !disposed && details() === saved}
+						scope={source()}
+						catalog={props.catalog}
+						reviews={props.reviews}
+						fresh={props.fresh}
+						connected={props.connected}
+						error={props.error}
+						expanded={props.expanded}
+						toggle={props.toggle}
+						prepare={props.prepare}
+						select={select}
+						openSession={props.openSession}
+						evidence={props.evidence}
+					/>
 				)}
 			</Show>
 		</box>

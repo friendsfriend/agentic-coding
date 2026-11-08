@@ -1672,3 +1672,63 @@ refusal is retained. No renderer, helper, mounting, screenshot or presenter test
 is added. Functional gates do not establish visual/interactive parity; no real
 environment/provider/model/cluster call, clipboard exercise, restart or deployment
 is claimed.
+
+## Integrated task/profile/wiki/skill supplied-data workspaces
+
+- Task catalogs, other pending review observations, detail review cards, owned
+  worker records and task evidence descriptors use bounded local record windows
+  (at most 20 mounted records per collection). The native 128-worker inspection
+  limit remains explicit; local search/paging cannot recover omitted records.
+  Worker IDs remain diagnostic only, never app-task/conversation aliases.
+- Extract task detail composition into a captured `TaskObservation`: retain its
+  top border, review borders, headings, source folds and indentation. Exact
+  immutable review text retains diff syntax through bounded source windows.
+  Outcomes reuse the original local MarkdownViewer port with bounded rendering
+  and an explicit inert-source switch. Window-local markdown can cross a fence
+  or structural boundary; no synthetic surrounding source is added.
+- Detail controls require a unique selected supplied task owner. Lifecycle and
+  review preparation additionally require a fresh connected catalog whose native
+  status agrees with the captured detail; reviews match supplied task/revision/
+  digest/state and unique identity. Native checks remain final and observations
+  are non-atomic. Cancellation/decisions/evidence reads still prepare commands,
+  never submit. Related-task and child-transcript links require unique supplied
+  catalog pointers; missing/ambiguous identities cannot adopt another worker.
+- Profile conversation targets and host definitions have separate bounded local
+  searches and source-fenced controls. Target/profile selection is local; current
+  model inspection and switching still require separate explicit submission.
+  Read-only/terminal, stale, ambiguous, unavailable and unsafe targets/profiles
+  cannot generate switch commands. Complete supplied inspection/profile fields
+  are bounded read-only observations, not credential or connectivity proof.
+- Loaded skill browsing uses local full-descriptor search and bounded exact
+  instruction ranges. Supplied id/digest/unique membership and fresh connectivity
+  fence read/discussion preparation. Repeated document replacement retires the
+  prior instruction widget even when bytes repeat; no disk reload, provider call
+  or task admission is performed by selection or range search.
+- Wiki page descriptors and retained comment observations are locally paged.
+  Long comment text and full supplied records remain available in source windows;
+  a comment task link requires the captured page owner and a unique supplied app
+  task. Cached documents that do not match the selected supplied page are not
+  relabeled. Editor ownership changes with supplied document/selection/mode,
+  never with a mirrored keystroke. Sealed candidates retain bounded exact source,
+  and stale/replaced/expired candidates cannot prepare save confirmation. The
+  placeholder is never an approval; native digest/revision/expiry fences remain.
+- Correct the evidence text display gap: decode and retain the WHOLE supplied
+  native byte window rather than clipping at 64000 characters and then skipping
+  directly to the next native byte window. Local text ranges and separately
+  submitted native byte reads are explicitly distinct. Byte metadata/body bounds
+  are checked before display/preparation. UTF-8 chunk-boundary replacement glyphs
+  are not original file byte/line provenance; binary preview stays signature-only.
+  No URL, script, archive, player or arbitrary path is activated.
+- Local view-detail JSON also uses bounded supplied-source disclosure. UI source
+  fingerprints/ordinals never become native identity, authority or approval.
+
+Authenticated faux-loopback fixtures retain a 405-line supplementary-Unicode/CRLF
+loaded skill beyond the local source window, refuse mismatched loaded digests and
+show no task admission. The retained report fixture exceeds 64000 text characters
+and deliberately splits a four-byte UTF-8 character at the native byte boundary;
+its exact byte windows concatenate to the original retained report while separate
+decodes explicitly exhibit replacement glyphs. These are public-boundary tests,
+not renderer/helper/mounting/presenter acceptance. Biome, full type-check, build,
+help and 30 boundary tests (540 assertions) pass. Visual/interactive parity,
+clipboard, real integration, Mermaid and deployment remain unverified; no real
+provider/model/environment/cluster calls, restart or manual TTY run are claimed.

@@ -6,6 +6,7 @@ import {
 	fauxText,
 	fauxThinking,
 } from "@earendil-works/pi-ai";
+import { digest } from "../src/config.ts";
 import { serve } from "../src/server/index.ts";
 import {
 	ClientConnection,
@@ -16,6 +17,55 @@ import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
+
+test("authenticated loaded skill observations retain long exact source without admission or revision aliasing", async () => {
+	const instructions = `${Array.from({ length: 405 }, (_, index) => `${index}: ${"supplied-inert-source ".repeat(3)}😀\r\n`).join("")}tail\r\n`;
+	const revision = digest(instructions);
+	const { app, config } = await fixture(false, (loaded) => {
+		const skill = loaded.skills[0];
+		if (!skill) throw new Error("Fixture skill missing");
+		skill.content = instructions;
+		skill.digest = revision;
+	});
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.status,
+			(status) => status === "connected",
+		);
+		expect(instructions.length).toBeGreaterThan(24000);
+		const catalog = await client.call("skills.read", {});
+		expect(catalog[0]).toMatchObject({
+			id: "code",
+			revision,
+			origin: "system",
+		});
+		const document = await client.call("skill.read", { id: "code", revision });
+		expect(document.content).toBe(instructions);
+		expect(document.content.endsWith("tail\r\n")).toBe(true);
+		expect(digest(document.content)).toBe(revision);
+		expect((await client.call("state.read", {})).tasks).toEqual([]);
+		await expect(
+			client.call("skill.read", { id: "code", revision: "0".repeat(64) }),
+		).rejects.toThrow("Native operation refused");
+		const skill = config.skills[0];
+		if (!skill) throw new Error("Fixture skill missing");
+		skill.content = `${instructions}changed without matching digest`;
+		await expect(
+			client.call("skill.read", { id: "code", revision }),
+		).rejects.toThrow("Native operation refused");
+		skill.content = instructions;
+		expect(
+			(await client.call("skill.read", { id: "code", revision })).content,
+		).toBe(instructions);
+		expect((await client.call("state.read", {})).tasks).toEqual([]);
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});
 
 test("authenticated native environment staging and retained history remain explicit, bounded and ownership-fenced", async () => {
 	const { app } = await fixture(true, (config) => {

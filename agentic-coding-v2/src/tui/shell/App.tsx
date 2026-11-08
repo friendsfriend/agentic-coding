@@ -125,6 +125,7 @@ import { type LocalChoice, LocalChoiceContext } from "../ui/LocalChoice.ts";
 import { MessageDialog } from "../ui/MessageDialog.tsx";
 import { createNotifications, type LocalNotice } from "../ui/notifications.ts";
 import { QuitDialog } from "../ui/QuitDialog.tsx";
+import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
 import { Navigation, type Page, type View, view } from "./navigation.ts";
@@ -4058,6 +4059,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									<TaskPanel
 										evidence={evidence()}
 										rows={rows()}
+										catalog={state()?.tasks ?? []}
+										fresh={snapshotFresh()}
 										selectedId={selectedTaskId()}
 										select={(id) => go("tasks", String(id))}
 										details={
@@ -4072,14 +4075,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										toggle={toggleDetail}
 										prepare={prepareCommand}
 										openSession={
-											state()?.sessions.find(
+											state()?.sessions.filter(
 												(session) => session.task === selectedTaskId(),
-											)
+											).length === 1
 												? () => {
-														const session = state()?.sessions.find(
-															(session) => session.task === selectedTaskId(),
-														);
-														if (session) go("session", String(session.id));
+														const matches =
+															state()?.sessions.filter(
+																(session) => session.task === selectedTaskId(),
+															) ?? [];
+														const session = matches[0];
+														if (
+															matches.length === 1 &&
+															session &&
+															Number.isSafeInteger(session.id) &&
+															session.id > 0
+														)
+															go("session", String(session.id));
 													}
 												: null
 										}
@@ -4139,6 +4150,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								<Show when={current().page === "skills"}>
 									<SkillPanel
 										rows={rows()}
+										catalog={skillData()}
+										fresh={snapshotFresh()}
 										selected={rowSelected}
 										select={(row, index) => {
 											navigation.current.selection = index;
@@ -4189,6 +4202,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								<Show when={current().page === "profiles"}>
 									<ProfilePanel
 										rows={rows()}
+										fresh={snapshotFresh()}
 										selected={rowSelected}
 										select={(row, index) => {
 											navigation.current.selection = index;
@@ -4404,6 +4418,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								</Show>
 								<Show when={current().page === "wiki"}>
 									<WikiPanel
+										catalog={wikiData()}
+										tasks={state()?.tasks ?? []}
+										selectedId={current().resource}
+										fresh={snapshotFresh()}
 										rows={wikiData().filter((row) =>
 											JSON.stringify(row)
 												.toLowerCase()
@@ -4436,7 +4454,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										select={(id) => go("wiki", id)}
 										prepare={prepareCommand}
 										openTask={(id) => {
-											if (state()?.tasks.some((task) => task.id === id))
+											if (
+												Number.isSafeInteger(id) &&
+												id > 0 &&
+												state()?.tasks.filter((task) => task.id === id)
+													.length === 1
+											)
 												go("tasks", String(id));
 											else
 												setNotice(
@@ -4470,9 +4493,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										current().page !== "providers"
 									}
 								>
-									<text wrapMode="word">
-										{JSON.stringify(current().detail, null, 2)}
-									</text>
+									<SuppliedObservation
+										value={current().detail}
+										scope={workspaceScope()}
+										label="Supplied local view details; not native authority"
+									/>
 								</Show>
 							</ActionScope>
 						</scrollbox>

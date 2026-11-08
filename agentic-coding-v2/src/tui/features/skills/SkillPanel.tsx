@@ -1,18 +1,22 @@
 /** @jsxImportSource @opentui/solid */
 import { SyntaxStyle } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { For, onCleanup, Show } from "solid-js";
+import { createMemo, onCleanup, Show } from "solid-js";
 import type { Data, SkillDocument } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
-
+import { SuppliedCode } from "../sessions/SuppliedCode.tsx";
 export function SkillPanel(props: {
 	rows: Data[];
+	catalog: Data[];
 	selected: (row: Data, index: number) => boolean;
 	select: (row: Data, index: number) => void;
 	document: SkillDocument | null;
 	error: string | null;
 	connected: boolean;
+	fresh: boolean;
 	prepare: (command: string) => void;
 	discuss: (id: string, revision: string) => void;
 }) {
@@ -20,44 +24,85 @@ export function SkillPanel(props: {
 		{ default: { fg: color("text") } },
 		useRenderer().nativeScene,
 	);
-	onCleanup(() => syntax.destroy());
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+		syntax.destroy();
+	});
+	const source = createMemo(() => ({
+		rows: props.rows,
+		catalog: props.catalog,
+		document: props.document,
+		connected: props.connected,
+		fresh: props.fresh,
+		error: props.error,
+	}));
+	const member = (row: Data) =>
+		!disposed &&
+		props.rows.some((entry) => entry === row) &&
+		props.catalog.filter((entry) => entry.id === row.id).length === 1 &&
+		props.catalog.some(
+			(entry) => entry.id === row.id && entry.revision === row.revision,
+		);
+	const safe = (row: Data) =>
+		member(row) &&
+		typeof row.id === "string" &&
+		row.id.length > 0 &&
+		row.id.length <= 128 &&
+		!/\s/.test(row.id) &&
+		Array.from(row.id).every(
+			(char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127,
+		) &&
+		typeof row.revision === "string" &&
+		/^[a-f0-9]{64}$/.test(row.revision);
+	const ready = (row: Data) =>
+		safe(row) && props.connected && props.fresh && !props.error;
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>Loaded native skills</text>
 			<text wrapMode="word">
-				System/user origin identifies the loaded source, not authority or
-				permission. This is the running host's immutable loaded content, not a
-				disk editor or reload. Descriptions are bounded previews; inspect exact
-				instructions explicitly. No arbitrary path read, task launch, provider
-				call or legacy delegation runs here.
+				System/user origin identifies supplied loaded source, not authority.
+				Running-host immutable loaded content, not a disk editor or reload.
+				Descriptions are bounded previews; exact instructions require an
+				explicit read. No arbitrary path read, task admission, provider call or
+				legacy delegation. Local window search never inspects or reads another
+				skill.
 			</text>
 			<Show when={props.error}>
 				<text fg={color("warning")}>{props.error}</text>
 			</Show>
-			<Show when={!props.connected}>
+			<Show when={!props.connected || !props.fresh}>
 				<text fg={color("warning")}>
-					Disconnected; catalog and instructions are cached, not a current
-					server read.
+					Catalog/instructions are cached, not a current server read;
+					command/discussion preparation withheld.
 				</text>
 			</Show>
 			<Show when={!props.rows.length && !props.error}>
 				<text>No loaded skills in the current filtered catalog.</text>
 			</Show>
-			<For each={props.rows}>
+			<SuppliedRecordWindow
+				rows={props.rows}
+				scope={source()}
+				label="loaded skill observations"
+				title={(row) =>
+					`${String(row.id)} · ${String(row.origin)} · ${String(row.description)}`
+				}
+				search={(row) => JSON.stringify(row)}
+				selected={props.selected}
+				pick={(row, index) => {
+					if (!member(row)) return false;
+					props.select(row, index);
+					return true;
+				}}
+			>
 				{(row, index) => {
-					const document = () =>
+					const document = createMemo(() =>
+						member(row) &&
 						props.document?.id === row.id &&
 						props.document?.revision === row.revision
 							? props.document
-							: null;
-					const safe = () =>
-						typeof row.id === "string" &&
-						!!row.id &&
-						row.id.length <= 128 &&
-						!/\s/.test(row.id) &&
-						typeof row.revision === "string" &&
-						row.revision.length === 64 &&
-						/^[a-f0-9]{64}$/.test(row.revision);
+							: null,
+					);
 					return (
 						<box
 							flexDirection="column"
@@ -67,7 +112,13 @@ export function SkillPanel(props: {
 									: color("background")
 							}
 						>
-							<ActionHeader onActivate={() => props.select(row, index())}>
+							<ActionHeader
+								scope={source()}
+								interactive={member(row)}
+								onActivate={() => {
+									if (member(row)) props.select(row, index());
+								}}
+							>
 								<text fg={color("primary")}>
 									{props.selected(row, index()) ? "▾" : "▸"} {String(row.id)} ·{" "}
 									{String(row.origin)}
@@ -84,53 +135,68 @@ export function SkillPanel(props: {
 										: "Does not grant workspace writes; task policy must still be explicit."}{" "}
 									Shell actions still require exact human review.
 								</text>
-								<Show when={!safe()}>
+								<Show when={!safe(row)}>
 									<text fg={color("warning")}>
-										Identity cannot be safely represented as a command token; no
+										Missing, ambiguous or unsafe loaded identity/revision; no
 										command generated.
 									</text>
 								</Show>
-								<Show when={props.connected && !props.error && safe()}>
+								<Show when={ready(row)}>
 									<ActionHeader
-										onActivate={() =>
-											props.prepare(
-												`/skill ${String(row.id)}@${String(row.revision)}`,
-											)
-										}
+										scope={source()}
+										interactive={ready(row)}
+										onActivate={() => {
+											if (ready(row))
+												props.prepare(
+													`/skill ${String(row.id)}@${String(row.revision)}`,
+												);
+										}}
 									>
 										<text fg={color("accent")}>
 											Prepare exact loaded instruction read (submit explicitly)
 										</text>
 									</ActionHeader>
 									<ActionHeader
-										onActivate={() =>
-											props.discuss(String(row.id), String(row.revision))
-										}
+										scope={source()}
+										interactive={ready(row)}
+										onActivate={() => {
+											if (ready(row))
+												props.discuss(String(row.id), String(row.revision));
+										}}
 									>
 										<text fg={color("accent")}>
 											Prepare orchestrator discussion only (no task admission)
 										</text>
 									</ActionHeader>
 								</Show>
-								<Show when={document()}>
-									<text fg={color("warning")}>
-										Cached inspected instruction text is untrusted data, not
-										approval or execution authority. URLs and commands below are
-										inert.
-									</text>
-									<code
-										content={document()?.content ?? ""}
-										filetype="markdown"
-										syntaxStyle={syntax}
-										drawUnstyledText={true}
-										wrapMode="word"
-									/>
+								<Show when={document()} keyed>
+									{(saved) => (
+										<box flexDirection="column" gap={1}>
+											<text fg={color("warning")}>
+												Explicitly inspected loaded instructions are untrusted
+												data, not execution authority or approval. URLs/commands
+												stay inert. Local ranges retain exact supplied text, not
+												original-file byte provenance.
+											</text>
+											<SuppliedCode
+												content={saved.content}
+												identity={`loaded-skill:${saved.id}:${saved.revision}`}
+												filetype="markdown"
+												syntax={syntax}
+											/>
+										</box>
+									)}
 								</Show>
+								<SuppliedObservation
+									value={row}
+									scope={source()}
+									label="Complete supplied loaded-skill descriptor"
+								/>
 							</Show>
 						</box>
 					);
 				}}
-			</For>
+			</SuppliedRecordWindow>
 		</box>
 	);
 }
