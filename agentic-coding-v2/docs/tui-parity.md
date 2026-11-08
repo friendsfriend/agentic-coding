@@ -420,6 +420,21 @@ content and bindings, not permission to replace the original presentation.
 - No renderer, mounting, snapshot, presenter or navigation-matrix tests are
   added. Static checks and public-boundary fixtures do not verify visual parity.
 
+## Retained browser observation sections
+
+- Restore separate Observation and Matches folds for explicit browser navigation,
+  input, wait and observation names when their paired retained JSON object carries
+  those fields. String observations remain plain terminal text; structured values
+  use the existing bounded data presentation. Arrays/scalars at the result root
+  and unknown tools retain the generic output path.
+- Keep complete structured output, original output bytes, arguments, images,
+  diagnostics and details available. Empty arrays/strings are not invented into
+  missing observations; null/missing fields add no section.
+- Returned refs and snapshot text are inert recorded data, not current browser
+  targets or UI permissions. No action, URL discovery or browser session is
+  created. Evidence/body families, reading anchors and visual parity remain
+  unfinished/unverified; no renderer or presenter tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

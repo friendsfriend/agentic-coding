@@ -172,6 +172,21 @@ export function ToolCard(props: {
 			return null;
 		}
 	});
+	const browserResult = createMemo(() => {
+		const value = structured();
+		return browserActions.has(name()) && value && !Array.isArray(value)
+			? object(value)
+			: null;
+	});
+	const browserSections = createMemo(() => {
+		const value = browserResult();
+		if (!value) return [];
+		return ["observation", "matches"].flatMap((key) =>
+			Object.hasOwn(value, key) && value[key] !== null
+				? [{ key, value: value[key] }]
+				: [],
+		);
+	});
 	const specialized = () =>
 		Boolean(
 			path() &&
@@ -388,6 +403,34 @@ export function ToolCard(props: {
 								</>
 							)}
 						</Show>
+						<For each={browserSections()}>
+							{(section) => (
+								<>
+									{fold(
+										`:${section.key}`,
+										section.key === "matches" ? "Matches" : "Observation",
+									)}
+									<Show when={open(`:${section.key}`)}>
+										<text fg={color("textMuted")} wrapMode="word">
+											Retained browser {section.key} — refs belong to the
+											recorded snapshot; this display does not resolve or
+											activate them.
+										</text>
+										<Show
+											when={typeof section.value === "string"}
+											fallback={
+												<StructuredData
+													value={section.value}
+													label={`Retained ${section.key}`}
+												/>
+											}
+										>
+											<text wrapMode="word">{string(section.value)}</text>
+										</Show>
+									</Show>
+								</>
+							)}
+						</For>
 						<Show when={!specialized() && props.result}>
 							<Show
 								when={structured() !== null}
