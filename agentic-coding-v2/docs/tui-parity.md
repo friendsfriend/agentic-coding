@@ -875,6 +875,22 @@ content and bindings, not permission to replace the original presentation.
 - Remaining specialized families, integrated load-older and interactive/visual
   acceptance remain unfinished. No renderer/helper tests are added.
 
+## Codemode original header gutter and source headline
+
+- Restore the codemode view's lambda gutter and first meaningful source line
+  as its header subject. Follow the original discriminator: skip blank lines
+  and `// @…` configuration lines, not arbitrary comments or script statements.
+- Bound the single-line UI preview to 160 code points (159 plus ellipsis when
+  truncated). Whitespace normalization affects only this preview; the source
+  body and raw Arguments remain verbatim. Missing/non-string code retains the
+  generic tool-name fallback; an empty/config-only string has the `script` subject.
+- Do not copy the original pending `Executing` label into a native generated-call
+  projection. Existing partial/live/retained status and native pairing rules
+  remain authoritative; no elapsed time, nested call count or execution status
+  is inferred from the source preview.
+- The full codemode/nested-call layout, integrated load-older and visual/interactive
+  acceptance remain unfinished. No renderer/helper tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

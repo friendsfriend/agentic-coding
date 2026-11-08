@@ -77,7 +77,7 @@ export function ToolCard(props: {
 		subagent: "✓",
 		webfetch: "%",
 		websearch: "◈",
-		codemode: "{}",
+		codemode: "λ",
 		developer_question: "?",
 		agent_ask: "?",
 	};
@@ -174,12 +174,27 @@ export function ToolCard(props: {
 					: props.pairing === "ambiguous"
 						? "Ambiguous retained identity — output not paired"
 						: "Result not in retained history — activity unknown";
+	const scriptHeadline = createMemo(() => {
+		if (name() !== "codemode" || typeof args().code !== "string") return "";
+		const line =
+			string(args().code)
+				.split("\n")
+				.map((entry) => entry.trim())
+				.find((entry) => entry.length > 0 && !entry.startsWith("// @")) ??
+			"script";
+		const points = Array.from(line.replace(/\s+/g, " "));
+		return points.length > 160
+			? `${points.slice(0, 159).join("")}…`
+			: points.join("");
+	});
 	const summary = () =>
-		["read", "edit", "write"].includes(name())
-			? path()
-			: name() === "bash" || name() === "shell"
-				? string(args().command)
-				: string(args().app) || string(args().title) || string(args().query);
+		name() === "codemode"
+			? scriptHeadline()
+			: ["read", "edit", "write"].includes(name())
+				? path()
+				: name() === "bash" || name() === "shell"
+					? string(args().command)
+					: string(args().app) || string(args().title) || string(args().query);
 	const headerLabel = () => {
 		if (!browserActions.has(name())) return summary() || name();
 		const verb = name().slice("browser_".length).replaceAll("_", " ");
