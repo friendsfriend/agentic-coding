@@ -2,6 +2,7 @@
 import { For, Show } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
+import { Selectable } from "../../presentation/components/Selectable.tsx";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { color } from "../../ui/theme/index.ts";
 
@@ -60,184 +61,185 @@ export function ResourcePanel(props: {
 			</Show>
 			<For each={props.rows}>
 				{(row, index) => (
-					<box
-						flexDirection="column"
-						border={true}
-						borderColor={
-							props.selected(row, index()) ? color("accent") : color("border")
-						}
-						padding={1}
-						gap={1}
+					<Selectable
+						selected={props.selected(row, index())}
+						onMouseUp={() => props.select(row, index())}
 					>
-						<ActionHeader onActivate={() => props.select(row, index())}>
-							<text fg={color("primary")}>
-								{props.selected(row, index()) ? "▾" : "▸"} {String(row.id)} ·{" "}
-								{String(row.state ?? row.kind)}
-							</text>
-						</ActionHeader>
-						<Show when={props.selected(row, index())}>
-							<Show when={props.kind === "schedules"}>
-								<text wrapMode="word">
-									Revision {String(row.revision)} · next due{" "}
-									{row.nextDue === null ? "none recorded" : String(row.nextDue)}{" "}
-									(epoch ms) · late grace{" "}
-									{String(row.lateGraceMs ?? "run late")}
+						<box flexDirection="column" gap={1}>
+							<ActionHeader onActivate={() => props.select(row, index())}>
+								<text fg={color("primary")}>
+									{props.selected(row, index()) ? "▾" : "▸"} {String(row.id)} ·{" "}
+									{String(row.state ?? row.kind)}
 								</text>
-								<text wrapMode="word">
-									Skill {String(object(row.invocation).skill)} · topic{" "}
-									{String(object(row.invocation).topicId)} · profile{" "}
-									{String(object(row.invocation).profile)}
-								</text>
-								<Show when={typeof row.activeTask === "number"}>
-									<ActionHeader
-										onActivate={() => props.openTask(Number(row.activeTask))}
-									>
-										<text fg={color("accent")}>
-											Open admitted task #{String(row.activeTask)}
-										</text>
-									</ActionHeader>
-								</Show>
-								<Show when={row.lastError}>
-									<text fg={color("warning")} wrapMode="word">
-										Last recorded error: {String(row.lastError)}
+							</ActionHeader>
+							<Show when={props.selected(row, index())}>
+								<Show when={props.kind === "schedules"}>
+									<text wrapMode="word">
+										Revision {String(row.revision)} · next due{" "}
+										{row.nextDue === null
+											? "none recorded"
+											: String(row.nextDue)}{" "}
+										(epoch ms) · late grace{" "}
+										{String(row.lateGraceMs ?? "run late")}
 									</text>
-								</Show>
-								{details(
-									`schedule:${String(row.id)}:timing`,
-									"Exact timing and invocation",
-									{ timing: row.timing, invocation: row.invocation },
-								)}
-								{details(
-									`schedule:${String(row.id)}:history`,
-									"Retained occurrence history",
-									row.history,
-								)}
-								<Show
-									when={
-										props.connected &&
-										commandToken(row.id) &&
-										Number.isSafeInteger(row.revision) &&
-										Number(row.revision) >= 1
-									}
-								>
-									<ActionHeader
-										onActivate={() =>
-											props.prepare(
-												`/delete-schedule ${String(row.id)}@${String(row.revision)}`,
-											)
+									<text wrapMode="word">
+										Skill {String(object(row.invocation).skill)} · topic{" "}
+										{String(object(row.invocation).topicId)} · profile{" "}
+										{String(object(row.invocation).profile)}
+									</text>
+									<Show when={typeof row.activeTask === "number"}>
+										<ActionHeader
+											onActivate={() => props.openTask(Number(row.activeTask))}
+										>
+											<text fg={color("accent")}>
+												Open admitted task #{String(row.activeTask)}
+											</text>
+										</ActionHeader>
+									</Show>
+									<Show when={row.lastError}>
+										<text fg={color("warning")} wrapMode="word">
+											Last recorded error: {String(row.lastError)}
+										</text>
+									</Show>
+									{details(
+										`schedule:${String(row.id)}:timing`,
+										"Exact timing and invocation",
+										{ timing: row.timing, invocation: row.invocation },
+									)}
+									{details(
+										`schedule:${String(row.id)}:history`,
+										"Retained occurrence history",
+										row.history,
+									)}
+									<Show
+										when={
+											props.connected &&
+											commandToken(row.id) &&
+											Number.isSafeInteger(row.revision) &&
+											Number(row.revision) >= 1
 										}
 									>
-										<text fg={color("warning")}>
-											Prepare revision-fenced deletion (does not submit)
-										</text>
-									</ActionHeader>
-								</Show>
-							</Show>
-							<Show when={props.kind === "environments"}>
-								<text wrapMode="word">
-									Repository: {String(row.repository)} · prerequisites:{" "}
-									{JSON.stringify(row.requires ?? [])}
-								</text>
-								<For each={dataList(row.targets)}>
-									{(target) => (
-										<box flexDirection="column" paddingLeft={1} gap={1}>
-											<text fg={color("primary")}>
-												{String(target.id)} · {String(target.action)} ·{" "}
-												{String(target.runtime)} ·{" "}
-												{String(target.profile ?? "default profile")}
+										<ActionHeader
+											onActivate={() =>
+												props.prepare(
+													`/delete-schedule ${String(row.id)}@${String(row.revision)}`,
+												)
+											}
+										>
+											<text fg={color("warning")}>
+												Prepare revision-fenced deletion (does not submit)
 											</text>
-											{details(
-												`environment:${String(row.id)}:target:${String(target.id)}`,
-												"Native target definition and availability",
-												target,
-											)}
-											<Show
-												when={
-													props.connected &&
-													commandToken(row.id) &&
-													commandToken(target.id) &&
-													row.kind !== "infrastructure" &&
-													["run", "build", "test"].includes(
-														String(target.action),
-													)
-												}
-											>
-												<ActionHeader
-													onActivate={() =>
-														props.prepare(
-															`/${String(target.action)} ${String(row.id)} ${String(target.id)}`,
+										</ActionHeader>
+									</Show>
+								</Show>
+								<Show when={props.kind === "environments"}>
+									<text wrapMode="word">
+										Repository: {String(row.repository)} · prerequisites:{" "}
+										{JSON.stringify(row.requires ?? [])}
+									</text>
+									<For each={dataList(row.targets)}>
+										{(target) => (
+											<box flexDirection="column" paddingLeft={1} gap={1}>
+												<text fg={color("primary")}>
+													{String(target.id)} · {String(target.action)} ·{" "}
+													{String(target.runtime)} ·{" "}
+													{String(target.profile ?? "default profile")}
+												</text>
+												{details(
+													`environment:${String(row.id)}:target:${String(target.id)}`,
+													"Native target definition and availability",
+													target,
+												)}
+												<Show
+													when={
+														props.connected &&
+														commandToken(row.id) &&
+														commandToken(target.id) &&
+														row.kind !== "infrastructure" &&
+														["run", "build", "test"].includes(
+															String(target.action),
 														)
 													}
 												>
+													<ActionHeader
+														onActivate={() =>
+															props.prepare(
+																`/${String(target.action)} ${String(row.id)} ${String(target.id)}`,
+															)
+														}
+													>
+														<text fg={color("accent")}>
+															Prepare {String(target.action)} task (native exact
+															approval still required)
+														</text>
+													</ActionHeader>
+												</Show>
+											</box>
+										)}
+									</For>
+									<For
+										each={dataList(props.environments?.runs).filter(
+											(run) => object(run.plan).app === row.id,
+										)}
+									>
+										{(run) => (
+											<box
+												flexDirection="column"
+												border={["top"]}
+												borderColor={color("border")}
+												gap={1}
+											>
+												<text wrapMode="word">
+													Run {String(run.id)} · {String(run.state)} · owner #
+													{String(run.owner)} · recorded readiness{" "}
+													{String(run.ready ?? "unknown")} · revision{" "}
+													{String(run.revision)}
+												</text>
+												<Show when={run.error}>
+													<text fg={color("warning")} wrapMode="word">
+														{String(run.error)}
+													</text>
+												</Show>
+												<ActionHeader
+													onActivate={() => props.openTask(Number(run.owner))}
+												>
 													<text fg={color("accent")}>
-														Prepare {String(target.action)} task (native exact
-														approval still required)
+														Inspect native owner task
 													</text>
 												</ActionHeader>
-											</Show>
-										</box>
+												{details(
+													`environment:run:${String(run.id)}`,
+													"Retained run / idle / cleanup diagnostics (not lease authority)",
+													run,
+												)}
+											</box>
+										)}
+									</For>
+									{details(
+										`environment:${String(row.id)}:waiters`,
+										"Current observed acquisition waiters",
+										dataList(props.environments?.waiters).filter(
+											(waiter) =>
+												Array.isArray(waiter.apps) &&
+												waiter.apps.includes(row.id),
+										),
 									)}
-								</For>
-								<For
-									each={dataList(props.environments?.runs).filter(
-										(run) => object(run.plan).app === row.id,
-									)}
-								>
-									{(run) => (
-										<box
-											flexDirection="column"
-											border={["top"]}
-											borderColor={color("border")}
-											gap={1}
+									<Show when={props.connected && commandToken(row.id)}>
+										<ActionHeader
+											onActivate={() =>
+												props.prepare(`/logs ${String(row.id)}`)
+											}
 										>
-											<text wrapMode="word">
-												Run {String(run.id)} · {String(run.state)} · owner #
-												{String(run.owner)} · recorded readiness{" "}
-												{String(run.ready ?? "unknown")} · revision{" "}
-												{String(run.revision)}
+											<text fg={color("accent")}>
+												Prepare diagnostic logs read (does not stop or take over
+												an app)
 											</text>
-											<Show when={run.error}>
-												<text fg={color("warning")} wrapMode="word">
-													{String(run.error)}
-												</text>
-											</Show>
-											<ActionHeader
-												onActivate={() => props.openTask(Number(run.owner))}
-											>
-												<text fg={color("accent")}>
-													Inspect native owner task
-												</text>
-											</ActionHeader>
-											{details(
-												`environment:run:${String(run.id)}`,
-												"Retained run / idle / cleanup diagnostics (not lease authority)",
-												run,
-											)}
-										</box>
-									)}
-								</For>
-								{details(
-									`environment:${String(row.id)}:waiters`,
-									"Current observed acquisition waiters",
-									dataList(props.environments?.waiters).filter(
-										(waiter) =>
-											Array.isArray(waiter.apps) &&
-											waiter.apps.includes(row.id),
-									),
-								)}
-								<Show when={props.connected && commandToken(row.id)}>
-									<ActionHeader
-										onActivate={() => props.prepare(`/logs ${String(row.id)}`)}
-									>
-										<text fg={color("accent")}>
-											Prepare diagnostic logs read (does not stop or take over
-											an app)
-										</text>
-									</ActionHeader>
+										</ActionHeader>
+									</Show>
 								</Show>
 							</Show>
-						</Show>
-					</box>
+						</box>
+					</Selectable>
 				)}
 			</For>
 		</box>

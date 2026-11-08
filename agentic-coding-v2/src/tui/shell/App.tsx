@@ -1,9 +1,11 @@
 /** @jsxImportSource @opentui/solid */
+
 import type {
 	BoxRenderable,
 	ScrollBoxRenderable,
 	TextareaRenderable,
 } from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
 import { useTerminalDimensions } from "@opentui/solid";
 import {
@@ -50,6 +52,10 @@ import {
 import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
 import { HistoryPanel } from "../features/sessions/HistoryPanel.tsx";
 import { DraftHistory } from "../features/sessions/history.ts";
+import {
+	NativeAgentNavigation,
+	nativeAgentNavigationKeybinds,
+} from "../features/sessions/NativeAgentNavigation.tsx";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
 import { StandalonePanel } from "../features/sessions/StandalonePanel.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
@@ -61,6 +67,14 @@ import {
 import { SkillPanel } from "../features/skills/SkillPanel.tsx";
 import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { WikiPanel } from "../features/wiki/WikiPanel.tsx";
+import { Badge } from "../presentation/components/Badge.tsx";
+import { StatusBar } from "../presentation/components/StatusBar.tsx";
+import {
+	WorkspaceNavigation,
+	workspaceNavigationKeybinds,
+} from "../presentation/components/WorkspaceNavigation.tsx";
+import { BreadcrumbRow } from "../presentation/navigation/BreadcrumbRow.tsx";
+import type { Route } from "../presentation/routes.ts";
 import { ActionScope } from "../ui/ActionScope.tsx";
 import { CommandPalette } from "../ui/CommandPalette.tsx";
 import {
@@ -68,7 +82,6 @@ import {
 	bindings,
 	editorKeybinds,
 	keybindCatalogs,
-	keybindFooter,
 	keyLabel,
 	paletteKeybinds,
 	promptKeybinds,
@@ -817,7 +830,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			},
 			{
 				id: "shell.viewpoints",
-				name: "Focus viewpoints",
+				name: "Focus native agents",
 				run: () => {
 					remember();
 					navigation.current.focus = "viewpoints";
@@ -1790,6 +1803,51 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			update();
 		}
 	}
+	const [workspaceWidth, setWorkspaceWidth] = createSignal(6);
+	const ancestors = (): Route[] => {
+		const selected = current();
+		const title =
+			pages.find(([page]) => page === selected.page)?.[1] ??
+			(
+				{
+					opencode: "OpenCode",
+					pi: "Pi",
+					"pi-durable": "Pi Durable",
+					orchestrator: "Orchestrator",
+					session: "Conversation",
+				} as Record<string, string>
+			)[selected.page] ??
+			selected.page;
+		if (selected.page === "session") {
+			const session = state()?.sessions.find(
+				(session) => String(session.id) === selected.resource,
+			);
+			return [
+				{
+					page: session?.task == null ? "pi-durable" : "tasks",
+					resource: session?.task == null ? null : String(session.task),
+					label: session?.task == null ? "Pi Durable" : `Task #${session.task}`,
+				},
+				{
+					page: selected.page,
+					resource: selected.resource,
+					label: session?.title ?? "Unavailable conversation",
+				},
+			];
+		}
+		return [
+			{ page: selected.page, resource: null, label: title },
+			...(selected.resource === null
+				? []
+				: [
+						{
+							page: selected.page,
+							resource: selected.resource,
+							label: selected.resource,
+						},
+					]),
+		];
+	};
 	const sidebarOptions = () => [
 		...["OpenCode", "Pi", "Pi Durable", "Orchestrator"].map((name, index) => ({
 			name,
@@ -1810,6 +1868,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						value: `session:${session.id}`,
 					})) ?? [])
 			: []),
+		...bookmarks().map((item) => ({
+			name: item.name,
+			description: `${item.view.page} · UI-only viewpoint`,
+			value: `bookmark:${item.id}`,
+		})),
 		...pages.map(([page, title]) => ({
 			name: title,
 			description: "",
@@ -1824,65 +1887,85 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			backgroundColor={color("background")}
 		>
 			<box
-				height={1}
-				flexDirection="row"
-				justifyContent="space-between"
 				backgroundColor={color("backgroundPanel")}
+				style={{
+					height: 1,
+					flexShrink: 0,
+					flexDirection: "row",
+					alignItems: "center",
+					paddingLeft: 1,
+					paddingRight: 1,
+				}}
 			>
-				<text fg={color("primary")}> agentic-coding v2 · {current().page}</text>
-				<text
-					fg={status() === "connected" ? color("success") : color("warning")}
-				>
-					{status()} {busy() ? "· pending" : ""}{" "}
+				<text fg={color("text")} attributes={TextAttributes.BOLD}>
+					AGENTIC CODING
 				</text>
+				<box style={{ flexGrow: 1 }} />
+				<Show when={status() !== "connected" || busy()}>
+					<text fg={color("textMuted")} attributes={TextAttributes.DIM}>
+						{status()} {busy() ? "· pending " : " "}
+					</text>
+				</Show>
+				<Badge text={current().page} highlight="accent" />
 			</box>
 			<box flexDirection="row" flexGrow={1} minHeight={0}>
-				<box
-					width={dimensions().width < 100 ? 22 : 30}
-					flexDirection="column"
-					border={["right"]}
-					borderColor={color("border")}
-				>
-					<text fg={color("textMuted")}> SESSIONS & FEATURES</text>
-					<select
-						flexGrow={1}
-						focused={current().focus === "sessions"}
-						options={sidebarOptions()}
-						showDescription={false}
-						textColor={color("text")}
-						selectedBackgroundColor={color("backgroundElement")}
-						onSelect={(_index, option) => {
-							const value = option?.value;
-							if (typeof value !== "string") return;
-							if (value === "tree:children") {
-								navigation.current.expanded = current().expanded.includes(
-									"sidebar:children",
-								)
-									? current().expanded.filter(
-											(key) => key !== "sidebar:children",
-										)
-									: [...current().expanded, "sidebar:children"];
-								update();
-							} else if (value.startsWith("mode:"))
-								go(
-									(["opencode", "pi", "pi-durable", "orchestrator"] as Page[])[
-										Number(value.slice(5))
-									] ?? "orchestrator",
-								);
-							else if (value.startsWith("session:"))
-								go("session", value.slice(8));
-							else go(value as Page);
-						}}
-					/>
-				</box>
+				<WorkspaceNavigation
+					active={
+						current().focus === "sessions" && !paletteOpen() && !helpOpen()
+					}
+					entries={sidebarOptions()}
+					onWidth={setWorkspaceWidth}
+					selected={
+						current().page === "session"
+							? `session:${current().resource}`
+							: ["opencode", "pi", "pi-durable", "orchestrator"].includes(
+										current().page,
+									)
+								? `mode:${["opencode", "pi", "pi-durable", "orchestrator"].indexOf(current().page)}`
+								: current().page
+					}
+					focus={() => {
+						navigation.current.focus = "sessions";
+						update();
+					}}
+					open={(value) => {
+						if (value.startsWith("bookmark:")) {
+							remember();
+							viewpoints.restore(value.slice(9), navigation);
+							restore();
+						} else if (value === "tree:children") {
+							navigation.current.expanded = current().expanded.includes(
+								"sidebar:children",
+							)
+								? current().expanded.filter((key) => key !== "sidebar:children")
+								: [...current().expanded, "sidebar:children"];
+							update();
+						} else if (value.startsWith("mode:"))
+							go(
+								(["opencode", "pi", "pi-durable", "orchestrator"] as Page[])[
+									Number(value.slice(5))
+								] ?? "orchestrator",
+							);
+						else if (value.startsWith("session:"))
+							go("session", value.slice(8));
+						else go(value as Page);
+					}}
+				/>
 				<box flexGrow={1} minWidth={0} flexDirection="column">
+					<BreadcrumbRow
+						ancestors={ancestors()}
+						focusedIndex={-1}
+						onNavigate={(route) => go(route.page, route.resource)}
+					/>
+					<box height={1} flexShrink={0} />
 					<scrollbox
 						ref={(value) => {
 							scroll = value;
 						}}
 						flexGrow={1}
 						minHeight={0}
-						padding={1}
+						paddingLeft={1}
+						paddingRight={1}
 						scrollY={true}
 						focused={current().focus === "content" && !isTranscript()}
 					>
@@ -2450,7 +2533,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							}
 						>
 							<For each={help}>{(line) => <text>{line}</text>}</For>
-							<For each={Object.entries(keybindCatalogs)}>
+							<For
+								each={Object.entries({
+									...keybindCatalogs,
+									workspaces: workspaceNavigationKeybinds,
+									agents: nativeAgentNavigationKeybinds,
+								})}
+							>
 								{([name, catalog]) => (
 									<box flexDirection="column">
 										<text fg={color("primary")}>{name} keybindings</text>
@@ -2514,64 +2603,60 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						/>
 					</box>
 				</box>
-				<box
-					width={dimensions().width < 100 ? 20 : 27}
-					flexDirection="column"
-					border={["left"]}
-					borderColor={color("border")}
-				>
-					<text fg={color("textMuted")}> VIEWPOINTS</text>
-
-					<select
-						flexGrow={1}
-						focused={current().focus === "viewpoints"}
-						options={bookmarks().map((item) => ({
-							name: item.name,
-							description: `${item.view.page} ${item.view.resource ?? ""}${item.nativeRevision === undefined ? " · memory/draft" : ` · rev ${item.nativeRevision} · UI-only pin`}`,
-							value: item.id,
-						}))}
-						textColor={color("text")}
-						selectedBackgroundColor={color("backgroundElement")}
-						onSelect={(_index, option) => {
-							if (typeof option?.value !== "string") return;
-							remember();
-							viewpoints.restore(option.value, navigation);
-							restore();
-						}}
-					/>
-					<text wrapMode="word" fg={color("textMuted")}>
-						Memory bookmarks keep drafts; native pins never persist drafts,
-						diagnostics or confirmations. /pin NAME · /pins · /repin UUID@REV
-						NAME · /unpin UUID@REV. Cached pins may be stale; restoration never
-						executes/adopts missing resources.
-					</text>
-				</box>
+				<NativeAgentNavigation
+					sessions={state()?.sessions ?? []}
+					tasks={state()?.tasks ?? []}
+					active={
+						current().focus === "viewpoints" && !paletteOpen() && !helpOpen()
+					}
+					connected={status() === "connected"}
+					widthLimit={Math.max(0, dimensions().width - workspaceWidth() - 24)}
+					selected={current().page === "session" ? current().resource : null}
+					focus={() => {
+						navigation.current.focus = "viewpoints";
+						update();
+					}}
+					open={(id) => {
+						if (state()?.sessions.some((session) => session.id === id))
+							go("session", String(id));
+					}}
+				/>
 			</box>
-			<text wrapMode="word" fg={color("textMuted")}>
-				{keybindFooter(
-					paletteOpen()
-						? paletteKeybinds
-						: settingsEditing()
-							? [...shellKeybinds, ...editorKeybinds]
-							: [
-									...shellKeybinds,
-									...actionKeybinds,
-									...(isTranscript() ? transcriptKeybinds : []),
-									...(current().focus === "content" ? promptKeybinds : []),
-								],
-				)}
-			</text>
-			<text
-				height={1}
-				fg={
-					notice() || connectionError() ? color("warning") : color("textMuted")
-				}
-			>
-				{" "}
-				{notice() ??
-					connectionError() ??
-					"Native observations only · actions require explicit submission"}
-			</text>
+			<StatusBar
+				keybinds={(paletteOpen()
+					? paletteKeybinds
+					: settingsEditing()
+						? [...shellKeybinds, ...editorKeybinds]
+						: [
+								...shellKeybinds,
+								...actionKeybinds,
+								...(isTranscript() ? transcriptKeybinds : []),
+								...(current().focus === "content" ? promptKeybinds : []),
+								...(current().focus === "sessions"
+									? workspaceNavigationKeybinds
+									: []),
+								...(current().focus === "viewpoints"
+									? nativeAgentNavigationKeybinds
+									: []),
+							]
+				)
+					.filter((binding) => !binding.standard)
+					.map((binding) => ({ ...binding, key: keyLabel(binding.key) }))}
+				showHelp={!paletteOpen()}
+			/>
+			<Show when={notice() || connectionError()}>
+				<text
+					height={1}
+					fg={
+						notice() || connectionError()
+							? color("warning")
+							: color("textMuted")
+					}
+				>
+					{" "}
+					{notice() ?? connectionError()}
+				</text>
+			</Show>
 		</box>
 	);
 }

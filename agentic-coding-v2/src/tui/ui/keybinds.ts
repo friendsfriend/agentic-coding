@@ -58,8 +58,8 @@ export const shellKeybinds: Keybind[] = [
 	{
 		key: "ctrl+v",
 		cmd: "shell.viewpoints",
-		action: "Focus viewpoints sidebar",
-		short: "viewpoints",
+		action: "Focus native agents sidebar",
+		short: "agents",
 	},
 	{
 		key: "escape",
