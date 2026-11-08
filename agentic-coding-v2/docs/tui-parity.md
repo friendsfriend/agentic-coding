@@ -435,6 +435,26 @@ content and bindings, not permission to replace the original presentation.
   created. Evidence/body families, reading anchors and visual parity remain
   unfinished/unverified; no renderer or presenter tests are added.
 
+## Current-window reading-place and bottom-follow pass
+
+- Register the mounted transcript's existing identity-keyed header anchors with
+  the shell. Registration/cleanup is instance-fenced and creates no native
+  session/task binding, persisted authority or new view fields.
+- Remember a header identity and its screen-space offset while away from the
+  bottom. After layout, correct growth/reflow above that header without changing
+  transcript selection. Missing/destroyed anchors retain the numeric position
+  before sampling the current visible window; no history is fetched or fabricated.
+- Once the observed viewport reaches the bottom, follow subsequent height growth.
+  Stable-geometry scroll movement and explicit row reveal stop following and
+  resample the reading place. Navigation/registration resets the transient state;
+  help/palette suspend corrections. Avoid redundant bottom scroll writes.
+- This is header-offset anchoring inside the supplied bounded native window,
+  not text-line anchoring or original frozen-window/load-older parity. Initial
+  asynchronous saved-position placement, simultaneous reader movement/layout
+  changes, timeline/latest controls and persistent follow-mode restoration still
+  need work and interaction verification. No visual acceptance or renderer tests
+  are claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

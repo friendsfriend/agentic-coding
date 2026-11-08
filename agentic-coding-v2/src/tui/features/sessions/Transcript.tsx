@@ -7,6 +7,7 @@ import {
 	For,
 	Match,
 	onCleanup,
+	onMount,
 	Show,
 	Switch,
 	untrack,
@@ -43,11 +44,18 @@ export function Transcript(props: {
 	selected: string | null;
 	select: (id: string) => void;
 	reveal: (node: BoxRenderable) => void;
+	registerReadingRows?: (
+		rows: ReadonlyMap<string, BoxRenderable>,
+	) => () => void;
 	expanded: string[];
 	toggle: (id: string) => void;
 }) {
 	const keymap = useKeymap();
 	const anchors = new Map<string, BoxRenderable>();
+	onMount(() => {
+		const unregister = props.registerReadingRows?.(anchors);
+		if (unregister) onCleanup(unregister);
+	});
 	const anchor = (id: string) => {
 		let previous: BoxRenderable | undefined;
 		return (node: BoxRenderable | null) => {

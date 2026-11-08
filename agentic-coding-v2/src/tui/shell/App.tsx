@@ -238,6 +238,29 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const cursorBlink = createPromptCursorBlink();
 	const renderer = useRenderer();
 	let pendingReveal: BoxRenderable | undefined;
+	let readingRows: ReadonlyMap<string, BoxRenderable> | null = null;
+	let readingAnchor: { key: string; offset: number } | null = null;
+	let followingBottom = false;
+	let sampledScroll: {
+		top: number;
+		height: number;
+		width: number;
+		viewport: number;
+	} | null = null;
+	const resetReadingPlace = () => {
+		readingAnchor = null;
+		followingBottom = false;
+		sampledScroll = null;
+	};
+	const registerReadingRows = (rows: ReadonlyMap<string, BoxRenderable>) => {
+		readingRows = rows;
+		resetReadingPlace();
+		return () => {
+			if (readingRows !== rows) return;
+			readingRows = null;
+			resetReadingPlace();
+		};
+	};
 	// The mirror wakes only presentation; native admission still reads the actual
 	// editor buffer. Programmatic restores/clears synchronize both surfaces.
 	const writePrompt = (text: string) => {
@@ -285,6 +308,85 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					scroll.scrollTo(
 						Math.max(0, top + node.height - scroll.viewport.height),
 					);
+			}
+			if (
+				scroll &&
+				!scroll.isDestroyed &&
+				readingRows &&
+				readingRows.size > 0 &&
+				!helpOpen() &&
+				!paletteOpen()
+			) {
+				const previous = sampledScroll;
+				const geometryChanged =
+					previous &&
+					(previous.height !== scroll.scrollHeight ||
+						previous.width !== scroll.viewport.width ||
+						previous.viewport !== scroll.viewport.height);
+				const readerMoved =
+					node !== undefined ||
+					(previous && !geometryChanged && previous.top !== scroll.scrollTop);
+				if (readerMoved) {
+					readingAnchor = null;
+					followingBottom = false;
+				}
+				if (!readerMoved && previous) {
+					if (followingBottom) {
+						const bottom = Math.max(
+							0,
+							scroll.scrollHeight - scroll.viewport.height,
+						);
+						if (scroll.scrollTop !== bottom) scroll.scrollTo(bottom);
+					} else if (readingAnchor) {
+						const held = readingRows.get(readingAnchor.key);
+						if (held && !held.isDestroyed && held.visible) {
+							const offset = held.screenY - scroll.viewport.screenY;
+							if (Number.isFinite(offset) && offset !== readingAnchor.offset) {
+								const desired =
+									scroll.scrollTop + offset - readingAnchor.offset;
+								const target = Math.min(
+									Math.max(0, scroll.scrollHeight - scroll.viewport.height),
+									Math.max(0, desired),
+								);
+								if (target !== scroll.scrollTop) scroll.scrollTo(target);
+								if (target !== desired) readingAnchor = null;
+							}
+						} else readingAnchor = null;
+					}
+				}
+				followingBottom =
+					scroll.scrollTop >=
+					Math.max(0, scroll.scrollHeight - scroll.viewport.height);
+				if (followingBottom) readingAnchor = null;
+				else if (!readingAnchor) {
+					const viewportTop = scroll.viewport.screenY;
+					const viewportBottom = viewportTop + scroll.viewport.height;
+					const rows = [...readingRows]
+						.filter(
+							([, row]) =>
+								!row.isDestroyed &&
+								row.visible &&
+								row.height > 0 &&
+								Number.isFinite(row.screenY),
+						)
+						.sort((a, b) => a[1].screenY - b[1].screenY);
+					const preceding = rows
+						.filter(([, row]) => row.screenY <= viewportTop)
+						.at(-1);
+					const candidate =
+						preceding ?? rows.find(([, row]) => row.screenY < viewportBottom);
+					if (candidate)
+						readingAnchor = {
+							key: candidate[0],
+							offset: candidate[1].screenY - scroll.viewport.screenY,
+						};
+				}
+				sampledScroll = {
+					top: scroll.scrollTop,
+					height: scroll.scrollHeight,
+					width: scroll.viewport.width,
+					viewport: scroll.viewport.height,
+				};
 			}
 			const focused = prompt?.focused ?? false;
 			if (focused && !cursorFocused) cursorBlink.reset();
@@ -370,6 +472,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	};
 	const restore = () => {
 		pendingReveal = undefined;
+		resetReadingPlace();
 		setBreadcrumbFocused(false);
 		setCrumbKey(undefined);
 		setProviderCandidate(null);
@@ -2333,6 +2436,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											update();
 										}}
 										reveal={reveal}
+										registerReadingRows={registerReadingRows}
 										expanded={current().expanded}
 										toggle={(id) => {
 											navigation.current.expanded = current().expanded.includes(
