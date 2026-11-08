@@ -860,6 +860,21 @@ content and bindings, not permission to replace the original presentation.
   added. Integrated load-older and interactive/visual acceptance remain unfinished;
   no renderer/helper tests are added.
 
+## Codemode supplied JavaScript source body
+
+- Restore the original codemode source discriminator (`arguments.code` as a
+  string) in the local requested-source body. Render the exact supplied bytes
+  as highlighted JavaScript, retaining the existing independent source fold
+  and partial/live-slot/retained-intent caveats.
+- Missing/non-string code does not synthesize a script. Arguments and native
+  result/details remain available through their existing read-only bodies.
+- This is source presentation only, not the complete original codemode view:
+  do not reconstruct nested calls, elapsed time, interruption, completion or
+  counts from output strings. Native nested-slot and pairing rules remain the
+  only authority for those observations; no execution or replay is introduced.
+- Remaining specialized families, integrated load-older and interactive/visual
+  acceptance remain unfinished. No renderer/helper tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

@@ -197,7 +197,7 @@ export function ToolCard(props: {
 				label: "Requested SQL",
 			};
 		if (
-			["browser_run_script", "browser_eval"].includes(name()) &&
+			["browser_run_script", "browser_eval", "codemode"].includes(name()) &&
 			typeof args().code === "string"
 		)
 			return {
