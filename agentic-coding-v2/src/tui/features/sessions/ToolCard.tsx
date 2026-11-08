@@ -240,13 +240,26 @@ export function ToolCard(props: {
 		}
 	});
 	const requestedEdits = createMemo(() => {
-		const edits = args().edits;
-		if (name() !== "edit" || !Array.isArray(edits)) return [];
-		return edits.flatMap((item: unknown, index: number) => {
+		if (name() !== "edit") return [];
+		const value = args();
+		const edits = value.edits;
+		const supplied = Array.isArray(edits)
+			? edits.map((entry: unknown, index: number) => ({
+					key: String(index),
+					label: `replacement ${index + 1}`,
+					entry,
+				}))
+			: [{ key: "object", label: "single-object replacement", entry: edits }];
+		supplied.push({
+			key: "top-level",
+			label: "top-level replacement",
+			entry: value,
+		});
+		return supplied.flatMap(({ key, label, entry: item }) => {
 			const entry = object(item);
 			return typeof entry.oldText === "string" &&
 				typeof entry.newText === "string"
-				? [{ index, oldText: entry.oldText, newText: entry.newText }]
+				? [{ key, label, oldText: entry.oldText, newText: entry.newText }]
 				: [];
 		});
 	});
@@ -518,10 +531,10 @@ export function ToolCard(props: {
 								{(edit) => (
 									<>
 										{fold(
-											`:replacement:${edit.index}`,
-											`${props.partial ? "Partial generated" : props.liveOnly ? "Live slot" : "Requested"} replacement ${edit.index + 1}`,
+											`:replacement:${edit.key}`,
+											`${props.partial ? "Partial generated" : props.liveOnly ? "Live slot" : "Requested"} ${edit.label}`,
 										)}
-										<Show when={open(`:replacement:${edit.index}`)}>
+										<Show when={open(`:replacement:${edit.key}`)}>
 											<text fg={color("textMuted")} wrapMode="word">
 												Supplied replacement intent — not an applied diff, live
 												file snapshot or file-line range.

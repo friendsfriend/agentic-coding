@@ -1004,6 +1004,22 @@ content and bindings, not permission to replace the original presentation.
   integrated load-older and visual/interactive acceptance remain unfinished.
   No renderer/helper tests or native/provider calls are added.
 
+## Native single-object and top-level supplied edit forms
+
+- Inspect the installed native `createEditTool` contract: it accepts array edits,
+  a single edit object and top-level old/new fields while preserving original
+  arguments. Display supplied single-object/top-level string pairs alongside
+  array fragments without importing or executing its argument-repair machinery.
+- Keep array disclosure suffixes stable; single-object and top-level forms use
+  distinct local suffixes/labels. Both forms may be shown when both are supplied:
+  this represents raw intent, not the SDK's prepared/merged operation or outcome.
+- Stringified `edits` remain opaque in complete Arguments, even though the SDK
+  can prepare them. Missing/non-string pairs produce no fragment; all displayed
+  bytes and explicit empty-string annotations retain the prior fidelity policy.
+- No normalization, parsing, deduplication, applied diff, file read, operation or
+  authority is inferred. Specialized/nested-call composition, integrated load-older
+  and interactive/visual acceptance remain unfinished. No renderer/helper tests.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
