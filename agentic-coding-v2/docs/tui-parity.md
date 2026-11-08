@@ -1033,6 +1033,21 @@ content and bindings, not permission to replace the original presentation.
   No renderer/helper tests or filesystem/provider operations are introduced;
   integrated load-older and interactive/visual acceptance remain unfinished.
 
+## Supplied shell-command and timeout fidelity
+
+- Keep the requested Bash syntax body only for explicit string command bytes.
+  Missing/non-string commands receive an unavailable caveat; explicit empty
+  strings remain displayable with a distinct passive annotation. Complete
+  Arguments remain the source for other values; no command is reconstructed.
+- Label partial generation, unlinked live-slot source and retained request source
+  separately. An absent timeout is not presented as a known native default;
+  only supplied finite numbers receive a timeout value label, without asserting
+  that the timeout was valid, admitted or used. Other values stay in Arguments.
+- Retained/live bounded output, dropped-byte/line notices and native status/pairing
+  remain unchanged. No shell execution, renderer/helper tests or authority changes
+  are introduced. Alias composition, integrated load-older and interactive/visual
+  acceptance remain unfinished.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

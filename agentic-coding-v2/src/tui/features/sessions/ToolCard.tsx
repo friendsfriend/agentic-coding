@@ -588,22 +588,44 @@ export function ToolCard(props: {
 								)}
 							</For>
 						</Show>
-						<Show
-							when={name() === "bash" && props.call.arguments !== undefined}
-						>
-							<text fg={color("textMuted")}>
-								Requested shell command ·{" "}
+						<Show when={name() === "bash"}>
+							<text fg={color("textMuted")} wrapMode="word">
+								{props.partial
+									? "Partial generated shell command"
+									: props.liveOnly
+										? "Supplied current-round shell command"
+										: "Requested shell command"}{" "}
+								·{" "}
 								{args().timeout === undefined
-									? "default timeout"
-									: `timeout ${String(args().timeout)}`}
+									? "timeout not supplied in observed arguments"
+									: typeof args().timeout === "number" &&
+											Number.isFinite(args().timeout)
+										? `supplied timeout ${args().timeout}`
+										: "timeout unavailable as a supplied finite number; see Arguments"}
 							</text>
-							<code
-								content={string(args().command)}
-								filetype="bash"
-								syntaxStyle={props.syntax}
-								drawUnstyledText={true}
-								wrapMode="word"
-							/>
+							<Show
+								when={typeof args().command === "string"}
+								fallback={
+									<text fg={color("textMuted")} wrapMode="word">
+										Shell command unavailable as a supplied string; no empty
+										command is inferred. Complete Arguments remain below.
+									</text>
+								}
+							>
+								<Show when={args().command === ""}>
+									<text fg={color("textMuted")} wrapMode="word">
+										Supplied shell command is an explicit empty string — not an
+										execution observation.
+									</text>
+								</Show>
+								<code
+									content={string(args().command)}
+									filetype="bash"
+									syntaxStyle={props.syntax}
+									drawUnstyledText={true}
+									wrapMode="word"
+								/>
+							</Show>
 						</Show>
 						<Show when={requestedSource()}>
 							{(source) => (
