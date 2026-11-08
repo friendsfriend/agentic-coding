@@ -49,6 +49,55 @@ export function uiWorkspaceLayout(value: unknown): UiWorkspaceLayout {
 			: {}),
 	};
 }
+export type UiResourcePreferences = {
+	category: string | null;
+	order: "inventory" | "identity";
+	pins: string[];
+	pinnedOnly: boolean;
+};
+/** Display-only resource identities, not leases, task IDs or execution configuration. */
+export function uiResourcePreferences(
+	value: unknown,
+	page: unknown,
+): UiResourcePreferences {
+	const data = record(value);
+	if (
+		!["environments", "schedules"].includes(String(page)) ||
+		Object.keys(data).length !== 4 ||
+		Object.keys(data).some(
+			(key) => !["category", "order", "pins", "pinnedOnly"].includes(key),
+		) ||
+		!(
+			data.category === null ||
+			(typeof data.category === "string" &&
+				data.category.length > 0 &&
+				data.category.length <= 64 &&
+				data.category.trim() === data.category &&
+				[...data.category].every(
+					(character) =>
+						character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+				))
+		) ||
+		(data.order !== "inventory" && data.order !== "identity") ||
+		typeof data.pinnedOnly !== "boolean" ||
+		!Array.isArray(data.pins) ||
+		data.pins.length > 64 ||
+		!data.pins.every(
+			(id) =>
+				typeof id === "string" &&
+				id.length > 0 &&
+				id.length <= 256 &&
+				id.trim() === id &&
+				[...id].every(
+					(character) =>
+						character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+				),
+		) ||
+		new Set(data.pins).size !== data.pins.length
+	)
+		throw new Error("Invalid UI-only resource preferences");
+	return structuredClone(data) as UiResourcePreferences;
+}
 export type UiView = {
 	page: UiPage;
 	resource: string | null;
@@ -60,6 +109,7 @@ export type UiView = {
 	focus: "sessions" | "content" | "viewpoints";
 	transcriptFollow?: { id: number; following: boolean };
 	workspace?: UiWorkspaceLayout;
+	resourcePreferences?: UiResourcePreferences;
 };
 export type NativeViewpoint = {
 	id: string;
@@ -86,7 +136,8 @@ export function uiView(value: unknown): UiView {
 			(key) =>
 				!keys.includes(key) &&
 				key !== "transcriptFollow" &&
-				key !== "workspace",
+				key !== "workspace" &&
+				key !== "resourcePreferences",
 		) ||
 		keys.some((key) => !Object.hasOwn(data, key)) ||
 		!uiPages.includes(data.page as UiPage) ||
@@ -112,6 +163,8 @@ export function uiView(value: unknown): UiView {
 	)
 		throw new Error("Invalid UI-only viewpoint state");
 	if (Object.hasOwn(data, "workspace")) uiWorkspaceLayout(data.workspace);
+	if (Object.hasOwn(data, "resourcePreferences"))
+		uiResourcePreferences(data.resourcePreferences, data.page);
 	if (Object.hasOwn(data, "transcriptFollow")) {
 		const follow = record(data.transcriptFollow);
 		if (

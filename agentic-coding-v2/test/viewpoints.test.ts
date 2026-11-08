@@ -13,6 +13,7 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 		client = new ClientConnection(host.client);
 	const id = crypto.randomUUID(),
 		followId = crypto.randomUUID(),
+		resourceId = crypto.randomUUID(),
 		view: UiView = {
 			page: "tasks",
 			resource: "missing-task",
@@ -24,6 +25,18 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			focus: "content",
 			workspace: { mode: "permanent", side: "right" },
 		};
+	const resourceView: UiView = {
+		...view,
+		page: "environments",
+		resource: "missing-app",
+		filter: "web",
+		resourcePreferences: {
+			category: "app",
+			order: "identity",
+			pins: ["missing-app", "web"],
+			pinnedOnly: true,
+		},
+	};
 	let revision = 0;
 	try {
 		client.connect();
@@ -232,6 +245,144 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 				}),
 			).rejects.toThrow("Native operation refused");
 		}
+		for (const resourcePreferences of [
+			null,
+			[],
+			{},
+			{
+				category: null,
+				order: "identity",
+				pins: [],
+				pinnedOnly: true,
+				execute: true,
+			},
+			{
+				category: "app",
+				order: "identity",
+				pins: ["web", "web"],
+				pinnedOnly: false,
+			},
+			{
+				category: "x".repeat(65),
+				order: "identity",
+				pins: [],
+				pinnedOnly: false,
+			},
+			{
+				category: null,
+				order: "inventory",
+				pins: ["x".repeat(257)],
+				pinnedOnly: false,
+			},
+			{
+				category: null,
+				order: "inventory",
+				pins: [{ id: "web", owner: 1 }],
+				pinnedOnly: false,
+			},
+			{ category: null, order: "inventory", pins: [] },
+			{ category: null, order: "newest", pins: [], pinnedOnly: false },
+			{ category: null, order: "inventory", pins: [""], pinnedOnly: false },
+			{ category: null, order: "inventory", pins: [" web"], pinnedOnly: false },
+			{
+				category: null,
+				order: "inventory",
+				pins: ["web\n"],
+				pinnedOnly: false,
+			},
+			{
+				category: null,
+				order: "inventory",
+				pins: Array.from({ length: 65 }, (_, i) => `app-${i}`),
+				pinnedOnly: false,
+			},
+			{ category: null, order: "inventory", pins: [], pinnedOnly: "true" },
+			{
+				category: null,
+				order: "inventory",
+				pins: [],
+				pinnedOnly: false,
+				approval: "approve:digest",
+			},
+		]) {
+			await expect(
+				client.call("viewpoints.save", {
+					id: crypto.randomUUID(),
+					name: "Invalid resource preferences",
+					revision: 0,
+					view: { ...resourceView, resourcePreferences } as unknown as UiView,
+				}),
+			).rejects.toThrow("Native operation refused");
+		}
+		for (const page of ["tasks", "orchestrator", "pi", "settings"] as const)
+			await expect(
+				client.call("viewpoints.save", {
+					id: crypto.randomUUID(),
+					name: "Wrong resource scope",
+					revision: 0,
+					view: { ...resourceView, page },
+				}),
+			).rejects.toThrow("Native operation refused");
+		const resourceSaved = await client.call("viewpoints.save", {
+			id: resourceId,
+			name: "Resource display",
+			revision: 0,
+			view: resourceView,
+		});
+		expect(resourceSaved.view).toEqual(resourceView);
+		const bounded = await client.call("viewpoints.save", {
+			id: resourceId,
+			name: "Resource display",
+			revision: resourceSaved.revision,
+			view: {
+				...resourceView,
+				resourcePreferences: {
+					category: null,
+					order: "inventory",
+					pins: Array.from({ length: 64 }, (_, i) =>
+						i === 0 ? "x".repeat(256) : `missing-${i}`,
+					),
+					pinnedOnly: false,
+				},
+			},
+		});
+		expect(bounded.view.resourcePreferences?.pins).toHaveLength(64);
+		expect(bounded.view.resourcePreferences?.pins[0]?.length).toBe(256);
+		const scheduleDisplay = await client.call("viewpoints.save", {
+			id: resourceId,
+			name: "Resource display",
+			revision: bounded.revision,
+			view: {
+				...resourceView,
+				page: "schedules",
+				resourcePreferences: {
+					category: null,
+					order: "inventory",
+					pins: ["missing-schedule"],
+					pinnedOnly: false,
+				},
+			},
+		});
+		expect(scheduleDisplay.view.resourcePreferences?.pins).toEqual([
+			"missing-schedule",
+		]);
+		await expect(
+			client.call("viewpoints.save", {
+				id: resourceId,
+				name: "Resource display",
+				revision: resourceSaved.revision,
+				view: resourceView,
+			}),
+		).rejects.toThrow("Native operation refused");
+		const restoredResources = await client.call("viewpoints.save", {
+			id: resourceId,
+			name: "Resource display",
+			revision: scheduleDisplay.revision,
+			view: resourceView,
+		});
+		expect(restoredResources.view.resourcePreferences).toEqual(
+			resourceView.resourcePreferences,
+		);
 		expect((await app.snapshot()).tasks).toEqual(before.tasks);
 		expect((await app.snapshot()).schedules).toEqual(before.schedules);
 	} finally {
@@ -241,9 +392,14 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 	await app.close();
 	const reopened = await open();
 	const retained = await readViewpoints(reopened);
-	expect(retained).toHaveLength(2);
+	expect(retained).toHaveLength(3);
 	expect(retained).toEqual(
 		expect.arrayContaining([
+			expect.objectContaining({
+				id: resourceId,
+				name: "Resource display",
+				view: resourceView,
+			}),
 			expect.objectContaining({
 				id,
 				revision,

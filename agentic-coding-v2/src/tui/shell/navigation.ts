@@ -1,5 +1,8 @@
 import type { Data } from "../../protocol/index.ts";
-import type { UiWorkspaceLayout } from "../../protocol/viewpoints.ts";
+import type {
+	UiResourcePreferences,
+	UiWorkspaceLayout,
+} from "../../protocol/viewpoints.ts";
 export type Page =
 	| "opencode"
 	| "pi"
@@ -27,6 +30,7 @@ export type View = {
 	draft: string;
 	detail: Data;
 	workspace: UiWorkspaceLayout;
+	resourcePreferences?: UiResourcePreferences;
 };
 export function view(
 	page: Page = "orchestrator",

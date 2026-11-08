@@ -38,6 +38,8 @@ import type {
 } from "../../protocol/provider-actions.ts";
 import type { StandaloneInventory } from "../../protocol/standalone.ts";
 import {
+	type UiResourcePreferences,
+	uiResourcePreferences,
 	uiView,
 	uiWorkspaceFilter,
 	uiWorkspaceLayout,
@@ -1483,6 +1485,40 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				if (epoch === providerEpoch) setProviderError(error.message);
 			});
 	});
+	const resourcePreferences = (): UiResourcePreferences =>
+		current().resourcePreferences ?? {
+			category: null,
+			order: "inventory",
+			pins: [],
+			pinnedOnly: false,
+		};
+	const changeResourcePreferences = (next: UiResourcePreferences): boolean => {
+		if (
+			busy() ||
+			helpOpen() ||
+			settingsEditing() ||
+			(paletteOpen() && !localChoice())
+		)
+			return false;
+		try {
+			const checked = uiResourcePreferences(next, current().page);
+			const selected = rows().find(rowSelected);
+			if (
+				navigation.current.resource === null &&
+				selected &&
+				rows().filter((row) => row.id === selected.id).length === 1
+			)
+				navigation.current.resource = String(selected.id);
+			navigation.current.resourcePreferences = checked;
+			update();
+			return true;
+		} catch (cause) {
+			setNotice(
+				cause instanceof Error ? cause.message : "Resource preference refused",
+			);
+			return false;
+		}
+	};
 	const rows = createMemo(() => {
 		const snapshot = state(),
 			selected = current();
@@ -1535,6 +1571,30 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					.includes(selected.filter.toLowerCase()),
 			);
 		if (selected.sort === "newest") rows = [...rows].reverse();
+		if (selected.page === "environments" || selected.page === "schedules") {
+			const preferences = resourcePreferences();
+			if (preferences.category !== null)
+				rows = rows.filter(
+					(row) =>
+						(selected.page === "environments" ? row.kind : row.state) ===
+						preferences.category,
+				);
+			if (preferences.pinnedOnly)
+				rows = rows.filter((row) => preferences.pins.includes(String(row.id)));
+			if (preferences.order === "identity")
+				rows = rows
+					.map((row, index) => ({ row, index }))
+					.sort(
+						(a, b) =>
+							String(a.row.id).localeCompare(String(b.row.id)) ||
+							a.index - b.index,
+					)
+					.map(({ row }) => row);
+			rows = [
+				...rows.filter((row) => preferences.pins.includes(String(row.id))),
+				...rows.filter((row) => !preferences.pins.includes(String(row.id))),
+			];
+		}
 		return rows;
 	});
 	const rowSelected = (row: Data, index: number) =>
@@ -2332,6 +2392,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								scroll: source.scroll,
 								focus: source.focus,
 								workspace: source.workspace,
+								...(source.resourcePreferences
+									? { resourcePreferences: source.resourcePreferences }
+									: {}),
 								...(((source.page === "orchestrator" &&
 									source.resource === null) ||
 									source.page === "session") &&
@@ -2381,13 +2444,28 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					clear();
 					update();
 				} else if (command === "filter" || command === "sort") {
-					if (command === "filter") navigation.current.filter = args;
-					else {
+					const resources =
+						current().page === "environments" || current().page === "schedules";
+					const selectedResource = resources
+						? rows().find(rowSelected)
+						: undefined;
+					if (command === "filter") {
+						if (args.length > 256)
+							throw new Error("Filter is limited to 256 characters");
+						navigation.current.filter = args;
+					} else {
 						if (!["default", "newest"].includes(args))
 							throw new Error("Sort accepts default or newest");
 						navigation.current.sort = args;
 					}
-					navigation.current.selection = 0;
+					if (
+						resources &&
+						navigation.current.resource === null &&
+						selectedResource &&
+						rows().filter((row) => row.id === selectedResource.id).length === 1
+					)
+						navigation.current.resource = String(selectedResource.id);
+					if (!resources) navigation.current.selection = 0;
 					clear();
 					update();
 				} else if (command === "quit") {
@@ -3702,6 +3780,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								}
 							>
 								<ResourcePanel
+									preferences={resourcePreferences()}
+									changePreferences={changeResourcePreferences}
+									filter={current().filter}
+									inventory={
+										current().page === "schedules"
+											? dataList(state()?.schedules)
+											: dataList(state()?.environments.projects)
+									}
 									scope={workspaceScope()}
 									interactive={workspaceInteractive() && !settingsEditing()}
 									fresh={snapshotFresh()}

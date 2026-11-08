@@ -1394,6 +1394,36 @@ content and bindings, not permission to replace the original presentation.
   mismatch. No helper/renderer/navigation tests or actual app operations are added.
   Full layout, lifecycle and terminal visual acceptance remain unfinished.
 
+## Integrated resource workspace display-state batch
+
+- Resource overview now uses the shared searchable choice frame for matching-row
+  navigation, supplied category selection and inventory/identity ordering. Category
+  labels come from observed environment kinds or schedule states, not invented
+  readiness, activity or engine discovery. Text filtering remains an explicit local
+  `/filter` command, prepared without replacing an existing draft.
+- Add per-view display-only row pins and pinned-only filtering. Pins partition
+  matching rows ahead of unpinned rows while keeping stable order within each group.
+  Identity ordering supersedes `/sort`; inventory ordering respects it. Category,
+  text and pinned-only predicates compose without bypassing any filter. Missing
+  pins remain inert strings and hidden selections remain exact identities rather
+  than silently moving to the next row. Clearing filters can reveal the same row.
+- Preference edits and resource filter/order commands preserve the previously
+  highlighted unambiguous identity. Matching-row search is explicit navigation,
+  does not read a native task or switch to an orchestrator route, and rejects stale
+  inventory/filter/preferences and duplicate identities. Header gestures are
+  retired on display-scope changes and covered controls do not activate.
+- Extend the closed UI-only viewpoint DTO with optional, resource-page-scoped
+  preferences: bounded category, inventory/identity order, at most 64 unique bounded
+  display pins and a boolean pinned-only flag. Existing saved views need no
+  migration. Local bookmarks, Back/Forward and explicit native pin/repin preserve
+  preferences without persisting editor bodies, approval, leases or execution state.
+- Extend the existing authenticated native viewpoint fixture for malformed/extra
+  fields, wrong-page scope, duplicate/oversized/control-bearing identities, schedule
+  and environment round trips, stale revision refusal, reopening and unchanged
+  native tasks/schedules. No renderer/helper/navigation-matrix tests are added.
+- These are functionality and isolation checks, not terminal visual acceptance.
+  Original layout, mixed-height reveal and lifecycle parity remain to be completed.
+
 ## Still required before claiming parity
 
 - Remaining workspace resource filters/pin customization, global preference persistence beyond

@@ -2,6 +2,7 @@ import { record } from "../../protocol/index.ts";
 import {
 	type NativeViewpoint,
 	nativeViewpoint,
+	uiResourcePreferences,
 	uiWorkspaceLayout,
 } from "../../protocol/viewpoints.ts";
 import type { Navigation, View } from "./navigation.ts";
@@ -52,6 +53,8 @@ function checkedView(value: unknown): View {
 		throw new Error(
 			"Configuration/wiki confirmations and comment admission drafts cannot be saved or restored in viewpoints",
 		);
+	if (Object.hasOwn(item, "resourcePreferences"))
+		uiResourcePreferences(item.resourcePreferences, item.page);
 	record(item.detail);
 	if (JSON.stringify(item).length > 128000)
 		throw new Error("Saved view is oversized");
