@@ -172,6 +172,29 @@ content and bindings, not permission to replace the original presentation.
   expose Tab completion while the list is open. Prompt help documents these
   conditional keys without adding a global command-dispatch layer.
 
+## Recorded timing and prompt usage restoration pass
+
+- Port original Stamp and clock/duration/token/cost formats locally. User prompts
+  regain the clock beside their disclosure; thinking headers regain a right-edge
+  clock without changing their folds, selection or committed-partial labels.
+- Tool headers regain right-edge recorded timing. Native SDK result timestamps
+  describe results, not tool starts, so their clocks explicitly say `result`.
+  Optional reported result durations use original millisecond/second/minute
+  formatting and the original ten-second warning threshold; the duplicate raw
+  duration suffix is removed from the status line.
+- Accept only finite, nonnegative recorded numeric fields; invalid date ranges,
+  missing values and string timestamps remain absent. No timestamp is borrowed
+  from another message, commit, task or live slot, and no elapsed-time timer or
+  fabricated start time is introduced. The standalone projection supplies no
+  message timestamps, so its prompt clocks remain absent.
+- Bind the original SessionPrompt right-hand meter to native reported input,
+  output and cost totals. The gateway aggregates only returned history: `window`
+  and `cached window` labels retain that scope, including stale observations.
+  This is not lifetime spend, charged billing, active-context sizing or tokens/s.
+- Unknown context-window/percentage and generation timing are not inferred from
+  aggregate usage. Cache-token totals remain native source data, not guessed
+  current context. Remaining progress/context composition is tracked below.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
@@ -181,7 +204,8 @@ content and bindings, not permission to replace the original presentation.
   modal parity.
 - Remaining orchestrator/durable transcript composition: original viewport/window
   anchoring, Mermaid diagram rendering, remaining specialized tool families and
-  file/shell header/section composition, timestamps, usage/progress arrangement,
+  file/shell header/section composition, remaining timing coverage and
+  progress/context arrangement,
   remaining prompt history details and model/thinking/argument picker behavior.
 - Remaining standalone detail/header, profile-picker and focus composition;
   its independent native identities must never alias durable conversations.

@@ -6,6 +6,7 @@ import { dataList } from "../../client/connection.ts";
 import { useHover } from "../../presentation/components/mouse/useHover.ts";
 import { useTap } from "../../presentation/components/mouse/useTap.ts";
 import { Spinner } from "../../presentation/components/Spinner.tsx";
+import { Stamp } from "../../presentation/components/Stamp.tsx";
 import { uiColors } from "../../presentation/theme/colors.ts";
 import { ImageView } from "../../ui/ImageView.tsx";
 import { StructuredData } from "../../ui/StructuredData.tsx";
@@ -216,6 +217,11 @@ export function ToolCard(props: {
 							{name()}
 							{summary() ? ` · ${summary()}` : ""}
 						</text>
+						<Stamp
+							timestamp={props.result?.timestamp}
+							durationMs={props.result?.durationMs}
+							clockLabel="result"
+						/>
 					</box>
 					<text
 						fg={
@@ -226,10 +232,6 @@ export function ToolCard(props: {
 						wrapMode="word"
 					>
 						{status()}
-						{typeof props.result?.durationMs === "number" &&
-						Number.isFinite(props.result.durationMs)
-							? ` · reported ${props.result.durationMs} ms`
-							: ""}
 					</text>
 					<Show when={props.liveOnly}>
 						<text fg={color("textMuted")}>

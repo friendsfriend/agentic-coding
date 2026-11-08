@@ -77,6 +77,10 @@ import {
 import { SessionPrompt } from "../presentation/components/SessionPrompt.tsx";
 import { StatusBar } from "../presentation/components/StatusBar.tsx";
 import {
+	formatCost,
+	formatTokenCount,
+} from "../presentation/components/transcriptFormat.ts";
+import {
 	WorkspaceNavigation,
 	workspaceNavigationKeybinds,
 } from "../presentation/components/WorkspaceNavigation.tsx";
@@ -698,6 +702,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			? current().expanded.filter((key) => key !== id)
 			: [...current().expanded, id];
 		update();
+	};
+	const promptUsage = () => {
+		const value = transcript();
+		if (!isTranscript() || !value) return undefined;
+		// The gateway totals only the returned history window. They are neither
+		// active context size nor a lifetime/billing estimate.
+		const scope = observation() === "watching" ? "window" : "cached window";
+		return `${scope} ${formatCost(value.usage.cost)} · tok ${formatTokenCount(value.usage.input)}→${formatTokenCount(value.usage.output)}`;
 	};
 	const prepareCommand = (command: string) => {
 		remember();
@@ -2677,6 +2689,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						/>
 					</Show>
 					<SessionPrompt
+						meter={promptUsage()}
 						role={
 							current().page === "orchestrator"
 								? "Orchestrator"

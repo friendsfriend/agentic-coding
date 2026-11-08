@@ -21,6 +21,7 @@ import { AssistantMarkdown } from "../../presentation/components/AssistantMarkdo
 import { MarkdownViewer } from "../../presentation/components/MarkdownViewer.tsx";
 import { useMarkdownSyntaxStyle } from "../../presentation/components/markdownSyntax.ts";
 import { Spinner } from "../../presentation/components/Spinner.tsx";
+import { Stamp } from "../../presentation/components/Stamp.tsx";
 import { UserPrompt } from "../../presentation/components/UserPrompt.tsx";
 import { createKeyedItems } from "../../presentation/components/utils/keyedItems.ts";
 import { ImageView } from "../../ui/ImageView.tsx";
@@ -459,6 +460,7 @@ export function Transcript(props: {
 								>
 									<UserPrompt
 										text={text(message())}
+										timestamp={message().timestamp}
 										expanded={props.expanded.includes(
 											String(message().identity),
 										)}
@@ -541,6 +543,8 @@ export function Transcript(props: {
 																<text fg={color("textMuted")}> </text>
 															</Show>
 															<text
+																flexGrow={1}
+																minWidth={0}
 																fg={
 																	message().nativePartial === true
 																		? color("textMuted")
@@ -558,6 +562,7 @@ export function Transcript(props: {
 																	? "Thinking… · committed partial"
 																	: "Thinking… · retained"}
 															</text>
+															<Stamp timestamp={message().timestamp} />
 														</box>
 													</TranscriptHeader>
 													<Show when={props.expanded.includes(identity)}>
