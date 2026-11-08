@@ -15,6 +15,11 @@ import {
 	type SuppliedBrowserSection,
 	ToolBrowserObservation,
 } from "./ToolBrowserObservation.tsx";
+import {
+	ToolReadBody,
+	ToolShellBody,
+	ToolWriteBody,
+} from "./ToolByteBodies.tsx";
 import { ToolDialogue } from "./ToolDialogue.tsx";
 import {
 	type SuppliedEditReplacement,
@@ -490,68 +495,26 @@ export function ToolCard(props: {
 				<Show when={open()}>
 					<box flexDirection="column" gap={1} paddingTop={1}>
 						<Show when={name() === "read" && path() && props.result}>
-							<Show
-								when={props.result?.isError !== true}
-								fallback={
-									<text fg={color("error")} wrapMode="word">
-										{output()}
-									</text>
+							<ToolReadBody
+								path={path()}
+								file={readProjection().file}
+								notice={readProjection().notice}
+								startLine={
+									typeof args().offset === "number" ? Number(args().offset) : 1
 								}
-							>
-								<Show when={readProjection().file !== null}>
-									<FileContent
-										path={path()}
-										content={readProjection().file ?? ""}
-										syntax={props.syntax}
-										startLine={
-											typeof args().offset === "number"
-												? Number(args().offset)
-												: 1
-										}
-										label="Retained read output — not a live file snapshot"
-									/>
-								</Show>
-								<Show when={readProjection().notice !== null}>
-									<text fg={color("textMuted")} wrapMode="word">
-										{readProjection().file === null
-											? "Retained read text · file-line provenance unavailable; possible SDK annotation kept verbatim"
-											: "Retained SDK-style read annotation · metadata-matched, not a file line"}
-									</text>
-									<text fg={color("text")} wrapMode="word">
-										{readProjection().notice ?? ""}
-									</text>
-								</Show>
-							</Show>
+								failed={props.result?.isError === true}
+								output={output()}
+								syntax={props.syntax}
+							/>
 						</Show>
 						<Show when={name() === "write" && path()}>
-							<Show
-								when={typeof args().content === "string"}
-								fallback={
-									<text fg={color("textMuted")} wrapMode="word">
-										Write content unavailable as a supplied string. Complete
-										Arguments remain below; no empty write is inferred.
-									</text>
-								}
-							>
-								<Show when={args().content === ""}>
-									<text fg={color("textMuted")} wrapMode="word">
-										Supplied write content is an explicit empty string — not
-										proof of an applied write.
-									</text>
-								</Show>
-								<FileContent
-									path={path()}
-									content={string(args().content)}
-									syntax={props.syntax}
-									label={
-										props.partial
-											? "Partial requested write bytes — call still being generated"
-											: props.liveOnly
-												? "Supplied current-round write bytes — no retained intent linked; not a live file snapshot"
-												: "Requested write bytes — not a live file snapshot"
-									}
-								/>
-							</Show>
+							<ToolWriteBody
+								path={path()}
+								content={args().content}
+								partial={props.partial}
+								liveOnly={props.liveOnly}
+								syntax={props.syntax}
+							/>
 						</Show>
 						<Show when={name() === "edit" && path() && patch()}>
 							<FileContent
@@ -584,43 +547,13 @@ export function ToolCard(props: {
 							/>
 						</Show>
 						<Show when={shellSource()}>
-							<text fg={color("textMuted")} wrapMode="word">
-								{props.partial
-									? "Partial generated shell command"
-									: props.liveOnly
-										? "Supplied current-round shell command"
-										: "Requested shell command"}{" "}
-								·{" "}
-								{args().timeout === undefined
-									? "timeout not supplied in observed arguments"
-									: typeof args().timeout === "number" &&
-											Number.isFinite(args().timeout)
-										? `supplied timeout ${args().timeout}`
-										: "timeout unavailable as a supplied finite number; see Arguments"}
-							</text>
-							<Show
-								when={typeof args().command === "string"}
-								fallback={
-									<text fg={color("textMuted")} wrapMode="word">
-										Shell command unavailable as a supplied string; no empty
-										command is inferred. Complete Arguments remain below.
-									</text>
-								}
-							>
-								<Show when={args().command === ""}>
-									<text fg={color("textMuted")} wrapMode="word">
-										Supplied shell command is an explicit empty string — not an
-										execution observation.
-									</text>
-								</Show>
-								<code
-									content={string(args().command)}
-									filetype="bash"
-									syntaxStyle={props.syntax}
-									drawUnstyledText={true}
-									wrapMode="word"
-								/>
-							</Show>
+							<ToolShellBody
+								command={args().command}
+								timeout={args().timeout}
+								partial={props.partial}
+								liveOnly={props.liveOnly}
+								syntax={props.syntax}
+							/>
 						</Show>
 						<ToolRequestedSource
 							source={requestedSource()}

@@ -1146,6 +1146,26 @@ content and bindings, not permission to replace the original presentation.
   Integrated load-older, nested-call composition and interactive/visual acceptance
   remain unfinished; checks do not establish presentation parity.
 
+## Batched read/write/shell body separation
+
+- Extract all three remaining basic byte bodies together into local
+  `ToolByteBodies`: retained read fragments/annotations/errors, supplied write
+  content and supplied shell command/timeout presentation. Preserve existing
+  labels, phase precedence, unavailable/empty distinctions, syntax, wrapping,
+  order and layout without extra renderer wrappers or listeners.
+- ToolCard retains family admission, valid read-offset/continuation projection,
+  exact diagnostic-footer handling, native pairing/status, retained edit diff
+  gating and all output/disclosure ownership. Body inputs contain only projected
+  bytes/display values, paths, owner-proven read positioning and presentation
+  flags—not native result/progress records, executable handles or client access.
+- Reuse FileContent in the same owning hover context. Shell aliases remain
+  pending-only; compact/live/retained output and native dropped-byte/line notices
+  remain independent. No calls, repairs, file reads or result inference are added.
+- This batch separates read/write/shell together, complementing the already local
+  dialogue/source/edit/browser sections, with one full verification/commit pass.
+  No renderer/helper tests are introduced. Integrated load-older, nested-call
+  composition and interactive/visual acceptance remain unfinished.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
