@@ -1,7 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { type JSX, Show } from "solid-js";
+import { createEffect, type JSX, Show } from "solid-js";
 import { uiColors } from "../theme/colors.ts";
+import type { RowGestureState } from "./mouse/useRowMouse.ts";
+import { useTap } from "./mouse/useTap.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
 
 /** Prompt chrome extracted from the original AgentSessionView. The editor,
@@ -14,7 +16,34 @@ export function SessionPrompt(props: {
 	working: boolean;
 	error?: boolean;
 	meter?: string;
+	scope?: unknown;
+	interactive?: boolean;
+	onModel?: () => void;
+	onThinking?: () => void;
 }) {
+	const modelGesture: RowGestureState = {},
+		thinkingGesture: RowGestureState = {};
+	createEffect(() => {
+		// A header press belongs to this view and these exact observed labels.
+		props.scope;
+		props.model;
+		props.thinking;
+		props.interactive;
+		for (const gesture of [modelGesture, thinkingGesture]) {
+			gesture.down = undefined;
+			gesture.lastTap = undefined;
+		}
+	});
+	const modelTap = useTap(() => props.onModel?.(), {
+		gesture: modelGesture,
+		stopPropagation: true,
+		enabled: () => props.interactive === true && props.onModel !== undefined,
+	});
+	const thinkingTap = useTap(() => props.onThinking?.(), {
+		gesture: thinkingGesture,
+		stopPropagation: true,
+		enabled: () => props.interactive === true && props.onThinking !== undefined,
+	});
 	const model = () => {
 		const value = props.model ?? "";
 		return value.length > 32 ? `${value.slice(0, 31)}…` : value;
@@ -41,6 +70,7 @@ export function SessionPrompt(props: {
 							·
 						</text>
 						<text
+							{...modelTap}
 							fg={uiColors.textPrimary}
 							flexShrink={1}
 							minWidth={0}
@@ -55,6 +85,7 @@ export function SessionPrompt(props: {
 							·
 						</text>
 						<text
+							{...thinkingTap}
 							fg={uiColors.warning}
 							attributes={TextAttributes.BOLD}
 							flexShrink={0}

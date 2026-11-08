@@ -83,6 +83,7 @@ import {
 	createPromptCursorBlink,
 	paintPromptCursor,
 } from "../presentation/components/prompt-cursor.ts";
+import { ReadOnlyChoicePicker } from "../presentation/components/ReadOnlyChoicePicker.tsx";
 import { SessionPrompt } from "../presentation/components/SessionPrompt.tsx";
 import { StatusBar } from "../presentation/components/StatusBar.tsx";
 import {
@@ -133,7 +134,9 @@ const help = [
 	"/help · /view tasks|environments|providers|schedules",
 	"/session ID · /back · /forward · /reconnect",
 	"/view skills · /skill SKILL_ID@DIGEST (loaded instructions only)",
-	"/model PROFILE · /abort · /compact [instructions] · /latest · /timeline",
+	"/models · /model [PROFILE] · /thinking · choose supplied model/thinking profile bundles",
+	"/standalone-model ID@REVISION PROFILE · explicit observed standalone configuration",
+	"/abort · /compact [instructions] · /latest · /timeline",
 	"/workspace expanding|permanent left|right · UI layout only; no configuration write",
 	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
 	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
@@ -268,6 +271,33 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		registry: ReadonlyMap<string, BoxRenderable>;
 		targets: ReadonlyMap<string, BoxRenderable>;
 	} | null>(null);
+	type ProfileChoice = {
+		key: string;
+		label: string;
+		detail: string;
+		id: string;
+		signature: string;
+		model: string;
+		thinking: string;
+	};
+	type ProfilePickerState = {
+		origin: ReturnType<typeof view>;
+		purpose: "model" | "thinking";
+		model: string | null;
+		rows: ProfileChoice[];
+		initialKey?: string;
+		target:
+			| { kind: "native"; id: number }
+			| {
+					kind: "standalone";
+					id: string;
+					revision: number;
+					mode: "pi" | "opencode";
+					scope: string;
+			  };
+	};
+	const [profilePicker, setProfilePicker] =
+		createSignal<ProfilePickerState | null>(null);
 	let pendingLatest: number | null = null;
 	let pendingReaderMotion: number | null = null;
 	let pendingOlderMotion: number | null = null;
@@ -948,6 +978,147 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			if (paletteOpen()) setPaletteOpen(false);
 		}
 	});
+	const profileSnapshotFresh = () => {
+		revision();
+		return client.stateFresh;
+	};
+	const profileChoices = (): ProfileChoice[] => {
+		const supplied = state()?.profiles ?? [];
+		const counts = new Map<string, number>();
+		for (const entry of supplied)
+			if (typeof entry.id === "string")
+				counts.set(entry.id, (counts.get(entry.id) ?? 0) + 1);
+		return supplied.flatMap((entry) => {
+			if (
+				typeof entry.id !== "string" ||
+				counts.get(entry.id) !== 1 ||
+				typeof entry.provider !== "string" ||
+				typeof entry.modelId !== "string" ||
+				typeof entry.thinking !== "string" ||
+				typeof entry.description !== "string" ||
+				typeof entry.available !== "boolean"
+			)
+				return [];
+			const model = `${entry.provider}/${entry.modelId}`;
+			return [
+				{
+					key: entry.id,
+					id: entry.id,
+					signature: JSON.stringify(entry),
+					model,
+					thinking: entry.thinking,
+					label: `${entry.id} · ${model}${entry.available ? "" : " [reported unavailable]"}`,
+					detail: entry.thinking,
+				},
+			];
+		});
+	};
+	const profileTargetCurrent = (saved: ProfilePickerState) => {
+		if (navigation.current !== saved.origin || !profileSnapshotFresh())
+			return false;
+		const target = saved.target;
+		if (target.kind === "native")
+			return (
+				sessionId() === target.id &&
+				state()?.sessions.filter(
+					(entry) => entry.id === target.id && entry.writable,
+				).length === 1 &&
+				(saved.purpose !== "thinking" ||
+					(observation() === "watching" &&
+						transcript()?.id === target.id &&
+						transcript()?.model === saved.model))
+			);
+		const inventory = standalone();
+		if (inventory?.scope !== target.scope) return false;
+		const matches = inventory.sessions.filter(
+			(entry) =>
+				entry.id === target.id &&
+				entry.mode === target.mode &&
+				entry.revision === target.revision &&
+				entry.status === "ready",
+		);
+		const selected = matches.length === 1 ? matches[0] : undefined;
+		return Boolean(
+			selected &&
+				(saved.purpose !== "thinking" ||
+					profileChoices().find((row) => row.id === selected.profile)?.model ===
+						saved.model),
+		);
+	};
+	createEffect(() => {
+		const saved = profilePicker();
+		if (saved && (!paletteOpen() || !profileTargetCurrent(saved))) {
+			setProfilePicker(null);
+			if (paletteOpen()) setPaletteOpen(false);
+		}
+	});
+	const openProfilePicker = (
+		purpose: "model" | "thinking",
+		submitted = false,
+	): boolean => {
+		if (
+			!profileSnapshotFresh() ||
+			helpOpen() ||
+			settingsEditing() ||
+			(!submitted && (busy() || paletteOpen()))
+		)
+			return false;
+		const origin = navigation.current;
+		let target: ProfilePickerState["target"];
+		let model: string | null = null;
+		let initialKey: string | undefined;
+		let rows = profileChoices();
+		if (origin.page === "pi" || origin.page === "opencode") {
+			const inventory = standalone();
+			const matches = inventory?.sessions.filter(
+				(entry) => entry.id === origin.resource && entry.mode === origin.page,
+			);
+			const selected = matches?.length === 1 ? matches[0] : undefined;
+			if (
+				!inventory ||
+				!selected ||
+				selected.status !== "ready" ||
+				!Number.isSafeInteger(selected.revision) ||
+				selected.revision < 1
+			)
+				return false;
+			target = {
+				kind: "standalone",
+				id: selected.id,
+				revision: selected.revision,
+				mode: selected.mode,
+				scope: inventory.scope,
+			};
+			initialKey = selected.profile;
+			model = rows.find((row) => row.id === selected.profile)?.model ?? null;
+		} else {
+			const id = sessionId();
+			if (
+				!isTranscript() ||
+				id === null ||
+				(purpose === "thinking" &&
+					(observation() !== "watching" || transcript()?.id !== id)) ||
+				state()?.sessions.filter((entry) => entry.id === id && entry.writable)
+					.length !== 1
+			)
+				return false;
+			target = { kind: "native", id };
+			model = transcript()?.model ?? null;
+			const matches = rows.filter(
+				(row) => row.model === model && row.thinking === transcript()?.thinking,
+			);
+			if (matches.length === 1) initialKey = matches[0]?.key;
+		}
+		// No independent SDK thinking override: only observed profile bundles for this exact model.
+		if (purpose === "thinking")
+			rows = rows.filter((row) => row.model === model);
+		batch(() => {
+			setTimeline(null);
+			setProfilePicker({ origin, purpose, target, model, initialKey, rows });
+			setPaletteOpen(true);
+		});
+		return true;
+	};
 	const remember = () => {
 		if (prompt) navigation.current.draft = prompt.plainText;
 		if (pendingTranscriptRestore)
@@ -1404,6 +1575,41 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		);
 		update();
 	};
+	const chooseProfile = (saved: ProfilePickerState, key: string): boolean => {
+		const selected = saved.rows.find((row) => row.key === key);
+		const observed = profileChoices().find((row) => row.key === key);
+		if (
+			profilePicker() !== saved ||
+			!profileTargetCurrent(saved) ||
+			busy() ||
+			helpOpen() ||
+			!selected ||
+			!observed ||
+			selected.signature !== observed.signature ||
+			selected.id.length > 128 ||
+			!/^\S+$/.test(selected.id)
+		)
+			return false;
+		remember();
+		if (navigation.current.draft.trim()) {
+			setNotice(
+				"An unsent draft was not replaced. Clear or save it before preparing a model/thinking command.",
+			);
+			return false;
+		}
+		const target = saved.target;
+		const command =
+			target.kind === "native"
+				? `/model-for ${target.id} ${selected.id}`
+				: `/standalone-model ${target.id}@${target.revision} ${selected.id}`;
+		batch(() => {
+			setProfilePicker(null);
+			setPaletteOpen(false);
+		});
+		navigation.current.focus = "content";
+		prepareCommand(command);
+		return true;
+	};
 	const historyKey = () => `${current().page}:${current().resource ?? ""}`;
 	const recall = (direction: -1 | 1, quiet = false): boolean => {
 		if (
@@ -1449,6 +1655,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		})),
 		...[
 			"/help",
+			"/models",
+			"/thinking",
 			"/workspace expanding left",
 			"/workspace expanding right",
 			"/workspace permanent left",
@@ -1877,7 +2085,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					} else throw new Error("Unknown standalone command");
 				} else if (
 					(command === "abort" ||
-						command === "model" ||
+						(command === "model" && Boolean(args)) ||
 						command === "compact") &&
 					(origin.page === "pi" || origin.page === "opencode")
 				) {
@@ -1938,6 +2146,62 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						setPaletteOpen(true);
 					});
 					clear();
+				} else if (
+					command === "models" ||
+					command === "thinking" ||
+					(command === "model" && !args)
+				) {
+					if (args)
+						throw new Error(
+							`/${command} accepts no arguments; choose a supplied native profile bundle`,
+						);
+					if (
+						!openProfilePicker(
+							command === "thinking" ? "thinking" : "model",
+							true,
+						)
+					)
+						throw new Error(
+							"Select a currently observed writable native conversation or ready standalone session; no model discovery is performed",
+						);
+					clear();
+				} else if (command === "standalone-model") {
+					const match = /^([a-f0-9-]{36})@(\d+)$/.exec(words[0] ?? "");
+					if (
+						!match?.[1] ||
+						!match[2] ||
+						words.length !== 2 ||
+						!words[1] ||
+						!Number.isSafeInteger(Number(match[2]))
+					)
+						throw new Error(
+							"Use /standalone-model ID@REVISION PROFILE; inspect the observed session first",
+						);
+					const matches = standalone()?.sessions.filter(
+						(entry) =>
+							entry.id === match[1] &&
+							entry.revision === Number(match[2]) &&
+							entry.status === "ready",
+					);
+					const selected = matches?.length === 1 ? matches[0] : undefined;
+					if (
+						!selected ||
+						!(
+							(origin.page === selected.mode &&
+								origin.resource === selected.id) ||
+							origin.page === "orchestrator"
+						)
+					)
+						throw new Error(
+							"Standalone identity/revision is unavailable or changed; inspect explicitly without replay",
+						);
+					await client.call("standalone.configure", {
+						id: selected.id,
+						revision: Number(match[2]),
+						profile: words[1],
+					});
+					clear();
+					setRefreshRevision((value) => value + 1);
 				} else if (command === "latest") {
 					if (args) throw new Error("/latest accepts no arguments");
 					if (!jumpToLatest())
@@ -3651,54 +3915,101 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					</Show>
 					<Show when={paletteOpen()}>
 						<Show
-							when={timeline()}
+							when={profilePicker()}
 							fallback={
-								<CommandPalette
-									active={!helpOpen()}
-									entries={paletteEntries()}
-									close={() => setPaletteOpen(false)}
-									choose={(command) => {
-										setPaletteOpen(false);
-										navigation.current.focus = "content";
-										prepareCommand(command);
-									}}
-								/>
+								<Show
+									when={timeline()}
+									fallback={
+										<CommandPalette
+											active={!helpOpen()}
+											entries={paletteEntries()}
+											close={() => setPaletteOpen(false)}
+											choose={(command) => {
+												setPaletteOpen(false);
+												navigation.current.focus = "content";
+												prepareCommand(command);
+											}}
+										/>
+									}
+								>
+									{(target) => (
+										<TimelinePicker
+											rows={target().rows}
+											active={!helpOpen()}
+											close={() => {
+												setTimeline(null);
+												setPaletteOpen(false);
+											}}
+											choose={(key) => {
+												const saved = target();
+												const node = saved.targets.get(key);
+												if (
+													!available() ||
+													sessionId() !== saved.id ||
+													current().page !== saved.page ||
+													current().resource !== saved.resource ||
+													!node ||
+													readingRows !== saved.registry ||
+													saved.registry.get(key) !== node ||
+													!isReadingRow(node) ||
+													!saved.rows.some((row) => row.key === key)
+												)
+													return false;
+												if (!reveal(node, { key, registry: saved.registry }))
+													return false;
+												setTimeline(null);
+												setPaletteOpen(false);
+												return true;
+											}}
+										/>
+									)}
+								</Show>
 							}
 						>
-							{(target) => (
-								<TimelinePicker
-									rows={target().rows}
-									active={!helpOpen()}
+							{(saved) => (
+								<ReadOnlyChoicePicker
+									note="Prepare only · model/thinking are bundled"
+									layerId="v2.profile-picker"
+									title={
+										saved().purpose === "thinking"
+											? "Select thinking level"
+											: "Select model"
+									}
+									rows={saved().rows}
+									initialKey={saved().initialKey}
+									empty={
+										saved().purpose === "thinking"
+											? "No supplied profile bundles for this exact model."
+											: "No unambiguous supplied profiles to show."
+									}
+									refusal="Selection changed or an unsent draft blocks preparation; inspect and choose explicitly."
+									active={!helpOpen() && !busy() && profilePicker() === saved()}
 									close={() => {
-										setTimeline(null);
+										setProfilePicker(null);
 										setPaletteOpen(false);
 									}}
-									choose={(key) => {
-										const saved = target();
-										const node = saved.targets.get(key);
-										if (
-											!available() ||
-											sessionId() !== saved.id ||
-											current().page !== saved.page ||
-											current().resource !== saved.resource ||
-											!node ||
-											readingRows !== saved.registry ||
-											saved.registry.get(key) !== node ||
-											!isReadingRow(node) ||
-											!saved.rows.some((row) => row.key === key)
-										)
-											return false;
-										if (!reveal(node, { key, registry: saved.registry }))
-											return false;
-										setTimeline(null);
-										setPaletteOpen(false);
-										return true;
-									}}
+									choose={(key) => chooseProfile(saved(), key)}
 								/>
 							)}
 						</Show>
 					</Show>
 					<SessionPrompt
+						scope={(() => {
+							current();
+							return navigation.current;
+						})()}
+						interactive={
+							!paletteOpen() &&
+							!helpOpen() &&
+							!busy() &&
+							!settingsEditing() &&
+							profileSnapshotFresh() &&
+							state()?.sessions.some(
+								(entry) => entry.id === sessionId() && entry.writable,
+							)
+						}
+						onModel={() => openProfilePicker("model")}
+						onThinking={() => openProfilePicker("thinking")}
 						meter={promptUsage()}
 						role={
 							current().page === "orchestrator"

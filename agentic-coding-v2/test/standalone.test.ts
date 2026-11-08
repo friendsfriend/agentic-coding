@@ -187,7 +187,7 @@ test("authenticated standalone bridge retains its own identities and consumes un
 			repository = config.repositories[0];
 		if (!profile || !repository)
 			throw new Error("Fixture missing native profile/repository");
-		const session = await client.call("standalone.create", {
+		let session = await client.call("standalone.create", {
 			mode: "opencode",
 			title: "Owned",
 			profile,
@@ -195,6 +195,49 @@ test("authenticated standalone bridge retains its own identities and consumes un
 		});
 		expect(session.status).toBe("ready");
 		expect(JSON.stringify(session)).not.toContain("ses_fixture");
+		const captured = session;
+		await expect(
+			client.call("standalone.configure", {
+				id: captured.id,
+				revision: captured.revision,
+				profile: "foreign",
+			}),
+		).rejects.toThrow();
+		expect(
+			(await client.call("standalone.read", { id: captured.id })).sessions[0],
+		).toEqual(captured);
+		expect(
+			await client.call("standalone.configure", {
+				id: captured.id,
+				revision: captured.revision,
+				profile,
+			}),
+		).toEqual({ configured: true });
+		const configured = (
+			await client.call("standalone.read", { id: captured.id })
+		).sessions[0];
+		if (!configured)
+			throw new Error("Fixture lost configured standalone identity");
+		expect(configured).toMatchObject({
+			id: captured.id,
+			mode: captured.mode,
+			profile,
+			status: "ready",
+			messages: [],
+		});
+		expect(configured.revision).toBeGreaterThan(captured.revision);
+		expect(messages).toBe(0);
+		await expect(
+			client.call("standalone.configure", {
+				id: captured.id,
+				revision: captured.revision,
+				profile,
+			}),
+		).rejects.toThrow();
+		expect(
+			(await client.call("standalone.read", { id: captured.id })).sessions[0],
+		).toEqual(configured);
+		session = configured;
 		const reply = await client.call("standalone.send", {
 			id: session.id,
 			content: "Hello",

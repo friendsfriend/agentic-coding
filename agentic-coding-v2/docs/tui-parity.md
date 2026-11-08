@@ -1231,6 +1231,48 @@ content and bindings, not permission to replace the original presentation.
   tests or visual acceptance claims are introduced. Resource filters, pin ordering
   beyond current observations and the remaining focus catalog still need work.
 
+## Batched model/thinking profile choices and scoped preparation
+
+- Extract the original cap-sized single-row model/thinking/timeline modal branch
+  into local `ReadOnlyChoicePicker`: same half-width/90%-height frame, search
+  header, selection marker, row colors, passive scroll indicator, j/k and arrow
+  navigation, filter-first Escape/backdrop dismissal and footer gestures. Timeline
+  keeps its reverse order, clock formatting, 160-codepoint label budget and exact
+  App-owned mounted-node/registry reveal fences. Add digits, identifier punctuation
+  and space to the modal's finite filtering alphabet; do not install an editor,
+  global keyboard hook or paste listener.
+- `/models`, argument-free `/model` and `/thinking` open choices from the supplied
+  authenticated profile snapshot, never SDK discovery. Keep native profile IDs
+  exact and reject duplicate identities and unsafe command tokens. Show model and
+  declared thinking together, with observed availability marked as reported rather
+  than probed or inferred. This native API configures profile bundles, not arbitrary
+  models or independent SDK thinking overrides: thinking choices are restricted
+  to supplied profiles for the exact observed/configured model.
+- Model/thinking prompt labels now use original primary-tap classification to open
+  these choices. Retire pending header gestures when view identity, labels or
+  interactivity changes. Existing text, color, clipping and prompt composition stay
+  in place; standalone model/usage labels are not invented from backend behavior.
+- Choice activation only prepares `/model-for NATIVE_ID PROFILE` or
+  `/standalone-model UUID@REVISION PROFILE`. Preserve an unsent draft, require the
+  captured view identity and exact current profile observation, and fence native
+  writability or standalone mode/scope/revision/readiness. Retire the chooser on
+  navigation, disconnect or target loss/change rather than adopting another row.
+  Palette/autocomplete still prepare commands for explicit submission.
+- The explicit standalone command rechecks the observed UUID/revision and ready
+  state before calling the existing native configuration API. No numeric alias,
+  implicit current revision, session creation or uncertain replay is introduced.
+- A client-only `stateFresh` observation distinguishes authenticated hello from a
+  new-generation snapshot. Retained offline state remains readable, but these new
+  selectors stay disabled until a fresh native snapshot arrives. This flag grants
+  no permission and changes no gateway/HTTP schema, approval or execution path.
+- Extend existing authenticated client/standalone fixtures with exact public
+  profile bundle fields, inert reads, unknown-profile refusal, explicit ready
+  configuration, revision advancement/stale refusal, no chat send during
+  configuration, and reconnect freshness without mutation replay. No helper,
+  navigation-matrix or renderer tests are added. These checks do not establish
+  visual or interactive acceptance. Resource/run profile and argument pickers,
+  full text-input behavior and remaining prompt actions still need work.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, global preference persistence beyond
@@ -1244,9 +1286,11 @@ content and bindings, not permission to replace the original presentation.
   Mermaid diagram rendering, remaining specialized tool families and
   file/shell header/section composition, remaining timing coverage and
   progress/context arrangement,
-  remaining prompt history details and model/thinking/argument picker behavior.
-- Remaining standalone detail/header, profile-picker and focus composition;
-  its independent native identities must never alias durable conversations.
+  remaining prompt history details, resource/run argument and profile pickers,
+  and complete filtering/input behavior. Native model/thinking bundle preparation
+  is restored; independent overrides are not offered by the native API.
+- Remaining standalone detail/header and focus composition; scoped model/thinking
+  profile-bundle preparation is restored without durable-ID aliases.
 - Original settings/provider/wiki/schedules/environment list/detail composition;
   adapt only content and controls incompatible with native authority.
 - Interaction/lifecycle audit and terminal visual verification. Compilation,

@@ -150,6 +150,37 @@ test("authenticated client reads/subscribes, configures its native session and d
 			(state) => state !== null,
 		);
 		const state = client.state;
+		const observedProfiles = (await client.call("state.read", {})).profiles;
+		expect(
+			observedProfiles.map(
+				({ id, provider, modelId, thinking, description }) => ({
+					id,
+					provider,
+					modelId,
+					thinking,
+					description,
+				}),
+			),
+		).toEqual(config.profiles);
+		expect(
+			observedProfiles.every(
+				(profile) => typeof profile.available === "boolean",
+			),
+		).toBe(true);
+		for (const profile of observedProfiles)
+			expect(Object.keys(profile).sort()).toEqual([
+				"available",
+				"description",
+				"id",
+				"modelId",
+				"provider",
+				"thinking",
+			]);
+		expect(client.stateFresh).toBe(true);
+		expect(
+			(await client.call("session.read", { id: Number(app.home.id) })).thinking,
+		).toBe("off");
+		expect((await client.call("state.read", {})).tasks).toEqual([]);
 		const skills = await client.call("skills.read", {});
 		expect(skills).toEqual([
 			{
@@ -297,14 +328,17 @@ test("disconnect makes an in-flight native mutation uncertain; reconnect only re
 			async () => calls,
 			(value) => value === 1,
 		);
+		expect(client.stateFresh).toBe(true);
 		client.reconnectNow();
+		expect(client.stateFresh).toBe(false);
 		expect(await outcome).toBeInstanceOf(CommandUncertain);
 		barrier.resolve();
 		await eventually(async () => applied, Boolean);
 		await eventually(
-			async () => client.status,
-			(status) => status === "connected",
+			async () => client.status === "connected" && client.stateFresh,
+			Boolean,
 		);
+		expect(client.stateFresh).toBe(true);
 		expect(calls).toBe(1);
 		expect(
 			await client.call("session.read", { id: Number(app.home.id) }),

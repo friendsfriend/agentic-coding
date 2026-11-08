@@ -43,6 +43,11 @@ export class ClientConnection {
 	observation: "none" | "resynchronizing" | "watching" | "unavailable" = "none";
 	observationError: string | null = null;
 	state: Snapshot | null = null;
+	private currentSnapshot = false;
+	/** Cache observation only, never permission: hello alone does not refresh retained state. */
+	get stateFresh() {
+		return this.status === "connected" && this.currentSnapshot;
+	}
 	status: "connecting" | "connected" | "reconnecting" | "closed" = "connecting";
 	error: string | null = null;
 	methods: Method[] = [];
@@ -110,6 +115,7 @@ export class ClientConnection {
 	connect() {
 		if (this.closed || this.socket) return;
 		const generation = ++this.generation;
+		this.currentSnapshot = false;
 		this.resynchronizingSocket = false;
 		const socket = new NativeWebSocket(this.endpoint.url, {
 			headers: { Authorization: `Bearer ${this.endpoint.token}` },
@@ -142,6 +148,7 @@ export class ClientConnection {
 						.then((value) => {
 							if (generation === this.generation) {
 								this.state = value;
+								this.currentSnapshot = true;
 								this.notify();
 							}
 						})
@@ -162,6 +169,7 @@ export class ClientConnection {
 						throw new Error("Out-of-order server state");
 					this.sequence = frame.sequence;
 					this.state = frame.value;
+					this.currentSnapshot = true;
 				} else if (
 					frame.type === "session" ||
 					frame.type === "session-unavailable"
