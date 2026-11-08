@@ -48,6 +48,10 @@ export function Transcript(props: {
 	registerReadingRows?: (
 		rows: ReadonlyMap<string, BoxRenderable>,
 	) => () => void;
+	onPromptTimeline?: (
+		rows: ReadonlyMap<string, BoxRenderable>,
+		items: { key: string; label: string }[],
+	) => void;
 	expanded: string[];
 	toggle: (id: string) => void;
 }) {
@@ -365,6 +369,24 @@ export function Transcript(props: {
 					.filter((part) => part.type === "text")
 					.map((part) => (typeof part.text === "string" ? part.text : ""))
 					.join("\n");
+	createEffect(() => {
+		props.onPromptTimeline?.(
+			anchors,
+			messageSlots()
+				.map((slot) => slot.value())
+				.filter(
+					(message) =>
+						message.role === "user" && text(message).trim().length > 0,
+				)
+				.slice(-200)
+				.map((message) => ({
+					key: JSON.stringify(["reading-message", message.identity]),
+					label: Array.from(text(message).replace(/\s+/g, " ").trim())
+						.slice(0, 512)
+						.join(""),
+				})),
+		);
+	});
 	return (
 		<box flexDirection="column" gap={1}>
 			<text

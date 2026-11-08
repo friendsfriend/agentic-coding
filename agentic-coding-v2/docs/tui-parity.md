@@ -696,6 +696,29 @@ content and bindings, not permission to replace the original presentation.
   No renderer/helper tests or visual acceptance are claimed; existing functional
   gates are rerun, not used as evidence of presentation parity.
 
+## First supplied-window timeline picker
+
+- Explicit `/timeline` (no arguments) opens a bounded snapshot of user prompts
+  in the mounted supplied native transcript window. Palette/slash preparation is
+  inert until submission. Standalone/non-native/unavailable/loading scopes refuse;
+  an empty user-prompt window shows the original `No user messages to show.`.
+- Port the original cap modal dimensions, `Jump to message` header, selection
+  marker and selected/hover row fills with one-line prompt labels. j/k and arrows
+  navigate; Enter activates, Esc/backdrop dismiss; primary row gestures use the
+  original shared row policy and wheel movement remains local to the picker.
+- Prompt preview registration is fenced by the reading registry instance. Snapshot
+  labels are bounded to 200 prompts/512 code points each. Selection uses the
+  captured prompt identity, never a polling position; deleted/detached targets
+  refuse without replacement. Modal scope retirement clears the snapshot.
+- A successful activation queues an explicit top-aligned prompt reveal through
+  the existing post-layout path, fenced again by native ID/page/resource and
+  attached visible row. It changes viewport placement only, not card selection,
+  unsent drafts, native context, authority or retained history. No fetch is made.
+- This is the first timeline subset, not complete ListViewModal/ScrollableList
+  parity. Filter prompts, original timestamp/index details, footer-chip activation,
+  scrollbar/indicator behavior and integrated load-older remain unported. No
+  renderer/helper/mounting tests or visual acceptance are claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

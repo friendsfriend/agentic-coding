@@ -9,6 +9,7 @@ import { TextAttributes } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
+	batch,
 	createEffect,
 	createMemo,
 	createSignal,
@@ -59,6 +60,10 @@ import {
 } from "../features/sessions/NativeAgentNavigation.tsx";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
 import { StandalonePanel } from "../features/sessions/StandalonePanel.tsx";
+import {
+	type PromptTimelineRow,
+	TimelinePicker,
+} from "../features/sessions/TimelinePicker.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
 import { SettingsPanel } from "../features/settings/SettingsPanel.tsx";
 import {
@@ -125,7 +130,7 @@ const help = [
 	"/help · /view tasks|environments|providers|schedules",
 	"/session ID · /back · /forward · /reconnect",
 	"/view skills · /skill SKILL_ID@DIGEST (loaded instructions only)",
-	"/model PROFILE · /abort · /compact [instructions] · /latest",
+	"/model PROFILE · /abort · /compact [instructions] · /latest · /timeline",
 	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
 	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
@@ -240,6 +245,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const cursorBlink = createPromptCursorBlink();
 	const renderer = useRenderer();
 	let pendingReveal: BoxRenderable | undefined;
+	let pendingRevealTop = false;
+	let pendingRevealScope: {
+		id: number;
+		page: Page;
+		resource: string | null;
+	} | null = null;
+	const [promptTimeline, setPromptTimeline] = createSignal<PromptTimelineRow[]>(
+		[],
+	);
+	const [timeline, setTimeline] = createSignal<{
+		id: number;
+		page: Page;
+		resource: string | null;
+		rows: PromptTimelineRow[];
+	} | null>(null);
 	let pendingLatest: number | null = null;
 	let pendingReaderMotion: number | null = null;
 	let readerSelection: import("@opentui/core").Selection | null = null;
@@ -273,6 +293,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		viewport: number;
 	} | null = null;
 	const resetReadingPlace = () => {
+		if (pendingRevealScope) {
+			pendingReveal = undefined;
+			pendingRevealTop = false;
+			pendingRevealScope = null;
+		}
 		readerSelection = null;
 		readerSelectionId = null;
 		pendingReaderMotion = null;
@@ -288,6 +313,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		return () => {
 			if (readingRows !== rows) return;
 			readingRows = null;
+			setPromptTimeline([]);
 			resetReadingPlace();
 		};
 	};
@@ -416,8 +442,19 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			}
 			// Layout and wrapping have settled before this post-process callback.
 			// A newer selection replaces the target; destroyed rows are never reused.
-			const node = pendingReveal;
+			const scope = pendingRevealScope;
+			const node =
+				scope &&
+				(scope.id !== sessionId() ||
+					scope.page !== current().page ||
+					scope.resource !== current().resource ||
+					!available())
+					? undefined
+					: pendingReveal;
+			pendingRevealScope = null;
+			const revealTop = pendingRevealTop;
 			pendingReveal = undefined;
+			pendingRevealTop = false;
 			let visibleInScroll = false;
 			if (node && scroll) {
 				let ancestor: BoxRenderable | BoxRenderable["parent"] = node;
@@ -443,7 +480,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				Number.isFinite(scroll.viewport.screenY)
 			) {
 				const top = node.screenY - scroll.viewport.screenY + scroll.scrollTop;
-				if (top < scroll.scrollTop) scroll.scrollTo(Math.max(0, top));
+				if (revealTop || top < scroll.scrollTop)
+					scroll.scrollTo(Math.max(0, top));
 				else if (top + node.height > scroll.scrollTop + scroll.viewport.height)
 					scroll.scrollTo(
 						Math.max(0, top + node.height - scroll.viewport.height),
@@ -672,7 +710,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		// a delta, prevents default, dispatches work, or infers a layout-only change.
 		markReaderMotion(id, wheel || scroll.scrollTop < bottom);
 	};
-	const reveal = (node: BoxRenderable) => {
+	const reveal = (node: BoxRenderable, alignTop = false) => {
 		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
 		pendingReaderMotion = null;
 		readerSelection = null;
@@ -680,6 +718,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		pendingLatest = null;
 		pendingTranscriptRestore = null;
 		pendingReveal = node;
+		pendingRevealTop = alignTop;
+		const id = sessionId();
+		pendingRevealScope =
+			alignTop && id !== null
+				? { id, page: current().page, resource: current().resource }
+				: null;
 		renderer.requestRender();
 	};
 	const update = () => setRevision((value) => value + 1);
@@ -738,6 +782,20 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			state()?.sessions.some((session) => session.id === id) === true
 		);
 	};
+	createEffect(() => {
+		const target = timeline();
+		if (
+			target &&
+			(!paletteOpen() ||
+				!available() ||
+				target.id !== sessionId() ||
+				target.page !== current().page ||
+				target.resource !== current().resource)
+		) {
+			setTimeline(null);
+			if (paletteOpen()) setPaletteOpen(false);
+		}
+	});
 	const remember = () => {
 		if (prompt) navigation.current.draft = prompt.plainText;
 		if (pendingTranscriptRestore)
@@ -1264,6 +1322,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							"Configure selected conversation from a running-host profile (no in-flight replacement)",
 					},
 					{
+						command: "/timeline",
+						description:
+							"Choose a supplied native user prompt; no history fetch or admission",
+					},
+					{
 						command: "/latest",
 						description:
 							"Jump within the supplied native transcript window; no history fetch",
@@ -1417,6 +1480,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				run: () => {
 					if (busy() || settingsEditing()) return;
 					remember();
+					setTimeline(null);
 					setPaletteOpen(!paletteOpen());
 				},
 			},
@@ -1526,7 +1590,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		if (crumbActive()) return;
 		if (
 			busy() &&
-			!/^\/(?:abort|refresh|latest)\s*$/.test(
+			!/^\/(?:abort|refresh|latest|timeline)\s*$/.test(
 				prompt?.plainText ?? navigation.current.draft,
 			)
 		)
@@ -1648,6 +1712,34 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						});
 					clear();
 					setRefreshRevision((value) => value + 1);
+				} else if (command === "timeline") {
+					if (args) throw new Error("/timeline accepts no arguments");
+					const id = sessionId();
+					if (
+						!isTranscript() ||
+						!available() ||
+						id === null ||
+						transcript() === null ||
+						!readingRows ||
+						pendingTranscriptRestore !== null
+					)
+						throw new Error(
+							"Select a mounted available native transcript; /timeline does not open/adopt a conversation or fetch history",
+						);
+					const rows = promptTimeline().filter((row) => {
+						const node = readingRows?.get(row.key);
+						return node !== undefined && isReadingRow(node);
+					});
+					batch(() => {
+						setTimeline({
+							id,
+							page: current().page,
+							resource: current().resource,
+							rows,
+						});
+						setPaletteOpen(true);
+					});
+					clear();
 				} else if (command === "latest") {
 					if (args) throw new Error("/latest accepts no arguments");
 					if (!jumpToLatest())
@@ -2801,6 +2893,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}}
 										reveal={reveal}
 										registerReadingRows={registerReadingRows}
+										onPromptTimeline={(rows, items) => {
+											if (readingRows === rows) setPromptTimeline(items);
+										}}
 										expanded={current().expanded}
 										toggle={(id) => {
 											navigation.current.expanded = current().expanded.includes(
@@ -3311,16 +3406,50 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						/>
 					</Show>
 					<Show when={paletteOpen()}>
-						<CommandPalette
-							active={!helpOpen()}
-							entries={paletteEntries()}
-							close={() => setPaletteOpen(false)}
-							choose={(command) => {
-								setPaletteOpen(false);
-								navigation.current.focus = "content";
-								prepareCommand(command);
-							}}
-						/>
+						<Show
+							when={timeline()}
+							fallback={
+								<CommandPalette
+									active={!helpOpen()}
+									entries={paletteEntries()}
+									close={() => setPaletteOpen(false)}
+									choose={(command) => {
+										setPaletteOpen(false);
+										navigation.current.focus = "content";
+										prepareCommand(command);
+									}}
+								/>
+							}
+						>
+							{(target) => (
+								<TimelinePicker
+									rows={target().rows}
+									active={!helpOpen()}
+									close={() => {
+										setTimeline(null);
+										setPaletteOpen(false);
+									}}
+									choose={(key) => {
+										const saved = target();
+										const node = readingRows?.get(key);
+										if (
+											!available() ||
+											sessionId() !== saved.id ||
+											current().page !== saved.page ||
+											current().resource !== saved.resource ||
+											!node ||
+											!isReadingRow(node) ||
+											!saved.rows.some((row) => row.key === key)
+										)
+											return false;
+										setTimeline(null);
+										setPaletteOpen(false);
+										reveal(node, true);
+										return true;
+									}}
+								/>
+							)}
+						</Show>
 					</Show>
 					<SessionPrompt
 						meter={promptUsage()}
