@@ -622,6 +622,25 @@ content and bindings, not permission to replace the original presentation.
   acceptance are still unfinished. No renderer/helper tests or native authority,
   protocol, provider or draft/admission changes are introduced.
 
+## Retained SDK read annotations
+
+- Keep the existing exact separately recorded harness-footer removal. For SDK
+  truncation, split file prefix from notice only when retained truncation content,
+  output-line metadata, requested start and complete continuation suffix agree.
+  Validate safe line/next-offset bounds; show the notice separately as inert,
+  metadata-matched SDK-style text, never as a numbered file line or action.
+- Ambiguous/unmatched truncation, first-line-limit notices, image-associated text
+  and continuation-shaped tails without corroborating metadata remain verbatim
+  plain retained text with unavailable line provenance. A literal file tail that
+  resembles a notice is not silently removed. Full retained output/details remain
+  available through the existing output/details folds.
+- Normal retained read bodies retain original file presentation. No live read,
+  synthesized patch, sed/offset execution, continuation fetch, provider call or
+  native authority is introduced. Metadata does not prove a fresh file snapshot.
+- This is conservative provenance handling, not complete SDK tool-view parity.
+  Timeline/load-older, text-line anchoring and visual verification remain open;
+  no renderer/helper/presenter tests or visual acceptance are claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

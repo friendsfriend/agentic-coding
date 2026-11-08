@@ -111,6 +111,53 @@ export function ToolCard(props: {
 			.map((part) => string(part.text))
 			.join("\n");
 	};
+	const readProjection = createMemo(() => {
+		if (name() !== "read") return { file: null, notice: null };
+		const text = readOutput();
+		const truncation = object(details().truncation);
+		const supplied = truncation.content;
+		const line = typeof args().offset === "number" ? Number(args().offset) : 1;
+		// SDK metadata may prove a file-prefix/notice split. Never strip a
+		// footer-shaped literal file line based on spelling alone.
+		if (
+			typeof supplied === "string" &&
+			truncation.truncated === true &&
+			truncation.firstLineExceedsLimit !== true &&
+			Number.isSafeInteger(line) &&
+			line >= 1 &&
+			Number.isSafeInteger(truncation.outputLines) &&
+			Number(truncation.outputLines) > 0 &&
+			text.startsWith(`${supplied}\n\n`)
+		) {
+			const notice = text.slice(supplied.length + 2);
+			const match =
+				/^\[Showing lines (\d+)-(\d+) of (\d+)(?: \([^\n\r()]+ limit\))?\. Use offset=(\d+) to continue\.\]$/.exec(
+					notice,
+				);
+			const end = line + Number(truncation.outputLines) - 1;
+			if (
+				match &&
+				Number(match[1]) === line &&
+				Number(match[2]) === end &&
+				Number.isSafeInteger(end) &&
+				Number.isSafeInteger(end + 1) &&
+				Number.isSafeInteger(Number(match[3])) &&
+				Number(match[3]) >= end &&
+				Number(match[4]) === end + 1
+			)
+				return { file: supplied, notice };
+		}
+		const ambiguous =
+			truncation.truncated === true ||
+			truncation.firstLineExceedsLimit === true ||
+			dataList(props.result?.content).some((part) => part.type === "image") ||
+			/(?:^|\n)\[(?:Showing lines [^\n]*|\d+ more lines in file\.[^\n]*|Line \d+ is [^\n]*)\]$/.test(
+				text,
+			);
+		return ambiguous
+			? { file: null, notice: text }
+			: { file: text, notice: null };
+	});
 	const path = () => string(args().path);
 	const patch = () => string(details().patch) || string(details().diff);
 	const open = (section = "") =>
@@ -316,17 +363,29 @@ export function ToolCard(props: {
 									</text>
 								}
 							>
-								<FileContent
-									path={path()}
-									content={readOutput()}
-									syntax={props.syntax}
-									startLine={
-										typeof args().offset === "number"
-											? Number(args().offset)
-											: 1
-									}
-									label="Retained read output — not a live file snapshot"
-								/>
+								<Show when={readProjection().file !== null}>
+									<FileContent
+										path={path()}
+										content={readProjection().file ?? ""}
+										syntax={props.syntax}
+										startLine={
+											typeof args().offset === "number"
+												? Number(args().offset)
+												: 1
+										}
+										label="Retained read output — not a live file snapshot"
+									/>
+								</Show>
+								<Show when={readProjection().notice !== null}>
+									<text fg={color("textMuted")} wrapMode="word">
+										{readProjection().file === null
+											? "Retained read text · file-line provenance unavailable; possible SDK annotation kept verbatim"
+											: "Retained SDK-style read annotation · metadata-matched, not a file line"}
+									</text>
+									<text fg={color("text")} wrapMode="word">
+										{readProjection().notice ?? ""}
+									</text>
+								</Show>
 							</Show>
 						</Show>
 						<Show when={name() === "write" && path()}>
