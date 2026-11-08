@@ -16,10 +16,15 @@ import { useWheelScroll } from "../../presentation/components/mouse/useWheelScro
 import { ReadOnlyModalFrame } from "../../presentation/components/ReadOnlyModalFrame.tsx";
 import { SearchHeader } from "../../presentation/components/SearchHeader.tsx";
 import { SelectionMarker } from "../../presentation/components/SelectionMarker.tsx";
+import { formatClock } from "../../presentation/components/transcriptFormat.ts";
 import { useTerminalDimensions } from "../../presentation/hooks/useTerminalDimensions.ts";
 import { uiColors } from "../../presentation/theme/colors.ts";
 
-export type PromptTimelineRow = { key: string; label: string };
+export type PromptTimelineRow = {
+	key: string;
+	label: string;
+	timestamp?: number;
+};
 /** Original cap-sized ListViewModal read-only timeline branch. Supplied rows
  * are a bounded snapshot, not a transcript cursor or native admission target. */
 export function TimelinePicker(props: {
@@ -42,8 +47,17 @@ export function TimelinePicker(props: {
 			.reverse()
 			.map((row) => {
 				const label = Array.from(row.label);
+				const timestamp = row.timestamp;
+				const detail =
+					typeof timestamp === "number" &&
+					Number.isFinite(timestamp) &&
+					timestamp >= 0 &&
+					Number.isFinite(new Date(timestamp).getTime())
+						? formatClock(timestamp)
+						: "";
 				return {
 					...row,
+					detail,
 					label:
 						label.length > 160 ? `${label.slice(0, 159).join("")}…` : row.label,
 				};
@@ -52,7 +66,11 @@ export function TimelinePicker(props: {
 	const rows = createMemo(() => {
 		const filter = query().trim().toLowerCase();
 		return filter
-			? source().filter((row) => row.label.toLowerCase().includes(filter))
+			? source().filter(
+					(row) =>
+						row.label.toLowerCase().includes(filter) ||
+						row.detail.toLowerCase().includes(filter),
+				)
 			: source();
 	});
 	const changeQuery = (value: string) => {
@@ -282,7 +300,12 @@ export function TimelinePicker(props: {
 									}
 								>
 									<SelectionMarker selected={selected() === row.key} />
-									<box flexGrow={1} minWidth={0} overflow="hidden">
+									<box
+										flexDirection="row"
+										flexGrow={1}
+										minWidth={0}
+										overflow="hidden"
+									>
 										<text
 											fg={
 												selected() === row.key
@@ -296,6 +319,13 @@ export function TimelinePicker(props: {
 										>
 											{row.label}
 										</text>
+										<Show when={row.detail}>
+											{(detail) => (
+												<text fg={uiColors.textMuted} flexShrink={0}>
+													{detail()}
+												</text>
+											)}
+										</Show>
 									</box>
 								</box>
 							);

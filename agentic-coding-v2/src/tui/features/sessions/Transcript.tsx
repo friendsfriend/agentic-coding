@@ -29,6 +29,7 @@ import { ImageView } from "../../ui/ImageView.tsx";
 import { bindings, transcriptKeybinds } from "../../ui/keybinds.ts";
 import { color } from "../../ui/theme/index.ts";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
+import type { PromptTimelineRow } from "./TimelinePicker.tsx";
 import { ToolCard } from "./ToolCard.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 
@@ -50,7 +51,7 @@ export function Transcript(props: {
 	) => () => void;
 	onPromptTimeline?: (
 		rows: ReadonlyMap<string, BoxRenderable>,
-		items: { key: string; label: string }[],
+		items: PromptTimelineRow[],
 	) => void;
 	expanded: string[];
 	toggle: (id: string) => void;
@@ -380,6 +381,12 @@ export function Transcript(props: {
 				)
 				.slice(-200)
 				.map((message) => ({
+					...(typeof message.timestamp === "number" &&
+					Number.isFinite(message.timestamp) &&
+					message.timestamp >= 0 &&
+					Number.isFinite(new Date(message.timestamp).getTime())
+						? { timestamp: message.timestamp }
+						: {}),
 					key: JSON.stringify(["reading-message", message.identity]),
 					label: Array.from(text(message).replace(/\s+/g, " ").trim())
 						.slice(0, 512)

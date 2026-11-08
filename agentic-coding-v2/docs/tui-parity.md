@@ -763,6 +763,22 @@ content and bindings, not permission to replace the original presentation.
   added. Full scrollbar interaction, timestamp details and load-older remain
   unfinished; no renderer/helper tests or visual/interactive acceptance claimed.
 
+## Recorded timeline clock details
+
+- Carry only a valid, nonnegative finite millisecond timestamp already present
+  on a retained user message into its captured UI-only prompt row. Omit absent,
+  string, negative, nonfinite and out-of-Date-range values. No native entry/task
+  time, seconds conversion, current clock, timer or inferred start is substituted.
+- Restore the original muted, nonshrinking right-edge clock detail beside the
+  truncated prompt label, using the existing pure original clock formatter and
+  explicit row composition. Local filtering considers the displayed clock detail
+  as in the original picker; the finite query-key alphabet is unchanged.
+- Timestamp metadata does not enter navigation/bookmark persistence, admissions,
+  native identity or ownership. Captured rows and existing reveal/refusal fences
+  remain intact. A recorded clock is not claimed to establish native task timing.
+- Full scrollbar interaction and integrated load-older remain unfinished. No
+  renderer/helper tests or interactive/visual acceptance are claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
