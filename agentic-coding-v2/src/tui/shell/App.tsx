@@ -242,6 +242,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	let pendingReveal: BoxRenderable | undefined;
 	let pendingLatest: number | null = null;
 	let pendingReaderMotion: number | null = null;
+	let readerSelection: import("@opentui/core").Selection | null = null;
+	let readerSelectionId: number | null = null;
 	const [awayFromBottom, setAwayFromBottom] = createSignal(false);
 	let pendingTranscriptRestore: {
 		page: Page;
@@ -271,6 +273,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		viewport: number;
 	} | null = null;
 	const resetReadingPlace = () => {
+		readerSelection = null;
+		readerSelectionId = null;
 		pendingReaderMotion = null;
 		pendingLatest = null;
 		setAwayFromBottom(false);
@@ -305,6 +309,25 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		}
 		return false;
 	};
+	const ownsSelectionDrag = () => {
+		if (
+			!isTranscript() ||
+			sessionId() === null ||
+			!available() ||
+			transcript() === null ||
+			!scroll ||
+			scroll.isDestroyed ||
+			!renderer.getSelection()?.isDragging
+		)
+			return false;
+		let ancestor = renderer.getSelectionContainer();
+		while (ancestor) {
+			if (ancestor.isDestroyed || !ancestor.visible) return false;
+			if (ancestor === scroll.content) return true;
+			ancestor = ancestor.parent;
+		}
+		return false;
+	};
 	// The mirror wakes only presentation; native admission still reads the actual
 	// editor buffer. Programmatic restores/clears synchronize both surfaces.
 	const writePrompt = (text: string) => {
@@ -318,6 +341,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		let cursorFocused = false;
 		let paintedCursorVisible = true;
 		const paintCursor = (buffer: Parameters<typeof paintPromptCursor>[0]) => {
+			if (
+				!isTranscript() ||
+				helpOpen() ||
+				paletteOpen() ||
+				readerSelectionId !== sessionId()
+			) {
+				readerSelection = null;
+				readerSelectionId = null;
+			}
 			if (
 				pendingReaderMotion !== null &&
 				(pendingReaderMotion !== sessionId() ||
@@ -432,7 +464,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					(previous.height !== scroll.scrollHeight ||
 						previous.width !== scroll.viewport.width ||
 						previous.viewport !== scroll.viewport.height);
+				const selection = renderer.getSelection();
+				const ownedDrag = ownsSelectionDrag();
+				const selectionMoved =
+					previous &&
+					previous.top !== scroll.scrollTop &&
+					(ownedDrag ||
+						(selection !== null &&
+							readerSelection === selection &&
+							readerSelectionId === sessionId()));
+				// Retain only the current owned selection object for the next sample,
+				// including its final release frame. Never inspect selected text.
+				readerSelection = ownedDrag ? selection : null;
+				readerSelectionId = ownedDrag ? sessionId() : null;
 				const readerMoved =
+					selectionMoved ||
 					(pendingReaderMotion !== null &&
 						pendingReaderMotion === sessionId()) ||
 					node !== undefined ||
@@ -513,6 +559,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			pendingTranscriptRestore = null;
 			pendingLatest = null;
 			pendingReaderMotion = null;
+			readerSelection = null;
+			readerSelectionId = null;
 			renderer.removePostProcessFn(paintCursor);
 		});
 	});
@@ -532,12 +580,16 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		pendingReveal = undefined;
 		readingAnchor = null;
 		pendingReaderMotion = null;
+		readerSelection = null;
+		readerSelectionId = null;
 		setAwayFromBottom(false);
 		pendingLatest = sessionId();
 		renderer.requestRender();
 		return true;
 	};
 	const markReaderMotion = (id: number, freeze: boolean) => {
+		readerSelection = null;
+		readerSelectionId = null;
 		pendingReaderMotion = id;
 		pendingLatest = null;
 		pendingTranscriptRestore = null;
@@ -623,6 +675,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const reveal = (node: BoxRenderable) => {
 		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
 		pendingReaderMotion = null;
+		readerSelection = null;
+		readerSelectionId = null;
 		pendingLatest = null;
 		pendingTranscriptRestore = null;
 		pendingReveal = node;

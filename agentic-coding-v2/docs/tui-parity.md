@@ -603,6 +603,25 @@ content and bindings, not permission to replace the original presentation.
   or visual acceptance claims are added. Timeline/load-older, selection-autoscroll
   and text-line anchoring still remain unfinished.
 
+## Native owned-selection autoscroll sampling
+
+- Observe OpenTUI's existing dragging selection only when its visible,
+  non-destroyed container belongs to the current available native transcript's
+  scroll content. Do not inspect/copy selected text, change selection, install
+  selection listeners or replace native autoscroll/clipboard behavior.
+- Actual viewport movement during that owned drag counts as reader motion even
+  alongside geometry changes. Retain only the same selection object/native ID
+  for the next eligible sample to cover its release frame when the object remains;
+  static selections and unrelated/new selection objects do not imply movement.
+- Navigation/registry reset, overlays, identity mismatch, explicit latest/reveal
+  or other reader intent and cleanup discard the retained observation. Standard
+  clamped sampling/freezing/follow behavior remains responsible for placement.
+- This is bounded detection, not complete selection/autoscroll parity: escalated
+  cross-pane containers, destroyed/cleared selection objects, first-event ordering
+  and text-line displacement remain unverified. Timeline/load-older and visual
+  acceptance are still unfinished. No renderer/helper tests or native authority,
+  protocol, provider or draft/admission changes are introduced.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
