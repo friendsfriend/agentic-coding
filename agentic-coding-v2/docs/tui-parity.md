@@ -1048,6 +1048,22 @@ content and bindings, not permission to replace the original presentation.
   are introduced. Alias composition, integrated load-older and interactive/visual
   acceptance remain unfinished.
 
+## Original pending shell aliases
+
+- Restore the original pending/live `shell` and `execute` family alongside Bash:
+  supplied string command bodies and bounded observed-output tails share the
+  existing shell presentation while no terminal result is linked. Partial calls
+  still cannot display an execution-output preview.
+- Retain the command/timeout fidelity guards and the native dropped-byte/line,
+  uncertainty and live-slot notices. Output expansion shows supplied bytes only;
+  alias recognition neither authorizes execution nor reconstructs a command.
+- Follow the original terminal-family distinction: recorded `shell`/`execute`
+  results remain generic structured/text views, not reclassified Bash results.
+  Native pairing/status, output/details folds and non-text content are unchanged.
+- No renderer/helper tests or execution operations are added. Integrated
+  load-older, nested-call composition and interactive/visual acceptance remain
+  unfinished.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

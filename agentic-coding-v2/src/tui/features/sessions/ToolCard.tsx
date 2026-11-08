@@ -84,6 +84,10 @@ export function ToolCard(props: {
 	};
 	const args = () => object(props.call.arguments);
 	const name = () => string(props.call.name) || "Unnamed native tool";
+	// Original pending aliases share shell presentation, not terminal semantics.
+	const shellSource = () =>
+		name() === "bash" ||
+		(!props.result && ["shell", "execute"].includes(name()));
 	const detailsValue = () =>
 		props.result ? props.result.details : props.progress?.details;
 	const details = () => object(props.result?.details);
@@ -195,7 +199,7 @@ export function ToolCard(props: {
 				? dialogueHeadline()
 				: ["read", "edit", "write"].includes(name())
 					? path()
-					: name() === "bash" || name() === "shell"
+					: shellSource() || name() === "shell"
 						? string(args().command)
 						: string(args().app) ||
 							string(args().title) ||
@@ -351,7 +355,7 @@ export function ToolCard(props: {
 				(name() === "read" ||
 					name() === "write" ||
 					(name() === "edit" && patch())),
-		) || name() === "bash";
+		) || shellSource();
 	const fold = (suffix: string, label: string) => (
 		<box
 			{...useTap(
@@ -437,7 +441,7 @@ export function ToolCard(props: {
 				</TranscriptHeader>
 				<Show
 					when={
-						name() === "bash" &&
+						shellSource() &&
 						!open() &&
 						!props.partial &&
 						(props.result
@@ -588,7 +592,7 @@ export function ToolCard(props: {
 								)}
 							</For>
 						</Show>
-						<Show when={name() === "bash"}>
+						<Show when={shellSource()}>
 							<text fg={color("textMuted")} wrapMode="word">
 								{props.partial
 									? "Partial generated shell command"
@@ -790,7 +794,7 @@ export function ToolCard(props: {
 									: ` · native dropped lines: ${props.progress.droppedLines}`}
 							</text>
 							<Show
-								when={name() === "bash"}
+								when={shellSource()}
 								fallback={
 									<Show when={open(":output")}>
 										<text wrapMode="word">{props.progress?.output}</text>
