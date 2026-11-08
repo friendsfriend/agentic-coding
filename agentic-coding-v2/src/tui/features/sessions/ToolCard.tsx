@@ -234,6 +234,25 @@ export function ToolCard(props: {
 			return null;
 		}
 	});
+	const requestedQuestions = createMemo(() => {
+		if (!["developer_question", "agent_ask"].includes(name())) return [];
+		const value = args();
+		const items = Array.isArray(value.questions) ? value.questions : [value];
+		return items.flatMap((item: unknown, index: number) => {
+			const record = object(item);
+			const text = [record.question, record.description].find(
+				(value) => typeof value === "string" && value.trim().length > 0,
+			);
+			if (typeof text !== "string") return [];
+			return [
+				{
+					index,
+					text,
+					context: typeof record.context === "string" ? record.context : null,
+				},
+			];
+		});
+	});
 	const scriptOutput = createMemo(() => {
 		const value = details().output;
 		return name() === "codemode" &&
@@ -488,6 +507,31 @@ export function ToolCard(props: {
 								</>
 							)}
 						</Show>
+						<For each={requestedQuestions()}>
+							{(question) => (
+								<>
+									{fold(
+										`:question:${question.index}`,
+										`${props.partial ? "Partial generated" : props.liveOnly ? "Live slot" : "Requested"} question ${question.index + 1}`,
+									)}
+									<Show when={open(`:question:${question.index}`)}>
+										<text fg={color("textMuted")} wrapMode="word">
+											Supplied question bytes — not an active clarification,
+											answer or approval control.
+										</text>
+										<text fg={color("text")} wrapMode="word">
+											{question.text}
+										</text>
+										<Show when={question.context !== null}>
+											<text fg={color("textMuted")}>
+												Supplied question context
+											</text>
+											<text wrapMode="word">{question.context ?? ""}</text>
+										</Show>
+									</Show>
+								</>
+							)}
+						</For>
 						<Show when={scriptOutput()}>
 							{(script) => (
 								<>

@@ -907,6 +907,23 @@ content and bindings, not permission to replace the original presentation.
 - Full nested-call layout, other families, integrated load-older and interactive/
   visual acceptance remain unfinished. No renderer/helper tests are added.
 
+## Dialogue supplied question/context bodies
+
+- Restore read-only supplied-question sections for `developer_question` and
+  `agent_ask`, using the original nonblank string `question`/`description`
+  discriminator and optional string context. An explicit `questions` array
+  takes precedence over the single argument form; invalid/nontext items are
+  omitted without inventing question text or falling back to result parsing.
+- Keep original array positions for the local fold labels, including gaps for
+  omitted items. These positions are UI labels, never response identities.
+  Question/context bytes remain verbatim; partial/live-only sections are labeled
+  as such and do not claim the question has been admitted or delivered.
+- No result parsing, option/answer pairing, clickable responses, clarification
+  routing or approval controls are introduced. The caption explicitly disclaims
+  active clarification authority; raw Arguments/output/Details remain available.
+- Full original dialogue and nested-call composition, integrated load-older and
+  visual/interactive acceptance remain unfinished. No renderer/helper tests.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
