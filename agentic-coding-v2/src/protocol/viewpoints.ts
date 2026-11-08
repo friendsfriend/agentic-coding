@@ -16,22 +16,38 @@ export const uiPages = [
 	"settings",
 ] as const;
 export type UiPage = (typeof uiPages)[number];
+export const uiWorkspaceFilters = ["active", "attention", "all"] as const;
+export type UiWorkspaceFilter = (typeof uiWorkspaceFilters)[number];
+export function uiWorkspaceFilter(value: unknown): UiWorkspaceFilter {
+	if (value !== "active" && value !== "attention" && value !== "all")
+		throw new Error("Invalid UI-only workspace filter");
+	return value;
+}
 export type UiWorkspaceLayout = {
 	mode: "expanding" | "permanent";
 	side: "left" | "right";
+	filter?: UiWorkspaceFilter;
 };
 /** Closed display preferences, never shell configuration or execution state. */
 export function uiWorkspaceLayout(value: unknown): UiWorkspaceLayout {
 	const data = record(value);
 	if (
-		Object.keys(data).length !== 2 ||
+		Object.keys(data).some(
+			(key) => key !== "mode" && key !== "side" && key !== "filter",
+		) ||
 		!Object.hasOwn(data, "mode") ||
 		!Object.hasOwn(data, "side") ||
 		(data.mode !== "expanding" && data.mode !== "permanent") ||
 		(data.side !== "left" && data.side !== "right")
 	)
 		throw new Error("Invalid UI-only workspace layout");
-	return { mode: data.mode, side: data.side };
+	return {
+		mode: data.mode,
+		side: data.side,
+		...(Object.hasOwn(data, "filter")
+			? { filter: uiWorkspaceFilter(data.filter) }
+			: {}),
+	};
 }
 export type UiView = {
 	page: UiPage;

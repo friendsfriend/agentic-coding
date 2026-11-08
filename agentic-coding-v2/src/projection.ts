@@ -37,6 +37,8 @@ export async function projectState(
 			const activity = activities.get(info.id);
 			return {
 				...info,
+				// Native task state, not the activity/detail label or legacy workflow status.
+				status: task?.state.status ?? null,
 				activity:
 					waiting || !task || task.state.status === "terminal"
 						? "idle"

@@ -37,7 +37,11 @@ import type {
 	ProviderActionReceipt,
 } from "../../protocol/provider-actions.ts";
 import type { StandaloneInventory } from "../../protocol/standalone.ts";
-import { uiView, uiWorkspaceLayout } from "../../protocol/viewpoints.ts";
+import {
+	uiView,
+	uiWorkspaceFilter,
+	uiWorkspaceLayout,
+} from "../../protocol/viewpoints.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
@@ -138,6 +142,7 @@ const help = [
 	"/standalone-model ID@REVISION PROFILE · explicit observed standalone configuration",
 	"/abort · /compact [instructions] · /latest · /timeline",
 	"/workspace expanding|permanent left|right · UI layout only; no configuration write",
+	"/workspace filter active|attention|all · observed native tasks only; f cycles in sidebar",
 	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
 	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
@@ -978,7 +983,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			if (paletteOpen()) setPaletteOpen(false);
 		}
 	});
-	const profileSnapshotFresh = () => {
+	const snapshotFresh = () => {
 		revision();
 		return client.stateFresh;
 	};
@@ -1014,8 +1019,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		});
 	};
 	const profileTargetCurrent = (saved: ProfilePickerState) => {
-		if (navigation.current !== saved.origin || !profileSnapshotFresh())
-			return false;
+		if (navigation.current !== saved.origin || !snapshotFresh()) return false;
 		const target = saved.target;
 		if (target.kind === "native")
 			return (
@@ -1057,7 +1061,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		submitted = false,
 	): boolean => {
 		if (
-			!profileSnapshotFresh() ||
+			!snapshotFresh() ||
 			helpOpen() ||
 			settingsEditing() ||
 			(!submitted && (busy() || paletteOpen()))
@@ -1661,6 +1665,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			"/workspace expanding right",
 			"/workspace permanent left",
 			"/workspace permanent right",
+			"/workspace filter active",
+			"/workspace filter attention",
+			"/workspace filter all",
 			"/refresh",
 			"/back",
 			"/forward",
@@ -2028,12 +2035,16 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				if (command === "workspace") {
 					if (words.length !== 2)
 						throw new Error(
-							"Use /workspace expanding|permanent left|right; UI preferences only",
+							"Use /workspace expanding|permanent left|right or /workspace filter active|attention|all; UI preferences only",
 						);
-					origin.workspace = uiWorkspaceLayout({
-						mode: words[0],
-						side: words[1],
-					});
+					origin.workspace =
+						words[0] === "filter"
+							? { ...origin.workspace, filter: uiWorkspaceFilter(words[1]) }
+							: uiWorkspaceLayout({
+									...origin.workspace,
+									mode: words[0],
+									side: words[1],
+								});
 					clear();
 					update();
 				} else if (command === "standalone") {
@@ -3174,6 +3185,79 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	});
 	onCleanup(unregisterPageFocus);
 	onCleanup(unregisterBreadcrumbs);
+	const workspaceFilter = () => current().workspace.filter ?? "active";
+	const workspaceTasks = createMemo(() => {
+		const snapshot = state();
+		const supplied = snapshot?.tasks ?? [];
+		const counts = new Map<number, number>();
+		for (const entry of supplied)
+			if (typeof entry.id === "number")
+				counts.set(entry.id, (counts.get(entry.id) ?? 0) + 1);
+		const pending = new Set(
+			(snapshot?.reviews ?? [])
+				.filter(
+					(review) =>
+						review.state === "pending" && typeof review.taskId === "number",
+				)
+				.map((review) => review.taskId),
+		);
+		return supplied
+			.flatMap((entry) => {
+				if (
+					typeof entry.id !== "number" ||
+					!Number.isSafeInteger(entry.id) ||
+					entry.id < 0 ||
+					counts.get(entry.id) !== 1
+				)
+					return [];
+				const result =
+					entry.result &&
+					typeof entry.result === "object" &&
+					!Array.isArray(entry.result)
+						? (entry.result as Data)
+						: null;
+				const attention = pending.has(entry.id);
+				return [
+					{
+						id: entry.id,
+						createdAt:
+							typeof entry.createdAt === "number" &&
+							Number.isFinite(entry.createdAt)
+								? entry.createdAt
+								: 0,
+						name: `#${entry.id}${typeof entry.skill === "string" ? ` ${entry.skill}` : ""}`,
+						description: [
+							attention ? "pending review" : "",
+							typeof entry.activity === "string" ? entry.activity : "",
+							typeof entry.detail === "string" ? entry.detail : "",
+						]
+							.filter(Boolean)
+							.join(" · "),
+						value: `task:${entry.id}`,
+						task: {
+							status: typeof entry.status === "string" ? entry.status : null,
+							outcome:
+								typeof result?.status === "string" ? result.status : null,
+							attention,
+							repository:
+								typeof entry.repository === "string" ? entry.repository : "",
+						},
+					},
+				];
+			})
+			.sort(
+				(left, right) => right.createdAt - left.createdAt || left.id - right.id,
+			);
+	});
+	const filteredWorkspaceTasks = createMemo(() =>
+		workspaceTasks().filter(
+			(entry) =>
+				workspaceFilter() === "all" ||
+				(workspaceFilter() === "attention"
+					? entry.task.attention
+					: entry.task.status !== null && entry.task.status !== "terminal"),
+		),
+	);
 	const sidebarOptions = () => [
 		...["OpenCode", "Pi", "Pi Durable", "Orchestrator"].map((name, index) => ({
 			name,
@@ -3194,6 +3278,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						value: `session:${session.id}`,
 					})) ?? [])
 			: []),
+		...filteredWorkspaceTasks(),
 		...bookmarks().map((item) => ({
 			name: item.name,
 			description: `${item.view.page} · UI-only viewpoint`,
@@ -3213,13 +3298,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		!settingsEditing() &&
 		!busy();
 	const workspaceSelected = () =>
-		current().page === "session"
-			? `session:${current().resource}`
-			: ["opencode", "pi", "pi-durable", "orchestrator"].includes(
-						current().page,
-					)
-				? `mode:${["opencode", "pi", "pi-durable", "orchestrator"].indexOf(current().page)}`
-				: current().page;
+		current().page === "tasks" && current().resource !== null
+			? `task:${current().resource}`
+			: current().page === "session"
+				? `session:${current().resource}`
+				: ["opencode", "pi", "pi-durable", "orchestrator"].includes(
+							current().page,
+						)
+					? `mode:${["opencode", "pi", "pi-durable", "orchestrator"].indexOf(current().page)}`
+					: current().page;
 	const openWorkspaceEntry = (value: string) => {
 		if (
 			!workspaceInteractive() ||
@@ -3244,6 +3331,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					Number(value.slice(5))
 				] ?? "orchestrator",
 			);
+		else if (value.startsWith("task:")) go("tasks", value.slice(5));
 		else if (value.startsWith("session:")) go("session", value.slice(8));
 		else go(value as Page);
 	};
@@ -3268,11 +3356,23 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			];
 		if (next) openWorkspaceEntry(next.value);
 	};
+	const workspaceScope = () => {
+		current();
+		return navigation.current;
+	};
 	const WorkspacePanel = () => (
 		<WorkspaceNavigation
+			scope={workspaceScope()}
 			interactive={workspaceInteractive()}
 			mode={current().workspace.mode}
 			side={current().workspace.side}
+			filter={workspaceFilter()}
+			taskCount={filteredWorkspaceTasks().length}
+			tasksKnown={snapshotFresh()}
+			onFilterChange={(filter) => {
+				navigation.current.workspace.filter = uiWorkspaceFilter(filter);
+				update();
+			}}
 			onToggleMode={() => {
 				navigation.current.workspace.mode =
 					current().workspace.mode === "permanent" ? "expanding" : "permanent";
@@ -4003,7 +4103,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							!helpOpen() &&
 							!busy() &&
 							!settingsEditing() &&
-							profileSnapshotFresh() &&
+							snapshotFresh() &&
 							state()?.sessions.some(
 								(entry) => entry.id === sessionId() && entry.writable,
 							)

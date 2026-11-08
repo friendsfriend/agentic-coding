@@ -104,6 +104,7 @@ test("native skill task completes in a separate worktree; admission is idempoten
 	const view = await app.snapshot();
 	expect(view.topics[0].id).toBe(invocation.topicId);
 	expect(view.tasks[0].activity).toBe("idle");
+	expect(view.tasks[0].status).toBe(settled.state.status);
 	expect(view.tasks[0].workspace).not.toBe(invocation.repository);
 	expect(view.tasks[0].detail).toBe("completed");
 	const child = view.tasks[0].conversationId;
@@ -575,6 +576,15 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 			(status) => status === "connected",
 		);
 		const pendingDetail = await client.call("task.read", { id });
+		const pendingState = await client.call("state.read", {});
+		const pendingTask = pendingState.tasks.find((task) => task.id === id);
+		expect(pendingTask?.status).toBe(pendingDetail.native?.status);
+		expect(pendingTask?.status).toBe("running");
+		expect(
+			pendingState.reviews.some(
+				(review) => review.taskId === id && review.state === "pending",
+			),
+		).toBe(true);
 		expect(
 			pendingDetail.ownedWork.items.every(
 				(work) => !("checkpoint" in work) && !("input" in work),

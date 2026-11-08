@@ -11,15 +11,37 @@ import {
 	Show,
 	untrack,
 } from "solid-js";
+import {
+	type UiWorkspaceFilter,
+	uiWorkspaceFilters,
+} from "../../../protocol/viewpoints.ts";
 import { bindings, type Keybind } from "../../ui/keybinds.ts";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors.ts";
 import { useHover } from "./mouse/useHover.ts";
+import type { RowGestureState } from "./mouse/useRowMouse.ts";
 import { useTap } from "./mouse/useTap.ts";
 import { Panel } from "./Panel.tsx";
 import { PinRow } from "./PinRow.tsx";
+import {
+	type WorkspaceTaskObservation,
+	WorkspaceTaskRow,
+} from "./WorkspaceTaskRow.tsx";
+
+export type WorkspaceEntry = {
+	name: string;
+	description: string;
+	value: string;
+	task?: WorkspaceTaskObservation;
+};
 
 export const workspaceNavigationKeybinds: Keybind[] = [
+	{
+		key: "f",
+		cmd: "workspace.filter",
+		action: "Cycle filter (active/attention/all)",
+		short: "filter",
+	},
 	{
 		key: "e",
 		cmd: "workspace.size",
@@ -61,12 +83,17 @@ export const workspaceNavigationKeybinds: Keybind[] = [
  * adapted to native navigation entries. Focus/activation never dispatch a task. */
 export function WorkspaceNavigation(props: {
 	active: boolean;
+	scope: object;
 	mode: "expanding" | "permanent";
 	side: "left" | "right";
 	onToggleMode: () => void;
+	filter: UiWorkspaceFilter;
+	onFilterChange: (filter: UiWorkspaceFilter) => void;
+	taskCount: number;
+	tasksKnown: boolean;
 	/** Covered surfaces must not accept focus taps or retained activations. */
 	interactive?: boolean;
-	entries: { name: string; description: string; value: string }[];
+	entries: WorkspaceEntry[];
 	/** Fixed leading UI pins, rendered outside the scrolling resource list. */
 	pinCount?: number;
 	selected: string;
@@ -175,6 +202,19 @@ export function WorkspaceNavigation(props: {
 		enabled: () => props.active && interactive(),
 		commands: [
 			{
+				id: "workspace.filter",
+				name: "Cycle native task filter",
+				run: () => {
+					if (!props.active || !interactive()) return;
+					props.onFilterChange(
+						uiWorkspaceFilters[
+							(uiWorkspaceFilters.indexOf(props.filter) + 1) %
+								uiWorkspaceFilters.length
+						] ?? "active",
+					);
+				},
+			},
+			{
 				id: "workspace.size",
 				name: "Toggle sidebar size",
 				run: () => {
@@ -198,9 +238,16 @@ export function WorkspaceNavigation(props: {
 	onCleanup(unregister);
 	createEffect(() => {
 		const index = cursor() - pinCount();
-		const height = expanded() ? 2 : 1;
 		if (!scroll || index < 0) return;
-		const top = index * height;
+		const flowing = entries().slice(pinCount());
+		const rowHeight = (entry: WorkspaceEntry) =>
+			entry.task ? 3 : expanded() ? 2 : 1;
+		const entry = flowing[index];
+		if (!entry) return;
+		const height = rowHeight(entry);
+		const top = flowing
+			.slice(0, index)
+			.reduce((sum, entry) => sum + rowHeight(entry), 0);
 		if (top < scroll.scrollTop) scroll.scrollTo(top);
 		else if (top + height > scroll.scrollTop + scroll.viewport.height)
 			scroll.scrollTo(Math.max(0, top + height - scroll.viewport.height));
@@ -214,28 +261,87 @@ export function WorkspaceNavigation(props: {
 		{ stopPropagation: true },
 	);
 	const hover = useHover(toggle.onMouseOut);
-	const glyph = (index: number) =>
-		index < 4 ? (["󱚞", "π", "∞", "⌂"][index] ?? "·") : "·";
+	const marks: Readonly<Record<string, string>> = {
+		"mode:0": "󱚞",
+		"mode:1": "π",
+		"mode:2": "∞",
+		"mode:3": "⌂",
+	};
+	const glyph = (value: string) => marks[value] ?? "·";
+	const taskPositions = createMemo(
+		() =>
+			new Map(
+				entries()
+					.filter((entry) => entry.task)
+					.map((entry, index) => [entry.value, index]),
+			),
+	);
 	const renderRow = (key: string) => (
 		<Show when={entriesByKey().get(key)}>
-			{(slot) => (
-				<PinRow
-					pin={{
-						glyph: glyph(slot().index),
-						label: slot().entry.name,
-						meta: slot().entry.description,
-					}}
-					selected={cursorValue() === key}
-					height={expanded() ? 2 : 1}
-					onActivate={() => {
-						// Stable presentation identity, but always read current membership.
-						if (!interactive() || !entriesByKey().has(key)) return;
-						focus();
-						setCursorValue(key);
-						props.open(key);
-					}}
-				/>
-			)}
+			{(slot) => {
+				const gesture: RowGestureState = {};
+				const signature = createMemo(() =>
+					JSON.stringify([
+						slot().entry,
+						slot().index,
+						width(),
+						props.tasksKnown,
+						props.side,
+						props.filter,
+						props.active,
+						interactive(),
+						expanded(),
+						taskPositions().get(key),
+					]),
+				);
+				createEffect(() => {
+					props.scope;
+					signature();
+					gesture.down = undefined;
+					gesture.lastTap = undefined;
+				});
+				onCleanup(() => {
+					gesture.down = undefined;
+					gesture.lastTap = undefined;
+				});
+				const activate = () => {
+					if (!interactive() || !entriesByKey().has(key)) return;
+					focus();
+					setCursorValue(key);
+					props.open(key);
+				};
+				return (
+					<Show
+						when={slot().entry.task}
+						fallback={
+							<PinRow
+								pin={{
+									glyph: glyph(key),
+									label: slot().entry.name,
+									meta: slot().entry.description,
+								}}
+								selected={cursorValue() === key}
+								height={expanded() ? 2 : 1}
+								gesture={gesture}
+								onActivate={activate}
+							/>
+						}
+					>
+						{(task) => (
+							<WorkspaceTaskRow
+								name={slot().entry.name}
+								meta={slot().entry.description}
+								task={task()}
+								position={taskPositions().get(key) ?? 0}
+								expanded={expanded()}
+								selected={cursorValue() === key}
+								gesture={gesture}
+								open={activate}
+							/>
+						)}
+					</Show>
+				);
+			}}
 		</Show>
 	);
 	const rows = () => (
@@ -325,7 +431,76 @@ export function WorkspaceNavigation(props: {
 						</text>
 					}
 				>
+					<box height={1} flexShrink={0} flexDirection="row">
+						<For each={uiWorkspaceFilters}>
+							{(filter) => {
+								const gesture: RowGestureState = {};
+								const signature = createMemo(() =>
+									JSON.stringify([
+										props.filter,
+										width(),
+										props.tasksKnown,
+										props.side,
+										props.active,
+										interactive(),
+										expanded(),
+									]),
+								);
+								createEffect(() => {
+									props.scope;
+									signature();
+									gesture.down = undefined;
+									gesture.lastTap = undefined;
+								});
+								onCleanup(() => {
+									gesture.down = undefined;
+									gesture.lastTap = undefined;
+								});
+								const tap = useTap(
+									() => {
+										if (!interactive()) return;
+										focus();
+										props.onFilterChange(filter);
+									},
+									{ gesture, stopPropagation: true },
+								);
+								const hover = useHover(tap.onMouseOut);
+								const selected = () => props.filter === filter;
+								return (
+									<box marginRight={1} {...tap} {...hover}>
+										<text
+											fg={
+												selected()
+													? uiColors.bgBase
+													: hover.hovered()
+														? uiColors.textPrimary
+														: uiColors.textMuted
+											}
+											bg={
+												selected()
+													? hover.hovered()
+														? uiColors.primaryDim
+														: uiColors.primary
+													: hover.hovered()
+														? uiColors.bgHover
+														: uiColors.bgMantle
+											}
+										>{` ${filter[0]?.toUpperCase()}${filter.slice(1)} `}</text>
+									</box>
+								);
+							}}
+						</For>
+					</box>
 					{rows()}
+					<Show when={props.taskCount === 0 || !props.tasksKnown}>
+						<text fg={uiColors.textMuted} wrapMode="none" truncate>
+							{!props.tasksKnown
+								? "Cached · activity unknown"
+								: props.filter === "all"
+									? "No native tasks in supplied view"
+									: `No ${props.filter} native tasks`}
+						</text>
+					</Show>
 				</Panel>
 			</Show>
 		</box>

@@ -1273,9 +1273,50 @@ content and bindings, not permission to replace the original presentation.
   visual or interactive acceptance. Resource/run profile and argument pickers,
   full text-input behavior and remaining prompt actions still need work.
 
+## Batched native workspace filters, task rows and scoped navigation
+
+- Restore original Active/Attention/All chips, colors and sidebar-only `f`
+  cycling. Filters apply only to native task rows: Active means an observed
+  nonterminal native task; Attention means a supplied pending review for that
+  exact task ID. All also retains terminal/unknown task observations. Do not
+  classify execution from activity prose, tool names or legacy workflow states.
+- Expose the already-read native task's scalar SDK status alongside existing
+  activity/detail/outcome in the authenticated snapshot. Null means no native
+  state observation; it is not a running/failed task. This adds no SDK lookup,
+  command, ownership grant or new engine authority. Public fixture checks compare
+  settled status with the SDK and held-review status with authenticated task.read.
+- Adapt the original three-line expanded task row and compact numbered/status/
+  metadata-initial composition locally. Expanded rows show exact native task ID,
+  supplied skill/activity/detail and repository basename; warnings and terminal
+  outcome tones use observed native fields. Compact positions are display only,
+  never task or conversation identities. No timer, usage, phase or owner is inferred.
+- Keep OpenCode, Pi, Pi Durable and Orchestrator as the four fixed leading pins;
+  native children follow unchanged and remain outside task filtering. Add task
+  rows before viewpoints/feature resources, which also remain available under
+  every filter. Stable task creation ordering and native-ID tiebreaks avoid
+  progress-driven reshuffling; duplicate/invalid task identities are omitted.
+- Task activation targets the existing native task detail route, not a child
+  conversation, standalone UUID or inferred session. Host cycling shares current
+  filtered membership checks. Track mixed one/two/three-line row heights for
+  keyboard reveal; keep identity selection when filtering removes its visible row
+  rather than silently adopting the next task. Retire presses on view replacement,
+  source/position/filter/layout/interactivity changes and cleanup.
+- Add optional closed workspace.filter to UI-only viewpoints, retaining older
+  mode/side DTOs and defaulting absent filters to Active in the shell. Layout
+  changes preserve filtering; ordinary routes, Back/Forward and explicit local/
+  native viewpoints carry it. `/workspace filter active|attention|all` and its
+  palette suggestions change/prepare display state only, without a config write,
+  task admission or draft submission. Existing authenticated viewpoint checks
+  cover all filters on both modes/sides, invalid shapes, reopen persistence and
+  unchanged tasks/schedules. No helper/renderer/navigation-matrix tests are added.
+- Cached snapshots remain navigable but visibly disclaim current activity;
+  connection-generation freshness is not an atomic per-task observation or action
+  permission. Original resource/pin customization, richer phase/progress content,
+  list virtualization and interactive/visual acceptance remain unfinished.
+
 ## Still required before claiming parity
 
-- Original workspace filter/pin ordering, global preference persistence beyond
+- Remaining workspace resource filters/pin customization, global preference persistence beyond
   explicitly saved viewpoints and the remaining navigation/focus key catalogs.
   Side/mode viewpoint restoration and keyboard breadcrumb focus are restored.
 - Remaining original modal components, selection/clipboard interactions and

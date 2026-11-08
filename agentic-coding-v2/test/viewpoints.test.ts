@@ -40,6 +40,12 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			{ mode: "permanent", side: "up" },
 			{ mode: ["permanent"], side: "left" },
 			{ mode: "permanent", side: "left", execute: true },
+			{ mode: "permanent", side: "left", filter: null },
+			{ mode: "permanent", side: "left", filter: "" },
+			{ mode: "permanent", side: "left", filter: "running" },
+			{ mode: "permanent", side: "left", filter: ["active"] },
+			{ mode: "permanent", side: "left", filter: { state: "active" } },
+			{ mode: "permanent", side: "left", filter: "active", execute: true },
 		]) {
 			await expect(
 				client.call("viewpoints.save", {
@@ -78,6 +84,16 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 				});
 				revision = layout.revision;
 				expect(layout.view.workspace).toEqual({ mode, side });
+				for (const filter of ["active", "attention", "all"] as const) {
+					const filtered = await client.call("viewpoints.save", {
+						id,
+						name: "Task position",
+						revision,
+						view: { ...view, workspace: { mode, side, filter } },
+					});
+					revision = filtered.revision;
+					expect(filtered.view.workspace).toEqual({ mode, side, filter });
+				}
 			}
 		}
 		expect(JSON.stringify(saved)).not.toContain("draft");
@@ -107,7 +123,11 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			id,
 			name: "Updated task position",
 			revision,
-			view: { ...view, scroll: 4 },
+			view: {
+				...view,
+				scroll: 4,
+				workspace: { mode: "permanent", side: "right", filter: "attention" },
+			},
 		});
 		revision = changed.revision;
 		await expect(
@@ -228,7 +248,11 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 				id,
 				revision,
 				name: "Updated task position",
-				view: { ...view, scroll: 4 },
+				view: {
+					...view,
+					scroll: 4,
+					workspace: { mode: "permanent", side: "right", filter: "attention" },
+				},
 			}),
 			expect.objectContaining({
 				id: followId,
