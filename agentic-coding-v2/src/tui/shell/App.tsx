@@ -184,6 +184,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const [standalone, setStandalone] = createSignal<StandaloneInventory | null>(
 		null,
 	);
+	const [standaloneFresh, setStandaloneFresh] = createSignal(false);
 	const [diagnosticDraft, setDiagnosticDraft] = createSignal<DiagnosticDraft>({
 		task: "",
 		kind: "http",
@@ -1018,6 +1019,20 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			];
 		});
 	};
+	const selectedStandalone = createMemo(() => {
+		const view = current();
+		if (view.page !== "pi" && view.page !== "opencode") return undefined;
+		const matches =
+			standalone()?.sessions.filter(
+				(entry) => entry.id === view.resource && entry.mode === view.page,
+			) ?? [];
+		const selected = matches.length === 1 ? matches[0] : undefined;
+		return selected &&
+			Number.isSafeInteger(selected.revision) &&
+			selected.revision >= 1
+			? selected
+			: undefined;
+	});
 	const profileTargetCurrent = (saved: ProfilePickerState) => {
 		if (navigation.current !== saved.origin || !snapshotFresh()) return false;
 		const target = saved.target;
@@ -1033,7 +1048,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						transcript()?.model === saved.model))
 			);
 		const inventory = standalone();
-		if (inventory?.scope !== target.scope) return false;
+		if (!standaloneFresh() || inventory?.scope !== target.scope) return false;
 		const matches = inventory.sessions.filter(
 			(entry) =>
 				entry.id === target.id &&
@@ -1079,6 +1094,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			);
 			const selected = matches?.length === 1 ? matches[0] : undefined;
 			if (
+				!standaloneFresh() ||
 				!inventory ||
 				!selected ||
 				selected.status !== "ready" ||
@@ -3081,7 +3097,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						{
 							page: selected.page,
 							resource: selected.resource,
-							label: selected.resource,
+							label: selectedStandalone()?.title ?? selected.resource,
 						},
 					]),
 		];
@@ -3520,14 +3536,23 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								when={current().page === "opencode" || current().page === "pi"}
 							>
 								<StandalonePanel
+									scope={workspaceScope()}
+									interactive={workspaceInteractive() && !settingsEditing()}
+									filter={current().filter}
+									sort={current().sort === "newest" ? "newest" : "default"}
+									onFresh={setStandaloneFresh}
 									client={client}
 									mode={current().page === "pi" ? "pi" : "opencode"}
 									resource={current().resource}
 									connected={status() === "connected"}
 									refresh={refreshRevision()}
 									select={(id) => {
-										navigation.current.resource = id;
-										update();
+										const mode = current().page;
+										if (
+											(mode === "pi" || mode === "opencode") &&
+											current().resource !== id
+										)
+											go(mode, id);
 									}}
 									observe={setStandalone}
 								/>
@@ -4104,9 +4129,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							!busy() &&
 							!settingsEditing() &&
 							snapshotFresh() &&
-							state()?.sessions.some(
+							((state()?.sessions.some(
 								(entry) => entry.id === sessionId() && entry.writable,
-							)
+							) &&
+								isTranscript()) ||
+								(standaloneFresh() && selectedStandalone()?.status === "ready"))
 						}
 						onModel={() => openProfilePicker("model")}
 						onThinking={() => openProfilePicker("thinking")}
@@ -4125,7 +4152,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						model={
 							isTranscript() && typeof transcript()?.model === "string"
 								? String(transcript()?.model)
-								: undefined
+								: selectedStandalone()
+									? `profile: ${selectedStandalone()?.profile}`
+									: undefined
 						}
 						thinking={
 							isTranscript() && typeof transcript()?.thinking === "string"
@@ -4133,9 +4162,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								: undefined
 						}
 						working={
-							isTranscript() &&
-							observation() === "watching" &&
-							Boolean(transcript()?.progress?.run)
+							(isTranscript() &&
+								observation() === "watching" &&
+								Boolean(transcript()?.progress?.run)) ||
+							(standaloneFresh() && selectedStandalone()?.status === "busy")
 						}
 					>
 						<textarea

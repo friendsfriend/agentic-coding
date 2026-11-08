@@ -69,6 +69,11 @@ test("authenticated Pi abort keeps a cancelled attempt uncertain without publish
 			requestId: "abort-first",
 			content: "Retain a prior reply",
 		});
+		expect(
+			(
+				await client.observeStandalone({ mode: "pi", id: session.id })
+			).sessions.find((row) => row.id === session.id),
+		).toEqual(first);
 		const sending = client
 			.call("standalone.send", {
 				id: session.id,
@@ -91,6 +96,14 @@ test("authenticated Pi abort keeps a cancelled attempt uncertain without publish
 			await client.call("standalone.read", { id: session.id })
 		).sessions.find((value) => value.id === session.id);
 		expect(retained?.status).toBe("uncertain");
+		await expect(
+			client.observeStandalone({ mode: "opencode", id: session.id }),
+		).rejects.toThrow("another mode");
+		expect(
+			(
+				await client.observeStandalone({ mode: "pi", id: session.id })
+			).sessions.find((row) => row.id === session.id),
+		).toEqual(retained);
 		expect(
 			retained?.messages.filter((value) => value.role === "assistant"),
 		).toEqual([{ role: "assistant", content: "Earlier ready reply" }]);

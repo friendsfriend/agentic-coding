@@ -9,6 +9,11 @@ import {
 	type Transcript,
 } from "../../protocol/index.ts";
 
+import type {
+	StandaloneInventory,
+	StandaloneMode,
+} from "../../protocol/standalone.ts";
+
 // DOM typings hide Bun's native header-taking constructor overload.
 const NativeWebSocket = WebSocket as typeof WebSocket & {
 	new (url: string, options: Bun.WebSocketOptions): WebSocket;
@@ -68,6 +73,64 @@ export class ClientConnection {
 		this.listeners.add(listener);
 		return () => {
 			this.listeners.delete(listener);
+		};
+	}
+	/** Explicit read-only inventory/detail observation. No UUID adoption, mutation or replay. */
+	async observeStandalone(target: {
+		mode: StandaloneMode;
+		id: string | null;
+	}): Promise<StandaloneInventory> {
+		const generation = this.generation;
+		const current = () =>
+			!this.closed &&
+			this.status === "connected" &&
+			generation === this.generation;
+		if (!current())
+			throw new Error("Standalone observation connection changed");
+		const listing = await this.call("standalone.read", {});
+		if (!current())
+			throw new Error("Standalone observation connection changed");
+		const ids = new Set<string>();
+		for (const session of listing.sessions) {
+			if (
+				ids.has(session.id) ||
+				!Number.isSafeInteger(session.revision) ||
+				session.revision < 1
+			)
+				throw new Error("Ambiguous standalone observation");
+			ids.add(session.id);
+		}
+		if (target.id === null) return listing;
+		const selected = listing.sessions.find(
+			(session) => session.id === target.id && session.mode === target.mode,
+		);
+		if (!selected)
+			throw new Error(
+				"Saved standalone identity belongs to another mode or is unavailable",
+			);
+		const detail = await this.call("standalone.read", { id: selected.id });
+		if (!current())
+			throw new Error("Standalone observation connection changed");
+		const row = detail.sessions.length === 1 ? detail.sessions[0] : undefined;
+		if (
+			!row ||
+			row.id !== selected.id ||
+			row.mode !== target.mode ||
+			row.repository !== selected.repository ||
+			!Number.isSafeInteger(row.revision) ||
+			row.revision < selected.revision ||
+			detail.scope !== listing.scope ||
+			detail.piAvailable !== listing.piAvailable ||
+			detail.opencodeAvailable !== listing.opencodeAvailable
+		)
+			throw new Error(
+				"Standalone observation source changed; read again explicitly",
+			);
+		return {
+			...listing,
+			sessions: listing.sessions.map((session) =>
+				session.id === row.id ? row : session,
+			),
 		};
 	}
 	private notify() {

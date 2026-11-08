@@ -7,7 +7,10 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
-import type { StandaloneSession } from "../../../protocol/standalone.ts";
+import type {
+	StandaloneMode,
+	StandaloneSession,
+} from "../../../protocol/standalone.ts";
 import { AssistantMarkdown } from "../../presentation/components/AssistantMarkdown.tsx";
 import { markdownBlockParts } from "../../presentation/components/markdownBlocks.ts";
 import { UserPrompt } from "../../presentation/components/UserPrompt.tsx";
@@ -17,7 +20,10 @@ import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 /** Presentation only. Retained rows survive unchanged observation polls; changed
  * bytes/indexes replace a row instead of inheriting another message's fold. */
 export function StandaloneTranscript(props: {
+	mode: StandaloneMode;
 	sessionId: string;
+	interactive: boolean;
+	scope: object;
 	messages: StandaloneSession["messages"];
 	partial: string | null;
 	busy: boolean;
@@ -27,10 +33,11 @@ export function StandaloneTranscript(props: {
 	const markdownCache = new SessionMarkdownCache();
 	let scope: string | undefined;
 	const key = (index: number) =>
-		JSON.stringify(["standalone", props.sessionId, index]);
+		JSON.stringify(["standalone", props.mode, props.sessionId, index]);
 	const messages = createMemo(() => {
-		if (scope !== props.sessionId) {
-			scope = props.sessionId;
+		const identity = JSON.stringify([props.mode, props.sessionId]);
+		if (scope !== identity) {
+			scope = identity;
 			retained.clear();
 			markdownCache.clear();
 		}
@@ -72,6 +79,9 @@ export function StandaloneTranscript(props: {
 							}
 						>
 							<UserPrompt
+								scope={props.scope}
+								interactive={props.interactive}
+								keyboard
 								text={message.content}
 								expanded={expanded()}
 								onToggle={() => setExpanded((value) => !value)}
@@ -97,6 +107,7 @@ export function StandaloneTranscript(props: {
 						transcript={(_key, text) => markdownBlockParts(text)}
 						partKey={JSON.stringify([
 							"standalone",
+							props.mode,
 							props.sessionId,
 							"volatile",
 						])}

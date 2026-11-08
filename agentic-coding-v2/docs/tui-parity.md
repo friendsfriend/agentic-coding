@@ -1314,6 +1314,48 @@ content and bindings, not permission to replace the original presentation.
   permission. Original resource/pin customization, richer phase/progress content,
   list virtualization and interactive/visual acceptance remain unfinished.
 
+## Integrated standalone observation, navigation and prompt batch
+
+- Compose Pi/OpenCode inventory rows with the original selectable chrome and
+  supplied title, configured profile and native status. UUIDs stay independent
+  of durable task/session IDs. Filtering uses supplied fields; `newest` reverses
+  supplied inventory order, without inventing creation timestamps. A hidden or
+  missing saved UUID never selects the next session automatically.
+- Register inventory rows and retained user folds with the existing rendered
+  control key layer (Ctrl+Alt+J/K and Ctrl+Alt+Enter), including viewport reveal.
+  Primary taps share guarded navigation. Retire row presses on source, position,
+  filter/order, view and interactivity changes. Opening another UUID uses normal
+  route/Back/Forward state, not in-place resource reassignment; reselecting the
+  current UUID preserves its draft and does not add duplicate history.
+- Read inventory/detail through an explicit read-only client observation. Reject
+  duplicate IDs, invalid revisions, wrong-mode/missing UUIDs, mismatched detail
+  identity/repository/capabilities/scope and regressing revisions. Check the exact
+  connection generation across both reads. This is bounded and non-atomic, not
+  an ownership grant, backend probe or implicit session adoption.
+- Scope panel reads to client, mode, UUID, view, connection and explicit refresh;
+  coalesce invalidations while a read is pending and discard retired results.
+  Ordinary input/cursor updates do not initiate reads. Disconnect/read errors
+  preserve visibly cached content while withdrawing current-activity claims and
+  prompt chooser freshness. Native reads may wait for an in-flight attempt;
+  retained display is not a guaranteed live status feed. No uncertain
+  send/configure/compact is redispatched.
+- Key retained markdown caches by mode plus UUID and keep user folds for unchanged
+  role/content at the same retained index during polling. Indexes are local
+  display positions, not native message IDs. Source replacement or unmount still
+  resets those local folds; this is not native-history merge or persisted folding.
+  UserPrompt keeps its original raised/left-bordered chrome with scoped primary
+  tap retirement and optional standalone keyboard registration.
+- Integrate the observed standalone configured-profile label into prompt chrome.
+  Fresh ready records may open the existing supplied profile-bundle chooser;
+  cached, busy, uncertain or missing records cannot. The chooser only prepares an
+  explicit revision-fenced command. Busy pulse uses observed native attempt
+  activity, never completion. No standalone model, thinking, timing or lifetime
+  usage is inferred from the limited retained-message DTO.
+- Extend existing authenticated OpenCode/Pi boundary fixtures for inert scoped
+  reads, wrong-mode/foreign refusal, retained redacted replies, ready/uncertain/
+  closed observations and closed-client refusal. No renderer/helper/navigation
+  tests, real model/provider calls, backend starts or visual acceptance are added.
+
 ## Still required before claiming parity
 
 - Remaining workspace resource filters/pin customization, global preference persistence beyond
@@ -1330,8 +1372,10 @@ content and bindings, not permission to replace the original presentation.
   remaining prompt history details, resource/run argument and profile pickers,
   and complete filtering/input behavior. Native model/thinking bundle preparation
   is restored; independent overrides are not offered by the native API.
-- Remaining standalone detail/header and focus composition; scoped model/thinking
-  profile-bundle preparation is restored without durable-ID aliases.
+- Remaining standalone detail/header and focus composition, native-history/source
+  anchors and persisted fold state. Scoped inventory/detail reads, rendered-control
+  navigation and observed-profile prompt preparation are integrated without
+  durable-ID aliases; they do not establish full interaction or visual parity.
 - Original settings/provider/wiki/schedules/environment list/detail composition;
   adapt only content and controls incompatible with native authority.
 - Interaction/lifecycle audit and terminal visual verification. Compilation,

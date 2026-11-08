@@ -183,6 +183,9 @@ test("authenticated standalone bridge retains its own identities and consumes un
 		expect(inventory.sessions).toEqual([]);
 		expect(inventory.opencodeAvailable).toBe(true);
 		expect(inventory.piAvailable).toBe(false);
+		expect(
+			await client.observeStandalone({ mode: "opencode", id: null }),
+		).toEqual(inventory);
 		const profile = config.profiles[0]?.id,
 			repository = config.repositories[0];
 		if (!profile || !repository)
@@ -196,6 +199,19 @@ test("authenticated standalone bridge retains its own identities and consumes un
 		expect(session.status).toBe("ready");
 		expect(JSON.stringify(session)).not.toContain("ses_fixture");
 		const captured = session;
+		const observed = await client.observeStandalone({
+			mode: "opencode",
+			id: captured.id,
+		});
+		expect(observed.sessions).toEqual([captured]);
+		expect(observed.scope).toBe(inventory.scope);
+		await expect(
+			client.observeStandalone({ mode: "pi", id: captured.id }),
+		).rejects.toThrow("another mode");
+		await expect(
+			client.observeStandalone({ mode: "opencode", id: "ses_foreign" }),
+		).rejects.toThrow("unavailable");
+		expect(messages).toBe(0);
 		await expect(
 			client.call("standalone.configure", {
 				id: captured.id,
@@ -245,6 +261,14 @@ test("authenticated standalone bridge retains its own identities and consumes un
 			requestId: "attempt-1",
 		});
 		expect(reply.messages.at(-1)?.content).toBe("[redacted] answer");
+		const retainedObservation = await client.observeStandalone({
+			mode: "opencode",
+			id: session.id,
+		});
+		expect(
+			retainedObservation.sessions.find((row) => row.id === session.id),
+		).toEqual(reply);
+		expect(JSON.stringify(retainedObservation)).not.toContain("ses_fixture");
 		await expect(
 			client.call("standalone.send", {
 				id: session.id,
@@ -307,6 +331,15 @@ test("authenticated standalone bridge retains its own identities and consumes un
 			),
 		).toBe(true);
 		expect(creates).toBe(1);
+		expect(
+			(await client.observeStandalone({ mode: "opencode", id: session.id }))
+				.sessions[0]?.status,
+		).toBe("closed");
+		expect(messages).toBe(2);
+		client.close();
+		await expect(
+			client.observeStandalone({ mode: "opencode", id: session.id }),
+		).rejects.toThrow("connection changed");
 	} finally {
 		client?.close();
 		host?.stop();
