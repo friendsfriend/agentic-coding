@@ -16,6 +16,23 @@ export const uiPages = [
 	"settings",
 ] as const;
 export type UiPage = (typeof uiPages)[number];
+export type UiWorkspaceLayout = {
+	mode: "expanding" | "permanent";
+	side: "left" | "right";
+};
+/** Closed display preferences, never shell configuration or execution state. */
+export function uiWorkspaceLayout(value: unknown): UiWorkspaceLayout {
+	const data = record(value);
+	if (
+		Object.keys(data).length !== 2 ||
+		!Object.hasOwn(data, "mode") ||
+		!Object.hasOwn(data, "side") ||
+		(data.mode !== "expanding" && data.mode !== "permanent") ||
+		(data.side !== "left" && data.side !== "right")
+	)
+		throw new Error("Invalid UI-only workspace layout");
+	return { mode: data.mode, side: data.side };
+}
 export type UiView = {
 	page: UiPage;
 	resource: string | null;
@@ -26,6 +43,7 @@ export type UiView = {
 	scroll: number;
 	focus: "sessions" | "content" | "viewpoints";
 	transcriptFollow?: { id: number; following: boolean };
+	workspace?: UiWorkspaceLayout;
 };
 export type NativeViewpoint = {
 	id: string;
@@ -49,7 +67,10 @@ export function uiView(value: unknown): UiView {
 	const data = record(value);
 	if (
 		Object.keys(data).some(
-			(key) => !keys.includes(key) && key !== "transcriptFollow",
+			(key) =>
+				!keys.includes(key) &&
+				key !== "transcriptFollow" &&
+				key !== "workspace",
 		) ||
 		keys.some((key) => !Object.hasOwn(data, key)) ||
 		!uiPages.includes(data.page as UiPage) ||
@@ -74,6 +95,7 @@ export function uiView(value: unknown): UiView {
 		)
 	)
 		throw new Error("Invalid UI-only viewpoint state");
+	if (Object.hasOwn(data, "workspace")) uiWorkspaceLayout(data.workspace);
 	if (Object.hasOwn(data, "transcriptFollow")) {
 		const follow = record(data.transcriptFollow);
 		if (

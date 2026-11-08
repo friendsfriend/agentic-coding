@@ -6,6 +6,24 @@ export type Keybind = {
 	standard?: boolean;
 };
 export const shellKeybinds: Keybind[] = [
+	{
+		key: "ctrl+s",
+		cmd: "shell.workspaceToggle",
+		action: "Toggle workspace/content focus",
+		short: "sidebar",
+	},
+	{
+		key: "ctrl+h",
+		cmd: "shell.workspacePrevious",
+		action: "Previous workspace",
+		standard: true,
+	},
+	{
+		key: "ctrl+l",
+		cmd: "shell.workspaceNext",
+		action: "Next workspace",
+		standard: true,
+	},
 	{ key: "ctrl+q", cmd: "shell.quit", action: "Quit", short: "quit" },
 	{
 		key: "f1",

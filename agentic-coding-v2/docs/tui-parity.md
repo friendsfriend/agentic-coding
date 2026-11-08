@@ -1198,10 +1198,44 @@ content and bindings, not permission to replace the original presentation.
   text-line/source-offset restoration or visual/interactive acceptance. No
   renderer, presenter or navigation-matrix tests are added.
 
+## Batched workspace layout, host controls and viewpoint persistence
+
+- Move expanding/permanent ownership from the sidebar component into the shell's
+  view state. Ordinary route changes carry the preference; Back/Forward and local
+  memory viewpoints restore their own cloned layout. Preserve the original
+  6/34-column compact/expanded geometry and 150ms tween.
+- Mount the same workspace presentation on the selected outer left/right side;
+  mirror the original open/collapse glyphs by side. Each side mount registers its
+  own key layer so retiring one cannot unregister the replacement. Native agent
+  identities and workspace entry ordering remain unchanged: OpenCode, Pi,
+  Pi Durable, Orchestrator, native children, viewpoints and feature resources.
+- Restore the original Ctrl+S workspace/content toggle and Ctrl+H/Ctrl+L route
+  cycle alongside existing aliases. These target workspace identities on either
+  side, not physical panel indices. Cycles exclude child disclosure and unrelated
+  viewpoint snapshots; pointer activation and host cycling share current route
+  membership checks. Covered modals, editing and busy state refuse interaction.
+  Ctrl+A is not newly claimed from standalone/input selection surfaces.
+- `/workspace expanding|permanent left|right` explicitly changes only local
+  display state. Palette/autocomplete entries prepare the four choices; submission
+  validates exact arguments before clearing the draft. No config write, native
+  provider call, session admission or execution occurs.
+- Add an optional closed `UiView.workspace` layout to native viewpoints, with
+  exact mode/side enums and refusal of missing/extra/execution-shaped fields.
+  Native pin/repin capture it; UI-only restoration preserves it. Old native/local
+  views lacking layout remain valid and use expanding/left on restoration.
+  Persistence is through explicitly saved viewpoints, not a silent global config
+  update or automatic bookmark adoption on startup.
+- Extend the existing authenticated viewpoint fixture with all four layouts,
+  invalid-shape/enum refusals, old DTO compatibility, read/reopen retention and
+  unchanged native task/schedule assertions. No renderer/helper/navigation-matrix
+  tests or visual acceptance claims are introduced. Resource filters, pin ordering
+  beyond current observations and the remaining focus catalog still need work.
+
 ## Still required before claiming parity
 
-- Original workspace filter/pin ordering, side/mode persistence and complete
-  navigation/focus key catalogs. Keyboard breadcrumb focus is already restored.
+- Original workspace filter/pin ordering, global preference persistence beyond
+  explicitly saved viewpoints and the remaining navigation/focus key catalogs.
+  Side/mode viewpoint restoration and keyboard breadcrumb focus are restored.
 - Remaining original modal components, selection/clipboard interactions and
   notification placement; the restored read-only help frame is not general
   modal parity.

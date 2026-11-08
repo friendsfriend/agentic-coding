@@ -61,6 +61,9 @@ export const workspaceNavigationKeybinds: Keybind[] = [
  * adapted to native navigation entries. Focus/activation never dispatch a task. */
 export function WorkspaceNavigation(props: {
 	active: boolean;
+	mode: "expanding" | "permanent";
+	side: "left" | "right";
+	onToggleMode: () => void;
 	/** Covered surfaces must not accept focus taps or retained activations. */
 	interactive?: boolean;
 	entries: { name: string; description: string; value: string }[];
@@ -72,13 +75,21 @@ export function WorkspaceNavigation(props: {
 	onWidth: (width: number) => void;
 }) {
 	const dimensions = useTerminalDimensions();
-	const [permanent, setPermanent] = createSignal(false);
+	const permanent = () => props.mode === "permanent";
+	const toggleGlyph = () =>
+		permanent()
+			? props.side === "left"
+				? "«"
+				: "»"
+			: props.side === "left"
+				? "»"
+				: "«";
 	const interactive = () => props.interactive !== false;
 	const focus = () => {
 		if (interactive()) props.focus();
 	};
 	const toggleSize = () => {
-		if (interactive()) setPermanent((value) => !value);
+		if (interactive()) props.onToggleMode();
 	};
 	const [cursorValue, setCursorValue] = createSignal(props.selected);
 	let scroll: ScrollBoxRenderable | undefined;
@@ -158,7 +169,8 @@ export function WorkspaceNavigation(props: {
 		if (entry) setCursorValue(entry.value);
 	};
 	const unregister = useKeymap().registerLayer({
-		id: "v2.workspace-navigation",
+		// Each side mount owns its own layer; retiring one cannot remove the other.
+		id: `v2.workspace-navigation.${props.side}`,
 		priority: 15,
 		enabled: () => props.active && interactive(),
 		commands: [
@@ -285,7 +297,7 @@ export function WorkspaceNavigation(props: {
 							<text
 								fg={hover.hovered() ? uiColors.textPrimary : uiColors.textMuted}
 							>
-								{permanent() ? "«" : "»"}
+								{toggleGlyph()}
 							</text>
 						</box>
 						{rows()}
@@ -309,7 +321,7 @@ export function WorkspaceNavigation(props: {
 							{...toggle}
 							{...hover}
 						>
-							{permanent() ? "«" : "»"}
+							{toggleGlyph()}
 						</text>
 					}
 				>

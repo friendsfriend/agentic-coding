@@ -2,6 +2,7 @@ import { record } from "../../protocol/index.ts";
 import {
 	type NativeViewpoint,
 	nativeViewpoint,
+	uiWorkspaceLayout,
 } from "../../protocol/viewpoints.ts";
 import type { Navigation, View } from "./navigation.ts";
 export type Viewpoint = {
@@ -54,7 +55,12 @@ function checkedView(value: unknown): View {
 	record(item.detail);
 	if (JSON.stringify(item).length > 128000)
 		throw new Error("Saved view is oversized");
-	return structuredClone(item) as View;
+	return structuredClone({
+		...item,
+		workspace: Object.hasOwn(item, "workspace")
+			? uiWorkspaceLayout(item.workspace)
+			: { mode: "expanding", side: "left" },
+	}) as View;
 }
 /** Data-only bookmark collection. Restoration has no reference to client commands. */
 export class Viewpoints {

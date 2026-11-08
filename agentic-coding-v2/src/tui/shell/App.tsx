@@ -37,7 +37,7 @@ import type {
 	ProviderActionReceipt,
 } from "../../protocol/provider-actions.ts";
 import type { StandaloneInventory } from "../../protocol/standalone.ts";
-import { uiView } from "../../protocol/viewpoints.ts";
+import { uiView, uiWorkspaceLayout } from "../../protocol/viewpoints.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
@@ -134,6 +134,7 @@ const help = [
 	"/session ID · /back · /forward · /reconnect",
 	"/view skills · /skill SKILL_ID@DIGEST (loaded instructions only)",
 	"/model PROFILE · /abort · /compact [instructions] · /latest · /timeline",
+	"/workspace expanding|permanent left|right · UI layout only; no configuration write",
 	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
 	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
@@ -1000,7 +1001,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	};
 	const go = (page: Page, resource: string | null = null) => {
 		remember();
-		navigation.go(view(page, resource));
+		navigation.go({
+			...view(page, resource),
+			workspace: navigation.current.workspace,
+		});
 		setNotice(null);
 		restore();
 	};
@@ -1445,6 +1449,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		})),
 		...[
 			"/help",
+			"/workspace expanding left",
+			"/workspace expanding right",
+			"/workspace permanent left",
+			"/workspace permanent right",
 			"/refresh",
 			"/back",
 			"/forward",
@@ -1621,6 +1629,28 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		commands: [
 			{ id: "shell.quit", name: "Quit", run: () => props.quit() },
 			{
+				id: "shell.workspaceToggle",
+				name: "Toggle workspace/content focus",
+				run: () => {
+					if (!workspaceInteractive()) return;
+					remember();
+					setBreadcrumbFocused(false);
+					navigation.current.focus =
+						current().focus === "sessions" ? "content" : "sessions";
+					update();
+				},
+			},
+			{
+				id: "shell.workspacePrevious",
+				name: "Previous workspace",
+				run: () => cycleWorkspace(-1),
+			},
+			{
+				id: "shell.workspaceNext",
+				name: "Next workspace",
+				run: () => cycleWorkspace(1),
+			},
+			{
 				id: "shell.help",
 				name: "Show keybinding/command help",
 				run: () => queueMicrotask(() => setHelpOpen((value) => !value)),
@@ -1787,7 +1817,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						throw new Error("Use ID@REVISION from current server state");
 					return { id: match[1], revision: Number(match[2]) };
 				};
-				if (command === "standalone") {
+				if (command === "workspace") {
+					if (words.length !== 2)
+						throw new Error(
+							"Use /workspace expanding|permanent left|right; UI preferences only",
+						);
+					origin.workspace = uiWorkspaceLayout({
+						mode: words[0],
+						side: words[1],
+					});
+					clear();
+					update();
+				} else if (command === "standalone") {
 					if (!["orchestrator", "pi", "opencode"].includes(origin.page))
 						throw new Error(
 							"Manage standalone sessions through orchestrator/transcript commands",
@@ -1967,6 +2008,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								expanded: source.expanded,
 								scroll: source.scroll,
 								focus: source.focus,
+								workspace: source.workspace,
 								...(((source.page === "orchestrator" &&
 									source.resource === null) ||
 									source.page === "session") &&
@@ -2899,6 +2941,91 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			value: page,
 		})),
 	];
+
+	const workspaceInteractive = () =>
+		!paletteOpen() &&
+		!helpOpen() &&
+		!timeline() &&
+		!settingsEditing() &&
+		!busy();
+	const workspaceSelected = () =>
+		current().page === "session"
+			? `session:${current().resource}`
+			: ["opencode", "pi", "pi-durable", "orchestrator"].includes(
+						current().page,
+					)
+				? `mode:${["opencode", "pi", "pi-durable", "orchestrator"].indexOf(current().page)}`
+				: current().page;
+	const openWorkspaceEntry = (value: string) => {
+		if (
+			!workspaceInteractive() ||
+			!sidebarOptions().some((entry) => entry.value === value)
+		)
+			return;
+
+		if (value.startsWith("bookmark:")) {
+			remember();
+			viewpoints.restore(value.slice(9), navigation);
+			restore();
+		} else if (value === "tree:children") {
+			navigation.current.expanded = current().expanded.includes(
+				"sidebar:children",
+			)
+				? current().expanded.filter((key) => key !== "sidebar:children")
+				: [...current().expanded, "sidebar:children"];
+			update();
+		} else if (value.startsWith("mode:"))
+			go(
+				(["opencode", "pi", "pi-durable", "orchestrator"] as Page[])[
+					Number(value.slice(5))
+				] ?? "orchestrator",
+			);
+		else if (value.startsWith("session:")) go("session", value.slice(8));
+		else go(value as Page);
+	};
+	const cycleWorkspace = (direction: -1 | 1) => {
+		if (!workspaceInteractive()) return;
+		// Cycle actual routes, not a disclosure toggle or an unrelated saved view.
+		const entries = sidebarOptions().filter(
+			(entry) =>
+				entry.value !== "tree:children" && !entry.value.startsWith("bookmark:"),
+		);
+		if (!entries.length) return;
+		const index = entries.findIndex(
+			(entry) => entry.value === workspaceSelected(),
+		);
+		const next =
+			entries[
+				index < 0
+					? direction < 0
+						? entries.length - 1
+						: 0
+					: (index + direction + entries.length) % entries.length
+			];
+		if (next) openWorkspaceEntry(next.value);
+	};
+	const WorkspacePanel = () => (
+		<WorkspaceNavigation
+			interactive={workspaceInteractive()}
+			mode={current().workspace.mode}
+			side={current().workspace.side}
+			onToggleMode={() => {
+				navigation.current.workspace.mode =
+					current().workspace.mode === "permanent" ? "expanding" : "permanent";
+				update();
+			}}
+			pinCount={4}
+			active={current().focus === "sessions" && !paletteOpen() && !helpOpen()}
+			entries={sidebarOptions()}
+			onWidth={setWorkspaceWidth}
+			selected={workspaceSelected()}
+			focus={() => {
+				navigation.current.focus = "sessions";
+				update();
+			}}
+			open={openWorkspaceEntry}
+		/>
+	);
 	return (
 		<box
 			width="100%"
@@ -2929,50 +3056,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				<Badge text={current().page} highlight="accent" />
 			</box>
 			<box flexDirection="row" flexGrow={1} minHeight={0}>
-				<WorkspaceNavigation
-					interactive={!paletteOpen() && !helpOpen()}
-					pinCount={4}
-					active={
-						current().focus === "sessions" && !paletteOpen() && !helpOpen()
-					}
-					entries={sidebarOptions()}
-					onWidth={setWorkspaceWidth}
-					selected={
-						current().page === "session"
-							? `session:${current().resource}`
-							: ["opencode", "pi", "pi-durable", "orchestrator"].includes(
-										current().page,
-									)
-								? `mode:${["opencode", "pi", "pi-durable", "orchestrator"].indexOf(current().page)}`
-								: current().page
-					}
-					focus={() => {
-						navigation.current.focus = "sessions";
-						update();
-					}}
-					open={(value) => {
-						if (value.startsWith("bookmark:")) {
-							remember();
-							viewpoints.restore(value.slice(9), navigation);
-							restore();
-						} else if (value === "tree:children") {
-							navigation.current.expanded = current().expanded.includes(
-								"sidebar:children",
-							)
-								? current().expanded.filter((key) => key !== "sidebar:children")
-								: [...current().expanded, "sidebar:children"];
-							update();
-						} else if (value.startsWith("mode:"))
-							go(
-								(["opencode", "pi", "pi-durable", "orchestrator"] as Page[])[
-									Number(value.slice(5))
-								] ?? "orchestrator",
-							);
-						else if (value.startsWith("session:"))
-							go("session", value.slice(8));
-						else go(value as Page);
-					}}
-				/>
+				<Show when={current().workspace.side === "left"}>
+					<WorkspacePanel />
+				</Show>
 				<box flexGrow={1} minWidth={0} flexDirection="column">
 					<BreadcrumbRow
 						width={Math.max(
@@ -3740,6 +3826,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							go("session", String(id));
 					}}
 				/>
+				<Show when={current().workspace.side === "right"}>
+					<WorkspacePanel />
+				</Show>
 			</box>
 			<StatusBar
 				keybinds={(paletteOpen()

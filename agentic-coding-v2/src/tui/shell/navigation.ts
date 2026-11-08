@@ -1,4 +1,5 @@
 import type { Data } from "../../protocol/index.ts";
+import type { UiWorkspaceLayout } from "../../protocol/viewpoints.ts";
 export type Page =
 	| "opencode"
 	| "pi"
@@ -25,6 +26,7 @@ export type View = {
 	focus: "sessions" | "content" | "viewpoints";
 	draft: string;
 	detail: Data;
+	workspace: UiWorkspaceLayout;
 };
 export function view(
 	page: Page = "orchestrator",
@@ -41,6 +43,7 @@ export function view(
 		focus: "content",
 		draft: "",
 		detail: {},
+		workspace: { mode: "expanding", side: "left" },
 	};
 }
 /** Navigation stores state, not commands. Back restores the actual previous view. */

@@ -22,6 +22,7 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			expanded: [],
 			scroll: 3,
 			focus: "content",
+			workspace: { mode: "permanent", side: "right" },
 		};
 	let revision = 0;
 	try {
@@ -31,6 +32,24 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			(state) => state !== null,
 		);
 		const before = await app.snapshot();
+		for (const workspace of [
+			null,
+			[],
+			{},
+			{ mode: "permanent" },
+			{ mode: "permanent", side: "up" },
+			{ mode: ["permanent"], side: "left" },
+			{ mode: "permanent", side: "left", execute: true },
+		]) {
+			await expect(
+				client.call("viewpoints.save", {
+					id: crypto.randomUUID(),
+					name: "Invalid workspace",
+					revision: 0,
+					view: { ...view, workspace } as unknown as UiView,
+				}),
+			).rejects.toThrow("Native operation refused");
+		}
 		expect(await client.call("viewpoints.read", {})).toEqual([]);
 		const saved = await client.call("viewpoints.save", {
 			id,
@@ -49,6 +68,18 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			}),
 		).toEqual(saved);
 		expect(await client.call("viewpoints.read", {})).toEqual([saved]);
+		for (const mode of ["expanding", "permanent"] as const) {
+			for (const side of ["left", "right"] as const) {
+				const layout = await client.call("viewpoints.save", {
+					id,
+					name: "Task position",
+					revision,
+					view: { ...view, workspace: { mode, side } },
+				});
+				revision = layout.revision;
+				expect(layout.view.workspace).toEqual({ mode, side });
+			}
+		}
 		expect(JSON.stringify(saved)).not.toContain("draft");
 		for (const extra of [
 			{ draft: "private prompt" },
@@ -90,13 +121,16 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 				view: { ...view, filter: "x".repeat(257) },
 			}),
 		).rejects.toThrow("Native operation refused");
+		const legacyView = { ...view };
+		delete legacyView.workspace;
 		const disposable = crypto.randomUUID(),
 			removed = await client.call("viewpoints.save", {
 				id: disposable,
 				name: "Disposable",
 				revision: 0,
-				view,
+				view: legacyView,
 			});
+		expect(removed.view.workspace).toBeUndefined();
 		await client.call("viewpoints.remove", {
 			id: disposable,
 			revision: removed.revision,
