@@ -957,6 +957,22 @@ content and bindings, not permission to replace the original presentation.
   and visual/interactive acceptance remain unfinished. No renderer/helper tests,
   native answer/approval controls or runtime calls are added.
 
+## Dialogue supplied-question header subjects
+
+- Restore the original dialogue header subject: one displayable item's supplied
+  question text (or the generic `question` subject for options/context-only data),
+  or a count of multiple displayable supplied items. No valid supplied items
+  retains the generic tool-name fallback.
+- Bound the single-item preview to 160 code points (159 plus ellipsis when
+  truncated). Whitespace normalization applies only to this header preview;
+  question/context/option bodies, identifiers and raw Arguments stay unchanged.
+- Counts describe only displayable supplied items, not admitted/delivered questions
+  or responses. Keep the existing generated/live/retained status caveats; do not
+  infer an `asking` status, requester authority, result answer or clarification
+  identity from this subject. No native operation or response routing is added.
+- Full dialogue response composition, nested-call layout, integrated load-older
+  and interactive/visual acceptance remain unfinished. No renderer/helper tests.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

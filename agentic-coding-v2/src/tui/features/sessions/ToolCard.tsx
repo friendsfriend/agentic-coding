@@ -190,11 +190,15 @@ export function ToolCard(props: {
 	const summary = () =>
 		name() === "codemode"
 			? scriptHeadline()
-			: ["read", "edit", "write"].includes(name())
-				? path()
-				: name() === "bash" || name() === "shell"
-					? string(args().command)
-					: string(args().app) || string(args().title) || string(args().query);
+			: ["developer_question", "agent_ask"].includes(name())
+				? dialogueHeadline()
+				: ["read", "edit", "write"].includes(name())
+					? path()
+					: name() === "bash" || name() === "shell"
+						? string(args().command)
+						: string(args().app) ||
+							string(args().title) ||
+							string(args().query);
 	const headerLabel = () => {
 		if (!browserActions.has(name())) return summary() || name();
 		const verb = name().slice("browser_".length).replaceAll("_", " ");
@@ -278,6 +282,17 @@ export function ToolCard(props: {
 				},
 			];
 		});
+	});
+	const dialogueHeadline = createMemo(() => {
+		const questions = requestedQuestions();
+		if (questions.length === 0) return "";
+		if (questions.length > 1) return `${questions.length} questions`;
+		const points = Array.from(
+			(questions[0]?.text ?? "question").replace(/\s+/g, " ").trim(),
+		);
+		return points.length > 160
+			? `${points.slice(0, 159).join("")}…`
+			: points.join("");
 	});
 	const scriptOutput = createMemo(() => {
 		const value = details().output;
