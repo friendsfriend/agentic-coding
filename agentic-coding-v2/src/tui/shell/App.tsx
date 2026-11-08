@@ -69,6 +69,7 @@ import { SkillPanel } from "../features/skills/SkillPanel.tsx";
 import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { WikiPanel } from "../features/wiki/WikiPanel.tsx";
 import { Badge } from "../presentation/components/Badge.tsx";
+import { JumpToLatest } from "../presentation/components/JumpToLatest.tsx";
 import { PromptSuggestions } from "../presentation/components/PromptSuggestions.tsx";
 import {
 	createPromptCursorBlink,
@@ -238,6 +239,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const cursorBlink = createPromptCursorBlink();
 	const renderer = useRenderer();
 	let pendingReveal: BoxRenderable | undefined;
+	let pendingLatest: number | null = null;
+	const [awayFromBottom, setAwayFromBottom] = createSignal(false);
 	let pendingTranscriptRestore: {
 		page: Page;
 		resource: string | null;
@@ -266,6 +269,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		viewport: number;
 	} | null = null;
 	const resetReadingPlace = () => {
+		pendingLatest = null;
+		setAwayFromBottom(false);
 		readingAnchor = null;
 		followingBottom = false;
 		sampledScroll = null;
@@ -292,6 +297,25 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		let cursorFocused = false;
 		let paintedCursorVisible = true;
 		const paintCursor = (buffer: Parameters<typeof paintPromptCursor>[0]) => {
+			if (pendingLatest !== null && pendingLatest !== sessionId())
+				pendingLatest = null;
+			if (
+				pendingLatest !== null &&
+				scroll &&
+				!scroll.isDestroyed &&
+				readingRows &&
+				transcript() !== null &&
+				!helpOpen() &&
+				!paletteOpen()
+			) {
+				resetReadingPlace();
+				followingBottom = true;
+				const bottom = Math.max(
+					0,
+					scroll.scrollHeight - scroll.viewport.height,
+				);
+				if (scroll.scrollTop !== bottom) scroll.scrollTo(bottom);
+			}
 			// A loading placeholder must not consume a saved numeric position.
 			const saved = pendingTranscriptRestore;
 			if (saved) {
@@ -406,6 +430,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				followingBottom =
 					scroll.scrollTop >=
 					Math.max(0, scroll.scrollHeight - scroll.viewport.height);
+				if (awayFromBottom() !== !followingBottom)
+					setAwayFromBottom(!followingBottom);
 				if (followingBottom) readingAnchor = null;
 				else if (!readingAnchor) {
 					const viewportTop = scroll.viewport.screenY;
@@ -452,11 +478,29 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			clearInterval(blinkTimer);
 			pendingReveal = undefined;
 			pendingTranscriptRestore = null;
+			pendingLatest = null;
 			renderer.removePostProcessFn(paintCursor);
 		});
 	});
+	const jumpToLatest = () => {
+		if (
+			!isTranscript() ||
+			!available() ||
+			!readingRows ||
+			transcript() === null ||
+			helpOpen() ||
+			paletteOpen()
+		)
+			return;
+		pendingTranscriptRestore = null;
+		pendingReveal = undefined;
+		readingAnchor = null;
+		pendingLatest = sessionId();
+		renderer.requestRender();
+	};
 	const reveal = (node: BoxRenderable) => {
 		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
+		pendingLatest = null;
 		pendingTranscriptRestore = null;
 		pendingReveal = node;
 		renderer.requestRender();
@@ -513,7 +557,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const available = () => {
 		const id = sessionId();
 		return (
-			id === null || state()?.sessions.some((session) => session.id === id)
+			id === null ||
+			state()?.sessions.some((session) => session.id === id) === true
 		);
 	};
 	const remember = () => {
@@ -2988,6 +3033,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							</Show>
 						</ActionScope>
 					</scrollbox>
+					<Show when={isTranscript()}>
+						<JumpToLatest
+							visible={awayFromBottom()}
+							enabled={
+								!helpOpen() &&
+								!paletteOpen() &&
+								available() &&
+								transcript() !== null
+							}
+							onJump={jumpToLatest}
+						/>
+					</Show>
 					<Show when={suggestionsOpen()}>
 						<PromptSuggestions
 							items={suggestions()}

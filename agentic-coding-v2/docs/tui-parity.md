@@ -473,6 +473,24 @@ content and bindings, not permission to replace the original presentation.
 - Draft, native ingress, ownership, provider and protocol bindings are unchanged.
   No renderer/mounting/snapshot/presenter tests or visual acceptance are claimed.
 
+## Original latest affordance
+
+- Restore the one-row right-aligned “Jump to latest ↓” affordance between
+  transcript content and the prompt, with original muted/primary hover text.
+  The row remains allocated at the bottom; the label appears only when the
+  sampled current-window viewport is away from the bottom.
+- A guarded tap queues viewport intent for the currently selected native session.
+  Apply after layout, clear pending numeric/reveal placement and resume bottom
+  following. Navigation, registry reset, superseding reveal, identity mismatch
+  and cleanup discard stale intent; help/palette cannot activate it.
+- The pointer action does not change selection/focus, clear a draft, admit work,
+  adopt standalone identities, fetch history or promise a fresh observation.
+  It targets only the currently supplied transcript window. Native protocol,
+  command admission and provider/environment behavior remain unchanged.
+- `/latest` preparation/routing, keyboard/timeline controls, frozen/load-older
+  history and visual interaction verification remain unfinished. No renderer,
+  snapshot, helper or navigation-matrix tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
