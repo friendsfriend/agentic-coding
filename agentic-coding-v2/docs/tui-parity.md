@@ -719,6 +719,32 @@ content and bindings, not permission to replace the original presentation.
   scrollbar/indicator behavior and integrated load-older remain unported. No
   renderer/helper/mounting tests or visual acceptance are claimed.
 
+## Local timeline filter and original prompt order
+
+- Restore the original newest-first timeline order and 160-code-point one-line
+  preview budget (159 plus ellipsis when truncated). Captured native identities
+  and supplied rows are not mutated; no timestamp is synthesized.
+- `/` enters the original local filter mode. The shared search header displays
+  the active query/cursor and, after Enter leaves filtering, the result count.
+  The original `Filter prompts` placeholder was a search-enable flag rather than
+  visible placeholder text; this port uses the same SearchHeader branch directly.
+- Restore original filtering help (`Type`/Filter query, Enter/Done filtering,
+  Esc/Dismiss filter). Enter leaves filtering without jumping; a subsequent
+  explicit Enter activates. Esc clears the query and exits filtering without
+  dismissing the picker; a subsequent Esc dismisses it. j/k type into the query
+  while filtering and navigate otherwise. Backspace removes one code point.
+- Port the original finite alphabet/Enter spelling coverage through an active
+  modal keymap layer, not a global keyboard listener or hidden editor. No paste,
+  IME, arbitrary Unicode query alphabet or complete editor support is claimed.
+  Queries are bounded to 256 code points and match displayed labels locally.
+- Preserve selected prompt identity across filtering, unlike the original index
+  reset: hiding it leaves no activation target until explicit row navigation or
+  selection. Filter changes retire pending pointer/double-tap state. A refused
+  activation gets a reserved one-line footer instead of a clipped content row.
+- Native reveal/scope fences remain unchanged. Footer-chip activation, retained
+  timestamp details, scrollbar/indicator and load-older remain unfinished. No
+  renderer/helper/mounting tests or interactive/visual acceptance are claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

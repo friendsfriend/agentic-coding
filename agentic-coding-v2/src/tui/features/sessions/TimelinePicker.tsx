@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
+import { type KeyEvent, TextAttributes } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import {
@@ -31,70 +31,157 @@ export function TimelinePicker(props: {
 	const [selected, setSelected] = createSignal(props.rows.at(-1)?.key);
 	const [offset, setOffset] = createSignal(0);
 	const [refused, setRefused] = createSignal(false);
+	const [filtering, setFiltering] = createSignal(false);
+	const [query, setQuery] = createSignal("");
+	const gesture: RowGestureState = {};
+	// Original timeline order and label budget; never mutate the captured rows.
+	const source = createMemo(() =>
+		props.rows
+			.slice()
+			.reverse()
+			.map((row) => {
+				const label = Array.from(row.label);
+				return {
+					...row,
+					label:
+						label.length > 160 ? `${label.slice(0, 159).join("")}…` : row.label,
+				};
+			}),
+	);
+	const rows = createMemo(() => {
+		const filter = query().trim().toLowerCase();
+		return filter
+			? source().filter((row) => row.label.toLowerCase().includes(filter))
+			: source();
+	});
+	const changeQuery = (value: string) => {
+		setQuery(Array.from(value).slice(0, 256).join(""));
+		setOffset(0);
+		setRefused(false);
+		gesture.down = undefined;
+		gesture.lastTap = undefined;
+	};
 	const width = () => Math.max(1, Math.floor(dimensions().width * 0.5));
 	const height = () => Math.max(1, Math.floor(dimensions().height * 0.9));
-	const help = [
-		{ key: "j/k", action: "Navigate" },
-		{ key: "Enter", action: "Select" },
-		{ key: "Esc", action: "Cancel" },
-	];
 	const footer = createMemo(() =>
-		wrapHelpEntries(help, Math.max(1, width() - 4)),
+		wrapHelpEntries(
+			filtering()
+				? [
+						{ key: "Type", action: "Filter query" },
+						{ key: "Enter", action: "Done filtering" },
+						{ key: "Esc", action: "Dismiss filter" },
+					]
+				: [
+						{ key: "j/k", action: "Navigate" },
+						{ key: "/", action: "Filter" },
+						{ key: "Enter", action: "Select" },
+						{ key: "Esc", action: "Cancel" },
+					],
+			Math.max(1, width() - 4),
+		),
 	);
-	const lines = () => Math.max(1, height() - 3 - footer().length);
-	const selection = () => props.rows.findIndex((row) => row.key === selected());
+	const footerHeight = () => footer().length + Number(refused());
+	const lines = () => Math.max(1, height() - 3 - footerHeight());
+	const selection = () => rows().findIndex((row) => row.key === selected());
 	const start = () =>
 		Math.min(
-			Math.max(0, props.rows.length - lines()),
+			Math.max(0, rows().length - lines()),
 			Math.max(0, offset(), selection() - lines() + 1),
 		);
 	const select = (index: number) => {
 		if (!props.active) return;
-		const row = props.rows[index];
+		const row = rows()[index];
 		if (!row) return;
 		setSelected(row.key);
 		setRefused(false);
 		setOffset(Math.max(0, Math.min(start(), index)));
 	};
 	const move = (delta: number) =>
-		select(Math.max(0, Math.min(props.rows.length - 1, selection() + delta)));
+		select(Math.max(0, Math.min(rows().length - 1, selection() + delta)));
 	const choose = () => {
 		const key = selected();
-		if (props.active && key && props.rows.some((row) => row.key === key))
-			setRefused(!props.choose(key));
+		if (!props.active) return;
+		setRefused(
+			!key || !rows().some((row) => row.key === key) || !props.choose(key),
+		);
+	};
+	// Original finite picker key alphabet. No editor, paste listener or global
+	// keyboard hook: keys belong only to this active modal layer.
+	const handleKey = (event: KeyEvent) => {
+		if (!props.active) return;
+		const name = event.name.toLowerCase();
+		if (filtering()) {
+			if (name === "escape") {
+				changeQuery("");
+				setFiltering(false);
+			} else if (name === "enter" || name === "return") setFiltering(false);
+			else if (name === "backspace")
+				changeQuery(Array.from(query()).slice(0, -1).join(""));
+			else if (event.name.length === 1 && !event.ctrl && !event.meta)
+				changeQuery(query() + event.name);
+			return;
+		}
+		if (name === "escape") props.close();
+		else if (name === "j" || name === "down") move(1);
+		else if (name === "k" || name === "up") move(-1);
+		else if (name === "/") {
+			changeQuery("");
+			setFiltering(true);
+		} else if (name === "enter" || name === "return") choose();
 	};
 	const unregister = useKeymap().registerLayer({
 		id: "v2.timeline-picker",
 		priority: 50,
 		enabled: () => props.active,
 		bindings: [
-			...["j", "down"].map((key) => ({ key, cmd: () => move(1) })),
-			...["k", "up"].map((key) => ({ key, cmd: () => move(-1) })),
-			{ key: "return", cmd: choose },
-			{ key: "escape", cmd: () => props.close() },
-		],
+			...new Set([
+				"j",
+				"k",
+				"up",
+				"down",
+				"enter",
+				"return",
+				"escape",
+				"/",
+				"backspace",
+				..."abcdefghijklmnopqrstuvwxyz".split(""),
+			]),
+		].map((key) => ({ key, cmd: ({ event }) => handleKey(event) })),
 	});
 	onCleanup(unregister);
 	const wheel = useWheelScroll({
-		enabled: () => props.active && props.rows.length > lines(),
+		enabled: () => props.active && rows().length > lines(),
 		onScroll: (direction, delta) => move(direction === "up" ? -delta : delta),
 	});
-	const gesture: RowGestureState = {};
 	return (
 		<ReadOnlyModalFrame
 			width={width()}
 			height={height()}
 			close={props.close}
-			footerHeight={footer().length}
+			footerHeight={footerHeight()}
 			header={
-				<SearchHeader>
+				<SearchHeader
+					searchMode={filtering}
+					searchQuery={query}
+					resultCount={() => rows().length}
+				>
 					<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
 						Jump to message
 					</text>
 				</SearchHeader>
 			}
 			footer={
-				<For each={footer()}>{(entries) => <HelpText entries={entries} />}</For>
+				<>
+					<For each={footer()}>
+						{(entries) => <HelpText entries={entries} />}
+					</For>
+					<Show when={refused()}>
+						<text fg={uiColors.textMuted} wrapMode="none" truncate>
+							Selected prompt unavailable in this view; choose a visible prompt
+							explicitly.
+						</text>
+					</Show>
+				</>
 			}
 		>
 			<box
@@ -107,16 +194,16 @@ export function TimelinePicker(props: {
 				{...wheel}
 			>
 				<Show
-					when={props.rows.length > 0}
+					when={rows().length > 0}
 					fallback={
 						<text fg={uiColors.textMuted}>No user messages to show.</text>
 					}
 				>
-					<For each={props.rows.slice(start(), start() + lines())}>
+					<For each={rows().slice(start(), start() + lines())}>
 						{(row) => {
 							const hover = useHover();
 							const mouse = useRowMouse({
-								index: () => props.rows.indexOf(row),
+								index: () => rows().indexOf(row),
 								selectedIndex: selection,
 								gesture,
 								activatable: () => props.active,
@@ -162,12 +249,6 @@ export function TimelinePicker(props: {
 							);
 						}}
 					</For>
-				</Show>
-				<Show when={refused()}>
-					<text fg={uiColors.textMuted} wrapMode="word">
-						Prompt unavailable in this native window; selection was not
-						replaced.
-					</text>
 				</Show>
 			</box>
 		</ReadOnlyModalFrame>
