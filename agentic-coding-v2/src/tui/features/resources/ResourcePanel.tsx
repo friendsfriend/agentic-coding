@@ -1,22 +1,18 @@
 /** @jsxImportSource @opentui/solid */
-import { createMemo, For, type JSX, onCleanup, Show } from "solid-js";
+import { createMemo, type JSX, onCleanup, Show } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import type { UiResourcePreferences } from "../../../protocol/viewpoints.ts";
 import { dataList } from "../../client/connection.ts";
 import { Selectable } from "../../presentation/components/Selectable.tsx";
 import { ActionHeader as NativeActionHeader } from "../../ui/ActionHeader.tsx";
 import type { LocalChoice } from "../../ui/LocalChoice.ts";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
+import {
+	resourceCommandToken as commandToken,
+	ResourceDetails,
+} from "./ResourceDetails.tsx";
 
-const object = (value: unknown): Data =>
-	value && typeof value === "object" && !Array.isArray(value)
-		? (value as Data)
-		: {};
-const commandToken = (value: unknown) =>
-	typeof value === "string" &&
-	value.length > 0 &&
-	value.length <= 128 &&
-	!/\s/.test(value);
 /** Native resource overview. No engine probing, lease adoption or action execution. */
 export function ResourcePanel(props: {
 	scope: object;
@@ -49,6 +45,9 @@ export function ResourcePanel(props: {
 		props.inventory,
 		props.filter,
 		props.interactive,
+		props.environments,
+		props.connected,
+		props.fresh,
 	]);
 	const ActionHeader = (action: {
 		onActivate: () => void;
@@ -64,6 +63,8 @@ export function ResourcePanel(props: {
 	);
 	const member = (row: Data) =>
 		!disposed &&
+		typeof row.id === "string" &&
+		row.id.length > 0 &&
 		props.inventory.filter((entry) => entry.id === row.id).length === 1 &&
 		props.rows.filter((entry) => entry.id === row.id).length === 1 &&
 		props.rows.some(
@@ -221,22 +222,6 @@ export function ResourcePanel(props: {
 				: [...props.preferences.pins, row.id],
 		});
 	};
-	const details = (key: string, label: string, value: unknown) => (
-		<>
-			<ActionHeader
-				onActivate={() => {
-					if (props.interactive && !disposed) props.toggle(key);
-				}}
-			>
-				<text fg={color("accent")}>
-					{props.expanded.includes(key) ? "▾" : "▸"} {label}
-				</text>
-			</ActionHeader>
-			<Show when={props.expanded.includes(key)}>
-				<text wrapMode="word">{JSON.stringify(value, null, 2)}</text>
-			</Show>
-		</>
-	);
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
@@ -325,7 +310,21 @@ export function ResourcePanel(props: {
 					timing, not an already admitted task.
 				</text>
 			</Show>
-			<For each={props.rows}>
+			<SuppliedRecordWindow
+				rows={props.rows}
+				scope={props.scope}
+				label="resource records"
+				title={(row) =>
+					`${String(row.id ?? "identity not supplied")} · ${String(row.state ?? row.kind ?? "unknown")}`
+				}
+				search={(row) => JSON.stringify(row)}
+				selected={props.selected}
+				pick={(row, index) => {
+					if (!member(row)) return false;
+					props.select(row, index);
+					return true;
+				}}
+			>
 				{(row, index) => (
 					<Selectable
 						selected={props.selected(row, index())}
@@ -334,13 +333,20 @@ export function ResourcePanel(props: {
 						<box flexDirection="column" gap={1}>
 							<ActionHeader onActivate={() => select(row)}>
 								<text fg={color("primary")}>
-									{props.selected(row, index()) ? "▾" : "▸"} {String(row.id)} ·{" "}
-									{String(row.state ?? row.kind)}
+									{props.selected(row, index()) ? "▾" : "▸"}{" "}
+									{String(row.id ?? "identity not supplied")} ·{" "}
+									{String(row.state ?? row.kind ?? "unknown")}
 									{props.preferences.pins.includes(String(row.id))
 										? " · pinned"
 										: ""}
 								</text>
 							</ActionHeader>
+							<Show when={!member(row)}>
+								<text fg={color("warning")}>
+									Missing or ambiguous resource identity; navigation/preparation
+									disabled.
+								</text>
+							</Show>
 							<Show when={props.selected(row, index())}>
 								<ActionHeader onActivate={() => togglePin(row)}>
 									<text fg={color("accent")}>
@@ -349,208 +355,26 @@ export function ResourcePanel(props: {
 											: "Pin this resource (display only)"}
 									</text>
 								</ActionHeader>
-								<Show when={props.kind === "schedules"}>
-									<text wrapMode="word">
-										Revision {String(row.revision)} · next due{" "}
-										{row.nextDue === null
-											? "none recorded"
-											: String(row.nextDue)}{" "}
-										(epoch ms) · late grace{" "}
-										{String(row.lateGraceMs ?? "run late")}
-									</text>
-									<text wrapMode="word">
-										Skill {String(object(row.invocation).skill)} · topic{" "}
-										{String(object(row.invocation).topicId)} · profile{" "}
-										{String(object(row.invocation).profile)}
-									</text>
-									<Show when={typeof row.activeTask === "number"}>
-										<ActionHeader
-											onActivate={() => {
-												if (
-													props.interactive &&
-													member(row) &&
-													Number.isSafeInteger(row.activeTask) &&
-													Number(row.activeTask) > 0
-												)
-													props.openTask(Number(row.activeTask));
-											}}
-										>
-											<text fg={color("accent")}>
-												Open admitted task #{String(row.activeTask)}
-											</text>
-										</ActionHeader>
-									</Show>
-									<Show when={row.lastError}>
-										<text fg={color("warning")} wrapMode="word">
-											Last recorded error: {String(row.lastError)}
-										</text>
-									</Show>
-									{details(
-										`schedule:${String(row.id)}:timing`,
-										"Exact timing and invocation",
-										{ timing: row.timing, invocation: row.invocation },
-									)}
-									{details(
-										`schedule:${String(row.id)}:history`,
-										"Retained occurrence history",
-										row.history,
-									)}
-									<Show
-										when={
-											props.connected &&
-											commandToken(row.id) &&
-											Number.isSafeInteger(row.revision) &&
-											Number(row.revision) >= 1
-										}
-									>
-										<ActionHeader
-											onActivate={() =>
-												prepare(
-													row,
-													`/delete-schedule ${String(row.id)}@${String(row.revision)}`,
-												)
-											}
-										>
-											<text fg={color("warning")}>
-												Prepare revision-fenced deletion (does not submit)
-											</text>
-										</ActionHeader>
-									</Show>
-								</Show>
-								<Show when={props.kind === "environments"}>
-									<For
-										each={["run", "build", "test"].filter((action) =>
-											dataList(row.targets).some(
-												(target) => target.action === action,
-											),
-										)}
-									>
-										{(action) => (
-											<ActionHeader
-												onActivate={() => targetChoice(row, action)}
-											>
-												<text fg={color("accent")}>
-													Choose {action} target/profile bundle (prepare only)
-												</text>
-											</ActionHeader>
-										)}
-									</For>
-									<text wrapMode="word">
-										Repository: {String(row.repository)} · prerequisites:{" "}
-										{JSON.stringify(row.requires ?? [])}
-									</text>
-									<For each={dataList(row.targets)}>
-										{(target) => (
-											<box flexDirection="column" paddingLeft={1} gap={1}>
-												<text fg={color("primary")}>
-													{String(target.id)} · {String(target.action)} ·{" "}
-													{String(target.runtime)} ·{" "}
-													{String(target.profile ?? "not supplied")}
-												</text>
-												{details(
-													`environment:${String(row.id)}:target:${String(target.id)}`,
-													"Native target definition and availability",
-													target,
-												)}
-												<Show
-													when={
-														props.connected &&
-														commandToken(row.id) &&
-														commandToken(target.id) &&
-														row.kind !== "infrastructure" &&
-														["run", "build", "test"].includes(
-															String(target.action),
-														)
-													}
-												>
-													<ActionHeader
-														onActivate={() =>
-															prepare(
-																row,
-																`/${String(target.action)} ${String(row.id)} ${String(target.id)}`,
-															)
-														}
-													>
-														<text fg={color("accent")}>
-															Prepare {String(target.action)} task (native exact
-															approval still required)
-														</text>
-													</ActionHeader>
-												</Show>
-											</box>
-										)}
-									</For>
-									<For
-										each={dataList(props.environments?.runs).filter(
-											(run) => object(run.plan).app === row.id,
-										)}
-									>
-										{(run) => (
-											<box
-												flexDirection="column"
-												border={["top"]}
-												borderColor={color("border")}
-												gap={1}
-											>
-												<text wrapMode="word">
-													Run {String(run.id)} · {String(run.state)} · owner #
-													{String(run.owner)} · recorded readiness{" "}
-													{String(run.ready ?? "unknown")} · revision{" "}
-													{String(run.revision)}
-												</text>
-												<Show when={run.error}>
-													<text fg={color("warning")} wrapMode="word">
-														{String(run.error)}
-													</text>
-												</Show>
-												<ActionHeader
-													onActivate={() => {
-														if (
-															props.interactive &&
-															member(row) &&
-															Number.isSafeInteger(run.owner) &&
-															Number(run.owner) > 0
-														)
-															props.openTask(Number(run.owner));
-													}}
-												>
-													<text fg={color("accent")}>
-														Inspect native owner task
-													</text>
-												</ActionHeader>
-												{details(
-													`environment:run:${String(run.id)}`,
-													"Retained run / idle / cleanup diagnostics (not lease authority)",
-													run,
-												)}
-											</box>
-										)}
-									</For>
-									{details(
-										`environment:${String(row.id)}:waiters`,
-										"Current observed acquisition waiters",
-										dataList(props.environments?.waiters).filter(
-											(waiter) =>
-												Array.isArray(waiter.apps) &&
-												waiter.apps.includes(row.id),
-										),
-									)}
-									<Show when={props.connected && commandToken(row.id)}>
-										<ActionHeader
-											onActivate={() => prepare(row, `/logs ${String(row.id)}`)}
-										>
-											<text fg={color("accent")}>
-												Prepare diagnostic logs read (does not stop or take over
-												an app)
-											</text>
-										</ActionHeader>
-									</Show>
-								</Show>
+								<ResourceDetails
+									row={row}
+									kind={props.kind}
+									scope={props.scope}
+									environments={props.environments}
+									interactive={props.interactive}
+									connected={props.connected}
+									fresh={props.fresh}
+									member={() => member(row)}
+									expanded={props.expanded}
+									toggle={props.toggle}
+									prepare={(command) => prepare(row, command)}
+									openTask={props.openTask}
+									chooseTarget={(action) => targetChoice(row, action)}
+								/>
 							</Show>
 						</box>
 					</Selectable>
 				)}
-			</For>
+			</SuppliedRecordWindow>
 		</box>
 	);
 }

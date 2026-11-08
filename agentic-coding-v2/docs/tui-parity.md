@@ -1630,3 +1630,45 @@ content and bindings, not permission to replace the original presentation.
 No renderer, snapshot, helper or navigation-matrix tests are introduced. No
 credentials, real provider calls, application restarts or deployments are part
 of this restoration pass.
+
+## Integrated retained-resource workspace
+
+- Schedule/environment overviews, target definitions, supplied run observations,
+  occurrence history, telemetry flat/tree records and diagnostic journals mount
+  at most 20 retained records per collection. Local window search retains the
+  complete supplied search material; it never requests another native page.
+  Ordinals are display carriers, never substitutes for native identity.
+- Disclosures reuse bounded supplied-code windows (200 newline boundaries / about
+  24000 UTF-16 units). Strings remain exact supplied text, including empty text;
+  objects are explicitly serialized supplied JSON fields, not alleged original
+  source bytes. Missing, null and empty remain distinguishable. Source replacement
+  retires the old code widget/window choices even when its bytes are unchanged.
+  Supplied-response fingerprints are UI fold keys only, not approval digests.
+- Supplied active/occurrence task and run-owner links navigate catalog observations
+  only; missing/ambiguous resource, target, occurrence and run identities disable
+  the corresponding controls. No run ID restores readiness, live lease authority
+  or permission to stop/restart/recover a resource. Target/profile choices and
+  revision-fenced schedule deletion still prepare unsent commands only.
+- The environment workbench now shares the scoped local editor: programmatic
+  mirroring cannot invalidate an immutable candidate. Its exact unvalidated
+  intention and last explicit result use bounded read-only source disclosures;
+  manual exact approval, native validation and uncertain-result fences remain.
+- Protected HTTP/SQL drafts use the same editor, with a 20000 UTF-16-unit local
+  field limit and exact prior-text restoration on refusal. Preparing an unsent
+  diagnostic request requires fresh supplied ownership and exactly one writable
+  workspace-write task/conversation binding. Actual preparation reports refusal
+  instead of claiming a protected existing conversation draft was replaced.
+- Telemetry tree indentation is bounded, invalid supplied epochs cannot throw,
+  and unusable depth never manufactures parentage. Long summaries label clipping;
+  the complete supplied fields remain accessible in local source windows. A
+  supplied nextCursor is read-only text for a separately prepared explicit read,
+  never automatically followed or persisted in viewpoints/history.
+
+The authenticated faux-loopback boundary fixture retains a 405-line CRLF and
+supplementary-Unicode intention beyond source-window bounds, rejects wrong exact
+confirmation, refuses an explicitly confirmed but invalid intention and replay,
+and proves no native draft was created. The gateway's deliberately masked public
+refusal is retained. No renderer, helper, mounting, screenshot or presenter test
+is added. Functional gates do not establish visual/interactive parity; no real
+environment/provider/model/cluster call, clipboard exercise, restart or deployment
+is claimed.

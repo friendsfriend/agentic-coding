@@ -1,32 +1,79 @@
 /** @jsxImportSource @opentui/solid */
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { StructuredData } from "../../ui/StructuredData.tsx";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
 
 const record = (value: unknown): Data =>
 	value && typeof value === "object" && !Array.isArray(value)
 		? (value as Data)
 		: {};
-const clip = (value: unknown, max = 2000) => {
+const clip = (value: unknown, max = 200) => {
 	const text =
-		typeof value === "string" ? value : JSON.stringify(value ?? null);
-	return text.length > max ? `${text.slice(0, max)} … [display clipped]` : text;
+		typeof value === "string"
+			? value
+			: (JSON.stringify(value) ?? "not supplied");
+	const points = Array.from(text);
+	return points.length > max
+		? `${points.slice(0, max).join("")} … [summary clipped; full supplied record below]`
+		: text;
 };
-const stamp = (value: unknown) =>
-	typeof value === "number" && Number.isFinite(value)
-		? new Date(value).toISOString()
-		: "not recorded";
-/** Observation-only presentation of one explicit native telemetry read.
- * Absence, retention loss and clipping are stated; nothing is fetched or replayed. */
+const stamp = (value: unknown) => {
+	if (value === undefined) return "not supplied";
+	if (typeof value !== "number" || !Number.isFinite(value))
+		return "unrecognized supplied epoch; see raw record";
+	const date = new Date(value);
+	return Number.isFinite(date.getTime())
+		? date.toISOString()
+		: "invalid supplied epoch; see raw record";
+};
+/** One explicit observation. All paging/disclosures below are local; even a
+ * supplied cursor/trace/owner never starts a new read or confers authority. */
 export function TelemetryView(props: { value: unknown }) {
 	const [raw, setRaw] = createSignal(false);
-	const data = createMemo(() => record(props.value));
+	const [expanded, setExpanded] = createSignal<string[]>([]);
+	const source = createMemo(() => ({ value: props.value }));
+	const data = createMemo(() => record(source().value));
 	const records = createMemo(() => dataList(data().records));
-	const mode = () => String(data().mode ?? "unrecorded");
 	const tree = createMemo(() => dataList(data().tree));
+	const mode = () => String(data().mode ?? "unrecorded");
+	createEffect(() => {
+		source();
+		setRaw(false);
+		setExpanded([]);
+	});
+	const details = (kind: string, item: Data, ordinal: () => number) => {
+		const key = () => `${kind}:${ordinal()}`;
+		return (
+			<box flexDirection="column" gap={1}>
+				<ActionHeader
+					scope={source()}
+					onActivate={() =>
+						setExpanded((keys) =>
+							keys.includes(key())
+								? keys.filter((value) => value !== key())
+								: [...keys, key()],
+						)
+					}
+				>
+					<text fg={color("accent")}>
+						{expanded().includes(key()) ? "▾" : "▸"} Supplied {kind} record (
+						{ordinal() + 1}; display ordinal only)
+					</text>
+				</ActionHeader>
+				<Show when={expanded().includes(key())}>
+					<SuppliedObservation
+						value={item}
+						label={`Supplied ${kind} record`}
+						scope={source()}
+					/>
+				</Show>
+			</box>
+		);
+	};
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
@@ -34,43 +81,65 @@ export function TelemetryView(props: { value: unknown }) {
 				record(s)
 			</text>
 			<text wrapMode="word" fg={color("textMuted")}>
-				Source {String(data().source ?? "not recorded")} ·{" "}
-				{String(data().completeness ?? "completeness not recorded")} · time
-				basis {String(data().timeBasis ?? "not recorded")} · scope{" "}
-				{clip(data().scope, 240)}
+				Source {clip(data().source)} · {clip(data().completeness)} · time basis{" "}
+				{clip(data().timeBasis)} · scope {clip(data().scope)}
 			</text>
 			<text wrapMode="word" fg={color("warning")}>
-				Retained observations only, not a complete capture, frozen snapshot or
-				execution authority. Loss: {clip(data().loss, 400)} · paging{" "}
-				{clip(data().paging, 400)} · selection {clip(data().selection, 400)}
+				Retained observations only, not complete capture, frozen snapshot or
+				execution authority. Loss: {clip(data().loss)} · paging{" "}
+				{clip(data().paging)} · selection {clip(data().selection)}
 			</text>
 			<Show when={data().availability !== undefined}>
 				<text wrapMode="word">
-					Lookup {clip(data().availability, 240)} ·{" "}
-					{clip(data().unknownMeaning, 400)}
+					Lookup {clip(data().availability)} · {clip(data().unknownMeaning)}
 				</text>
 			</Show>
 			<Show when={tree().length}>
-				<text fg={color("primary")}>Reported trace tree (preorder nodes)</text>
-				<For each={tree()}>
-					{(node) => (
-						<text wrapMode="word">
-							{"  ".repeat(Math.min(12, Number(node.depth ?? 0)))}
-							{Number(node.depth ?? 0) > 12 ? "… " : ""}
-							{String(node.name ?? node.spanId ?? "unidentified")} ·{" "}
-							{String(node.status ?? "status not recorded")} ·{" "}
-							{String(node.durationMs ?? "duration not recorded")} ms
-							{node.missingParent === true ? " · missing reported parent" : ""}
-						</text>
+				<text fg={color("primary")}>
+					Reported trace tree (supplied preorder; each local window may start
+					mid-tree)
+				</text>
+				<SuppliedRecordWindow
+					rows={tree()}
+					scope={source()}
+					label="reported tree nodes"
+					title={(node) => clip(node.name ?? node.spanId ?? "unidentified")}
+					search={(node) => JSON.stringify(node)}
+				>
+					{(node, index) => (
+						<box flexDirection="column" gap={1}>
+							<text wrapMode="word">
+								{Number.isSafeInteger(node.depth) && Number(node.depth) >= 0
+									? "  ".repeat(Math.min(12, Number(node.depth)))
+									: ""}
+								{Number(node.depth) > 12 ? "… [indent bounded] " : ""}
+								{clip(node.name ?? node.spanId ?? "unidentified")} ·{" "}
+								{clip(node.status)} · {clip(node.durationMs)} ms
+								{node.missingParent === true
+									? " · missing reported parent"
+									: ""}
+								{!Number.isSafeInteger(node.depth) || Number(node.depth) < 0
+									? " · depth not usable; no inferred parentage"
+									: ""}
+							</text>
+							{details("tree", node, index)}
+						</box>
 					)}
-				</For>
+				</SuppliedRecordWindow>
 			</Show>
 			<Show when={!tree().length && mode() === "traces" && data().traceId}>
 				<text fg={color("textMuted")}>
-					This single-trace read returned no tree; see the flat records below.
+					This supplied single-trace response has no tree; see retained flat
+					records below. No tree is synthesized.
 				</text>
 			</Show>
-			<For each={records()}>
+			<SuppliedRecordWindow
+				rows={records()}
+				scope={source()}
+				label="telemetry records"
+				title={(item) => clip(item.name ?? item.body ?? "unidentified")}
+				search={(item) => JSON.stringify(item)}
+			>
 				{(item, index) => (
 					<box
 						flexDirection="column"
@@ -80,56 +149,65 @@ export function TelemetryView(props: { value: unknown }) {
 						gap={1}
 					>
 						<text fg={color("primary")} wrapMode="word">
-							{index() + 1}. {String(item.name ?? item.body ?? "unidentified")}
+							{index() + 1}. {clip(item.name ?? item.body ?? "unidentified")}
 						</text>
 						<text wrapMode="word">
-							trace {String(item.traceId ?? "not recorded")} · span{" "}
-							{String(item.spanId ?? "not recorded")} · parent{" "}
-							{String(item.parentSpanId ?? "not reported")}
+							Trace {clip(item.traceId)} · span {clip(item.spanId)} · reported
+							parent {clip(item.parentSpanId)}
 						</text>
 						<text wrapMode="word">
-							status {String(item.status ?? "not recorded")} · duration{" "}
-							{String(item.durationMs ?? "not recorded")} ms · spans{" "}
-							{String(item.spanCount ?? "not recorded")} · errors{" "}
-							{String(item.errorCount ?? "not recorded")}
+							Status {clip(item.status)} · duration {clip(item.durationMs)} ms ·
+							spans {clip(item.spanCount)} · errors {clip(item.errorCount)}
 						</text>
 						<text wrapMode="word">
-							started {stamp(item.startedAt)} · service{" "}
-							{String(item.service ?? "not recorded")} · severity{" "}
-							{String(item.severity ?? "not recorded")}
+							Started {stamp(item.startedAt)} · service {clip(item.service)} ·
+							severity {clip(item.severity)}
 						</text>
 						<Show when={item.body !== undefined}>
 							<text wrapMode="word">{clip(item.body)}</text>
 						</Show>
 						<Show when={item.rootKind !== undefined || item.http !== undefined}>
 							<text wrapMode="word">
-								kind {String(item.rootKind ?? "not recorded")} · http{" "}
-								{clip(item.http, 240)}
+								Kind {clip(item.rootKind)} · HTTP {clip(item.http)}
 							</text>
 						</Show>
+						{details("telemetry", item, index)}
 					</box>
 				)}
-			</For>
+			</SuppliedRecordWindow>
 			<Show when={!records().length}>
 				<text fg={color("textMuted")} wrapMode="word">
-					No retained matching observations in this window. That is not proof of
-					no activity and not a successful-cleanup claim.
+					No retained matching observations in this supplied window. Not proof
+					of no activity or successful cleanup.
 				</text>
 			</Show>
-			<Show when={data().nextCursor}>
+			<Show
+				when={data().nextCursor !== undefined && data().nextCursor !== null}
+			>
 				<text wrapMode="word" fg={color("accent")}>
-					Older page available: place nextCursor {clip(data().nextCursor, 128)}{" "}
-					in the selection cursor field. The cursor expires and refuses on an
-					evicted boundary; it is never kept in history or a viewpoint.
+					Supplied older-page cursor: copy into a separately prepared explicit
+					read. Never saved in history/viewpoints, automatically followed or
+					treated as a current run identity; an expired/evicted boundary
+					refuses.
 				</text>
+				<SuppliedObservation
+					value={data().nextCursor}
+					label="Supplied nextCursor"
+					scope={source()}
+				/>
 			</Show>
-			<ActionHeader onActivate={() => setRaw(!raw())}>
+			<ActionHeader scope={source()} onActivate={() => setRaw(!raw())}>
 				<text fg={color("accent")}>
-					{raw() ? "▾" : "▸"} Complete observed native response
+					{raw() ? "▾" : "▸"} Retained native response in bounded local source
+					windows
 				</text>
 			</ActionHeader>
 			<Show when={raw()}>
-				<StructuredData value={props.value} label="Native telemetry response" />
+				<SuppliedObservation
+					value={source().value}
+					label="Supplied native telemetry response"
+					scope={source()}
+				/>
 			</Show>
 		</box>
 	);

@@ -1,5 +1,4 @@
 /** @jsxImportSource @opentui/solid */
-import type { TextareaRenderable } from "@opentui/core";
 import {
 	createEffect,
 	createMemo,
@@ -20,9 +19,9 @@ import { type Data, record } from "../../../protocol/index.ts";
 import type { ClientConnection } from "../../client/connection.ts";
 import { dataList } from "../../client/connection.ts";
 import { ActionHeader as NativeActionHeader } from "../../ui/ActionHeader.tsx";
-import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
 import type { LocalChoice } from "../../ui/LocalChoice.ts";
-import { StructuredData } from "../../ui/StructuredData.tsx";
+import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { TelemetryView } from "./TelemetryView.tsx";
 import { mutationFields, readFields } from "./workbench-fields.ts";
@@ -62,8 +61,7 @@ export function EnvironmentWorkbench(props: {
 		[pending, setPending] = createSignal(false),
 		[editing, setEditing] = createSignal(false),
 		[confirmationFocused, setConfirmationFocused] = createSignal(false);
-	let editor: TextareaRenderable | undefined,
-		epoch = 0,
+	let epoch = 0,
 		disposed = false;
 	createEffect(() =>
 		props.remember({
@@ -78,9 +76,11 @@ export function EnvironmentWorkbench(props: {
 		setCandidate(null);
 		setConfirmation("");
 	};
+	let sourceGeneration = 0;
 	const source = createMemo(
 		() => ({
 			resource: props.resource,
+			generation: ++sourceGeneration,
 			connected: props.connected,
 			client: props.client,
 			scope: props.scope,
@@ -101,10 +101,6 @@ export function EnvironmentWorkbench(props: {
 		setConfirmationFocused(false);
 		setResult(null);
 		untrack(() => props.edit(false));
-	});
-	createEffect(() => {
-		const value = body();
-		if (editor && editor.plainText !== value) editor.setText(value);
 	});
 	onCleanup(() => {
 		disposed = true;
@@ -411,25 +407,21 @@ export function EnvironmentWorkbench(props: {
 					{editing() ? "Leave local editor" : "Edit local JSON"}
 				</text>
 			</ActionHeader>
-			<textarea
-				ref={(value) => {
-					editor = value;
-				}}
-				initialValue={body()}
+			<LocalJsonEditor
+				value={body()}
+				scope={`environment:${source().generation}:${mode()}:${read()}:${mutation()}`}
 				height={9}
-				focused={
-					props.focused &&
-					props.editing &&
-					editing() &&
-					!pending() &&
-					props.interactive
-				}
-				keyBindings={textareaBindings(editorKeybinds)}
-				onMouseDown={() => edit(true)}
-				onContentChange={(value) => {
-					const next =
-						typeof value === "string" ? value : (editor?.plainText ?? "");
-					if (props.interactive && editing() && next !== body()) {
+				editing={props.focused && props.editing && editing() && !pending()}
+				interactive={!disposed && props.interactive && !pending()}
+				enter={() => edit(true)}
+				change={(next) => {
+					if (
+						!disposed &&
+						props.interactive &&
+						editing() &&
+						!pending() &&
+						next !== body()
+					) {
 						setResult(null);
 						setError(null);
 						invalidate();
@@ -437,6 +429,7 @@ export function EnvironmentWorkbench(props: {
 					}
 				}}
 			/>
+
 			<Show when={props.connected && !pending()}>
 				<ActionHeader onActivate={() => void execute()}>
 					<text fg={color("accent")}>
@@ -446,17 +439,27 @@ export function EnvironmentWorkbench(props: {
 					</text>
 				</ActionHeader>
 			</Show>
-			<Show when={candidate()}>
+			<Show when={candidate()} keyed>
 				{(sealed) => (
 					<box flexDirection="column" gap={1}>
 						<text wrapMode="word" fg={color("warning")}>
-							Exact immutable, unvalidated intention · {sealed().digest} ·
-							expires {sealed().expiresAt} (epoch ms)
+							Exact immutable, unvalidated intention · {sealed.digest} · expires{" "}
+							{sealed.expiresAt} (epoch ms)
 						</text>
-						<text wrapMode="word">{sealed().snapshot}</text>
+						<SuppliedObservation
+							value={sealed.snapshot}
+							label="Exact immutable unvalidated intention snapshot"
+							scope={sealed}
+						/>
 						<ActionHeader
 							onActivate={() => {
-								if (!props.interactive || pending()) return;
+								if (
+									disposed ||
+									candidate() !== sealed ||
+									!props.interactive ||
+									pending()
+								)
+									return;
 								edit(false);
 								setConfirmationFocused(true);
 								props.edit(true);
@@ -469,10 +472,18 @@ export function EnvironmentWorkbench(props: {
 							placeholder="Manually type approve:DIGEST"
 							maxLength={80}
 							onInput={(value) => {
-								if (props.interactive && confirmationFocused() && !pending())
+								if (
+									!disposed &&
+									candidate() === sealed &&
+									props.interactive &&
+									confirmationFocused() &&
+									!pending()
+								)
 									setConfirmation(value);
 							}}
 							focused={
+								!disposed &&
+								candidate() === sealed &&
 								props.focused &&
 								props.editing &&
 								confirmationFocused() &&
@@ -480,15 +491,33 @@ export function EnvironmentWorkbench(props: {
 								props.interactive
 							}
 							onMouseDown={() => {
-								if (!props.interactive || pending()) return;
+								if (
+									disposed ||
+									candidate() !== sealed ||
+									!props.interactive ||
+									pending()
+								)
+									return;
 								edit(false);
 								setConfirmationFocused(true);
 								props.edit(true);
 							}}
-							onSubmit={() => edit(false)}
+							onSubmit={() => {
+								if (
+									!disposed &&
+									candidate() === sealed &&
+									props.interactive &&
+									!pending()
+								)
+									edit(false);
+							}}
 						/>
 						<Show when={props.connected && !pending()}>
-							<ActionHeader onActivate={() => void execute(true)}>
+							<ActionHeader
+								onActivate={() => {
+									if (!disposed && candidate() === sealed) void execute(true);
+								}}
+							>
 								<text fg={color("warning")}>
 									Submit one explicitly confirmed native intention
 								</text>
@@ -515,8 +544,9 @@ export function EnvironmentWorkbench(props: {
 						typeof result() === "object"
 					}
 					fallback={
-						<StructuredData
+						<SuppliedObservation
 							value={result()}
+							scope={source()}
 							label="Last explicitly requested native observation / acknowledgement"
 						/>
 					}

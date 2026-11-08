@@ -19,6 +19,8 @@ export function LocalJsonEditor(props: {
 	editing: boolean;
 	interactive: boolean;
 	height?: number;
+	maxLength?: number;
+	onLimit?: () => void;
 	enter: () => void;
 	change: (value: string) => void;
 }) {
@@ -75,6 +77,19 @@ export function LocalJsonEditor(props: {
 							if (!active() || !props.editing || mirroring || !node) return;
 							const value = typeof event === "string" ? event : node.plainText;
 							if (value !== node.plainText || value === props.value) return;
+							if (
+								props.maxLength !== undefined &&
+								value.length > props.maxLength
+							) {
+								mirroring = true;
+								try {
+									node.setText(props.value);
+								} finally {
+									mirroring = false;
+								}
+								props.onLimit?.();
+								return;
+							}
 							props.change(value);
 						}}
 					/>

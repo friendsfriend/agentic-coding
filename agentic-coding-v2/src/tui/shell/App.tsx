@@ -1757,7 +1757,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			setNotice(
 				"An unsent draft already exists; it was not replaced. Clear or save it before preparing another command.",
 			);
-			return;
+			return false;
 		}
 		navigation.current.draft = command;
 		writePrompt(command);
@@ -1765,6 +1765,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			"Command prepared only. Inspect the native snapshot, add comments, and submit explicitly; no action has run.",
 		);
 		update();
+		return true;
 	};
 	const chooseProfile = (saved: ProfilePickerState, key: string): boolean => {
 		const selected = saved.rows.find((row) => row.key === key);
@@ -4264,6 +4265,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}}
 									/>
 									<DiagnosticsComposer
+										fresh={snapshotFresh()}
 										memory={diagnosticDraft()}
 										remember={setDiagnosticDraft}
 										tasks={state()?.tasks ?? []}
@@ -4290,6 +4292,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}}
 										prepare={(conversation, content) => {
 											if (
+												!snapshotFresh() ||
 												!state()?.sessions.some(
 													(session) =>
 														session.id === conversation &&
@@ -4300,10 +4303,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 												setNotice(
 													"Native diagnostic owner is no longer writable; draft remains unsent.",
 												);
-												return;
+												return false;
 											}
 											go("session", String(conversation));
-											prepareCommand(content);
+											return prepareCommand(content);
 										}}
 									/>
 								</Show>

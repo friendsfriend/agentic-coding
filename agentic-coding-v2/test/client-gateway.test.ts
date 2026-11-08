@@ -68,6 +68,49 @@ test("authenticated native environment staging and retained history remain expli
 				approval: `approve:${unsupported.digest}`,
 			}),
 		).rejects.toThrow();
+		// An authenticated observation retains text beyond the local code-window
+		// bounds, including CRLF, supplementary Unicode and the final blank line.
+		// Sealing remains unvalidated; neither display nor a digest grants execution.
+		const longSource = `${Array.from(
+			{ length: 405 },
+			(_, index) => `${index}: ${"native-source ".repeat(6)}😀\r\n`,
+		).join("")}tail\r\n`;
+		expect(longSource.length).toBeGreaterThan(24000);
+		const longIntention = {
+			operation: "save" as const,
+			body: {
+				requestId: "ui-long-unvalidated-source",
+				content: longSource,
+				unexpected: true,
+			},
+		};
+		const longSealed = await client.call("environment.preview", longIntention);
+		expect(longSealed.snapshot).toBe(JSON.stringify(longIntention));
+		expect(JSON.parse(longSealed.snapshot).body.content).toBe(longSource);
+		await expect(
+			client.call("environment.apply", {
+				id: longSealed.id,
+				approval: `approve:${"0".repeat(64)}`,
+			}),
+		).rejects.toThrow("Native operation refused");
+		await expect(
+			client.call("environment.apply", {
+				id: longSealed.id,
+				approval: `approve:${longSealed.digest}`,
+			}),
+		).rejects.toThrow();
+		await expect(
+			client.call("environment.apply", {
+				id: longSealed.id,
+				approval: `approve:${longSealed.digest}`,
+			}),
+		).rejects.toThrow("Native operation refused");
+		expect(
+			await client.call("environment.inspect", {
+				operation: "drafts",
+				selection: {},
+			}),
+		).toEqual([]);
 		const sealed = await client.call("environment.preview", {
 			operation: "save",
 			body: { requestId: "ui-inert-draft", content: "{}" },

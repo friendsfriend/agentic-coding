@@ -1,10 +1,20 @@
 /** @jsxImportSource @opentui/solid */
-import type { TextareaRenderable } from "@opentui/core";
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+	useContext,
+} from "solid-js";
 import type { Data, Session } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
+import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
+import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
+
 export type DiagnosticDraft = {
 	task: string;
 	kind: "http" | "sql";
@@ -12,85 +22,121 @@ export type DiagnosticDraft = {
 	target: string;
 	body: string;
 };
-/** Compose only: actual HTTP/SQL remains the owning worker's separately reviewed tool. */
+/** Protected local input only. The chosen owner must still be unique, supplied,
+ * writable and a workspace-write task when preparing an UNSENT request. */
 export function DiagnosticsComposer(props: {
 	memory: DiagnosticDraft;
-	remember: (value: DiagnosticDraft) => void;
+	remember: (draft: DiagnosticDraft) => void;
 	tasks: Data[];
 	sessions: Session[];
 	connected: boolean;
+	fresh: boolean;
 	focused: boolean;
 	editing: boolean;
 	edit: (value: boolean) => void;
-	prepare: (conversation: number, content: string) => void;
+	prepare: (conversation: number, content: string) => boolean;
 }) {
-	const [draft, setDraft] = createSignal(props.memory),
-		[editing, setEditing] = createSignal(false),
-		[field, setField] = createSignal<"app" | "target" | "body">("body"),
-		[error, setError] = createSignal<string | null>(null);
-	let editor: TextareaRenderable | undefined;
-	createEffect(() => props.remember(draft()));
+	const choices = useContext(LocalChoiceContext);
+	const [draft, setDraft] = createSignal<DiagnosticDraft>({ ...props.memory });
+	const [error, setError] = createSignal<string | null>(null);
+	const [field, setField] = createSignal<"app" | "target" | "body">("body");
+	const [editing, setEditing] = createSignal(false);
+	let disposed = false;
+	const active = () => !disposed && (choices?.interactive() ?? true);
 	createEffect(() => {
-		const value = draft()[field()];
-		if (editor && editor.plainText !== value) editor.setText(value);
+		if (!disposed) props.remember(draft());
 	});
-	createEffect(() => {
-		if (!props.connected) {
-			setEditing(false);
-			props.edit(false);
-		}
+	onCleanup(() => {
+		disposed = true;
+		props.edit(false);
 	});
-	onCleanup(() => props.edit(false));
-	const prepare = () => {
-		try {
-			const value = draft(),
-				task = props.tasks.find((task) => String(task.id) === value.task),
-				session = props.sessions.find(
-					(session) => String(session.task) === value.task && session.writable,
-				);
+	const catalog = createMemo(() => ({
+		tasks: props.tasks,
+		sessions: props.sessions,
+	}));
+	const owners = createMemo(() =>
+		props.sessions.filter((session) => {
 			if (
-				!props.connected ||
-				!task ||
-				!session ||
-				task.policy !== "workspace-write"
+				!session.writable ||
+				!Number.isSafeInteger(session.id) ||
+				session.id <= 0 ||
+				session.task === null ||
+				!Number.isSafeInteger(session.task) ||
+				session.task <= 0
 			)
-				throw new Error(
-					"Select a currently writable native workspace-write task; unavailable owners are never adopted or replaced",
-				);
-			if (
-				!value.app.trim() ||
-				!value.target.trim() ||
-				value.app.length > 64 ||
-				value.target.length > 64 ||
-				!value.body.trim() ||
-				value.body.length > (value.kind === "http" ? 2048 : 20000)
-			)
-				throw new Error(
-					"Explicit app, endpoint/infra and bounded path/query required",
-				);
-			if (
-				value.kind === "http" &&
-				(!value.body.startsWith("/") || value.body.startsWith("//"))
-			)
-				throw new Error(
-					"HTTP input must be an origin-relative path, never a URL",
-				);
-			const args =
-				value.kind === "http"
-					? { app: value.app, endpoint: value.target, path: value.body }
-					: { app: value.app, infra: value.target, sql: value.body, limit: 50 };
-			setEditing(false);
-			props.edit(false);
-			setError(null);
-			props.prepare(
-				session.id,
-				`Diagnostic request for your own existing task scope only. Use ${value.kind === "http" ? "env_http_get" : "db_query"} with exactly ${JSON.stringify(args)}. This message is not approval: request and wait for the native human review of the exact operation. Refuse if you do not own the exact live app and required infrastructure; do not start, restart, release, adopt, discover credentials or substitute another owner/run. Do not retry an uncertain issuance. Retain the bounded native receipt and explain any refusal.`,
+				return false;
+			const task = props.tasks.filter((entry) => entry.id === session.task);
+			return (
+				task.length === 1 &&
+				task[0]?.skill === "workspace-write" &&
+				props.sessions.filter((entry) => entry.id === session.id).length ===
+					1 &&
+				props.sessions.filter(
+					(entry) => entry.task === session.task && entry.writable,
+				).length === 1
 			);
-		} catch (error) {
+		}),
+	);
+	const ownerMember = (session: Session) =>
+		owners().some((entry) => entry === session);
+	const selectOwner = (session: Session) => {
+		if (disposed || !props.connected || !props.fresh || !ownerMember(session))
+			return false;
+		setDraft({ ...draft(), task: String(session.task) });
+		setError(null);
+		setEditing(false);
+		props.edit(false);
+		return true;
+	};
+	const scope = createMemo(() => [
+		catalog(),
+		draft(),
+		field(),
+		editing(),
+		props.connected,
+		props.fresh,
+		props.focused,
+		props.editing,
+	]);
+	const enter = (name: "app" | "target" | "body") => {
+		if (!active()) return;
+		setField(name);
+		setEditing(true);
+		props.edit(true);
+	};
+	const finish = () => {
+		if (!active()) return;
+		setEditing(false);
+		props.edit(false);
+	};
+	const prepare = () => {
+		if (!active() || !props.connected || !props.fresh) return;
+		const value = draft();
+		const sessions = owners().filter(
+			(session) => String(session.task) === value.task,
+		);
+		if (
+			sessions.length !== 1 ||
+			!value.app.trim() ||
+			!value.target.trim() ||
+			!value.body.trim()
+		) {
 			setError(
-				error instanceof Error
-					? error.message
-					: "Diagnostic preparation refused",
+				"Choose an exact unique writable workspace-write owner and supply the requiring app, endpoint/infrastructure ident and path/SQL. Nothing submitted.",
+			);
+			return;
+		}
+		const session = sessions[0];
+		if (!session || !ownerMember(session)) return;
+		const content =
+			value.kind === "http"
+				? `Prepare an owned read-only environment HTTP operation for app ${JSON.stringify(value.app.trim())}, endpoint ${JSON.stringify(value.target.trim())}, method GET, path ${JSON.stringify(value.body)}. Resolve the exact currently held native run, display the masked snapshot and wait for exact human approve:<digest>. Do not start an app, obtain credentials, follow redirects or execute until reviewed. If no currently held matching run exists, refuse.`
+				: `Prepare an owned read-only PostgreSQL operation for requiring app ${JSON.stringify(value.app.trim())}, infrastructure ${JSON.stringify(value.target.trim())}, SQL source ${JSON.stringify(value.body)}. Resolve the exact currently held native run and configured query connection, display the masked snapshot and wait for exact human approve:<digest>. Do not start infrastructure, obtain credentials or execute until reviewed. If no currently held matching run exists, refuse.`;
+		if (props.prepare(session.id, content)) {
+			setEditing(false);
+			props.edit(false);
+			setError(
+				"Request prepared but not submitted. Credentials stay in native environment references; exact reviewed worker-tool approval remains required.",
 			);
 		}
 	};
@@ -98,81 +144,83 @@ export function DiagnosticsComposer(props: {
 		<box
 			flexDirection="column"
 			gap={1}
-			border={true}
+			border={["top"]}
 			borderColor={color("border")}
-			padding={1}
+			paddingTop={1}
 		>
 			<text fg={color("primary")}>
-				Owner-scoped HTTP / SQL diagnostic composer
+				Protected read-only diagnostics composer
 			</text>
 			<text wrapMode="word" fg={color("textMuted")}>
-				Unsent memory-only draft. Selecting an owner never probes or takes over
-				its lease. Prepare moves a request into that native worker's
-				conversation; explicit submission and a separate immutable human review
-				still apply. READ ONLY / GET is not proof of no external effects. No
-				credentials belong in these fields.
+				No backend request on navigation, editor focus or selection. This only
+				prepares an unsent request in an existing owned workspace-write
+				conversation. Draft stays local, outside input history, bookmarks and
+				viewpoints.
 			</text>
-			<For
-				each={props.sessions.filter(
-					(session) => session.task !== null && session.writable,
-				)}
+			<Show when={!props.connected || !props.fresh}>
+				<text fg={color("warning")}>
+					Cached ownership or disconnected client; owner selection and request
+					preparation unavailable. Local text remains editable.
+				</text>
+			</Show>
+			<SuppliedRecordWindow
+				rows={owners()}
+				scope={catalog()}
+				label="eligible diagnostic owners"
+				title={(session) =>
+					`task #${String(session.task)} · conversation #${session.id} · ${session.title}`
+				}
+				search={(session) => JSON.stringify(session)}
+				pick={selectOwner}
 			>
 				{(session) => (
 					<ActionHeader
+						scope={scope()}
+						interactive={active() && props.connected && props.fresh}
 						onActivate={() => {
-							setDraft({ ...draft(), task: String(session.task) });
-							setError(null);
+							if (active()) selectOwner(session);
 						}}
 					>
-						<text
-							fg={
-								String(session.task) === draft().task
-									? color("accent")
-									: color("textMuted")
-							}
-						>
-							Task {session.task} · {session.title}{" "}
-							{String(session.task) === draft().task ? "(selected)" : ""}
+						<text fg={color("accent")}>
+							Choose supplied owner task #{String(session.task)} / conversation
+							#{session.id}
+							{String(session.task) === draft().task ? " (selected)" : ""}
 						</text>
 					</ActionHeader>
 				)}
-			</For>
-			<Show
-				when={
-					!props.sessions.some(
-						(session) => session.task !== null && session.writable,
-					)
-				}
-			>
+			</SuppliedRecordWindow>
+			<Show when={!owners().length}>
 				<text fg={color("warning")}>
-					No writable native task owner. Nothing will be submitted or
-					automatically created.
+					No unique writable workspace-write task/conversation owner supplied.
+					Nothing will be submitted or automatically created.
 				</text>
 			</Show>
 			<ActionHeader
-				onActivate={() =>
+				scope={scope()}
+				interactive={active()}
+				onActivate={() => {
+					if (!active()) return;
 					setDraft({
 						...draft(),
 						kind: draft().kind === "http" ? "sql" : "http",
-					})
-				}
+					});
+					setError(null);
+				}}
 			>
 				<text fg={color("accent")}>
 					Operation:{" "}
 					{draft().kind === "http"
 						? "reviewed HTTP GET"
 						: "reviewed PostgreSQL SELECT/WITH"}{" "}
-					· switch
+					· switch locally
 				</text>
 			</ActionHeader>
 			<For each={["app", "target", "body"] as const}>
 				{(name) => (
 					<ActionHeader
-						onActivate={() => {
-							setField(name);
-							setEditing(true);
-							props.edit(true);
-						}}
+						scope={scope()}
+						interactive={active()}
+						onActivate={() => enter(name)}
 					>
 						<text wrapMode="word">
 							Edit{" "}
@@ -183,51 +231,57 @@ export function DiagnosticsComposer(props: {
 									: "exact requiring app ident"}
 							:{" "}
 							{name === "body"
-								? `${draft()[name].length} characters`
+								? `${draft()[name].length} UTF-16 units`
 								: draft()[name] || "unset"}
 						</text>
 					</ActionHeader>
 				)}
 			</For>
 			<Show when={editing()}>
-				<textarea
-					ref={(value) => {
-						editor = value;
-						value.setText(draft()[field()]);
-					}}
-					minHeight={3}
+				<LocalJsonEditor
+					value={draft()[field()]}
+					scope={`diagnostic:${draft().task}:${draft().kind}:${field()}`}
+					editing={props.focused && props.editing && editing()}
+					interactive={active()}
 					height={8}
-					focused={props.focused && props.editing && editing()}
-					keyBindings={textareaBindings(editorKeybinds)}
-					onContentChange={() => {
-						const value = editor?.plainText ?? draft()[field()];
-						if (value.length <= 20000)
+					maxLength={20000}
+					onLimit={() =>
+						setError(
+							"Local field limit is 20000 UTF-16 units; previous exact draft retained.",
+						)
+					}
+					enter={() => enter(field())}
+					change={(value) => {
+						if (active() && editing()) {
 							setDraft({ ...draft(), [field()]: value });
-						else editor?.setText(draft()[field()]);
-					}}
-					onSubmit={() => {
-						setEditing(false);
-						props.edit(false);
+							setError(null);
+						}
 					}}
 				/>
 				<ActionHeader
-					onActivate={() => {
-						setEditing(false);
-						props.edit(false);
-					}}
+					scope={scope()}
+					interactive={active()}
+					onActivate={finish}
 				>
 					<text fg={color("accent")}>
 						Finish editing (no read, dispatch or approval)
 					</text>
 				</ActionHeader>
 			</Show>
-			<ActionHeader onActivate={prepare}>
+			<ActionHeader
+				scope={scope()}
+				interactive={active() && props.connected && props.fresh}
+				onActivate={prepare}
+			>
 				<text fg={color("accent")}>
-					Prepare unsent request in selected owner's conversation
+					Prepare unsent request in exact selected owner's conversation
 				</text>
 			</ActionHeader>
 			<ActionHeader
+				scope={scope()}
+				interactive={active()}
 				onActivate={() => {
+					if (!active()) return;
 					setDraft({ task: "", kind: "http", app: "", target: "", body: "" });
 					setEditing(false);
 					props.edit(false);
