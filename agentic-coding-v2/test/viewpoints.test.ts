@@ -12,6 +12,7 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 		host = serve(app),
 		client = new ClientConnection(host.client);
 	const id = crypto.randomUUID(),
+		followId = crypto.randomUUID(),
 		view: UiView = {
 			page: "tasks",
 			resource: "missing-task",
@@ -117,6 +118,66 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			id: disposable,
 			revision: recreated.revision,
 		});
+		const followView: UiView = {
+			...view,
+			page: "orchestrator",
+			resource: null,
+			transcriptFollow: { id: 99, following: true },
+		};
+		const followSaved = await client.call("viewpoints.save", {
+			id: followId,
+			name: "Follow position",
+			revision: 0,
+			view: followView,
+		});
+		expect(followSaved.view).toEqual(followView);
+		const held = await client.call("viewpoints.save", {
+			id: followId,
+			name: "Follow position",
+			revision: followSaved.revision,
+			view: { ...followView, transcriptFollow: { id: 99, following: false } },
+		});
+		expect(held.view.transcriptFollow).toEqual({ id: 99, following: false });
+		await expect(
+			client.call("viewpoints.remove", {
+				id: followId,
+				revision: followSaved.revision,
+			}),
+		).rejects.toThrow("Native operation refused");
+		for (const transcriptFollow of [
+			null,
+			[],
+			{},
+			{ id: 99 },
+			{ id: 99, following: "true" },
+			{ id: 0, following: true },
+			{ id: 1.5, following: true },
+			{ id: 99, following: true, execute: true },
+		]) {
+			await expect(
+				client.call("viewpoints.save", {
+					id: crypto.randomUUID(),
+					name: "Invalid follow",
+					revision: 0,
+					view: { ...followView, transcriptFollow } as unknown as UiView,
+				}),
+			).rejects.toThrow("Native operation refused");
+		}
+		for (const invalidScope of [
+			{ page: "pi", resource: "99" },
+			{ page: "tasks", resource: null },
+			{ page: "session", resource: "98" },
+			{ page: "session", resource: null },
+		] as const) {
+			await expect(
+				client.call("viewpoints.save", {
+					id: crypto.randomUUID(),
+					name: "Wrong UI scope",
+					revision: 0,
+					view: { ...followView, ...invalidScope },
+				}),
+			).rejects.toThrow("Native operation refused");
+		}
 		expect((await app.snapshot()).tasks).toEqual(before.tasks);
 		expect((await app.snapshot()).schedules).toEqual(before.schedules);
 	} finally {
@@ -125,13 +186,27 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 	}
 	await app.close();
 	const reopened = await open();
-	expect(await readViewpoints(reopened)).toEqual([
-		expect.objectContaining({
-			id,
-			revision,
-			name: "Updated task position",
-			view: { ...view, scroll: 4 },
-		}),
-	]);
+	const retained = await readViewpoints(reopened);
+	expect(retained).toHaveLength(2);
+	expect(retained).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				id,
+				revision,
+				name: "Updated task position",
+				view: { ...view, scroll: 4 },
+			}),
+			expect.objectContaining({
+				id: followId,
+				name: "Follow position",
+				view: {
+					...view,
+					page: "orchestrator",
+					resource: null,
+					transcriptFollow: { id: 99, following: false },
+				},
+			}),
+		]),
+	);
 	expect((await reopened.snapshot()).tasks).toEqual([]);
 });

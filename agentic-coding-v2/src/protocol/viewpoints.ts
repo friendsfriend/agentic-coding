@@ -25,6 +25,7 @@ export type UiView = {
 	expanded: string[];
 	scroll: number;
 	focus: "sessions" | "content" | "viewpoints";
+	transcriptFollow?: { id: number; following: boolean };
 };
 export type NativeViewpoint = {
 	id: string;
@@ -47,7 +48,9 @@ const keys = [
 export function uiView(value: unknown): UiView {
 	const data = record(value);
 	if (
-		Object.keys(data).some((key) => !keys.includes(key)) ||
+		Object.keys(data).some(
+			(key) => !keys.includes(key) && key !== "transcriptFollow",
+		) ||
 		keys.some((key) => !Object.hasOwn(data, key)) ||
 		!uiPages.includes(data.page as UiPage) ||
 		!(
@@ -71,6 +74,25 @@ export function uiView(value: unknown): UiView {
 		)
 	)
 		throw new Error("Invalid UI-only viewpoint state");
+	if (Object.hasOwn(data, "transcriptFollow")) {
+		const follow = record(data.transcriptFollow);
+		if (
+			Object.keys(follow).length !== 2 ||
+			!Object.hasOwn(follow, "id") ||
+			!Object.hasOwn(follow, "following") ||
+			!Number.isSafeInteger(follow.id) ||
+			Number(follow.id) < 1 ||
+			typeof follow.following !== "boolean" ||
+			!(
+				(data.page === "orchestrator" && data.resource === null) ||
+				(data.page === "session" &&
+					typeof data.resource === "string" &&
+					/^\d+$/.test(data.resource) &&
+					Number(data.resource) === follow.id)
+			)
+		)
+			throw new Error("Invalid UI-only transcript follow state");
+	}
 	return structuredClone(data) as UiView;
 }
 export function nativeViewpoint(value: unknown): NativeViewpoint {

@@ -1698,6 +1698,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					viewpoints.save(args, current());
 					update();
 				} else if (command === "pin" || command === "repin") {
+					remember();
 					const source = current(),
 						target =
 							command === "repin"
@@ -1717,6 +1718,20 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								expanded: source.expanded,
 								scroll: source.scroll,
 								focus: source.focus,
+								...(((source.page === "orchestrator" &&
+									source.resource === null) ||
+									source.page === "session") &&
+								source.detail.transcriptFollowId === sessionId() &&
+								Number.isSafeInteger(source.detail.transcriptFollowId) &&
+								Number(source.detail.transcriptFollowId) >= 1 &&
+								typeof source.detail.transcriptFollowing === "boolean"
+									? {
+											transcriptFollow: {
+												id: Number(source.detail.transcriptFollowId),
+												following: source.detail.transcriptFollowing,
+											},
+										}
+									: {}),
 							}),
 						});
 					viewpoints.putNative(saved);

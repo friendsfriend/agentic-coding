@@ -79,10 +79,20 @@ export class Viewpoints {
 	cacheNative(items: NativeViewpoint[]) {
 		this.nativeItems = items.map((value) => {
 			const item = nativeViewpoint(value);
+			const { transcriptFollow, ...view } = item.view;
 			return {
 				id: `native:${item.id}`,
 				name: `Pinned · ${item.name}`,
-				view: checkedView({ ...item.view, draft: "", detail: {} }),
+				view: checkedView({
+					...view,
+					draft: "",
+					detail: transcriptFollow
+						? {
+								transcriptFollowId: transcriptFollow.id,
+								transcriptFollowing: transcriptFollow.following,
+							}
+						: {},
+				}),
 				nativeRevision: item.revision,
 			};
 		});

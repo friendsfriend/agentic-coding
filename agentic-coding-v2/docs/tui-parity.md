@@ -597,8 +597,9 @@ content and bindings, not permission to replace the original presentation.
   restore is ready, placing at the current supplied window bottom. Older or
   mismatched metadata keeps the existing clamped numeric restore and normal
   subsequent viewport sampling. Draft/selection/authority are not replaced.
-- Frozen entries are not saved or fetched. Native pinned viewpoints deliberately
-  omit local detail and retain numeric-only behavior; protocol, revision, owner,
+- Frozen entries are not saved or fetched. Native pinned viewpoints omit general
+  local detail; their optional closed UI-only `transcriptFollow` DTO carries the
+  fenced preference. Older pins retain numeric-only behavior. Revision, owner,
   approval and native admission contracts are unchanged. No renderer/helper tests
   or visual acceptance claims are added. Timeline/load-older, selection-autoscroll
   and text-line anchoring still remain unfinished.
@@ -640,6 +641,25 @@ content and bindings, not permission to replace the original presentation.
 - This is conservative provenance handling, not complete SDK tool-view parity.
   Timeline/load-older, text-line anchoring and visual verification remain open;
   no renderer/helper/presenter tests or visual acceptance are claimed.
+
+## Native pinned follow preference
+
+- Extend only the closed UI bookmark DTO with optional `transcriptFollow`:
+  positive safe native ID and boolean `following`, no additional nested keys.
+  Permit it only on the canonical orchestrator view or a numeric session resource
+  matching that ID; standalone/resource-family uses and malformed fields refuse.
+- Pin/repin sample current viewport memory before serializing. Only matching
+  native identity metadata is included. Cached native pins translate this narrow
+  DTO into local follow detail with an empty draft; all other local details remain
+  omitted. Restoring still waits for the matching available transcript/layout and
+  cannot open/adopt native work or assert that an ID is currently catalog-owned.
+- Existing pins without the optional field remain valid without migration.
+  Authenticated public-boundary fixtures cover true/false persistence/reopen,
+  malformed/foreign-page fields, stale deletion and unchanged task/schedule state.
+  General drafts, logs, confirmations and execution extras remain refused.
+- This extends UI-only wire data, not native authority. Timeline/load-older and
+  complete selection/text-line parity still remain open; no renderer/helper tests,
+  live provider/environment activity or visual acceptance are introduced.
 
 ## Still required before claiming parity
 
