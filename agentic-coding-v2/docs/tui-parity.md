@@ -145,6 +145,33 @@ content and bindings, not permission to replace the original presentation.
   are not restored by these ports. Mermaid remains readable fenced source; no
   render service, provider, shell or runtime authority is introduced.
 
+## Above-prompt slash autocomplete restoration pass
+
+- Port original PromptSuggestions composition locally: accent left rule, mantle
+  surface, fourteen-cell command gutter, two-cell row gap, native selection
+  colors, eight-row scrolling window and the original remaining-item count.
+- Bind the existing native command catalog, not legacy handlers. Command names
+  occupy the original gutter; explicit targets/placeholders remain visible in the
+  description and are copied into prepared text. No new backend command is added.
+- Keep a presentation-only draft mirror synchronized with typing, restores,
+  accepted-input recall and guarded clears. Native submission still reads the
+  actual editor buffer and retains its origin, ownership and revision checks.
+- Preserve history-arrow precedence at logical prompt boundaries; otherwise
+  arrows cycle visible slash suggestions. Tab and primary non-drag row activation
+  complete only a bare slash prefix. Whitespace-bearing/multiline drafts and the
+  literal `//` escape are not replaced by autocomplete.
+- Adapt original autocomplete Enter routing to native authority: a differing
+  selected suggestion is prepared only. A later explicit Enter on the exact
+  edited draft reaches the existing submit path; exact singleton commands dismiss
+  the suggestion surface. Preparation never records accepted-input history.
+- Recheck actual buffer eligibility and the current catalog before completion.
+  Stale completions preserve the unsent draft and consume that completion Enter
+  without dispatch. Help, palette, editor, focus and pending-submission guards
+  disable suggestion controls; opening help alone preserves its selection.
+- Contextual footer labels distinguish Enter preparation from submission and
+  expose Tab completion while the list is open. Prompt help documents these
+  conditional keys without adding a global command-dispatch layer.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
@@ -155,7 +182,7 @@ content and bindings, not permission to replace the original presentation.
 - Remaining orchestrator/durable transcript composition: original viewport/window
   anchoring, Mermaid diagram rendering, remaining specialized tool families and
   file/shell header/section composition, timestamps, usage/progress arrangement,
-  prompt history/autocomplete and picker behavior.
+  remaining prompt history details and model/thinking/argument picker behavior.
 - Remaining standalone detail/header, profile-picker and focus composition;
   its independent native identities must never alias durable conversations.
 - Original settings/provider/wiki/schedules/environment list/detail composition;

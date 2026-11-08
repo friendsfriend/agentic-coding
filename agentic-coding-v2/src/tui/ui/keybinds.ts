@@ -169,14 +169,14 @@ export const promptKeybinds: Keybind[] = [
 		key: "up",
 		cmd: "input.historyPrevious",
 		action:
-			"At first prompt line: recall only empty or unchanged recalled input",
+			"At first line: recall eligible history; otherwise cycle open slash suggestions",
 		standard: true,
 	},
 	{
 		key: "down",
 		cmd: "input.historyNext",
 		action:
-			"At last prompt line: advance recalled input or restore original draft",
+			"At last line: advance eligible history; otherwise cycle open slash suggestions",
 		standard: true,
 	},
 	{
@@ -186,9 +186,16 @@ export const promptKeybinds: Keybind[] = [
 		standard: true,
 	},
 	{
+		key: "tab",
+		cmd: "input.prepareSuggestion",
+		action: "Complete selected bare slash prefix as text only (no submission)",
+		standard: true,
+	},
+	{
 		key: "return",
 		cmd: "prompt.submit",
-		action: "Submit explicit prompt",
+		action:
+			"Prepare selected slash suggestion, or submit the exact edited draft",
 		short: "submit",
 	},
 	{

@@ -69,6 +69,7 @@ import { SkillPanel } from "../features/skills/SkillPanel.tsx";
 import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { WikiPanel } from "../features/wiki/WikiPanel.tsx";
 import { Badge } from "../presentation/components/Badge.tsx";
+import { PromptSuggestions } from "../presentation/components/PromptSuggestions.tsx";
 import {
 	createPromptCursorBlink,
 	paintPromptCursor,
@@ -222,9 +223,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[helpOpen, setHelpOpen] = createSignal(false),
 		[paletteOpen, setPaletteOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
+	const [promptText, setPromptText] = createSignal(navigation.current.draft);
+	const [suggestionIndex, setSuggestionIndex] = createSignal(0);
 	let prompt: TextareaRenderable | undefined,
 		scroll: ScrollBoxRenderable | undefined;
 	const cursorBlink = createPromptCursorBlink();
+	// The mirror wakes only presentation; native admission still reads the actual
+	// editor buffer. Programmatic restores/clears synchronize both surfaces.
+	const writePrompt = (text: string) => {
+		prompt?.setText(text);
+		setPromptText(text);
+		setSuggestionIndex(0);
+	};
 	// Original final-frame prompt cursor: native glyphs remain untouched, and
 	// only blink transitions wake an otherwise idle renderer.
 	onMount(() => {
@@ -307,7 +317,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		setSettingsEditing(false);
 		if (navigation.current.page === "settings")
 			setRefreshRevision((value) => value + 1);
-		prompt?.setText(navigation.current.draft);
+		writePrompt(navigation.current.draft);
 		scroll?.scrollTo(navigation.current.scroll);
 		update();
 	};
@@ -698,7 +708,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			return;
 		}
 		navigation.current.draft = command;
-		prompt?.setText(command);
+		writePrompt(command);
 		setNotice(
 			"Command prepared only. Inspect the native snapshot, add comments, and submit explicitly; no action has run.",
 		);
@@ -725,7 +735,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				return false;
 			}
 			navigation.current.draft = recalled.text;
-			prompt?.setText(recalled.text);
+			writePrompt(recalled.text);
 			prompt?.gotoBufferEnd();
 			cursorBlink.reset();
 			setNotice(recalled.label);
@@ -794,6 +804,93 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					},
 				]),
 	];
+	const promptCommands = createMemo(() =>
+		paletteEntries().map((entry) => {
+			const name = entry.command.split(/\s/, 1)[0] ?? entry.command;
+			const argumentsText = entry.command.slice(name.length).trim();
+			return {
+				name,
+				text: entry.command,
+				description: argumentsText
+					? `${argumentsText} · ${entry.description}`
+					: entry.description,
+			};
+		}),
+	);
+	const suggestions = createMemo(() => {
+		const match = /^\/(\S*)$/.exec(promptText());
+		if (!match) return [];
+		const query = (match[1] ?? "").toLowerCase();
+		return promptCommands().filter((entry) =>
+			entry.name.slice(1).toLowerCase().startsWith(query),
+		);
+	});
+	const suggestionControlsActive = () =>
+		current().focus === "content" &&
+		!settingsEditing() &&
+		!busy() &&
+		!helpOpen() &&
+		!paletteOpen();
+	const suggestionsOpen = () =>
+		suggestionControlsActive() &&
+		suggestions().length > 0 &&
+		!(suggestions().length === 1 && suggestions()[0]?.text === promptText());
+	createEffect(() => {
+		const count = suggestions().length;
+		setSuggestionIndex((index) => Math.max(0, Math.min(index, count - 1)));
+	});
+	const prepareSuggestion = (name: string): boolean => {
+		const draft = prompt?.plainText ?? navigation.current.draft;
+		const match = /^\/(\S*)$/.exec(draft);
+		if (
+			!suggestionControlsActive() ||
+			!match ||
+			!paletteEntries().some(
+				(entry) =>
+					entry.command === name &&
+					name
+						.slice(1)
+						.toLowerCase()
+						.startsWith((match[1] ?? "").toLowerCase()),
+			)
+		) {
+			setNotice(
+				"Suggestion is no longer eligible for this bare slash prefix; the unsent draft was not replaced.",
+			);
+			return false;
+		}
+		navigation.current.draft = name;
+		writePrompt(name);
+		prompt?.gotoBufferEnd();
+		cursorBlink.reset();
+		setNotice(
+			"Command completed as text only. Edit placeholders and submit explicitly; no action has run.",
+		);
+		update();
+		return true;
+	};
+	const completeSelectedSuggestion = (): boolean => {
+		if (!suggestionsOpen()) return false;
+		const entry = suggestions()[suggestionIndex()];
+		if (
+			!entry ||
+			entry.text === (prompt?.plainText ?? navigation.current.draft)
+		)
+			return false;
+		prepareSuggestion(entry.text);
+		// Even a stale completion consumes this Enter without backend submission.
+		return true;
+	};
+	const promptFooterBindings = () =>
+		suggestionsOpen()
+			? promptKeybinds.map((binding) =>
+					binding.cmd === "prompt.submit"
+						? { ...binding, short: "prepare" }
+						: binding.cmd === "input.prepareSuggestion"
+							? { ...binding, standard: false, short: "complete" }
+							: binding,
+				)
+			: promptKeybinds;
 	const keymap = useKeymap();
 	const unregister = keymap.registerLayer({
 		id: "v2.shell",
@@ -939,7 +1036,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					}
 					if (origin.draft !== content) return;
 					origin.draft = "";
-					if (navigation.current === origin) prompt?.setText("");
+					if (navigation.current === origin) writePrompt("");
 				};
 				const words = args.split(/\s+/),
 					identity = words[0] ?? "",
@@ -1802,7 +1899,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					history.admitted(`${origin.page}:${origin.resource ?? ""}`, content);
 					if (navigation.current === origin && current().draft === content) {
 						navigation.current.draft = "";
-						prompt?.setText("");
+						writePrompt("");
 					}
 					setRefreshRevision((value) => value + 1);
 					return;
@@ -1818,7 +1915,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				history.admitted(`${origin.page}:${origin.resource ?? ""}`, content);
 				if (navigation.current === origin && current().draft === content) {
 					navigation.current.draft = "";
-					prompt?.setText("");
+					writePrompt("");
 				}
 				setNotice(`Admitted submission #${result.submissionId}`);
 			}
@@ -2559,6 +2656,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							</Show>
 						</ActionScope>
 					</scrollbox>
+					<Show when={suggestionsOpen()}>
+						<PromptSuggestions
+							items={suggestions()}
+							selection={suggestionIndex()}
+							select={setSuggestionIndex}
+							choose={(entry) => prepareSuggestion(entry.text)}
+						/>
+					</Show>
 					<Show when={paletteOpen()}>
 						<CommandPalette
 							active={!helpOpen()}
@@ -2628,31 +2733,45 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									queueMicrotask(() => setHelpOpen(true));
 									return;
 								}
-								if (
-									event.ctrl ||
-									event.meta ||
-									event.shift ||
-									!prompt ||
-									(name !== "up" && name !== "down")
-								)
-									return;
-								const edge =
-									name === "up"
-										? prompt.logicalCursor.row === 0
-										: prompt.logicalCursor.row >= prompt.lineCount - 1;
-								if (
-									edge &&
-									history.canBrowseArrows(historyKey(), text) &&
-									recall(name === "up" ? -1 : 1, true)
-								)
+								if (event.ctrl || event.meta || event.shift || !prompt) return;
+								if (name === "up" || name === "down") {
+									const edge =
+										name === "up"
+											? prompt.logicalCursor.row === 0
+											: prompt.logicalCursor.row >= prompt.lineCount - 1;
+									if (
+										edge &&
+										history.canBrowseArrows(historyKey(), text) &&
+										recall(name === "up" ? -1 : 1, true)
+									) {
+										event.preventDefault();
+										return;
+									}
+								}
+								if (!suggestionsOpen()) return;
+								const count = suggestions().length;
+								if (name === "up" || name === "down") {
 									event.preventDefault();
+									setSuggestionIndex(
+										(index) =>
+											(index + (name === "down" ? 1 : -1) + count) % count,
+									);
+								} else if (name === "tab") {
+									event.preventDefault();
+									const entry = suggestions()[suggestionIndex()];
+									if (entry) prepareSuggestion(entry.text);
+								}
 							}}
 							onContentChange={(value) => {
 								cursorBlink.reset();
 								navigation.current.draft =
 									typeof value === "string" ? value : (prompt?.plainText ?? "");
+								setPromptText(navigation.current.draft);
+								setSuggestionIndex(0);
 							}}
-							onSubmit={() => void submit()}
+							onSubmit={() => {
+								if (!completeSelectedSuggestion()) void submit();
+							}}
 							width="100%"
 							minHeight={1}
 							maxHeight={8}
@@ -2692,7 +2811,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								...shellKeybinds,
 								...actionKeybinds,
 								...(isTranscript() ? transcriptKeybinds : []),
-								...(current().focus === "content" ? promptKeybinds : []),
+								...(current().focus === "content"
+									? promptFooterBindings()
+									: []),
 								...(current().focus === "sessions"
 									? workspaceNavigationKeybinds
 									: []),
