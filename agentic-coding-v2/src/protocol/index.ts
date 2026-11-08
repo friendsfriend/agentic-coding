@@ -14,6 +14,7 @@ import type {
 	ProviderActionIntent,
 	ProviderActionReceipt,
 } from "./provider-actions.ts";
+import type { StandaloneMethods } from "./standalone.ts";
 import type { NativeViewpoint, UiView } from "./viewpoints.ts";
 export type Data = Record<string, unknown>;
 export type Session = {
@@ -337,7 +338,7 @@ export type Methods = {
 	};
 	"providers.read": { input: Data; output: ProviderSummary[] };
 	"providers.inspect": { input: ProviderQuery; output: ProviderInspection };
-};
+} & StandaloneMethods;
 export type Method = keyof Methods;
 export type Request = { version: 1; id: string; method: Method; input: Data };
 export type Frame =
@@ -374,6 +375,13 @@ export const methods: Method[] = [
 	"session.read",
 	"session.history",
 	"session.watch",
+	"standalone.read",
+	"standalone.create",
+	"standalone.send",
+	"standalone.abort",
+	"standalone.compact",
+	"standalone.configure",
+	"standalone.retire",
 	"session.send",
 	"session.abort",
 	"session.compact",

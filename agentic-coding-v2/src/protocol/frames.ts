@@ -208,7 +208,64 @@ export function result<M extends Method>(
 	method: M,
 	value: unknown,
 ): Methods[M]["output"] {
-	if (method === "environment.preview") {
+	const standaloneSession = (value: unknown) => {
+		const data = record(value);
+		if (
+			typeof data.id !== "string" ||
+			!/^[a-f0-9-]{36}$/.test(data.id) ||
+			!["pi", "opencode"].includes(String(data.mode)) ||
+			!["ready", "busy", "uncertain", "closed"].includes(String(data.status)) ||
+			!integer(data.revision, 1) ||
+			typeof data.title !== "string" ||
+			data.title.length > 256 ||
+			typeof data.repository !== "string" ||
+			typeof data.profile !== "string" ||
+			typeof data.truncated !== "boolean" ||
+			(data.partial !== null &&
+				(typeof data.partial !== "string" || data.partial.length > 64000)) ||
+			!Array.isArray(data.messages) ||
+			data.messages.length > 100 ||
+			JSON.stringify(data.messages).length > 96000 ||
+			["backend", "context", "attempts", "token", "url"].some((key) =>
+				Object.hasOwn(data, key),
+			)
+		)
+			throw new Error("Invalid standalone observation");
+		for (const message of list(data.messages))
+			if (
+				!["user", "assistant"].includes(String(message.role)) ||
+				typeof message.content !== "string" ||
+				message.content.length > 64000
+			)
+				throw new Error("Invalid standalone message");
+	};
+	if (method === "standalone.read") {
+		const data = record(value);
+		if (
+			typeof data.piAvailable !== "boolean" ||
+			typeof data.opencodeAvailable !== "boolean" ||
+			typeof data.scope !== "string" ||
+			!Array.isArray(data.sessions) ||
+			data.sessions.length > 64
+		)
+			throw new Error("Invalid standalone inventory");
+		data.sessions.forEach(standaloneSession);
+	} else if (
+		method === "standalone.create" ||
+		method === "standalone.send" ||
+		method === "standalone.compact"
+	)
+		standaloneSession(value);
+	else if (method === "standalone.abort" && record(value).aborted !== true)
+		throw new Error("Invalid standalone abort");
+	else if (
+		method === "standalone.configure" &&
+		record(value).configured !== true
+	)
+		throw new Error("Invalid standalone configuration");
+	else if (method === "standalone.retire" && record(value).retired !== true)
+		throw new Error("Invalid standalone retirement");
+	else if (method === "environment.preview") {
 		const data = record(value);
 		if (
 			typeof data.id !== "string" ||

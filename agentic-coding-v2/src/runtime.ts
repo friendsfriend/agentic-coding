@@ -30,6 +30,7 @@ import { Scheduler, type ScheduleSlot } from "./scheduler.ts";
 import { Settings } from "./settings.ts";
 import { SkillFiles } from "./skill-files.ts";
 import { createSkillTask } from "./skill-task.ts";
+import { Standalone } from "./standalone.ts";
 import {
 	type Attachment,
 	Catalog,
@@ -50,6 +51,7 @@ export class Runtime {
 	private admission: TaskAdmission | null = null;
 	private reconciling = false;
 	private closed = false;
+	readonly standalone: Standalone;
 	readonly wiki: Wiki;
 	readonly providerActions: ProviderActions;
 	readonly settings: Settings;
@@ -61,6 +63,7 @@ export class Runtime {
 		readonly config: Config,
 		readonly models: Models,
 	) {
+		this.standalone = new Standalone(this);
 		this.wiki = new Wiki(this);
 		this.providerActions = new ProviderActions(this);
 		this.settings = new Settings(config);
@@ -341,6 +344,7 @@ export class Runtime {
 	}
 	async close() {
 		this.closed = true;
+		await this.standalone.close();
 		while (this.reconciling) await Bun.sleep(10);
 		try {
 			await this.environments.close();

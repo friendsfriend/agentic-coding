@@ -76,6 +76,61 @@ export async function dispatch(
 					: text(input.cursor, "history cursor", 80),
 			);
 		}
+		case "standalone.read":
+			fields(input, ["id"]);
+			return app.standalone.read(
+				input.id === undefined
+					? undefined
+					: text(input.id, "standalone identity", 80),
+			);
+		case "standalone.create":
+			fields(input, ["mode", "profile", "repository", "title"]);
+			if (input.mode !== "pi" && input.mode !== "opencode")
+				throw new Error("Invalid standalone mode");
+			return app.standalone.create(
+				input.mode,
+				text(input.profile, "profile", 128),
+				text(input.repository, "repository", 4096),
+				text(input.title, "title", 256),
+			);
+		case "standalone.send":
+			fields(input, ["id", "revision", "content", "requestId"]);
+			return app.standalone.send(
+				text(input.id, "standalone identity", 80),
+				integer(input.revision),
+				text(input.content, "message", 64000),
+				text(input.requestId, "request identity", 128),
+			);
+		case "standalone.compact":
+			fields(input, ["id", "revision", "requestId", "instructions"]);
+			return app.standalone.send(
+				text(input.id, "standalone identity", 80),
+				integer(input.revision),
+				input.instructions === undefined
+					? "Native context compaction"
+					: text(input.instructions, "instructions", 32000),
+				text(input.requestId, "request identity", 128),
+				true,
+			);
+		case "standalone.configure":
+			fields(input, ["id", "revision", "profile"]);
+			await app.standalone.configure(
+				text(input.id, "standalone identity", 80),
+				integer(input.revision),
+				text(input.profile, "profile", 128),
+			);
+			return { configured: true };
+		case "standalone.retire":
+			fields(input, ["id", "revision"]);
+			await app.standalone.retire(
+				text(input.id, "standalone identity", 80),
+				integer(input.revision),
+			);
+			return { retired: true };
+		case "standalone.abort":
+			fields(input, ["id"]);
+			await app.standalone.abort(text(input.id, "standalone identity", 80));
+			return { aborted: true };
 		case "session.read":
 			fields(input, ["id"]);
 			return readSession(app, integer(input.id));

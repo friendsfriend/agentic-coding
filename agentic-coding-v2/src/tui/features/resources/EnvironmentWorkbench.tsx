@@ -14,6 +14,7 @@ import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
 import { StructuredData } from "../../ui/StructuredData.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { TelemetryView } from "./TelemetryView.tsx";
 import { mutationFields, readFields } from "./workbench-fields.ts";
 /** Ephemeral workbench. Nothing is persisted to navigation/history/viewpoints.
  * Only explicit submission invokes a native boundary. */
@@ -308,10 +309,21 @@ export function EnvironmentWorkbench(props: {
 				</text>
 			</Show>
 			<Show when={result() !== null}>
-				<StructuredData
-					value={result()}
-					label="Last explicitly requested native observation / acknowledgement"
-				/>
+				<Show
+					when={
+						mode() === "read" &&
+						read() === "telemetry" &&
+						typeof result() === "object"
+					}
+					fallback={
+						<StructuredData
+							value={result()}
+							label="Last explicitly requested native observation / acknowledgement"
+						/>
+					}
+				>
+					<TelemetryView value={result()} />
+				</Show>
 			</Show>
 		</box>
 	);

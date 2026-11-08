@@ -32,6 +32,7 @@ import type {
 	ProviderActionOperation,
 	ProviderActionReceipt,
 } from "../../protocol/provider-actions.ts";
+import type { StandaloneInventory } from "../../protocol/standalone.ts";
 import { uiView } from "../../protocol/viewpoints.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
@@ -50,6 +51,7 @@ import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
 import { HistoryPanel } from "../features/sessions/HistoryPanel.tsx";
 import { DraftHistory } from "../features/sessions/history.ts";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
+import { StandalonePanel } from "../features/sessions/StandalonePanel.tsx";
 import { Transcript } from "../features/sessions/Transcript.tsx";
 import { SettingsPanel } from "../features/settings/SettingsPanel.tsx";
 import {
@@ -95,6 +97,7 @@ const help = [
 	"/session ID · /back · /forward · /reconnect",
 	"/view skills · /skill SKILL_ID@DIGEST (loaded instructions only)",
 	"/model PROFILE · /abort · /compact [instructions]",
+	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
 	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
 	"/evidence TASK_ID CONTENT_DIGEST [BYTE_OFFSET] (explicit bounded owned evidence read)",
@@ -132,6 +135,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		name: "",
 		content: "",
 	});
+	const [standalone, setStandalone] = createSignal<StandaloneInventory | null>(
+		null,
+	);
 	const [diagnosticDraft, setDiagnosticDraft] = createSignal<DiagnosticDraft>({
 		task: "",
 		kind: "http",
@@ -579,6 +585,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const missingResource = () =>
 		current().resource !== null &&
 		!isTranscript() &&
+		!["pi", "opencode"].includes(current().page) &&
 		!rows().some((row) => String(row.id) === current().resource);
 	const selectedTaskId = createMemo(() => {
 		if (page() !== "tasks") return null;
@@ -858,12 +865,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		bindings: bindings(shellKeybinds),
 	});
 	onCleanup(unregister);
+	let pendingSubmissions = 0;
 	async function submit() {
-		if (busy()) return;
+		if (busy() && !/^\/(?:abort|refresh)\s*$/.test(navigation.current.draft))
+			return;
 		remember();
 		const origin = navigation.current;
 		const content = origin.draft;
 		if (!content.trim()) return;
+		pendingSubmissions++;
 		setBusy(true);
 		setNotice(null);
 		try {
@@ -900,7 +910,83 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						throw new Error("Use ID@REVISION from current server state");
 					return { id: match[1], revision: Number(match[2]) };
 				};
-				if (command === "help") {
+				if (command === "standalone") {
+					if (!["orchestrator", "pi", "opencode"].includes(origin.page))
+						throw new Error(
+							"Manage standalone sessions through orchestrator/transcript commands",
+						);
+					const action = words[0];
+					if (action === "create") {
+						const mode = words[1],
+							profile = words[2],
+							repository = state()?.repositories[Number(words[3])];
+						if (
+							(mode !== "pi" && mode !== "opencode") ||
+							!profile ||
+							!/^\d+$/.test(words[3] ?? "") ||
+							!repository
+						)
+							throw new Error(
+								"Use standalone create MODE PROFILE REPOSITORY_INDEX TITLE",
+							);
+						const value = await client.call("standalone.create", {
+							mode,
+							profile,
+							repository,
+							title: words.slice(4).join(" "),
+						});
+						clear();
+						if (navigation.current === origin) go(mode, value.id);
+						setRefreshRevision((value) => value + 1);
+					} else if (action === "open") {
+						const value = await client.call("standalone.read", {
+								id: words[1] ?? "",
+							}),
+							selected = value.sessions[0];
+						if (!selected) throw new Error("Standalone unavailable");
+						clear();
+						if (navigation.current === origin) go(selected.mode, selected.id);
+					} else if (action === "retire") {
+						const match = /^([a-f0-9-]{36})@(\d+)$/.exec(words[1] ?? "");
+						if (!match?.[1] || !match[2])
+							throw new Error("Use standalone retire ID@REVISION");
+						await client.call("standalone.retire", {
+							id: match[1],
+							revision: Number(match[2]),
+						});
+						clear();
+						setRefreshRevision((value) => value + 1);
+					} else throw new Error("Unknown standalone command");
+				} else if (
+					(command === "abort" ||
+						command === "model" ||
+						command === "compact") &&
+					(origin.page === "pi" || origin.page === "opencode")
+				) {
+					const selected = standalone()?.sessions.find(
+						(session) =>
+							session.id === origin.resource && session.mode === origin.page,
+					);
+					if (!selected)
+						throw new Error("Select a currently observed standalone session");
+					if (command === "abort")
+						await client.call("standalone.abort", { id: selected.id });
+					else if (command === "compact")
+						await client.call("standalone.compact", {
+							id: selected.id,
+							revision: selected.revision,
+							requestId: crypto.randomUUID(),
+							...(args ? { instructions: args } : {}),
+						});
+					else
+						await client.call("standalone.configure", {
+							id: selected.id,
+							revision: selected.revision,
+							profile: args,
+						});
+					clear();
+					setRefreshRevision((value) => value + 1);
+				} else if (command === "help") {
 					setHelpOpen(true);
 					clear();
 				} else if (command === "view") {
@@ -1652,6 +1738,29 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						"Unsupported prompt command; /help lists available commands",
 					);
 			} else {
+				if (origin.page === "pi" || origin.page === "opencode") {
+					const selected = standalone()?.sessions.find(
+						(session) =>
+							session.id === origin.resource && session.mode === origin.page,
+					);
+					if (selected?.status !== "ready")
+						throw new Error(
+							"Select an owned ready standalone session; uncertain attempts cannot be retried",
+						);
+					await client.call("standalone.send", {
+						id: selected.id,
+						revision: selected.revision,
+						content: content.startsWith("//") ? content.slice(1) : content,
+						requestId: crypto.randomUUID(),
+					});
+					history.admitted(`${origin.page}:${origin.resource ?? ""}`, content);
+					if (navigation.current === origin && current().draft === content) {
+						navigation.current.draft = "";
+						prompt?.setText("");
+					}
+					setRefreshRevision((value) => value + 1);
+					return;
+				}
 				const id = sessionId();
 				if (id === null || !available())
 					throw new Error("Select a current native conversation to send input");
@@ -1676,14 +1785,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					: message,
 			);
 		} finally {
-			setBusy(false);
+			pendingSubmissions--;
+			setBusy(pendingSubmissions > 0);
 			update();
 		}
 	}
 	const sidebarOptions = () => [
 		...["OpenCode", "Pi", "Pi Durable", "Orchestrator"].map((name, index) => ({
 			name,
-			description: index < 2 ? "Native adapter not implemented" : "Native",
+			description: index < 2 ? "Independent native standalone chat" : "Native",
 			value: `mode:${index}`,
 		})),
 		{
@@ -1867,10 +1977,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											current().page === "opencode" || current().page === "pi"
 										}
 									>
-										<text fg={color("warning")}>
-											The v2 native adapter for this session mode is not
-											implemented yet. Legacy launch/delegation is not used.
-										</text>
+										<StandalonePanel
+											client={client}
+											mode={current().page === "pi" ? "pi" : "opencode"}
+											resource={current().resource}
+											connected={status() === "connected"}
+											refresh={refreshRevision()}
+											select={(id) => {
+												navigation.current.resource = id;
+												update();
+											}}
+											observe={setStandalone}
+										/>
 									</Show>
 									<Show when={current().page === "pi-durable"}>
 										<SessionExplorer
@@ -2377,7 +2495,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							}
 							initialValue={current().draft}
 							placeholder={
-								isTranscript()
+								isTranscript() ||
+								current().page === "pi" ||
+								current().page === "opencode"
 									? "Send a message or /help…"
 									: "Prompt command (/help)…"
 							}
