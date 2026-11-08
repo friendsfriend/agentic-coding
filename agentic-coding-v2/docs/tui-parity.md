@@ -27,13 +27,40 @@ content and bindings, not permission to replace the original presentation.
 - Replace boxed environment/schedule resource rows with the original selectable
   row chrome. Retain explicit read/preparation and revision fences.
 
+## Conversation restoration pass
+
+- Extract the original prompt's left-ruled raised surface, top pulse line,
+  input padding and role/model/thinking metadata row. Restore a one-to-eight-row
+  editor instead of the fixed five-row top-bordered input. Retain native draft,
+  command routing, focus exclusions and admission checks.
+- Port the original monotonic blinking, final-frame prompt cursor with its
+  grapheme-preserving paint and renderer/timer cleanup.
+- Port original UserPrompt paragraph spacing, five-line preview, disclosure and
+  hover surface. Folding uses the existing UI-only expansion memory; message
+  text is plain text, not markdown interpreted from a user prompt.
+- Restore assistant three-cell inset/unboxed markdown and thinking's unboxed
+  muted italic detail, warning-toned fold and recorded-partial spinner.
+- Port original shared MarkdownViewer and syntax palette. The native renderer
+  owns cached syntax styles; individual transcript cleanup must not destroy a
+  style shared with another mounted surface. v2 still uses its single local
+  Catppuccin palette, not legacy theme/settings authority.
+- Restore heavy tool-call rules, paragraph padding, hover surface, original icon
+  gutters and primary-colored labels. Animate only an observed running native
+  slot, never a model's partial tool intent. Keep explicit unknown/ambiguous,
+  retained-result and waiting-on-owned-work wording.
+- Use original primary-button tap/drag classification for transcript header and
+  section folding. Output selection/dragging does not collapse a tool card.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
   navigation/focus key catalogs, including keyboard breadcrumb focus.
 - Original help/modal components and notification placement.
-- Original orchestrator/durable transcript composition, prompt chrome, markdown,
-  tool cards, progress and metadata arrangement.
+- Remaining orchestrator/durable transcript composition: original ordered
+  markdown block/cache flow, specialized tool/file/shell bodies, timestamps,
+  usage/progress arrangement, prompt history/autocomplete and picker behavior.
+- Standalone message/list composition must reuse the same original conversation
+  surfaces without aliasing its independent native identities.
 - Original settings/provider/wiki/schedules/environment list/detail composition;
   adapt only content and controls incompatible with native authority.
 - Interaction/lifecycle audit and terminal visual verification. Compilation,

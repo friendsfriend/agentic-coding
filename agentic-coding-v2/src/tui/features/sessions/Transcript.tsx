@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import { type BoxRenderable, SyntaxStyle } from "@opentui/core";
+import { type BoxRenderable, TextAttributes } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
-import { useRenderer } from "@opentui/solid";
 import {
 	createEffect,
 	createMemo,
@@ -16,6 +15,10 @@ import type {
 	Transcript as TranscriptData,
 } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
+import { MarkdownViewer } from "../../presentation/components/MarkdownViewer.tsx";
+import { useMarkdownSyntaxStyle } from "../../presentation/components/markdownSyntax.ts";
+import { Spinner } from "../../presentation/components/Spinner.tsx";
+import { UserPrompt } from "../../presentation/components/UserPrompt.tsx";
 import { ImageView } from "../../ui/ImageView.tsx";
 import { bindings, transcriptKeybinds } from "../../ui/keybinds.ts";
 import { color } from "../../ui/theme/index.ts";
@@ -37,8 +40,7 @@ export function Transcript(props: {
 	expanded: string[];
 	toggle: (id: string) => void;
 }) {
-	const renderer = useRenderer(),
-		keymap = useKeymap();
+	const keymap = useKeymap();
 	const anchors = new Map<string, BoxRenderable>();
 	const anchor = (id: string) => {
 		let previous: BoxRenderable | undefined;
@@ -49,21 +51,8 @@ export function Transcript(props: {
 			} else if (anchors.get(id) === previous) anchors.delete(id);
 		};
 	};
-	const syntax = SyntaxStyle.fromStyles(
-		{
-			default: { fg: color("text") },
-			"markup.heading": { fg: color("primary"), bold: true },
-			"markup.strong": { fg: color("text"), bold: true },
-			"markup.raw": { fg: color("accent") },
-			keyword: { fg: color("primary") },
-			string: { fg: color("success") },
-			comment: { fg: color("textMuted") },
-			number: { fg: color("accent") },
-			function: { fg: color("primary") },
-		},
-		renderer.nativeScene,
-	);
-	onCleanup(() => syntax.destroy());
+	// Shared presentation styles belong to the native renderer, not this view.
+	const syntax = useMarkdownSyntaxStyle();
 	const progress = () =>
 		props.observation === "watching" ? props.value?.progress : undefined;
 	// Equal retained records keep their render identity across progress publications.
@@ -391,30 +380,39 @@ export function Transcript(props: {
 				{(message) => (
 					<>
 						<Show when={text(message) && message.role !== "toolResult"}>
-							<box
-								flexDirection="column"
-								paddingLeft={1}
-								paddingRight={1}
-								backgroundColor={
-									message.role === "user"
-										? color("backgroundPanel")
-										: color("background")
+							<Show
+								when={message.role === "user"}
+								fallback={
+									<box
+										flexDirection="column"
+										paddingLeft={3}
+										paddingRight={1}
+										flexShrink={0}
+									>
+										<Show when={message.role !== "assistant"}>
+											<text fg={color("textMuted")}>
+												{String(message.role)}
+											</text>
+										</Show>
+										<Show when={message.nativePartial === true}>
+											<text fg={color("textMuted")}>
+												Native in-flight committed partial
+											</text>
+										</Show>
+										<MarkdownViewer
+											content={text(message)}
+											fg={color("text")}
+											streaming={message.nativePartial === true}
+										/>
+									</box>
 								}
-								border={message.role === "user" ? ["left"] : false}
-								borderColor={color("accent")}
 							>
-								<text fg={color("textMuted")}>
-									{String(message.role)}
-									{message.nativePartial === true
-										? " · native in-flight committed partial"
-										: ""}
-								</text>
-								<markdown
-									content={text(message)}
-									syntaxStyle={syntax}
-									conceal={true}
+								<UserPrompt
+									text={text(message)}
+									expanded={props.expanded.includes(String(message.identity))}
+									onToggle={() => props.toggle(String(message.identity))}
 								/>
-							</box>
+							</Show>
 						</Show>
 						<For
 							each={parts(message).filter(
@@ -431,10 +429,9 @@ export function Transcript(props: {
 										fallback={
 											<box
 												flexDirection="column"
-												border={["left"]}
-												borderColor={color("accent")}
-												backgroundColor={color("backgroundPanel")}
-												paddingLeft={1}
+												paddingLeft={3}
+												paddingRight={1}
+												flexShrink={0}
 											>
 												<TranscriptHeader
 													identity={identity}
@@ -442,24 +439,48 @@ export function Transcript(props: {
 													toggle={props.toggle}
 													anchor={track}
 												>
-													<text fg={color("accent")}>
-														{props.selected === identity ? "› " : ""}
-														{props.expanded.includes(identity) ? "▾" : "▸"}{" "}
-														{message.nativePartial === true
-															? "Native in-flight thinking (committed partial)"
-															: "Retained thinking"}
-													</text>
+													<box flexDirection="row">
+														<Show when={message.nativePartial === true}>
+															<Spinner
+																color={color("textMuted")}
+																attributes={TextAttributes.DIM}
+															/>
+															<text fg={color("textMuted")}> </text>
+														</Show>
+														<text
+															fg={
+																message.nativePartial === true
+																	? color("textMuted")
+																	: color("warning")
+															}
+															attributes={
+																message.nativePartial === true
+																	? TextAttributes.DIM
+																	: undefined
+															}
+														>
+															{props.selected === identity ? "› " : ""}
+															{props.expanded.includes(identity) ? "▾" : "▸"}{" "}
+															{message.nativePartial === true
+																? "Thinking… · committed partial"
+																: "Thinking… · retained"}
+														</text>
+													</box>
 												</TranscriptHeader>
 												<Show when={props.expanded.includes(identity)}>
-													<markdown
-														content={
-															typeof part.thinking === "string"
-																? part.thinking
-																: ""
+													<text
+														fg={color("textMuted")}
+														attributes={
+															TextAttributes.ITALIC |
+															(message.nativePartial === true
+																? TextAttributes.DIM
+																: 0)
 														}
-														syntaxStyle={syntax}
-														conceal={true}
-													/>
+													>
+														{typeof part.thinking === "string"
+															? part.thinking
+															: ""}
+													</text>
 												</Show>
 											</box>
 										}

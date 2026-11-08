@@ -3,6 +3,10 @@ import type { BoxRenderable, SyntaxStyle } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
 import type { Data, ToolProgress } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
+import { useHover } from "../../presentation/components/mouse/useHover.ts";
+import { useTap } from "../../presentation/components/mouse/useTap.ts";
+import { Spinner } from "../../presentation/components/Spinner.tsx";
+import { uiColors } from "../../presentation/theme/colors.ts";
 import { ImageView } from "../../ui/ImageView.tsx";
 import { StructuredData } from "../../ui/StructuredData.tsx";
 import { color } from "../../ui/theme/index.ts";
@@ -33,6 +37,28 @@ export function ToolCard(props: {
 	toggle: (id: string) => void;
 	syntax: SyntaxStyle;
 }) {
+	const hover = useHover();
+	// Icon gutter from the original tool-call header; unknown tools keep its dot.
+	const icons: Record<string, string> = {
+		read: "→",
+		write: "←",
+		edit: "←",
+		apply_patch: "←",
+		patch: "←",
+		glob: "✱",
+		grep: "✱",
+		find: "✱",
+		bash: "$",
+		shell: "$",
+		execute: "▶",
+		task: "✓",
+		subagent: "✓",
+		webfetch: "%",
+		websearch: "◈",
+		codemode: "{}",
+		developer_question: "?",
+		agent_ask: "?",
+	};
 	const args = () => object(props.call.arguments);
 	const name = () => string(props.call.name) || "Unnamed native tool";
 	const detailsValue = () =>
@@ -106,10 +132,13 @@ export function ToolCard(props: {
 		) || name() === "bash";
 	const fold = (suffix: string, label: string) => (
 		<box
-			onMouseDown={() => {
-				props.select(props.identity);
-				props.toggle(`${props.identity}${suffix}`);
-			}}
+			{...useTap(
+				() => {
+					props.select(props.identity);
+					props.toggle(`${props.identity}${suffix}`);
+				},
+				{ stopPropagation: true },
+			)}
 		>
 			<text fg={color("accent")}>
 				{open(suffix) ? "▾" : "▸"} {label}
@@ -119,17 +148,24 @@ export function ToolCard(props: {
 	return (
 		<box
 			flexDirection="column"
-			paddingLeft={1}
+			paddingTop={1}
+			paddingBottom={1}
+			paddingLeft={2}
 			paddingRight={1}
+			flexShrink={0}
 			border={["left"]}
+			borderStyle="heavy"
 			borderColor={
 				props.result?.isError === true
 					? color("error")
 					: props.selected
 						? color("primary")
-						: color("accent")
+						: props.result
+							? color("success")
+							: color("textMuted")
 			}
-			backgroundColor={color("backgroundPanel")}
+			backgroundColor={hover.hovered() ? uiColors.bgHover : uiColors.bgMantle}
+			{...hover}
 		>
 			<TranscriptHeader
 				identity={props.identity}
@@ -137,11 +173,46 @@ export function ToolCard(props: {
 				toggle={props.toggle}
 				anchor={props.anchor}
 			>
-				<text fg={color("accent")} wrapMode="word">
-					{props.selected ? "› " : ""}
-					{open() ? "▾" : "▸"} {name()}
-					{summary() ? ` · ${summary()}` : ""}
-				</text>
+				<box flexDirection="row">
+					<box
+						width={name().startsWith("browser_") ? 3 : 2}
+						flexShrink={0}
+						flexDirection="row"
+					>
+						<Show when={name().startsWith("browser_")}>
+							<text fg={color("textMuted")}>{"\uf488"}</text>
+						</Show>
+						<Show
+							when={
+								!props.partial &&
+								!props.result &&
+								props.progress?.status === "running"
+							}
+							fallback={
+								<text
+									fg={
+										props.result?.isError === true
+											? color("error")
+											: color("textMuted")
+									}
+								>
+									{icons[name()] ?? "•"}
+								</text>
+							}
+						>
+							<Spinner color={color("textMuted")} />
+						</Show>
+					</box>
+					<text
+						fg={props.result?.isError === true ? color("error") : color("text")}
+						flexGrow={1}
+						minWidth={0}
+						wrapMode="word"
+					>
+						{name()}
+						{summary() ? ` · ${summary()}` : ""}
+					</text>
+				</box>
 				<text
 					fg={
 						props.result?.isError === true ? color("error") : color("textMuted")

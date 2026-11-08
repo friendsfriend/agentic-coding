@@ -7,13 +7,14 @@ import type {
 } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
-import { useTerminalDimensions } from "@opentui/solid";
+import { useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
 	createEffect,
 	createMemo,
 	createSignal,
 	For,
 	onCleanup,
+	onMount,
 	Show,
 } from "solid-js";
 import type { EvidenceDocument } from "../../protocol/evidence.ts";
@@ -68,6 +69,11 @@ import { SkillPanel } from "../features/skills/SkillPanel.tsx";
 import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
 import { WikiPanel } from "../features/wiki/WikiPanel.tsx";
 import { Badge } from "../presentation/components/Badge.tsx";
+import {
+	createPromptCursorBlink,
+	paintPromptCursor,
+} from "../presentation/components/prompt-cursor.ts";
+import { SessionPrompt } from "../presentation/components/SessionPrompt.tsx";
 import { StatusBar } from "../presentation/components/StatusBar.tsx";
 import {
 	WorkspaceNavigation,
@@ -217,6 +223,30 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[busy, setBusy] = createSignal(false);
 	let prompt: TextareaRenderable | undefined,
 		scroll: ScrollBoxRenderable | undefined;
+	const cursorBlink = createPromptCursorBlink();
+	// Original final-frame prompt cursor: native glyphs remain untouched, and
+	// only blink transitions wake an otherwise idle renderer.
+	onMount(() => {
+		const renderer = useRenderer();
+		let cursorFocused = false;
+		let paintedCursorVisible = true;
+		const paintCursor = (buffer: Parameters<typeof paintPromptCursor>[0]) => {
+			const focused = prompt?.focused ?? false;
+			if (focused && !cursorFocused) cursorBlink.reset();
+			cursorFocused = focused;
+			paintedCursorVisible = cursorBlink.visible();
+			if (prompt && paintedCursorVisible) paintPromptCursor(buffer, prompt);
+		};
+		renderer.addPostProcessFn(paintCursor);
+		const blinkTimer = setInterval(() => {
+			if (prompt?.focused && cursorBlink.visible() !== paintedCursorVisible)
+				renderer.requestRender();
+		}, 100);
+		onCleanup(() => {
+			clearInterval(blinkTimer);
+			renderer.removePostProcessFn(paintCursor);
+		});
+	});
 	const reveal = (node: BoxRenderable) => {
 		if (!scroll || !Number.isFinite(node.y)) return;
 		const top = node.y - scroll.viewport.y + scroll.scrollTop;
@@ -1991,10 +2021,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 												</text>
 											}
 										>
-											<text fg={color("textMuted")}>
-												{transcript()?.model ?? "Native conversation"} ·
-												thinking {transcript()?.thinking ?? "—"}
-											</text>
 											<Show when={transcript()}>
 												<text fg={color("textMuted")}>
 													History window · input{" "}
@@ -2566,13 +2592,37 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							}}
 						/>
 					</Show>
-					<box
-						height={5}
-						flexShrink={0}
-						border={["top"]}
-						borderColor={color("border")}
+					<SessionPrompt
+						role={
+							current().page === "orchestrator"
+								? "Orchestrator"
+								: current().page === "pi"
+									? "Pi"
+									: current().page === "opencode"
+										? "OpenCode"
+										: isTranscript()
+											? "Agent"
+											: "Command"
+						}
+						model={
+							isTranscript() && typeof transcript()?.model === "string"
+								? String(transcript()?.model)
+								: undefined
+						}
+						thinking={
+							isTranscript() && typeof transcript()?.thinking === "string"
+								? String(transcript()?.thinking)
+								: undefined
+						}
+						working={
+							isTranscript() &&
+							observation() === "watching" &&
+							Boolean(transcript()?.progress?.run)
+						}
 					>
 						<textarea
+							showCursor={false}
+							onCursorChange={() => cursorBlink.reset()}
 							ref={(value) => {
 								prompt = value;
 							}}
@@ -2587,21 +2637,26 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								isTranscript() ||
 								current().page === "pi" ||
 								current().page === "opencode"
-									? "Send a message or /help…"
+									? "Ask anything…"
 									: "Prompt command (/help)…"
 							}
 							keyBindings={textareaBindings(promptKeybinds)}
 							onContentChange={(value) => {
+								cursorBlink.reset();
 								navigation.current.draft =
 									typeof value === "string" ? value : (prompt?.plainText ?? "");
 							}}
 							onSubmit={() => void submit()}
 							width="100%"
-							height="100%"
+							minHeight={1}
+							maxHeight={8}
+							wrapMode="word"
 							textColor={color("text")}
 							backgroundColor={color("backgroundPanel")}
+							focusedTextColor={color("text")}
+							focusedBackgroundColor={color("backgroundPanel")}
 						/>
-					</box>
+					</SessionPrompt>
 				</box>
 				<NativeAgentNavigation
 					sessions={state()?.sessions ?? []}
