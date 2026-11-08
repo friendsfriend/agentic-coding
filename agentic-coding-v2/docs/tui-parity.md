@@ -1064,6 +1064,20 @@ content and bindings, not permission to replace the original presentation.
   load-older, nested-call composition and interactive/visual acceptance remain
   unfinished.
 
+## Extracted local requested-source presentation
+
+- Move the supplied JavaScript/SQL source fold into `ToolRequestedSource`, with
+  a readonly UI-byte shape and the owning card's phase/syntax/open/fold inputs.
+  Preserve source bytes, language, labels, caveats, wrapping and `:source`
+  disclosure suffix without an added layout wrapper or new event policy.
+- ToolCard retains source/header projection, native pairing/status, exact scoped
+  disclosure state and independent retained script-output gating. The extracted
+  component accepts no native result or progress records and performs no parsing,
+  execution, response matching, nested-call reconstruction or authority routing.
+- No renderer/helper tests, legacy/runtime imports or new global listeners are
+  introduced. Integrated load-older, nested-call composition and interactive/
+  visual acceptance remain unfinished; structural checks do not establish parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

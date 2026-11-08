@@ -12,6 +12,10 @@ import { StructuredData } from "../../ui/StructuredData.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
 import { ToolDialogue } from "./ToolDialogue.tsx";
+import {
+	type SuppliedToolSource,
+	ToolRequestedSource,
+} from "./ToolRequestedSource.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 import { TranscriptShellOutput } from "./TranscriptShellOutput.tsx";
 
@@ -213,7 +217,7 @@ export function ToolCard(props: {
 				.find((value) => value.length > 0) || summary();
 		return `${verb.charAt(0).toUpperCase()}${verb.slice(1)}${target ? ` ${target}` : ""}`;
 	};
-	const requestedSource = createMemo(() => {
+	const requestedSource = createMemo<SuppliedToolSource | null>(() => {
 		if (name() === "db_query" && typeof args().sql === "string")
 			return {
 				content: string(args().sql),
@@ -631,36 +635,19 @@ export function ToolCard(props: {
 								/>
 							</Show>
 						</Show>
-						<Show when={requestedSource()}>
-							{(source) => (
-								<>
-									{fold(
-										":source",
-										props.partial
-											? source().label.replace("Requested", "Partial")
-											: props.liveOnly
-												? source().label.replace("Requested", "Live slot")
-												: source().label,
-									)}
-									<Show when={open(":source")}>
-										<text fg={color("textMuted")} wrapMode="word">
-											{props.partial
-												? "Partial generated source — not an execution observation."
-												: props.liveOnly
-													? "Supplied current-round source — no retained intent linked; not proof of completion."
-													: "Retained requested source — not proof of execution or completion."}
-										</text>
-										<code
-											content={source().content}
-											filetype={source().filetype}
-											syntaxStyle={props.syntax}
-											drawUnstyledText={true}
-											wrapMode="word"
-										/>
-									</Show>
-								</>
-							)}
-						</Show>
+						<ToolRequestedSource
+							source={requestedSource()}
+							phase={
+								props.partial
+									? "Partial generated"
+									: props.liveOnly
+										? "Live slot"
+										: "Requested"
+							}
+							syntax={props.syntax}
+							open={open}
+							fold={fold}
+						/>
 						<ToolDialogue
 							questions={requestedQuestions()}
 							phase={
