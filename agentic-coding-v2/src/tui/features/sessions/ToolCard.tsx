@@ -234,6 +234,17 @@ export function ToolCard(props: {
 			return null;
 		}
 	});
+	const scriptOutput = createMemo(() => {
+		const value = details().output;
+		return name() === "codemode" &&
+			props.result &&
+			props.pairing === "matched" &&
+			!props.partial &&
+			!props.liveOnly &&
+			typeof value === "string"
+			? { text: value }
+			: null;
+	});
 	const browserResult = createMemo(() => {
 		const value = structured();
 		return browserActions.has(name()) && value && !Array.isArray(value)
@@ -473,6 +484,22 @@ export function ToolCard(props: {
 											drawUnstyledText={true}
 											wrapMode="word"
 										/>
+									</Show>
+								</>
+							)}
+						</Show>
+						<Show when={scriptOutput()}>
+							{(script) => (
+								<>
+									{fold(":script-output", "Retained script output")}
+									<Show when={open(":script-output")}>
+										<text fg={color("textMuted")} wrapMode="word">
+											Explicit native script-output field — not a completion or
+											nested-call observation.
+										</text>
+										<text wrapMode="word">
+											{script().text || "No script text output retained."}
+										</text>
 									</Show>
 								</>
 							)}

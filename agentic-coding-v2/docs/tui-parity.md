@@ -891,6 +891,22 @@ content and bindings, not permission to replace the original presentation.
 - The full codemode/nested-call layout, integrated load-older and visual/interactive
   acceptance remain unfinished. No renderer/helper tests are added.
 
+## Codemode explicit retained script-output section
+
+- Add the original codemode script-output body as an independently folded local
+  section, only for a matched retained codemode result whose `details.output`
+  is a string. Partial generated calls, live-only slots and ambiguous/missing
+  pairings do not qualify. An explicitly empty string shows the empty-output
+  message rather than falling back to arbitrary native result text.
+- Preserve nonempty output verbatim. Missing/non-string output fields do not
+  synthesize a section, parse text, strip status prefixes or reconstruct calls.
+  Complete retained output and native Details remain available unchanged.
+- The section's caption explicitly disclaims completion/nested-call authority.
+  No command, model call, provider request, execution, retry or native mutation
+  is added; source/headline/native slot observations retain their existing fences.
+- Full nested-call layout, other families, integrated load-older and interactive/
+  visual acceptance remain unfinished. No renderer/helper tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
