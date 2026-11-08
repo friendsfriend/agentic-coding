@@ -243,12 +243,36 @@ export function ToolCard(props: {
 			const text = [record.question, record.description].find(
 				(value) => typeof value === "string" && value.trim().length > 0,
 			);
-			if (typeof text !== "string") return [];
+			const options = Array.isArray(record.options)
+				? record.options.flatMap((item: unknown) => {
+						const option = object(item);
+						const label = [option.title, option.label, option.value].find(
+							(value) => typeof value === "string",
+						);
+						if (typeof label !== "string" || label.length === 0) return [];
+						return [
+							{
+								label,
+								recommended: option.recommended === true,
+								description:
+									typeof option.description === "string" &&
+									option.description.trim().length > 0
+										? option.description
+										: null,
+							},
+						];
+					})
+				: [];
+			const context =
+				typeof record.context === "string" ? record.context : null;
+			if (typeof text !== "string" && options.length === 0 && !context?.trim())
+				return [];
 			return [
 				{
 					index,
-					text,
-					context: typeof record.context === "string" ? record.context : null,
+					text: typeof text === "string" ? text : null,
+					context,
+					options,
 				},
 			];
 		});
@@ -520,13 +544,42 @@ export function ToolCard(props: {
 											answer or approval control.
 										</text>
 										<text fg={color("text")} wrapMode="word">
-											{question.text}
+											{question.text ?? "Question text not supplied."}
 										</text>
 										<Show when={question.context !== null}>
 											<text fg={color("textMuted")}>
 												Supplied question context
 											</text>
 											<text wrapMode="word">{question.context ?? ""}</text>
+										</Show>
+										<Show when={question.options.length > 0}>
+											<text fg={color("textMuted")} wrapMode="word">
+												Supplied options — stars are recorded recommendations,
+												not selected answers.
+											</text>
+											<For each={question.options}>
+												{(option) => (
+													<box flexDirection="column" flexShrink={0}>
+														<text
+															fg={
+																option.recommended
+																	? color("accent")
+																	: color("textMuted")
+															}
+															wrapMode="word"
+														>
+															○{option.recommended ? " ★" : "  "} {option.label}
+														</text>
+														<Show when={option.description !== null}>
+															<box paddingLeft={2} flexShrink={0}>
+																<text fg={color("textMuted")} wrapMode="word">
+																	{option.description ?? ""}
+																</text>
+															</box>
+														</Show>
+													</box>
+												)}
+											</For>
 										</Show>
 									</Show>
 								</>

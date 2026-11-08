@@ -924,6 +924,23 @@ content and bindings, not permission to replace the original presentation.
 - Full original dialogue and nested-call composition, integrated load-older and
   visual/interactive acceptance remain unfinished. No renderer/helper tests.
 
+## Dialogue supplied options and options-only questions
+
+- Add passive original option markers, explicit recommendation stars and
+  descriptions beneath the supplied question/context. Use the original typed
+  title → label → value fallback; an explicitly empty preferred label suppresses
+  that option rather than silently choosing a lower-priority label.
+- Recommendations require literal `true`; labels and nonblank description bytes
+  remain verbatim. No option value matching, result response pairing or selected
+  answer marker is introduced. The caption distinguishes supplied recommendations
+  from selected answers, and option rows have no answer/approval handlers.
+- Keep valid options-only or nonblank-context-only questions instead of dropping
+  them for missing question text. Show the absence annotation, not invented text;
+  invalid/empty items retain their original positional gaps in local fold labels.
+- Full original dialogue detail folding/answer composition, nested calls, integrated
+  load-older and interactive/visual acceptance remain unfinished. No native calls,
+  clarification/approval routing or renderer/helper tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
