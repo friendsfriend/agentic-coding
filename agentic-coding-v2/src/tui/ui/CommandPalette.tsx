@@ -15,6 +15,7 @@ export type PaletteEntry = { command: string; description: string };
 /** Search prepares text only. Enter here cannot dispatch a gateway method. */
 export function CommandPalette(props: {
 	entries: PaletteEntry[];
+	active?: boolean;
 	choose: (command: string) => void;
 	close: () => void;
 }) {
@@ -87,7 +88,7 @@ export function CommandPalette(props: {
 			</text>
 			<box paddingLeft={2} paddingRight={1}>
 				<input
-					focused={true}
+					focused={props.active !== false}
 					value={filter()}
 					maxLength={256}
 					placeholder="Filter native commands"

@@ -73,11 +73,33 @@ content and bindings, not permission to replace the original presentation.
   choosing never submits or overwrites an existing unsent draft. Selection is
   clamped when the observed command catalog shrinks.
 
+## Read-only help overlay restoration pass
+
+- Extract original HelpModal/GenericModal read-only framing locally: centered
+  portal, 72% terminal width / 78% height, 35%-alpha black backdrop, borderless
+  mantle surface, original two-cell horizontal / one-cell vertical padding,
+  SearchHeader title row, section/key colors and fourteen-cell key gutter.
+- Restore original wrapped HelpText footer/chip dispatch and primary-button,
+  non-drag backdrop dismissal. This frame is help-only, not a general draft,
+  secret, confirmation or running-operation dialog.
+- Bind native help scrolling to j/k, arrows, Page Up/Down and Home/End; Escape,
+  F1 and ? dismiss only this layer. Other input keys are consumed rather than
+  reaching underlying route, preparation or submission controls. Layer teardown
+  is deferred until the current native keymap dispatch completes.
+- Keep the underlying page mounted; opening help no longer replaces the page
+  body and destroys local folds. Prompt, palette and resource editors lose input
+  focus while help is open, without clearing their drafts or parent edit mode.
+- Use native command/key catalogs as content. Window long native descriptions
+  by their wrapped visual rows so scrolling can reach all continuation lines;
+  terminal resize updates the content budget and clamps the help offset.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
   navigation/focus key catalogs, including keyboard breadcrumb focus.
-- Original help/modal components and notification placement.
+- Remaining original modal components, selection/clipboard interactions and
+  notification placement; the restored read-only help frame is not general
+  modal parity.
 - Remaining orchestrator/durable transcript composition: original ordered
   markdown block/cache flow, specialized tool/file/shell bodies, timestamps,
   usage/progress arrangement, prompt history/autocomplete and picker behavior.
