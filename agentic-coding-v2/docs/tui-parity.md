@@ -1133,6 +1133,19 @@ content and bindings, not permission to replace the original presentation.
   Integrated load-older, nested-call composition and interactive/visual acceptance
   remain unfinished; this extraction does not establish visual parity.
 
+## Multipart retained structured-output fidelity
+
+- Require exactly one supplied text part before projecting a retained result as
+  structured JSON. A JSON-shaped first part no longer replaces the main display
+  of later text parts; multipart bodies use the existing complete-text fallback.
+  Do not concatenate parts into an invented structured result or discard extras.
+- Browser observation/match sections follow the same conservative projection
+  boundary. Single-text JSON behavior, complete output folds, non-text content,
+  diagnostic handling and native status/pairing remain unchanged.
+- No renderer/helper tests, result reconstruction or native operations are added.
+  Integrated load-older, nested-call composition and interactive/visual acceptance
+  remain unfinished; checks do not establish presentation parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

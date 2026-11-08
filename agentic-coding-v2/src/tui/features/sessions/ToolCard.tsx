@@ -248,9 +248,13 @@ export function ToolCard(props: {
 		return null;
 	});
 	const structured = createMemo(() => {
-		const text = dataList(props.result?.content).find(
+		const textParts = dataList(props.result?.content).filter(
 			(part) => part.type === "text",
-		)?.text;
+		);
+		// One JSON-shaped part cannot stand in for a multipart retained body.
+		// Keep all supplied text visible through the existing plain-text fallback.
+		if (textParts.length !== 1) return null;
+		const text = textParts[0]?.text;
 		if (typeof text !== "string") return null;
 		try {
 			const parsed: unknown = JSON.parse(text);
