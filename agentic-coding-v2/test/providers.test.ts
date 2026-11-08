@@ -8,6 +8,13 @@ import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
+const longPatch = `@@ -1,1 +1,405 @@\r\n${Array.from({ length: 405 }, (_, index) => `+line ${index}: supplied 😀 e\u0301 ${"x".repeat(70)}\r\n`).join("")}`;
+const suppliedFiles = Array.from({ length: 27 }, (_, index) => ({
+	filename: `src/file-${index}.ts`,
+	additions: index,
+	deletions: 0,
+	patch: index === 0 ? `${longPatch}token echo: stub-secret\r\n` : "",
+}));
 const seenAuth: string[] = [];
 const seenWrites: { method: string; path: string; body: unknown }[] = [];
 const stub = Bun.serve({
@@ -26,6 +33,8 @@ const stub = Bun.serve({
 					.json()
 					.catch(() => null),
 			});
+		if (path === "/repos/o/r/pulls/7/files")
+			return Response.json(suppliedFiles);
 		if (path === "/repos/o/r/pulls/7")
 			return Response.json({ head: { sha: "a".repeat(40) } });
 		if (request.method === "POST" && path === "/repos/o/r/pulls/7/reviews")
@@ -142,6 +151,117 @@ const approval = (
 	payload,
 	approve: digest(JSON.stringify({ op, target, payload })),
 });
+test("authenticated provider windows retain full patches and provider-scoped later receipts without journal-read dispatch", async () => {
+	const { app, host, config } = await setup();
+	const client = new ClientConnection(host.client);
+	for (let index = 0; index < 25; index++)
+		config.providers.push({
+			name: `fixture-${index}`,
+			type: "github",
+			baseUrl: `http://127.0.0.1:${stub.port}`,
+			username: "",
+			tokenRef: "PROVIDER_TEST_TOKEN",
+		});
+	try {
+		client.connect();
+		await eventually(
+			async () => client.state,
+			(state) => state !== null,
+		);
+		const registry = await client.call("providers.read", {});
+		expect(registry.length).toBe(27);
+		expect(registry[26]?.name).toBe("fixture-24");
+		expect(JSON.stringify(registry)).not.toContain("stub-secret");
+		expect(seenAuth).toEqual([]);
+		const inspection = await client.call("providers.inspect", {
+			provider: "gh",
+			operation: "files",
+			repo: "o/r",
+			number: 7,
+		});
+		expect(inspection.value).toEqual(
+			suppliedFiles.map(({ filename, additions, deletions, patch }) => ({
+				path: filename,
+				additions,
+				deletions,
+				patch: patch.replaceAll("stub-secret", "<redacted>"),
+			})),
+		);
+		expect(longPatch.length).toBeGreaterThan(24000);
+		expect(JSON.stringify(inspection)).not.toContain("stub-secret");
+		expect(seenAuth).toEqual(["Bearer stub-secret"]);
+		expect(seenWrites).toEqual([]);
+		for (let index = 0; index < 23; index++) {
+			const sealed = await client.call("providers.preview", {
+				provider: "gh",
+				operation: "comment-change",
+				repo: "o/r",
+				number: 7,
+				requestId: `window_${index}`,
+				payload: { body: `Disposable explicitly approved receipt ${index} 😀` },
+			});
+			expect(sealed.digest).toBe(digest(sealed.snapshot));
+			expect(seenWrites.length).toBe(index);
+			await client.call("providers.apply", {
+				id: sealed.id,
+				approval: `approve:${sealed.digest}`,
+			});
+		}
+		const other = await client.call("providers.preview", {
+			provider: "gl",
+			operation: "comment-change",
+			repo: "o/r",
+			number: 7,
+			requestId: "window_0",
+			payload: {
+				body: "Disposable different-provider request with the same local ID",
+			},
+		});
+		await client.call("providers.apply", {
+			id: other.id,
+			approval: `approve:${other.digest}`,
+		});
+		const calls = seenAuth.length;
+		const attempts = await client.call("providers.actions", { provider: "gh" });
+		expect(attempts.length).toBe(23);
+		expect(
+			attempts.some(
+				(attempt) =>
+					attempt.id === "window_22" && attempt.status === "acknowledged",
+			),
+		).toBe(true);
+		const first = await client.call("providers.receipt", {
+				provider: "gh",
+				requestId: "window_0",
+			}),
+			second = await client.call("providers.receipt", {
+				provider: "gl",
+				requestId: "window_0",
+			});
+		expect(first.id).toBe(second.id);
+		expect(first.provider).toBe("gh");
+		expect(second.provider).toBe("gl");
+		expect(first.digest).not.toBe(second.digest);
+		expect(JSON.stringify([attempts, second])).not.toContain("stub-secret");
+		expect(JSON.stringify([attempts, second])).not.toContain(
+			"rotated-stub-secret",
+		);
+		await expect(
+			client.call("providers.apply", {
+				id: other.id,
+				approval: `approve:${other.digest}`,
+			}),
+		).rejects.toThrow("Native operation refused");
+		expect(seenAuth.length).toBe(calls);
+		expect(seenWrites.length).toBe(24);
+		expect((await client.call("state.read", {})).tasks).toEqual([]);
+	} finally {
+		client.close();
+		await host.stop();
+		await app.close();
+	}
+});
+
 test("registry projects token presence without values", async () => {
 	const { app, host, api } = await setup();
 	try {

@@ -1,3 +1,6 @@
+// Explicit npm alias avoids Bun's substituted `ws`/global WebSocket decoder:
+// a following small frame must not become empty after a large JSON response.
+import WebSocket from "ws-client";
 import { result, frame as serverFrame } from "../../protocol/frames.ts";
 import {
 	clientPath,
@@ -13,11 +16,6 @@ import type {
 	StandaloneInventory,
 	StandaloneMode,
 } from "../../protocol/standalone.ts";
-
-// DOM typings hide Bun's native header-taking constructor overload.
-const NativeWebSocket = WebSocket as typeof WebSocket & {
-	new (url: string, options: Bun.WebSocketOptions): WebSocket;
-};
 
 export class CommandUncertain extends Error {
 	constructor() {
@@ -180,10 +178,21 @@ export class ClientConnection {
 		const generation = ++this.generation;
 		this.currentSnapshot = false;
 		this.resynchronizingSocket = false;
-		const socket = new NativeWebSocket(this.endpoint.url, {
+		const socket = new WebSocket(this.endpoint.url, {
 			headers: { Authorization: `Bearer ${this.endpoint.token}` },
+			maxPayload: maxFrameBytes,
+			perMessageDeflate: false,
 		});
 		this.socket = socket;
+		socket.onerror = () => {
+			// Consume transport errors without logging headers, URLs or raw
+			// exceptions. Close handles pending uncertainty; no mutation replay.
+			if (generation !== this.generation || this.closed) return;
+			this.currentSnapshot = false;
+			this.error ??=
+				"Client transport unavailable; activity and pending outcomes are unknown";
+			this.notify();
+		};
 		socket.onmessage = (event) => {
 			if (
 				generation !== this.generation ||
@@ -192,12 +201,13 @@ export class ClientConnection {
 			)
 				return;
 			try {
+				const payload = event.data;
 				if (
-					typeof event.data !== "string" ||
-					Buffer.byteLength(event.data) > maxFrameBytes
+					typeof payload !== "string" ||
+					Buffer.byteLength(payload) > maxFrameBytes
 				)
 					throw new Error("Invalid server frame");
-				const frame = serverFrame(JSON.parse(event.data));
+				const frame = serverFrame(JSON.parse(payload));
 				if (frame.type === "hello") {
 					if (this.status === "connected")
 						throw new Error("Duplicate server hello");

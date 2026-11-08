@@ -1495,12 +1495,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				if (epoch === skillEpoch) setSkillError(error.message);
 			});
 	});
-	const activeProvider = createMemo(() =>
-		page() === "providers"
-			? (providerData().find((entry) => entry.name === current().resource)
-					?.name ?? null)
-			: null,
-	);
+	const activeProvider = createMemo(() => {
+		if (page() !== "providers") return null;
+		const matches = providerData().filter(
+			(entry) => entry.name === current().resource,
+		);
+		return matches.length === 1 ? (matches[0]?.name ?? null) : null;
+	});
 	let providerActionEpoch = 0;
 	createEffect(() => {
 		const provider = activeProvider(),
@@ -3120,7 +3121,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							);
 						setProviderAttempts([
 							receipt,
-							...providerAttempts().filter((entry) => entry.id !== receipt.id),
+							...providerAttempts().filter(
+								(entry) =>
+									entry.id !== receipt.id ||
+									entry.provider !== receipt.provider,
+							),
 						]);
 						clear();
 						setNotice(
@@ -3156,7 +3161,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								? [
 										...attempts,
 										...providerAttempts().filter(
-											(entry) => entry.id !== attempts[0]?.id,
+											(entry) =>
+												entry.id !== attempts[0]?.id ||
+												entry.provider !== attempts[0]?.provider,
 										),
 									]
 								: attempts,
@@ -4189,6 +4196,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}}
 									/>
 									<SkillFileEditor
+										fresh={snapshotFresh()}
 										selection={current().resource}
 										client={client}
 										connected={status() === "connected"}
@@ -4326,6 +4334,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								</Show>
 								<Show when={current().page === "providers"}>
 									<ProviderPanel
+										catalog={providerData()}
+										fresh={snapshotFresh()}
 										rows={rows()}
 										selected={rowSelected}
 										select={(row, index) => {
@@ -4349,6 +4359,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								</Show>
 								<Show when={current().page === "providers"}>
 									<ProviderWritePanel
+										provider={activeProvider()}
+										catalog={providerData()}
+										fresh={snapshotFresh()}
 										draft={providerWriteDraft()}
 										change={(draft) => {
 											setProviderWriteDraft(draft);
@@ -4394,6 +4407,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								</Show>
 								<Show when={current().page === "settings"}>
 									<SettingsPanel
+										fresh={snapshotFresh()}
 										document={settingsDocument()}
 										error={settingsError()}
 										draft={settingsDraft()}

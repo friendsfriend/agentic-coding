@@ -18,6 +18,32 @@ import { createFixtures, eventually } from "./fixtures/runtime.ts";
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
 
+test("private client transport refuses invalid authentication without a snapshot, unhandled error or admission", async () => {
+	const { app } = await fixture();
+	const host = serve(app),
+		refused = new ClientConnection({
+			url: host.client.url,
+			token: "disposable-invalid-credential",
+		});
+	try {
+		refused.connect();
+		await eventually(
+			async () => refused.status,
+			(status) => status === "reconnecting",
+		);
+		expect(refused.state).toBeNull();
+		expect(refused.stateFresh).toBe(false);
+		expect(refused.methods).toEqual([]);
+		expect(refused.error).not.toContain("disposable-invalid-credential");
+		await expect(refused.call("state.read", {})).rejects.toThrow(
+			"Client operation unavailable",
+		);
+	} finally {
+		refused.close();
+		await host.stop();
+	}
+});
+
 test("authenticated loaded skill observations retain long exact source without admission or revision aliasing", async () => {
 	const instructions = `${Array.from({ length: 405 }, (_, index) => `${index}: ${"supplied-inert-source ".repeat(3)}😀\r\n`).join("")}tail\r\n`;
 	const revision = digest(instructions);

@@ -1,67 +1,67 @@
 /** @jsxImportSource @opentui/solid */
 import { createHash } from "node:crypto";
-import { SyntaxStyle } from "@opentui/core";
-import { useRenderer } from "@opentui/solid";
-import {
-	createEffect,
-	createMemo,
-	createSignal,
-	For,
-	onCleanup,
-	Show,
-	useContext,
-} from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { dataList } from "../../client/connection.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
-import { SuppliedCode } from "../sessions/SuppliedCode.tsx";
-
 export function ProviderPanel(props: {
 	rows: Data[];
+	catalog: Data[];
 	selected: (row: Data, index: number) => boolean;
 	select: (row: Data, index: number) => void;
 	connected: boolean;
+	fresh: boolean;
 	error: string | null;
 	inspection: Data | null;
 	expanded: string[];
 	toggle: (key: string) => void;
 	prepare: (command: string) => void;
 }) {
-	const syntax = SyntaxStyle.fromStyles(
-		{
-			default: { fg: color("text") },
-			"markup.heading": { fg: color("primary"), bold: true },
-		},
-		useRenderer().nativeScene,
-	);
-	onCleanup(() => syntax.destroy());
-	const open = (key: string) => props.expanded.includes(key);
-	const selectedName = () => props.rows.find(props.selected)?.name;
-	const choices = useContext(LocalChoiceContext);
-	const [start, setStart] = createSignal(0);
-	const inspection = createMemo(() => props.inspection);
-	const values = createMemo(() => {
-		const value = inspection()?.value;
-		return Array.isArray(value)
-			? dataList(value)
-			: value && typeof value === "object"
-				? [value as Data]
-				: [];
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
 	});
-	let generation = 0;
-	const source = createMemo(() => {
-		inspection();
-		return ++generation;
-	});
-	createEffect(() => {
-		source();
-		setStart(0);
-	});
-	const visible = createMemo(() => values().slice(start(), start() + 20));
+	const registry = createMemo(() => ({
+		rows: props.rows,
+		catalog: props.catalog,
+		connected: props.connected,
+		fresh: props.fresh,
+		error: props.error,
+	}));
+	const member = (provider: Data) =>
+		!disposed &&
+		props.rows.some((row) => row === provider) &&
+		props.catalog.filter((row) => row.name === provider.name).length === 1;
+	const safe = (provider: Data) =>
+		member(provider) &&
+		typeof provider.name === "string" &&
+		provider.name.length > 0 &&
+		provider.name.length <= 64 &&
+		!/\s/.test(provider.name) &&
+		Array.from(provider.name).every(
+			(char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127,
+		);
+	const ready = (provider: Data) =>
+		safe(provider) &&
+		props.connected &&
+		props.fresh &&
+		!props.error &&
+		provider.has_token === true;
+	const selectedName = () => {
+		const matches = props.rows.filter(props.selected);
+		return matches.length === 1 && matches[0] && member(matches[0])
+			? matches[0].name
+			: null;
+	};
+	const summary = (value: unknown, maximum = 200) => {
+		const units = Array.from(String(value).replace(/\s+/g, " "));
+		return `${units.slice(0, maximum).join("")}${units.length > maximum ? "…" : ""}`;
+	};
 	const title = (item: Data) =>
-		String(
+		summary(
 			item.title ??
 				item.full_name ??
 				item.path_with_namespace ??
@@ -71,68 +71,41 @@ export function ProviderPanel(props: {
 				item.sha ??
 				"Record",
 		);
-	// UI fold identity only, never an approval digest or native/provider identity.
-	const responseKey = createMemo(() =>
-		createHash("sha256").update(JSON.stringify(inspection())).digest("hex"),
-	);
-	const recordKey = (index: number) =>
-		`provider-inspection:${responseKey()}:row:${index}`;
-	const chooseRecord = () => {
-		if (!choices?.interactive()) return;
-		const saved = inspection();
-		const owner = choices.scope();
-		const version = source();
-		const records = values();
-		choices.choose({
-			title: "Search supplied provider response records",
-			rows: records.map((item, index) => ({
-				key: String(index),
-				label: `${index + 1}. ${Array.from(title(item).replace(/\s+/g, " ")).slice(0, 240).join("")}`,
-				detail: `${String(item.state ?? item.status ?? "")} · supplied response only`,
-				search: JSON.stringify(item),
-			})),
-			note: "Local cached response only; choosing mounts and expands the supplied record, never inspects upstream, opens a URL or prepares an approval.",
-			valid: () =>
-				inspection() === saved &&
-				source() === version &&
-				choices.scope() === owner,
-			choose: (key) => {
-				const index = Number(key);
-				if (
-					inspection() !== saved ||
-					source() !== version ||
-					choices.scope() !== owner ||
-					!/^\d+$/.test(key) ||
-					!Number.isSafeInteger(index) ||
-					!records[index]
-				)
-					return false;
-				setStart(Math.floor(index / 20) * 20);
-				if (!open(recordKey(index))) props.toggle(recordKey(index));
-				return true;
-			},
-		});
-	};
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
 				Configured native providers · {props.rows.length} matching
 			</text>
 			<text fg={color("textMuted")}>
-				Registry is local configuration/token presence only, not authentication
-				or reachability proof. No outbound request runs on navigation, reconnect
-				or viewpoint restore.
+				Registry is local configuration/token presence, not authentication or
+				reachability proof. No outbound request on navigation, reconnect, local
+				range search or viewpoint restoration.
 			</text>
 			<Show when={props.error}>
 				<text fg={color("warning")}>{props.error}</text>
 			</Show>
-			<Show when={!props.connected}>
+			<Show when={!props.connected || !props.fresh}>
 				<text fg={color("warning")}>
-					Disconnected; registry/inspection is cached, not current upstream
+					Cached/disconnected registry and inspection; no read-command
+					preparation. Local observations do not establish current upstream
 					state.
 				</text>
 			</Show>
-			<For each={props.rows}>
+			<SuppliedRecordWindow
+				rows={props.rows}
+				scope={registry()}
+				label="configured provider records"
+				title={(provider) =>
+					`${String(provider.name)} · ${String(provider.type)} · ${String(provider.baseUrl)}`
+				}
+				search={(provider) => JSON.stringify(provider)}
+				selected={props.selected}
+				pick={(provider, index) => {
+					if (!member(provider)) return false;
+					props.select(provider, index);
+					return true;
+				}}
+			>
 				{(provider, index) => (
 					<box
 						flexDirection="column"
@@ -145,7 +118,13 @@ export function ProviderPanel(props: {
 						padding={1}
 						gap={1}
 					>
-						<ActionHeader onActivate={() => props.select(provider, index())}>
+						<ActionHeader
+							scope={registry()}
+							interactive={member(provider)}
+							onActivate={() => {
+								if (member(provider)) props.select(provider, index());
+							}}
+						>
 							<text fg={color("primary")}>
 								{props.selected(provider, index()) ? "▾" : "▸"}{" "}
 								{String(provider.name)} · {String(provider.type)} · token{" "}
@@ -154,23 +133,24 @@ export function ProviderPanel(props: {
 						</ActionHeader>
 						<Show when={props.selected(provider, index())}>
 							<text wrapMode="word">
-								Configured origin: {String(provider.baseUrl)} · username:{" "}
+								Configured origin {String(provider.baseUrl)} · username{" "}
 								{String(provider.username || "not configured")}
 							</text>
 							<text fg={color("textMuted")}>
-								Provider tokens are never displayed or stored in viewpoints.
-								Provider writes use a separate immutable operator intention
-								preview and explicit digest confirmation below; inspections
-								never approve or dispatch a write.
+								Tokens are never displayed/persisted in viewpoints. Writes need
+								a separate sealed operator intention and manual digest
+								confirmation. Inspections never approve or dispatch writes.
 							</text>
-							<Show
-								when={
-									props.connected && !props.error && provider.has_token === true
-								}
-							>
+							<Show when={!safe(provider)}>
+								<text fg={color("warning")}>
+									Missing/ambiguous/unsafe provider identity; command generation
+									withheld.
+								</text>
+							</Show>
+							<Show when={ready(provider)}>
 								<text fg={color("textMuted")}>
-									Prepare a read-only command, edit placeholders, then submit
-									explicitly:
+									Prepare a read command, edit placeholders and explicitly
+									submit:
 								</text>
 								<For
 									each={[
@@ -190,11 +170,14 @@ export function ProviderPanel(props: {
 								>
 									{(query) => (
 										<ActionHeader
-											onActivate={() =>
-												props.prepare(
-													`/provider ${String(provider.name)} ${query}`,
-												)
-											}
+											scope={registry()}
+											interactive={ready(provider)}
+											onActivate={() => {
+												if (ready(provider))
+													props.prepare(
+														`/provider ${String(provider.name)} ${query}`,
+													);
+											}}
 										>
 											<text fg={color("accent")}>{query}</text>
 										</ActionHeader>
@@ -204,115 +187,144 @@ export function ProviderPanel(props: {
 						</Show>
 					</box>
 				)}
-			</For>
-			<Show when={props.inspection}>
-				<text fg={color("primary")}>
-					Retained explicit inspection · {String(props.inspection?.provider)} ·{" "}
-					{String(props.inspection?.operation)}
-				</text>
-				<text fg={color("textMuted")}>
-					Cached response, never automatically refreshed or replayed. Lists may
-					reflect upstream page limits; empty or absent patches are not proof of
-					no changes. URLs are inert text, not opened.
-				</text>
-				<Show when={props.inspection?.provider !== selectedName()}>
-					<text fg={color("warning")}>
-						This cached response belongs to another provider selection; it is
-						not substituted for the selected provider.
-					</text>
-				</Show>
-				<text wrapMode="word">
-					Received locally:{" "}
-					{String(props.inspection?.receivedAt ?? "not recorded")} (epoch ms,
-					not upstream revision). Read arguments:{" "}
-					{JSON.stringify(props.inspection?.input)}
-				</text>
-				<Show when={values().length > 0}>
-					<text fg={color("textMuted")}>
-						Supplied records {start() + 1}–
-						{Math.min(start() + 20, values().length)} of {values().length}; no
-						upstream pagination runs here.
-					</text>
-					<ActionHeader scope={source()} onActivate={chooseRecord}>
-						<text fg={color("accent")}>Search supplied records</text>
-					</ActionHeader>
-					<Show when={start() > 0}>
-						<ActionHeader
-							scope={`${source()}:${start()}`}
-							onActivate={() => setStart(Math.max(0, start() - 20))}
-						>
-							<text fg={color("accent")}>Previous supplied records</text>
-						</ActionHeader>
-					</Show>
-					<Show when={start() + 20 < values().length}>
-						<ActionHeader
-							scope={`${source()}:${start()}`}
-							onActivate={() => setStart(start() + 20)}
-						>
-							<text fg={color("accent")}>Next supplied records</text>
-						</ActionHeader>
-					</Show>
-				</Show>
-				<For each={visible()}>
-					{(item, index) => {
-						const key = () => recordKey(start() + index());
-						return (
-							<box flexDirection="column" gap={1} paddingLeft={1}>
-								<ActionHeader
-									scope={`${source()}:${key()}`}
-									onActivate={() => props.toggle(key())}
-								>
-									<text fg={color("primary")}>
-										{open(key()) ? "▾" : "▸"}{" "}
-										{String(
-											item.title ??
-												item.full_name ??
-												item.path_with_namespace ??
-												item.path ??
-												item.name ??
-												item.id ??
-												item.sha ??
-												"Record",
-										)}{" "}
-										· {String(item.state ?? item.status ?? "")}
-									</text>
-								</ActionHeader>
-								<Show when={open(key())}>
-									<Show when={typeof item.patch === "string"}>
-										<Show
-											when={String(item.patch).length > 0}
-											fallback={
-												<text fg={color("textMuted")}>
-													Upstream supplied an empty patch string; this is not
-													proof of no changes.
-												</text>
-											}
+			</SuppliedRecordWindow>
+			<Show when={props.inspection} keyed>
+				{(saved) => {
+					const current = () => !disposed && props.inspection === saved;
+					const source = createMemo(() => [saved, registry(), props.expanded]);
+					const records = Array.isArray(saved.value)
+						? dataList(saved.value)
+						: saved.value && typeof saved.value === "object"
+							? [saved.value as Data]
+							: [];
+					const fingerprint = createHash("sha256")
+						.update(JSON.stringify(saved))
+						.digest("hex");
+					const recordKey = (index: number) =>
+						`provider-inspection:${fingerprint}:row:${index}`;
+					return (
+						<box flexDirection="column" gap={1}>
+							<text fg={color("primary")}>
+								Retained explicit inspection · {String(saved.provider)} ·{" "}
+								{String(saved.operation)}
+							</text>
+							<text fg={color("textMuted")}>
+								Cached response, never refreshed/replayed automatically. Lists
+								may reflect upstream page limits; absent/empty patches never
+								prove no changes. URLs remain inert.
+							</text>
+							<Show when={saved.provider !== selectedName()}>
+								<text fg={color("warning")}>
+									Retained response belongs to another/missing provider
+									selection, never substituted for the selected registry owner.
+								</text>
+							</Show>
+							<text wrapMode="word">
+								Received locally {String(saved.receivedAt ?? "not recorded")}{" "}
+								(epoch ms, not upstream revision).
+							</text>
+							<SuppliedObservation
+								value={saved.input}
+								scope={saved}
+								label="Supplied explicit read arguments"
+							/>
+							<ActionHeader
+								scope={source()}
+								interactive={current()}
+								onActivate={() => {
+									if (current())
+										props.toggle(`provider-inspection:${fingerprint}:value`);
+								}}
+							>
+								<text fg={color("accent")}>
+									{props.expanded.includes(
+										`provider-inspection:${fingerprint}:value`,
+									)
+										? "▾"
+										: "▸"}{" "}
+									Inspect complete returned value separately from record
+									summaries
+								</text>
+							</ActionHeader>
+							<Show
+								when={props.expanded.includes(
+									`provider-inspection:${fingerprint}:value`,
+								)}
+							>
+								<SuppliedObservation
+									value={saved.value}
+									scope={saved}
+									label="Complete supplied returned value; serialized fields, not original upstream bytes"
+								/>
+							</Show>
+							<SuppliedRecordWindow
+								rows={records}
+								scope={saved}
+								label="provider response records"
+								title={title}
+								search={(item) => JSON.stringify(item)}
+								pick={(_item, index) => {
+									if (!current()) return false;
+									const key = recordKey(index);
+									if (!props.expanded.includes(key)) props.toggle(key);
+									return true;
+								}}
+							>
+								{(item, index) => (
+									<box flexDirection="column" gap={1} paddingLeft={1}>
+										<ActionHeader
+											scope={source()}
+											interactive={current()}
+											onActivate={() => {
+												if (current()) props.toggle(recordKey(index()));
+											}}
 										>
-											<code
-												content={String(item.patch)}
-												filetype="diff"
-												syntaxStyle={syntax}
-												drawUnstyledText={true}
-												wrapMode="word"
+											<text fg={color("primary")}>
+												{props.expanded.includes(recordKey(index()))
+													? "▾"
+													: "▸"}{" "}
+												{title(item)} ·{" "}
+												{summary(item.state ?? item.status ?? "", 80)}
+											</text>
+										</ActionHeader>
+										<Show when={props.expanded.includes(recordKey(index()))}>
+											<Show when={typeof item.patch === "string"}>
+												<Show
+													when={item.patch !== ""}
+													fallback={
+														<text fg={color("textMuted")}>
+															Native empty patch; not proof of upstream omission
+															or lack of changes.
+														</text>
+													}
+												>
+													<SuppliedObservation
+														value={item.patch}
+														filetype="diff"
+														scope={saved}
+														label="Exact supplied native patch (token-masked); window-local syntax only"
+													/>
+												</Show>
+											</Show>
+											<SuppliedObservation
+												value={item}
+												scope={saved}
+												label="Complete supplied response record; serialized fields, not original bytes"
 											/>
 										</Show>
-									</Show>
-									<SuppliedCode
-										content={JSON.stringify(item, null, 2)}
-										identity={key()}
-										filetype="json"
-										syntax={syntax}
-									/>
-								</Show>
-							</box>
-						);
-					}}
-				</For>
-				<Show when={!values().length}>
-					<text fg={color("textMuted")}>
-						The retained response contains no records.
-					</text>
-				</Show>
+									</box>
+								)}
+							</SuppliedRecordWindow>
+							<Show when={!records.length}>
+								<SuppliedObservation
+									value={saved.value}
+									scope={saved}
+									label="Supplied non-record/empty response; missing, null, scalar and empty remain distinct"
+								/>
+							</Show>
+						</box>
+					);
+				}}
 			</Show>
 		</box>
 	);

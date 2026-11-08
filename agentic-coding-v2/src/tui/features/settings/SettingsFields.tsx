@@ -10,13 +10,16 @@ import {
 import type { Data } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
 
 const object = (value: unknown): Data =>
 	value && typeof value === "object" && !Array.isArray(value)
 		? (value as Data)
 		: {};
-/** Local draft conveniences only; native preview remains the sole validation/approval boundary. */
+/** Field edits/search/add/remove are local draft operations ONLY. Native preview
+ * is the validation boundary; array ordinals are never native identities. */
 export function SettingsFields(props: {
 	draft: string;
 	change: (value: string) => void;
@@ -24,9 +27,20 @@ export function SettingsFields(props: {
 	edit: (value: boolean) => void;
 	connected: boolean;
 }) {
-	const [active, setActive] = createSignal<string | null>(null);
+	const [active, setActive] = createSignal<string | null>(null),
+		[ownedSource, setOwnedSource] = createSignal<string | null>(null),
+		[selection, setSelection] = createSignal<{
+			collection: string;
+			key: string | number;
+		} | null>(null),
+		[raw, setRaw] = createSignal(false);
 	const choices = useContext(LocalChoiceContext);
-	const interactive = () => props.connected && (choices?.interactive() ?? true);
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
+	const interactive = () =>
+		!disposed && props.connected && (choices?.interactive() ?? true);
 	const parsed = createMemo(() => {
 		try {
 			const value: unknown = JSON.parse(props.draft);
@@ -37,10 +51,10 @@ export function SettingsFields(props: {
 			return null;
 		}
 	});
-	const list = (key: string): unknown[] => {
-		const value = parsed()?.[key];
-		return Array.isArray(value) ? value : [];
-	};
+	const list = (key: string): unknown[] =>
+		Array.isArray(parsed()?.[key]) ? (parsed()?.[key] as unknown[]) : [];
+	const indices = (key: string) =>
+		Array.from({ length: list(key).length }, (_, index) => index);
 	const mutate = (change: (draft: Data) => void) => {
 		const draft = parsed();
 		if (!draft || !interactive()) return;
@@ -48,47 +62,66 @@ export function SettingsFields(props: {
 		change(next);
 		props.change(JSON.stringify(next, null, 2));
 	};
+	const selected = (collection: string, key: string | number) =>
+		selection()?.collection === collection && selection()?.key === key;
 	const field = (
-		id: string,
+		parts: (string | number)[],
 		label: string,
 		value: () => unknown,
 		change: (value: string) => void,
+		exists: () => boolean,
 		maxLength = 4096,
 	) => {
-		let disposed = false;
+		const id = JSON.stringify(parts);
+		let retired = false;
 		onCleanup(() => {
-			disposed = true;
+			retired = true;
 		});
 		const enter = () => {
-			if (disposed || !interactive()) return;
+			if (retired || !interactive() || !exists()) return;
 			setActive(id);
+			setOwnedSource(props.draft);
+			setSelection(
+				parts.length > 1
+					? { collection: String(parts[0]), key: parts[1] ?? "" }
+					: null,
+			);
 			props.edit(true);
 		};
+		const editing = () =>
+			!retired &&
+			interactive() &&
+			exists() &&
+			props.editing &&
+			active() === id &&
+			ownedSource() === props.draft;
 		return (
 			<box flexDirection="column">
-				<ActionHeader onActivate={enter}>
+				<ActionHeader
+					scope={props.draft}
+					interactive={interactive() && exists()}
+					onActivate={enter}
+				>
 					<text fg={color("accent")}>{label} · edit draft field</text>
 				</ActionHeader>
+				<Show when={value() !== undefined && typeof value() !== "string"}>
+					<text fg={color("warning")}>
+						Supplied field is not text. Blank input does not replace it; only an
+						explicit edit converts it. Inspect full draft below.
+					</text>
+				</Show>
 				<input
 					value={typeof value() === "string" ? String(value()) : ""}
-					focused={
-						!disposed && props.editing && interactive() && active() === id
-					}
 					maxLength={maxLength}
+					focused={editing()}
 					onMouseDown={enter}
-					onInput={(inputText) => {
-						if (
-							!disposed &&
-							interactive() &&
-							props.editing &&
-							active() === id &&
-							inputText !== value()
-						)
-							change(inputText);
+					onInput={(input) => {
+						if (!editing() || input === value()) return;
+						change(input);
+						if (!retired && !disposed && exists()) setOwnedSource(props.draft);
 					}}
 					onSubmit={() => {
-						if (!disposed && interactive() && active() === id)
-							props.edit(false);
+						if (editing()) props.edit(false);
 					}}
 				/>
 			</box>
@@ -97,51 +130,66 @@ export function SettingsFields(props: {
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
-				Field-specific draft editor · no save, probe or live configuration
-				update
+				Field-specific draft editor · no save/probe/live configuration update
 			</text>
 			<Show when={!parsed()}>
 				<text fg={color("warning")}>
-					Repair the JSON object in the advanced editor first. Native validation
-					occurs only on explicit preview.
+					Repair the JSON object in the advanced editor first. Only explicit
+					native preview validates it.
 				</text>
 			</Show>
 			<Show when={parsed()}>
 				{field(
-					"default",
+					["default"],
 					"Default orchestrator profile ID (must name a configured draft profile)",
 					() => parsed()?.orchestratorProfile,
 					(value) =>
 						mutate((draft) => {
 							draft.orchestratorProfile = value;
 						}),
+					() => parsed() !== null,
 					128,
 				)}
 				<text fg={color("primary")}>
 					Profiles · explicit provider/model · thinking
 					off/minimal/low/medium/high/xhigh
 				</text>
-				<For each={Object.keys(object(parsed()?.profiles))}>
+				<SuppliedRecordWindow
+					rows={Object.keys(object(parsed()?.profiles))}
+					scope={props.draft}
+					label="local draft profiles"
+					title={(id) => id}
+					search={(id) => JSON.stringify([id, object(parsed()?.profiles)[id]])}
+					selected={(id) => selected("profiles", id)}
+				>
 					{(id) => (
 						<box flexDirection="column" border={true} padding={1}>
 							<text fg={color("textMuted")}>
-								Profile {id} (rename through advanced JSON)
+								Profile {id} (rename in advanced JSON)
 							</text>
 							<For each={["model", "thinking", "description"]}>
 								{(key) =>
 									field(
-										`profile:${id}:${key}`,
+										["profiles", id, key],
 										key,
 										() => object(object(parsed()?.profiles)[id])[key],
 										(value) =>
 											mutate((draft) => {
-												object(object(draft.profiles)[id])[key] = value;
+												const profiles = object(draft.profiles);
+												if (!Object.hasOwn(profiles, id)) return;
+												const record = object(profiles[id]);
+												record[key] = value;
+												profiles[id] = record;
+												draft.profiles = profiles;
 											}),
+										() => Object.hasOwn(object(parsed()?.profiles), id),
 										key === "description" ? 2048 : 256,
 									)
 								}
 							</For>
 							<ActionHeader
+								scope={props.draft}
+								interactive={interactive()}
 								onActivate={() =>
 									mutate((draft) => {
 										delete object(draft.profiles)[id];
@@ -149,13 +197,15 @@ export function SettingsFields(props: {
 								}
 							>
 								<text fg={color("warning")}>
-									Remove {id} from draft only (default must still be valid)
+									Remove {id} from draft only (default must remain valid)
 								</text>
 							</ActionHeader>
 						</box>
 					)}
-				</For>
+				</SuppliedRecordWindow>
 				<ActionHeader
+					scope={props.draft}
+					interactive={interactive()}
 					onActivate={() =>
 						mutate((draft) => {
 							const profiles = object(draft.profiles);
@@ -175,29 +225,37 @@ export function SettingsFields(props: {
 					Repository allow-list · absolute canonical paths; no discovery/read on
 					edit
 				</text>
-				<For
-					each={
-						Array.isArray(parsed()?.repositories)
-							? Array.from(
-									{ length: list("repositories").length },
-									(_, index) => index,
-								)
-							: []
+				<SuppliedRecordWindow
+					rows={indices("repositories")}
+					scope={props.draft}
+					label="local repository draft rows"
+					title={(index) =>
+						`Repository ${index + 1} · ${String(list("repositories")[index])}`
 					}
+					search={(index) =>
+						JSON.stringify(list("repositories")[index]) ?? "not supplied"
+					}
+					selected={(index) => selected("repositories", index)}
 				>
 					{(index) => (
 						<box flexDirection="column">
 							{field(
-								`repo:${index}`,
+								["repositories", index],
 								`Repository ${index + 1}`,
 								() => list("repositories")[index],
 								(value) =>
 									mutate((draft) => {
-										if (Array.isArray(draft.repositories))
+										if (
+											Array.isArray(draft.repositories) &&
+											index < draft.repositories.length
+										)
 											draft.repositories[index] = value;
 									}),
+								() => index < list("repositories").length,
 							)}
 							<ActionHeader
+								scope={props.draft}
+								interactive={interactive()}
 								onActivate={() =>
 									mutate((draft) => {
 										if (Array.isArray(draft.repositories))
@@ -211,8 +269,10 @@ export function SettingsFields(props: {
 							</ActionHeader>
 						</box>
 					)}
-				</For>
+				</SuppliedRecordWindow>
 				<ActionHeader
+					scope={props.draft}
+					interactive={interactive()}
 					onActivate={() =>
 						mutate((draft) => {
 							draft.repositories = [
@@ -228,39 +288,49 @@ export function SettingsFields(props: {
 				</ActionHeader>
 				<text fg={color("primary")}>
 					Providers · github/gitlab · HTTPS (loopback HTTP exception) · tokenRef
-					is an environment-variable NAME, never a credential value
+					is an environment-variable NAME, never a token
 				</text>
-				<For
-					each={
-						Array.isArray(parsed()?.providers)
-							? Array.from(
-									{ length: list("providers").length },
-									(_, index) => index,
-								)
-							: []
+				<SuppliedRecordWindow
+					rows={indices("providers")}
+					scope={props.draft}
+					label="local provider draft rows"
+					title={(index) =>
+						`${index + 1} · ${String(object(list("providers")[index]).name ?? "not supplied")}`
 					}
+					search={(index) =>
+						JSON.stringify(list("providers")[index]) ?? "not supplied"
+					}
+					selected={(index) => selected("providers", index)}
 				>
 					{(index) => (
 						<box flexDirection="column" border={true} padding={1}>
 							<For each={["name", "type", "baseUrl", "username", "tokenRef"]}>
 								{(key) =>
 									field(
-										`provider:${index}:${key}`,
+										["providers", index, key],
 										key,
 										() => object(list("providers")[index])[key],
 										(value) =>
 											mutate((draft) => {
-												if (!Array.isArray(draft.providers)) return;
+												if (
+													!Array.isArray(draft.providers) ||
+													index >= draft.providers.length
+												)
+													return;
 												const provider = object(draft.providers[index]);
 												if (!value && ["username", "tokenRef"].includes(key))
 													delete provider[key];
 												else provider[key] = value;
+												draft.providers[index] = provider;
 											}),
+										() => index < list("providers").length,
 										2048,
 									)
 								}
 							</For>
 							<ActionHeader
+								scope={props.draft}
+								interactive={interactive()}
 								onActivate={() =>
 									mutate((draft) => {
 										if (Array.isArray(draft.providers))
@@ -274,8 +344,10 @@ export function SettingsFields(props: {
 							</ActionHeader>
 						</box>
 					)}
-				</For>
+				</SuppliedRecordWindow>
 				<ActionHeader
+					scope={props.draft}
+					interactive={interactive()}
 					onActivate={() =>
 						mutate((draft) => {
 							draft.providers = [
@@ -293,6 +365,25 @@ export function SettingsFields(props: {
 						Add provider draft row (no outbound call)
 					</text>
 				</ActionHeader>
+				<ActionHeader
+					scope={props.draft}
+					onActivate={() => {
+						if (!disposed) setRaw(!raw());
+					}}
+				>
+					<text fg={color("accent")}>
+						{raw() ? "▾" : "▸"} Inspect complete unvalidated local draft
+						separately from native candidate
+					</text>
+				</ActionHeader>
+				<Show when={raw()}>
+					<SuppliedObservation
+						value={props.draft}
+						filetype="json"
+						scope={props.draft}
+						label="Exact local JSON draft; not validation or approval"
+					/>
+				</Show>
 			</Show>
 		</box>
 	);

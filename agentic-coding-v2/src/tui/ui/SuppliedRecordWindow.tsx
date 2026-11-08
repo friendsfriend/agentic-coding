@@ -34,16 +34,17 @@ export function SuppliedRecordWindow<T>(props: {
 		scope: props.scope,
 		version: ++generation,
 	}));
+	let previous = source();
 	createEffect(() => {
-		source();
-		setStart(0);
-	});
-	createEffect(() => {
-		const rows = source().rows;
-		const index = rows.findIndex((row, ordinal) =>
+		const saved = source();
+		const index = saved.rows.findIndex((row, ordinal) =>
 			props.selected?.(row, ordinal),
 		);
+		// Set once: resetting to zero before restoring a selected later window
+		// would transiently unmount its input on every local draft keystroke.
 		if (index >= 0) setStart(Math.floor(index / 20) * 20);
+		else if (saved !== previous) setStart(0);
+		previous = saved;
 	});
 	onCleanup(() => {
 		disposed = true;

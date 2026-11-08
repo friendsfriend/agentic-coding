@@ -1,25 +1,35 @@
 /** @jsxImportSource @opentui/solid */
-import type { TextareaRenderable } from "@opentui/core";
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	onCleanup,
+	Show,
+	useContext,
+} from "solid-js";
 import type {
 	SkillFileCandidate,
 	SkillFileDocument,
 } from "../../../protocol/index.ts";
 import type { ClientConnection } from "../../client/connection.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
-import { editorKeybinds, textareaBindings } from "../../ui/keybinds.ts";
+import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
+import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
 export type SkillFileDraft = { name: string; content: string };
 export function SkillFileEditor(props: {
 	client: ClientConnection;
 	selection: string | null;
 	connected: boolean;
+	fresh: boolean;
 	focused: boolean;
 	editing: boolean;
 	edit: (value: boolean) => void;
 	memory: SkillFileDraft;
 	remember: (draft: SkillFileDraft) => void;
 }) {
+	const choices = useContext(LocalChoiceContext);
 	const [document, setDocument] = createSignal<SkillFileDocument | null>(null),
 		[candidate, setCandidate] = createSignal<SkillFileCandidate | null>(null),
 		[approval, setApproval] = createSignal(""),
@@ -28,32 +38,59 @@ export function SkillFileEditor(props: {
 		),
 		[pending, setPending] = createSignal(false),
 		[error, setError] = createSignal<string | null>(null),
-		[receipt, setReceipt] = createSignal<string | null>(null);
+		[attempt, setAttempt] = createSignal<{
+			id: string;
+			name: string;
+			digest: string;
+			status: "uncertain" | "acknowledged";
+			result?: unknown;
+		} | null>(null);
 	let epoch = 0,
-		disposed = false,
-		editor: TextareaRenderable | undefined;
+		disposed = false;
+	const context = createMemo(
+		() => ({
+			selection: props.selection,
+			connected: props.connected,
+			fresh: props.fresh,
+		}),
+		undefined,
+		{
+			equals: (a, b) =>
+				a?.selection === b.selection &&
+				a?.connected === b.connected &&
+				a?.fresh === b.fresh,
+		},
+	);
+	const interactive = () =>
+		!disposed &&
+		props.connected &&
+		props.fresh &&
+		!pending() &&
+		(choices?.interactive() ?? true);
+	const source = createMemo(() => [
+		context(),
+		document(),
+		candidate(),
+		props.memory.name,
+		props.memory.content,
+		approval(),
+		focus(),
+		pending(),
+	]);
 	const invalidate = () => {
 		epoch++;
 		setCandidate(null);
 		setApproval("");
-		setReceipt(null);
 	};
-	let lastSelection = props.selection,
-		lastConnected = props.connected;
+	let previous = context();
 	createEffect(() => {
-		const selection = props.selection,
-			connected = props.connected;
-		if (selection === lastSelection && connected === lastConnected) return;
-		lastSelection = selection;
-		lastConnected = connected;
+		const next = context();
+		if (next === previous) return;
+		previous = next;
 		invalidate();
 		setDocument(null);
 		setFocus(null);
 		props.edit(false);
-	});
-	createEffect(() => {
-		const content = props.memory.content;
-		if (editor && editor.plainText !== content) editor.setText(content);
 	});
 	onCleanup(() => {
 		disposed = true;
@@ -61,33 +98,64 @@ export function SkillFileEditor(props: {
 		props.edit(false);
 	});
 	const chooseFocus = (value: "name" | "content" | "approval" | null) => {
+		if (disposed || (value !== null && !interactive())) return;
 		setFocus(value);
 		props.edit(value !== null);
 	};
 	const change = (draft: SkillFileDraft) => {
+		if (
+			!interactive() ||
+			(draft.name === props.memory.name &&
+				draft.content === props.memory.content)
+		)
+			return;
 		invalidate();
 		setError(null);
 		if (draft.name !== props.memory.name) setDocument(null);
 		props.remember(draft);
 	};
+	const validCandidate = (sealed: SkillFileCandidate) =>
+		interactive() &&
+		candidate() === sealed &&
+		sealed.name === props.memory.name &&
+		sealed.content === props.memory.content &&
+		document()?.name === sealed.name &&
+		document()?.revision === sealed.baseRevision &&
+		document()?.directoryIdentity === sealed.directoryIdentity &&
+		/^[a-f0-9]{64}$/.test(sealed.digest) &&
+		Number.isSafeInteger(sealed.expiresAt) &&
+		sealed.expiresAt > Date.now();
 	const run = async (operation: "read" | "preview" | "apply") => {
-		if (pending() || !props.connected) return;
+		if (!interactive()) return;
 		const generation = epoch,
+			owner = context(),
 			draft = { ...props.memory };
+		const current = () =>
+			!disposed &&
+			generation === epoch &&
+			context() === owner &&
+			props.memory.name === draft.name &&
+			props.memory.content === draft.content;
+		// Validate before pending suppresses interactive controls.
+		const sealed = candidate(),
+			confirmed =
+				!!sealed &&
+				validCandidate(sealed) &&
+				approval() === `approve:${sealed.digest}`;
 		setPending(true);
 		setError(null);
 		chooseFocus(null);
 		let attempted = false;
 		try {
 			if (operation === "read") {
-				if (draft.content.trim())
+				if (draft.content.length)
 					throw new Error(
-						"Discard the local draft explicitly before reading another file; it will not be overwritten",
+						"Existing text, including whitespace, is preserved; explicitly discard before reading another destination",
 					);
 				const value = await props.client.call("skill-file.read", {
 					name: draft.name,
 				});
-				if (!disposed && generation === epoch) {
+				if (current()) {
 					setDocument(value);
 					props.remember({ name: value.name, content: value.content });
 					setCandidate(null);
@@ -97,46 +165,46 @@ export function SkillFileEditor(props: {
 				const base = document();
 				if (!base || base.name !== draft.name)
 					throw new Error(
-						"Read the exact existing/missing destination before sealing a preview",
+						"Explicitly read this exact existing/missing destination before sealing a preview",
 					);
 				const value = await props.client.call("skill-file.preview", {
 					name: draft.name,
 					baseRevision: base.revision,
 					content: draft.content,
 				});
-				if (!disposed && generation === epoch) {
+				if (current()) {
 					setCandidate(value);
 					setApproval("");
 				}
 			} else {
-				const sealed = candidate();
-				if (
-					!sealed ||
-					approval() !== `approve:${sealed.digest}` ||
-					sealed.expiresAt <= Date.now()
-				)
+				if (!sealed || !confirmed)
 					throw new Error(
-						"Manually type the exact unexpired snapshot confirmation",
+						"Manually type the exact unexpired snapshot confirmation for the unchanged destination/draft",
 					);
 				setCandidate(null);
 				setApproval("");
 				setDocument(null);
 				attempted = true;
+				const observed = {
+					id: sealed.id,
+					name: sealed.name,
+					digest: sealed.digest,
+					status: "uncertain" as const,
+				};
+				setAttempt(observed);
 				const saved = await props.client.call("skill-file.apply", {
 					id: sealed.id,
 					approval: `approve:${sealed.digest}`,
 				});
-				if (!disposed && generation === epoch) {
-					setDocument(null);
-					setReceipt(
-						`Saved ${saved.name} · byte revision ${saved.revision}. Running skills/tasks unchanged; restart separately authorized. Discard draft and explicitly read current disk before another edit.`,
-					);
-				}
+				// Captured acknowledgement remains bound to its OLD request, never
+				// populates a new editor owner or restores a consumed candidate.
+				if (!disposed && attempt() === observed)
+					setAttempt({ ...observed, status: "acknowledged", result: saved });
 			}
 		} catch (cause) {
-			if (!disposed && generation === epoch)
+			if (current())
 				setError(
-					`${cause instanceof Error ? cause.message : "Skill operation refused"}${attempted ? ". One attempt consumed; file/directories may have changed. Inspect disk before any separately confirmed new intention; no automatic retry." : ""}`,
+					`${cause instanceof Error ? cause.message : "Skill operation refused"}${attempted ? ". One attempt consumed; destination/directories may have changed. Inspect explicitly; no automatic retry." : ""}`,
 				);
 		} finally {
 			if (!disposed) setPending(false);
@@ -146,58 +214,107 @@ export function SkillFileEditor(props: {
 		<box flexDirection="column" border={true} padding={1} gap={1}>
 			<text fg={color("primary")}>Native user skill file authoring</text>
 			<text wrapMode="word" fg={color("warning")}>
-				Configuration directory must already exist (native settings authoring
-				can establish it). Fixed CONFIG_DIR/skills/slug/SKILL.md only;
-				lower-case flat slugs, never system skills or arbitrary paths. Loaded
-				catalog stays immutable. Writes require an exact manually confirmed
-				snapshot and current file/directory identities; this does not reload,
-				launch tasks, grant policy or restart. Memory-only drafts; no
-				credentials in instructions. Symlink/hard-link/invalid UTF-8/Windows
-				destinations refuse. Existing nested layouts remain loaded/read-only,
-				not rewritten or adopted.
+				CONFIG_DIR must already exist. Fixed CONFIG_DIR/skills/slug/SKILL.md
+				only; flat lower-case slugs, never system skills or arbitrary paths.
+				Loaded catalog stays unchanged. Writes require exact manually confirmed
+				snapshots and current file/directory identities, not policy grants,
+				reloads, task launches or restarts. Drafts are memory-only; no
+				credentials. Symlink/hard-link/invalid UTF-8/Windows destinations
+				refuse. Nested layouts stay loaded/read-only, never adopted.
 			</text>
-			<ActionHeader onActivate={() => chooseFocus("name")}>
-				<text fg={color("accent")}>Edit explicit user-skill slug</text>
-			</ActionHeader>
-			<input
-				value={props.memory.name}
-				maxLength={64}
-				focused={
-					props.focused && props.editing && focus() === "name" && !pending()
-				}
-				onInput={(name) => change({ ...props.memory, name })}
-				onMouseDown={() => chooseFocus("name")}
-				onSubmit={() => chooseFocus(null)}
-			/>
-			<Show when={props.connected && !pending()}>
-				<ActionHeader onActivate={() => void run("read")}>
-					<text fg={color("accent")}>
-						Read exact current/missing destination (never overwrites a draft)
-					</text>
-				</ActionHeader>
-			</Show>
-			<Show when={document()}>
-				<text wrapMode="word">
-					Observed file revision {document()?.revision} · directory identity{" "}
-					{document()?.directoryIdentity}; non-atomic disk observation, not the
-					running catalog.
+			<Show when={!props.connected || !props.fresh}>
+				<text fg={color("warning")}>
+					Cached/disconnected owner; no read, preview or write. Previous attempt
+					observations do not grant replay or prove current disk state.
 				</text>
 			</Show>
 			<ActionHeader
+				scope={source()}
+				interactive={interactive()}
+				onActivate={() => chooseFocus("name")}
+			>
+				<text fg={color("accent")}>Edit explicit user-skill slug</text>
+			</ActionHeader>
+			<Show when={context()} keyed>
+				{(owner) => (
+					<input
+						value={props.memory.name}
+						maxLength={64}
+						focused={
+							context() === owner &&
+							interactive() &&
+							props.focused &&
+							props.editing &&
+							focus() === "name"
+						}
+						onInput={(name) => {
+							if (
+								context() === owner &&
+								interactive() &&
+								props.editing &&
+								focus() === "name"
+							)
+								change({ ...props.memory, name });
+						}}
+						onMouseDown={() => {
+							if (context() === owner) chooseFocus("name");
+						}}
+						onSubmit={() => {
+							if (context() === owner && interactive()) chooseFocus(null);
+						}}
+					/>
+				)}
+			</Show>
+			<ActionHeader
+				scope={source()}
+				interactive={interactive()}
+				onActivate={() => void run("read")}
+			>
+				<text fg={color("accent")}>
+					Read exact current/missing destination (never overwrites a draft)
+				</text>
+			</ActionHeader>
+			<Show when={document()} keyed>
+				{(saved) => (
+					<box flexDirection="column" gap={1}>
+						<text wrapMode="word">
+							Observed file {saved.name} · revision {saved.revision} · directory{" "}
+							{saved.directoryIdentity}. Non-atomic disk observation, not
+							running catalog or current write authority.
+						</text>
+						<SuppliedObservation
+							value={saved.content}
+							scope={saved}
+							filetype="markdown"
+							label="Exact explicitly read user-skill source"
+						/>
+					</box>
+				)}
+			</Show>
+			<ActionHeader
+				scope={source()}
+				interactive={interactive()}
 				onActivate={() => {
+					if (!interactive()) return;
 					invalidate();
 					props.remember({ name: props.memory.name, content: "" });
 					chooseFocus(null);
 				}}
 			>
 				<text fg={color("warning")}>
-					Explicitly discard local draft and confirmation
+					Explicitly discard local draft and confirmation (not an attempt
+					rollback)
 				</text>
 			</ActionHeader>
 			<ActionHeader
+				scope={source()}
+				interactive={interactive()}
 				onActivate={() => {
-					if (props.memory.content.trim()) {
-						setError("Existing draft preserved; discard explicitly first");
+					if (!interactive()) return;
+					if (props.memory.content.length) {
+						setError(
+							"Existing draft preserved, including whitespace; discard explicitly first",
+						);
 						return;
 					}
 					if (!/^[a-z][a-z0-9-]{0,63}$/.test(props.memory.name)) {
@@ -215,41 +332,62 @@ export function SkillFileEditor(props: {
 					Prepare local instruction template only
 				</text>
 			</ActionHeader>
-			<ActionHeader onActivate={() => chooseFocus("content")}>
+			<ActionHeader
+				scope={source()}
+				interactive={interactive()}
+				onActivate={() => chooseFocus("content")}
+			>
 				<text fg={color("accent")}>Edit unsaved instruction text</text>
 			</ActionHeader>
-			<textarea
-				ref={(value) => {
-					editor = value;
-				}}
-				initialValue={props.memory.content}
-				height={12}
-				keyBindings={textareaBindings(editorKeybinds)}
-				focused={
-					props.focused && props.editing && focus() === "content" && !pending()
+			<LocalJsonEditor
+				value={props.memory.content}
+				scope={JSON.stringify([
+					"skill-file",
+					context().selection,
+					context().connected,
+					context().fresh,
+					props.memory.name,
+					document()?.directoryIdentity,
+				])}
+				editing={props.focused && props.editing && focus() === "content"}
+				interactive={interactive()}
+				maxLength={64000}
+				onLimit={() =>
+					setError(
+						"Native skill text limit is 64000 UTF-16 units; prior exact draft restored",
+					)
 				}
-				onMouseDown={() => chooseFocus("content")}
-				onContentChange={(value) =>
-					change({
-						...props.memory,
-						content:
-							typeof value === "string" ? value : (editor?.plainText ?? ""),
-					})
-				}
+				enter={() => chooseFocus("content")}
+				change={(content) => change({ ...props.memory, content })}
 			/>
-			<Show when={props.connected && !pending()}>
-				<ActionHeader onActivate={() => void run("preview")}>
-					<text fg={color("accent")}>Seal immutable file preview only</text>
-				</ActionHeader>
-			</Show>
-			<Show when={candidate()}>
+			<ActionHeader
+				scope={source()}
+				interactive={interactive()}
+				onActivate={() => void run("preview")}
+			>
+				<text fg={color("accent")}>Seal immutable file preview only</text>
+			</ActionHeader>
+			<Show when={candidate()} keyed>
 				{(sealed) => (
 					<box flexDirection="column" gap={1}>
 						<text wrapMode="word" fg={color("warning")}>
-							{sealed().snapshot} · digest {sealed().digest} · expires{" "}
-							{sealed().expiresAt} epoch ms
+							Immutable candidate {sealed.id} · native digest {sealed.digest} ·
+							expires {sealed.expiresAt} (epoch ms). Manual confirmation only;
+							no loaded-skill update.
 						</text>
-						<ActionHeader onActivate={() => chooseFocus("approval")}>
+						<SuppliedObservation
+							value={sealed.snapshot}
+							scope={sealed}
+							filetype="json"
+							label="Exact sealed file/directory/content snapshot"
+						/>
+						<ActionHeader
+							scope={source()}
+							interactive={validCandidate(sealed)}
+							onActivate={() => {
+								if (validCandidate(sealed)) chooseFocus("approval");
+							}}
+						>
 							<text fg={color("accent")}>
 								Focus exact snapshot confirmation
 							</text>
@@ -259,29 +397,63 @@ export function SkillFileEditor(props: {
 							maxLength={80}
 							placeholder="Manually type approve:DIGEST"
 							focused={
+								validCandidate(sealed) &&
 								props.focused &&
 								props.editing &&
-								focus() === "approval" &&
-								!pending()
+								focus() === "approval"
 							}
-							onInput={setApproval}
-							onMouseDown={() => chooseFocus("approval")}
-							onSubmit={() => chooseFocus(null)}
+							onInput={(value) => {
+								if (
+									validCandidate(sealed) &&
+									props.editing &&
+									focus() === "approval"
+								)
+									setApproval(value);
+							}}
+							onMouseDown={() => {
+								if (validCandidate(sealed)) chooseFocus("approval");
+							}}
+							onSubmit={() => {
+								if (validCandidate(sealed)) chooseFocus(null);
+							}}
 						/>
-						<Show when={props.connected && !pending()}>
-							<ActionHeader onActivate={() => void run("apply")}>
-								<text fg={color("warning")}>
-									Submit one explicitly confirmed skill-file write
-								</text>
-							</ActionHeader>
-						</Show>
+						<ActionHeader
+							scope={source()}
+							interactive={validCandidate(sealed)}
+							onActivate={() => {
+								if (validCandidate(sealed)) void run("apply");
+							}}
+						>
+							<text fg={color("warning")}>
+								Submit one explicitly confirmed skill-file write
+							</text>
+						</ActionHeader>
 					</box>
 				)}
 			</Show>
-			<Show when={receipt()}>
-				<text wrapMode="word" fg={color("success")}>
-					{receipt()}
-				</text>
+			<Show when={attempt()} keyed>
+				{(observed) => (
+					<box flexDirection="column" gap={1}>
+						<text
+							fg={
+								observed.status === "acknowledged"
+									? color("success")
+									: color("warning")
+							}
+						>
+							Captured local attempt for {observed.name} · {observed.status}.
+							Not a durable journal, current disk observation, rollback or
+							permission to retry. Explicitly inspect disk before another
+							independently confirmed intention; running skills/tasks remain
+							unchanged.
+						</text>
+						<SuppliedObservation
+							value={observed}
+							scope={observed}
+							label="Captured attempt identity and native acknowledgement, if received"
+						/>
+					</box>
+				)}
 			</Show>
 			<Show when={error()}>
 				<text wrapMode="word" fg={color("error")}>
@@ -289,7 +461,9 @@ export function SkillFileEditor(props: {
 				</text>
 			</Show>
 			<Show when={pending()}>
-				<text fg={color("textMuted")}>Native skill-file operation pending</text>
+				<text fg={color("textMuted")}>
+					Native skill-file operation pending; destination/draft edits withheld
+				</text>
 			</Show>
 		</box>
 	);

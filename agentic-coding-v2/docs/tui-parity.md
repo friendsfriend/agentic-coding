@@ -1732,3 +1732,58 @@ not renderer/helper/mounting/presenter acceptance. Biome, full type-check, build
 help and 30 boundary tests (540 assertions) pass. Visual/interactive parity,
 clipboard, real integration, Mermaid and deployment remain unverified; no real
 provider/model/environment/cluster calls, restart or manual TTY run are claimed.
+
+## Integrated settings/provider/skill-file authoring workspaces
+
+- Settings observations, structured field drafts, advanced JSON drafts and sealed
+  candidates are separate disclosures. Profile/provider/repository collections
+  use bounded local windows (20 mounted records per collection), including later
+  rows. Field ownership follows the exact draft and selected field; a mirrored
+  update must not reset the window to zero and transiently unmount its input.
+  Non-string supplied fields remain unchanged until an explicit edit. Existing
+  opaque disk fields and running profiles/providers/repositories stay preserved;
+  saves are restart-required, never live adoption or restart authorization.
+- Shared sealed-candidate disclosure retains exact supplied snapshot strings,
+  native digests, expiry and metadata. Apply controls require the captured current
+  candidate and fresh owner, and prepare only an UNSENT confirmation placeholder.
+  They never generate approval, dispatch, follow links or retry a candidate.
+- Provider registry and retained response records use bounded local ranges and
+  full-descriptor search. Labels are bounded display summaries; complete records
+  and complete returned values remain separately inspectable. Catalog membership
+  must be unique; retained inspections keep their original provider ownership.
+  Native empty patches do not establish upstream absence or lack of changes.
+- Correct silent 4096-character clipping of bounded provider JSON GET strings:
+  retain the complete token-masked supplied string within the existing HTTP/frame
+  budgets. Log/error and write-result caps stay unchanged. This is native masked
+  string fidelity, not original upstream byte or pagination provenance.
+- Provider receipt identity is provider + requestId, including underscore IDs.
+  Journal/source browsing cannot dispatch or replay; receipt preparation requires
+  the uniquely matching selected provider. Native destination/results remain
+  read-only acknowledgement/uncertainty observations, not completion proof.
+  Editor ownership changes on provider/connectivity/freshness transitions, not
+  mirrored keystrokes. Local JSON editors restore exact prior drafts on their
+  explicit 128000-unit limit; native validation remains final.
+- Skill-file authoring preserves the exact 64000-UTF-16-unit draft limit, including
+  supplementary Unicode, combining characters and CRLF. An explicit disk read
+  cannot overwrite any nonempty draft (including whitespace). Template/discard
+  actions are local and explicit. Preview/write match captured name, revision,
+  directory, content, expiry and exact manually typed confirmation. Consume the
+  local candidate before dispatch. Late acknowledgement stays tied to the old
+  attempted request, never populates a newly selected editor or restores replay.
+- The full-size fixture exposed a Bun 1.4.4 WebSocket decoder failure: after the
+  large valid response, the next small server refusal arrived as an empty message.
+  Use pinned npm `ws` through an explicit `ws-client` alias, avoiding Bun's native
+  `ws` substitution. Keep loopback Bearer auth, text-only validated envelopes,
+  frame/payload budgets and non-replay semantics intact. Transport errors are
+  handled without exposing headers/URLs/raw exceptions or retaining freshness.
+
+Authenticated faux-loopback fixtures exercise 27-row settings/provider datasets,
+opaque disk-field preservation, complete masked Unicode/CRLF patches, a 23-receipt
+journal and matching IDs on different providers. Full-size skill read/preview/write
+continues through exact refusal, directory substitution/consumption and hard-link
+refusal; invalid length/NUL/unpaired-surrogate drafts refuse. Invalid client auth
+has no snapshot or admission. Biome (357 files, zero diagnostics), full unfiltered
+type-check, build, help and 34 boundary tests (648 assertions) pass. No renderer,
+helper, mounting, presenter or manual TTY acceptance is added. Visual/interactive
+parity, clipboard, Mermaid, real integrations and deployment remain unverified;
+no real provider/model/cluster/existing-app call, restart or migration is claimed.

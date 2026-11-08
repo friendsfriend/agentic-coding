@@ -25,13 +25,15 @@
 		"@opentui/solid": "0.7.0",
 		"marked": "^18.1.1",
 		"solid-js": "1.9.17",
-		"typebox": "^1.0.0"
+		"typebox": "^1.0.0",
+		"ws-client": "npm:ws@8.22.1"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.6.3",
 		"@electric-sql/pglite": "0.3.15",
 		"@electric-sql/pglite-socket": "0.0.20",
 		"@types/bun": "^1.4.4",
+		"@types/ws-client": "npm:@types/ws@8.18.1",
 		"typescript": "^7.0.2"
 	}
 }

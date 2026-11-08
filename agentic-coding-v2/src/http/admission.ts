@@ -86,13 +86,18 @@ export async function boundedFetch(
 		clearTimeout(timer);
 	}
 }
+/** Token masking without a second silent cut. Call only on an independently
+ * bounded supplied source; log/error envelopes retain redactSecrets' cap. */
+export function maskSecrets(value: string, secrets: readonly string[]): string {
+	let out = value;
+	for (const secret of secrets)
+		if (secret) out = out.split(secret).join("<redacted>");
+	return out;
+}
 export function redactSecrets(
 	value: string,
 	secrets: readonly string[],
 ): string {
-	let out = value;
-	for (const secret of secrets)
-		if (secret) out = out.split(secret).join("<redacted>");
-	return out.slice(0, 4096);
+	return maskSecrets(value, secrets).slice(0, 4096);
 }
 export { digest };

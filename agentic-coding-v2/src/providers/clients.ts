@@ -1,4 +1,4 @@
-import { boundedFetch, redactSecrets } from "../http/admission.ts";
+import { boundedFetch, maskSecrets, redactSecrets } from "../http/admission.ts";
 import { type ProviderConfig, providerToken } from "./config.ts";
 
 /** Unified change (PR/MR), issue and CI job shapes. Host quirks stay in the
@@ -138,7 +138,11 @@ export function providerClient(
 		try {
 			return text
 				? (JSON.parse(text, (_key, value: unknown) =>
-						typeof value === "string" ? redactSecrets(value, [token]) : value,
+						typeof value === "string"
+							? method === "GET"
+								? maskSecrets(value, [token])
+								: redactSecrets(value, [token])
+							: value,
 					) as unknown)
 				: null;
 		} catch {

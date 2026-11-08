@@ -1,137 +1,194 @@
 /** @jsxImportSource @opentui/solid */
-import { SyntaxStyle } from "@opentui/core";
-import { useRenderer } from "@opentui/solid";
-import { For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import type { Data } from "../../../protocol/index.ts";
 import type {
 	ProviderActionCandidate,
 	ProviderActionReceipt,
 } from "../../../protocol/provider-actions.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
+import { PreparedCandidate } from "../../ui/PreparedCandidate.tsx";
+import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
+import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
-import { SuppliedCode } from "../sessions/SuppliedCode.tsx";
-/** Mutable local intention editor; immutable approval candidate; read-only native attempt journal. */
+/** Local intentions, sealed source and a read-only native attempt journal.
+ * Nothing here automatically dispatches, follows a link or retries a receipt. */
 export function ProviderWritePanel(props: {
+	provider: string | null;
+	catalog: Data[];
 	draft: string;
 	change: (draft: string) => void;
 	editing: boolean;
 	edit: (value: boolean) => void;
 	connected: boolean;
+	fresh: boolean;
 	error: string | null;
 	candidate: ProviderActionCandidate | null;
 	attempts: ProviderActionReceipt[];
 	prepare: (command: string) => void;
 }) {
-	const syntax = SyntaxStyle.fromStyles(
-		{ default: { fg: color("text") } },
-		useRenderer().nativeScene,
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
+	const editorOwner = createMemo(() =>
+		JSON.stringify([props.provider, props.connected, props.fresh]),
 	);
-	onCleanup(() => syntax.destroy());
+	let previousEditor = editorOwner();
+	createEffect(() => {
+		const next = editorOwner();
+		if (next !== previousEditor) {
+			previousEditor = next;
+			props.edit(false);
+		}
+	});
+	const journal = createMemo(() => ({
+		rows: props.attempts,
+		provider: props.provider,
+		catalog: props.catalog,
+		connected: props.connected,
+		fresh: props.fresh,
+	}));
+	const controls = createMemo(() => [
+		journal(),
+		props.draft,
+		props.candidate,
+		props.error,
+	]);
+	const ready = () =>
+		!disposed &&
+		props.connected &&
+		props.fresh &&
+		!props.error &&
+		props.provider !== null &&
+		props.catalog.filter((row) => row.name === props.provider).length === 1;
+	const prepare = (command: string) => {
+		if (ready()) {
+			props.edit(false);
+			props.prepare(command);
+		}
+	};
+	const member = (attempt: ProviderActionReceipt) =>
+		!disposed &&
+		props.attempts.some((row) => row === attempt) &&
+		attempt.provider === props.provider &&
+		props.catalog.filter((row) => row.name === attempt.provider).length === 1 &&
+		props.attempts.filter(
+			(row) => row.id === attempt.id && row.provider === attempt.provider,
+		).length === 1 &&
+		/^[A-Za-z0-9_-]{1,128}$/.test(attempt.id);
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
 				Native provider write intentions · no outbound request on edit/preview
 			</text>
 			<text wrapMode="word" fg={color("warning")}>
-				Exactly one explicit approval of an immutable
+				Exactly one manual approval of an immutable
 				provider/destination/operation/payload snapshot permits one dispatch
-				attempt. A retained uncertain attempt is never automatically retried on
-				apply, startup, reconnect or journal read. Acknowledgement is not proof
-				the remote operation finished; inspect remotely. GitHub CI numbers here
-				are RUN IDs, not job IDs.
+				attempt. Uncertain attempts never automatically retry on
+				apply/startup/reconnect/journal read. Acknowledgement is not remote
+				completion; inspect explicitly. GitHub CI numbers are RUN IDs, not job
+				IDs.
 			</text>
 			<text wrapMode="word" fg={color("textMuted")}>
-				Supported operations: comment-change, approve-exact-change (full
-				reviewed 40-hex SHA; server preflight plus host commit binding),
-				unapprove-change, comment-issue, close-issue, retry-job, cancel-job,
-				rebase-change (GitLab), reply-discussion, resolve-discussion (GitLab),
+				Supported: comment-change, approve-exact-change (full reviewed 40-hex
+				SHA; preflight and host commit binding), unapprove-change,
+				comment-issue, close-issue, retry-job, cancel-job, rebase-change
+				(GitLab), reply-discussion, resolve-discussion (GitLab),
 				set-issue-labels, set-issue-assignees. No arbitrary route, merge or
-				unsigned approval. Rebase/issue/job mutations are exact target
-				intentions, not remote revision CAS.
+				unsigned approval. Rebase/issue/job intentions are exact targets, not
+				remote revision CAS.
 			</text>
 			<Show when={props.error}>
 				<text fg={color("warning")}>{props.error}</text>
 			</Show>
-			<ActionHeader onActivate={() => props.edit(!props.editing)}>
+			<Show when={!props.connected || !props.fresh}>
+				<text fg={color("warning")}>
+					Cached/disconnected owner; command preparation withheld. Local
+					source/receipt browsing never grants replay.
+				</text>
+			</Show>
+			<ActionHeader
+				scope={controls()}
+				interactive={!disposed && props.connected}
+				onActivate={() => {
+					if (!disposed && props.connected) props.edit(!props.editing);
+				}}
+			>
 				<text fg={color("accent")}>
 					{props.editing
 						? "Leave intention editor"
 						: "Edit local provider intention"}
 				</text>
 			</ActionHeader>
+			<text fg={color("textMuted")}>
+				Local editor limit: 128000 UTF-16 units; oversize input restores the
+				prior exact draft. Native snapshot/field bounds and validation remain
+				final.
+			</text>
 			<LocalJsonEditor
 				value={props.draft}
-				scope="provider-intention"
+				scope={editorOwner()}
+				maxLength={128000}
 				editing={props.editing}
-				interactive={props.connected}
+				interactive={!disposed && props.connected}
 				height={10}
-				enter={() => props.edit(true)}
+				enter={() => {
+					if (!disposed && props.connected) props.edit(true);
+				}}
 				change={props.change}
 			/>
-			<Show when={props.connected}>
+			<Show when={ready()}>
 				<ActionHeader
-					onActivate={() => {
-						props.edit(false);
-						props.prepare("/provider-preview");
-					}}
+					scope={controls()}
+					interactive={ready()}
+					onActivate={() => prepare("/provider-preview")}
 				>
 					<text fg={color("accent")}>
-						Prepare sealed preview (submit explicitly; no outbound request)
+						Prepare sealed preview (explicit submission; no outbound request)
 					</text>
 				</ActionHeader>
 				<ActionHeader
-					onActivate={() => {
-						props.edit(false);
-						props.prepare("/provider-new OPERATION");
-					}}
+					scope={controls()}
+					interactive={ready()}
+					onActivate={() => prepare("/provider-new OPERATION")}
 				>
 					<text fg={color("accent")}>
 						Prepare new blank intention/request identity (explicit submission
-						discards editor draft)
+						discards draft)
 					</text>
 				</ActionHeader>
 				<ActionHeader
-					onActivate={() => {
-						props.edit(false);
-						props.prepare("/provider-attempts");
-					}}
+					scope={controls()}
+					interactive={ready()}
+					onActivate={() => prepare("/provider-attempts")}
 				>
 					<text fg={color("accent")}>
-						Prepare refreshing native attempt journal (no remote calls)
+						Prepare refreshing native attempt journal (no remote call)
 					</text>
 				</ActionHeader>
 			</Show>
-			<Show when={props.candidate}>
-				<text fg={color("primary")}>
-					Immutable candidate {props.candidate?.id} · expires{" "}
-					{props.candidate?.expiresAt} (epoch ms)
-				</text>
-				<SuppliedCode
-					content={props.candidate?.snapshot ?? ""}
-					identity={props.candidate?.id}
-					filetype="json"
-					syntax={syntax}
-				/>
-				<text wrapMode="word">Snapshot digest: {props.candidate?.digest}</text>
-				<text fg={color("warning")}>
-					Candidate/editor bytes are ephemeral and never saved in viewpoints.
-					Review the snapshot, then manually type approve:DIGEST. Any
-					edit/navigation/refresh/disconnect invalidates client confirmation.
-				</text>
-				<ActionHeader
-					onActivate={() => {
-						props.edit(false);
-						props.prepare(
-							`/provider-apply ${props.candidate?.id} approve:TYPE_THE_SNAPSHOT_DIGEST`,
-						);
-					}}
-				>
-					<text fg={color("accent")}>
-						Prepare confirmation placeholder only
-					</text>
-				</ActionHeader>
-			</Show>
-			<For each={props.attempts}>
+			<PreparedCandidate
+				candidate={props.candidate}
+				scope={controls()}
+				ready={ready() && props.candidate?.provider === props.provider}
+				label="Provider intention (one dispatch attempt, not remote completion)"
+				metadata={
+					props.candidate ? { provider: props.candidate.provider } : undefined
+				}
+				prepare={(id) =>
+					prepare(`/provider-apply ${id} approve:TYPE_THE_SNAPSHOT_DIGEST`)
+				}
+			/>
+			<SuppliedRecordWindow
+				rows={props.attempts}
+				scope={journal()}
+				label="native provider attempt receipts"
+				title={(attempt) =>
+					`${attempt.id} · ${attempt.operation} · ${attempt.target} · ${attempt.status}`
+				}
+				search={(attempt) => JSON.stringify(attempt)}
+			>
 				{(attempt) => (
 					<box flexDirection="column" gap={1}>
 						<text
@@ -146,36 +203,44 @@ export function ProviderWritePanel(props: {
 							{attempt.status} · {attempt.updatedAt} (epoch ms)
 						</text>
 						<ActionHeader
+							scope={controls()}
+							interactive={ready() && member(attempt)}
 							onActivate={() => {
-								props.edit(false);
-								props.prepare(`/provider-receipt ${attempt.id}`);
+								if (member(attempt)) prepare(`/provider-receipt ${attempt.id}`);
 							}}
 						>
 							<text fg={color("accent")}>
-								Prepare reading full native receipt (no remote call)
+								Prepare full native receipt read (no remote call)
 							</text>
 						</ActionHeader>
 						<text wrapMode="word">
-							Exact intention digest {attempt.digest}.{" "}
+							Native intention digest {attempt.digest}.{" "}
 							{attempt.status === "uncertain"
-								? "Outcome unknown, including preflight/rejection/crash; inspect the remote state before considering a new separately approved request ID."
-								: "Native provider receipt retained; no automatic follow-up/retry."}
+								? "Outcome unknown, including preflight/rejection/crash. Inspect remote state before any new separately approved request ID."
+								: "Retained native acknowledgement only; no automatic follow-up or retry."}
 						</text>
-						<text wrapMode="word">
-							Recorded destination/credential-reference metadata (not proof of
-							current account or configuration): {attempt.destination}
-						</text>
-						<Show when={attempt.result}>
-							<SuppliedCode
-								content={JSON.stringify(attempt.result, null, 2)}
-								identity={attempt.id}
-								filetype="json"
-								syntax={syntax}
+						<Show when={!member(attempt)}>
+							<text fg={color("warning")}>
+								Ambiguous/missing receipt identity; command preparation
+								withheld.
+							</text>
+						</Show>
+						<SuppliedObservation
+							value={attempt.destination}
+							scope={journal()}
+							filetype="json"
+							label="Recorded destination/credential-reference metadata; not current account/configuration proof"
+						/>
+						<Show when={attempt.result !== null}>
+							<SuppliedObservation
+								value={attempt.result}
+								scope={journal()}
+								label="Complete supplied native receipt result; not original remote bytes"
 							/>
 						</Show>
 					</box>
 				)}
-			</For>
+			</SuppliedRecordWindow>
 		</box>
 	);
 }
