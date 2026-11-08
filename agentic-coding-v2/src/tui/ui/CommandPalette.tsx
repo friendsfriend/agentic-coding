@@ -1,13 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { useKeymap } from "@opentui/keymap/solid";
-import {
-	createEffect,
-	createMemo,
-	createSignal,
-	For,
-	onCleanup,
-} from "solid-js";
-import { useRowMouse } from "../presentation/components/mouse/useRowMouse.ts";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { PromptSuggestions } from "../presentation/components/PromptSuggestions.tsx";
 import { uiColors } from "../presentation/theme/colors.ts";
 import { bindings, paletteKeybinds } from "./keybinds.ts";
 import { color } from "./theme/index.ts";
@@ -19,33 +13,68 @@ export function CommandPalette(props: {
 	choose: (command: string) => void;
 	close: () => void;
 }) {
-	const [filter, setFilter] = createSignal(""),
-		[selection, setSelection] = createSignal(0);
-	const entries = createMemo(() =>
-		props.entries
-			.filter((entry) =>
-				`${entry.command} ${entry.description}`
-					.toLowerCase()
-					.includes(filter().toLowerCase()),
-			)
-			.slice(0, 64),
-	);
-	createEffect(() => {
-		const count = entries().length;
-		setSelection((value) => Math.max(0, Math.min(value, count - 1)));
+	const [filter, setFilter] = createSignal("");
+	const [selectedCommand, setSelectedCommand] = createSignal<string>();
+	const active = () => props.active !== false;
+	const entries = createMemo(() => {
+		const seen = new Set<string>();
+		const query = filter().toLowerCase();
+		return props.entries
+			.filter((entry) => {
+				if (
+					seen.has(entry.command) ||
+					!`${entry.command} ${entry.description}`.toLowerCase().includes(query)
+				)
+					return false;
+				seen.add(entry.command);
+				return true;
+			})
+			.slice(0, 64);
 	});
-	const offset = () => Math.max(0, selection() - 2);
-	const choose = () => {
-		const entry = entries()[selection()];
-		if (entry) props.choose(entry.command);
+	createEffect(() => {
+		const first = entries()[0];
+		if (selectedCommand() === undefined && first)
+			setSelectedCommand(first.command);
+	});
+	const selection = () =>
+		entries().findIndex((entry) => entry.command === selectedCommand());
+	const suggestions = createMemo(() =>
+		entries().map((entry) => {
+			const name = entry.command.split(/\s/, 1)[0] ?? entry.command;
+			const argumentsText = entry.command.slice(name.length).trim();
+			return {
+				name,
+				text: entry.command,
+				description: argumentsText
+					? `${argumentsText} · ${entry.description}`
+					: entry.description,
+			};
+		}),
+	);
+	const chooseCommand = (command: string) => {
+		if (active() && entries().some((entry) => entry.command === command))
+			props.choose(command);
 	};
-	const move = (direction: number) =>
-		setSelection((value) =>
-			Math.max(0, Math.min(entries().length - 1, value + direction)),
-		);
+	const choose = () => {
+		const command = selectedCommand();
+		if (command !== undefined) chooseCommand(command);
+	};
+	const move = (direction: number) => {
+		if (!active()) return;
+		const current = selection();
+		const next =
+			current < 0
+				? direction < 0
+					? entries().length - 1
+					: 0
+				: Math.max(0, Math.min(entries().length - 1, current + direction));
+		const entry = entries()[next];
+		if (entry) setSelectedCommand(entry.command);
+	};
 	const unregister = useKeymap().registerLayer({
 		id: "v2.command-palette",
 		priority: 50,
+		enabled: active,
 		commands: [
 			{
 				id: "palette.previous",
@@ -65,7 +94,9 @@ export function CommandPalette(props: {
 			{
 				id: "palette.close",
 				name: "Dismiss palette",
-				run: () => props.close(),
+				run: () => {
+					if (active()) props.close();
+				},
 			},
 		],
 		bindings: bindings(paletteKeybinds),
@@ -75,78 +106,58 @@ export function CommandPalette(props: {
 		<box
 			flexDirection="column"
 			flexShrink={0}
-			border={["left"]}
-			borderColor={uiColors.accent}
 			backgroundColor={uiColors.bgMantle}
 		>
-			<text paddingLeft={2} paddingRight={1} fg={color("primary")}>
-				Command suggestions · filter and prepare only
-			</text>
-			<text paddingLeft={2} paddingRight={1} fg={color("textMuted")}>
-				Existing unsent drafts are not replaced. No automatic submission,
-				approval, reconnect or backend action.
-			</text>
-			<box paddingLeft={2} paddingRight={1}>
-				<input
-					focused={props.active !== false}
-					value={filter()}
-					maxLength={256}
-					placeholder="Filter native commands"
-					onInput={(value) => {
-						setFilter(value);
-						setSelection(0);
-					}}
-				/>
+			<box
+				flexDirection="column"
+				border={["left"]}
+				borderColor={uiColors.accent}
+			>
+				<text paddingLeft={2} paddingRight={1} fg={color("primary")}>
+					Command suggestions · filter and prepare only
+				</text>
+				<text paddingLeft={2} paddingRight={1} fg={color("textMuted")}>
+					Existing unsent drafts are not replaced. No automatic submission,
+					approval, reconnect or backend action.
+				</text>
+				<box paddingLeft={2} paddingRight={1}>
+					<input
+						focused={active()}
+						value={filter()}
+						maxLength={256}
+						placeholder="Filter native commands"
+						onInput={(value) => {
+							if (!active()) return;
+							setFilter(value);
+							setSelectedCommand(undefined);
+						}}
+					/>
+				</box>
 			</box>
-			<For each={entries().slice(offset(), offset() + 5)}>
-				{(entry, index) => (
-					<box
-						flexDirection="row"
-						gap={2}
-						paddingLeft={2}
-						paddingRight={1}
-						backgroundColor={
-							offset() + index() === selection()
-								? uiColors.selectionBg
-								: undefined
-						}
-						{...useRowMouse({
-							index: () => offset() + index(),
-							selectedIndex: selection,
-							activatable: () => true,
-							onSelect: (row) =>
-								setSelection(Math.max(0, Math.min(row, entries().length - 1))),
-							onActivate: () => props.choose(entry.command),
-						})}
-					>
-						<text
-							width={14}
-							flexShrink={0}
-							fg={
-								offset() + index() === selection()
-									? uiColors.selectionText
-									: uiColors.textPrimary
-							}
-						>
-							{entry.command}
-						</text>
-						<text
-							fg={
-								offset() + index() === selection()
-									? uiColors.selectionText
-									: uiColors.textMuted
-							}
-						>
-							{entry.description}
-						</text>
-					</box>
-				)}
-			</For>
-			<text paddingLeft={2} paddingRight={1} fg={color("textMuted")}>
-				{entries().length
-					? `${selection() + 1}/${entries().length}`
-					: "No native command matches"}
-			</text>
+			<PromptSuggestions
+				items={suggestions()}
+				selection={selection()}
+				select={(index) => {
+					if (!active()) return;
+					const entry = entries()[index];
+					if (entry) setSelectedCommand(entry.command);
+				}}
+				choose={(entry) => chooseCommand(entry.text)}
+			/>
+			<box
+				border={["left"]}
+				borderColor={uiColors.accent}
+				paddingLeft={2}
+				paddingRight={1}
+			>
+				<text fg={color("textMuted")}>
+					{entries().length === 0
+						? "No native command matches"
+						: selection() < 0
+							? "Selection unavailable · choose another command explicitly"
+							: `${selection() + 1}/${entries().length}`}
+				</text>
+			</box>
 		</box>
 	);
 }

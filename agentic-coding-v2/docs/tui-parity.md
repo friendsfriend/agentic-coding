@@ -256,6 +256,28 @@ content and bindings, not permission to replace the original presentation.
   current sessions before UI navigation. No missing row is adopted as another
   session and no navigation action is treated as work admission.
 
+## Native command palette list restoration pass
+
+- Reuse the original local PromptSuggestions body rather than a separate
+  five-row approximation: eight-row centered window, fourteen-cell name gutter,
+  two-cell gap, selection tones, accent rule and remaining-item indicator.
+  Keep the existing native safety header/filter/footer; this is not a claim that
+  the original location or model-picker modal has been restored.
+- Keep native explicit targets/placeholders visible in row descriptions, while
+  full command text remains the preparation payload. Retain the existing
+  sixty-four-match bound and deduplicate exact matching command text.
+- Preserve selection by full command identity during catalog changes, not a
+  position that could silently acquire another target. Explicit query edits
+  reset the cursor to the first eligible match; disappearing selections remain
+  unavailable until another selection is made. Existing clamped movement stays.
+- Gate the palette key layer, input changes, pointer selection/activation,
+  preparation and dismissal on its actual active state. Help can suppress the
+  mounted palette without letting its controls alter the preserved search.
+- Recheck current filtered eligibility before preparing retained command text.
+  Completion still goes through the existing unsent-draft refusal, and never
+  submits, approves, reconnects, records accepted history or invokes a gateway
+  mutation. No renderer/helper tests or visual acceptance are introduced.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
