@@ -3,6 +3,7 @@ import { type KeyEvent, TextAttributes } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import {
+	type HelpEntry,
 	HelpText,
 	wrapHelpEntries,
 } from "../../presentation/components/HelpText.tsx";
@@ -80,7 +81,9 @@ export function TimelinePicker(props: {
 			Math.max(1, width() - 4),
 		),
 	);
-	const footerHeight = () => footer().length + Number(refused());
+	const showIndicator = () => rows().length > 0;
+	const footerHeight = () =>
+		footer().length + Number(refused()) + Number(showIndicator());
 	const lines = () => Math.max(1, height() - 3 - footerHeight());
 	const selection = () => rows().findIndex((row) => row.key === selected());
 	const start = () =>
@@ -105,20 +108,13 @@ export function TimelinePicker(props: {
 			!key || !rows().some((row) => row.key === key) || !props.choose(key),
 		);
 	};
-	// Original finite picker key alphabet. No editor, paste listener or global
-	// keyboard hook: keys belong only to this active modal layer.
-	const handleKey = (event: KeyEvent) => {
+	const control = (name: string) => {
 		if (!props.active) return;
-		const name = event.name.toLowerCase();
 		if (filtering()) {
 			if (name === "escape") {
 				changeQuery("");
 				setFiltering(false);
 			} else if (name === "enter" || name === "return") setFiltering(false);
-			else if (name === "backspace")
-				changeQuery(Array.from(query()).slice(0, -1).join(""));
-			else if (event.name.length === 1 && !event.ctrl && !event.meta)
-				changeQuery(query() + event.name);
 			return;
 		}
 		if (name === "escape") props.close();
@@ -128,6 +124,38 @@ export function TimelinePicker(props: {
 			changeQuery("");
 			setFiltering(true);
 		} else if (name === "enter" || name === "return") choose();
+	};
+	const footerControl = (entry: HelpEntry) => {
+		// A press begun on a previous mode/width must not acquire a different
+		// meaning on release. Combined navigation and typing hints are inert.
+		if (!props.active || !footer().some((line) => line.includes(entry)))
+			return undefined;
+		return entry.key === "Enter"
+			? "return"
+			: entry.key === "Esc"
+				? "escape"
+				: entry.key === "/"
+					? "/"
+					: undefined;
+	};
+	// Original finite picker key alphabet. No editor, paste listener or global
+	// keyboard hook: keys belong only to this active modal layer.
+	const handleKey = (event: KeyEvent) => {
+		if (!props.active) return;
+		const name = event.name.toLowerCase();
+		if (
+			filtering() &&
+			name !== "escape" &&
+			name !== "enter" &&
+			name !== "return"
+		) {
+			if (name === "backspace")
+				changeQuery(Array.from(query()).slice(0, -1).join(""));
+			else if (event.name.length === 1 && !event.ctrl && !event.meta)
+				changeQuery(query() + event.name);
+			return;
+		}
+		control(name);
 	};
 	const unregister = useKeymap().registerLayer({
 		id: "v2.timeline-picker",
@@ -172,8 +200,32 @@ export function TimelinePicker(props: {
 			}
 			footer={
 				<>
+					<Show when={showIndicator()}>
+						<box
+							style={{
+								width: "100%",
+								height: 1,
+								justifyContent: "center",
+								flexShrink: 0,
+							}}
+						>
+							<text fg={uiColors.textMuted}>
+								Showing {start() + 1}–
+								{Math.min(rows().length, start() + lines())} of {rows().length}
+							</text>
+						</box>
+					</Show>
 					<For each={footer()}>
-						{(entries) => <HelpText entries={entries} />}
+						{(entries) => (
+							<HelpText
+								entries={entries}
+								activatable={(entry) => footerControl(entry) !== undefined}
+								onActivate={(entry) => {
+									const name = footerControl(entry);
+									if (name) control(name);
+								}}
+							/>
+						)}
 					</For>
 					<Show when={refused()}>
 						<text fg={uiColors.textMuted} wrapMode="none" truncate>

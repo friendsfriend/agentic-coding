@@ -745,6 +745,24 @@ content and bindings, not permission to replace the original presentation.
   timestamp details, scrollbar/indicator and load-older remain unfinished. No
   renderer/helper/mounting tests or interactive/visual acceptance are claimed.
 
+## Timeline range row and safe footer chips
+
+- Restore the original centered, muted `Showing a–b of n` row for nonempty
+  supplied lists, including filtered lists. Reserve its line before calculating
+  the visible prompt window; omit it with the original empty state. Counts refer
+  only to the supplied/filtered snapshot, not complete native retained history.
+- Wire the unambiguous `/`, Enter and Esc HelpText chips through the same local
+  control handler as their keyboard equivalents. Enter while filtering only
+  finishes filtering; Esc clears/exits filtering before it can dismiss the modal.
+- Combined `j/k` and `Type` hints stay informational: a tap cannot invent a
+  direction or text input. Shared tap/hover semantics remain in HelpText. Chip
+  activation requires the active surface and exact current footer entry, so a
+  retired mode/width entry cannot acquire a new meaning on release.
+- Native prompt identity/reveal fences, draft protection and bounded supplied
+  data are unchanged. No fetch, admission, timer, clipboard hook or authority is
+  added. Full scrollbar interaction, timestamp details and load-older remain
+  unfinished; no renderer/helper tests or visual/interactive acceptance claimed.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
