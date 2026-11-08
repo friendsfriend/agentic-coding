@@ -366,12 +366,19 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					!helpOpen() &&
 					!paletteOpen()
 				) {
-					const top = Math.min(
-						Math.max(0, saved.top),
-						Math.max(0, scroll.scrollHeight - scroll.viewport.height),
+					const bottom = Math.max(
+						0,
+						scroll.scrollHeight - scroll.viewport.height,
 					);
+					const follow =
+						target.detail.transcriptFollowId === id &&
+						target.detail.transcriptFollowing === true;
+					const top = follow
+						? bottom
+						: Math.min(Math.max(0, saved.top), bottom);
 					pendingTranscriptRestore = null;
 					resetReadingPlace();
+					followingBottom = follow;
 					if (scroll.scrollTop !== top) scroll.scrollTo(top);
 				}
 			}
@@ -681,8 +688,27 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		if (prompt) navigation.current.draft = prompt.plainText;
 		if (pendingTranscriptRestore)
 			navigation.current.scroll = pendingTranscriptRestore.top;
-		else if (scroll)
+		else if (scroll) {
 			navigation.current.scroll = Math.max(0, Math.round(scroll.scrollTop));
+			const id = sessionId();
+			if (
+				isTranscript() &&
+				available() &&
+				transcript() !== null &&
+				id !== null &&
+				Number.isSafeInteger(id) &&
+				readingRows &&
+				(sampledScroll ||
+					pendingLatest !== null ||
+					pendingReaderMotion !== null ||
+					pendingReveal)
+			) {
+				navigation.current.detail.transcriptFollowId = id;
+				navigation.current.detail.transcriptFollowing =
+					pendingLatest === id ||
+					(pendingReaderMotion === null && !pendingReveal && followingBottom);
+			}
+		}
 	};
 	const restore = () => {
 		pendingReveal = undefined;

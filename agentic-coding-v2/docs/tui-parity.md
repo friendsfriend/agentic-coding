@@ -583,6 +583,26 @@ content and bindings, not permission to replace the original presentation.
   acceptance. No renderer/presenter/helper tests are added, and native protocol,
   permissions, pairing, draft/admission and provider behavior remain unchanged.
 
+## Local navigation follow-mode restoration
+
+- Remember the sampled native transcript's bottom-follow preference as small,
+  data-only local view detail, fenced by the resolved native conversation ID.
+  Queued latest requests preserve following intent; effective reader/reveal
+  requests preserve numeric-place intent. Unobserved/missing scopes do not
+  manufacture a follow preference.
+- Back/Forward and local memory bookmarks retain this through their existing
+  cloned view snapshots. A pending deferred restore preserves the requested
+  detail/top during rapid navigation rather than sampling a loading placeholder.
+- Apply matching follow intent only after the guarded projection/registry/layout
+  restore is ready, placing at the current supplied window bottom. Older or
+  mismatched metadata keeps the existing clamped numeric restore and normal
+  subsequent viewport sampling. Draft/selection/authority are not replaced.
+- Frozen entries are not saved or fetched. Native pinned viewpoints deliberately
+  omit local detail and retain numeric-only behavior; protocol, revision, owner,
+  approval and native admission contracts are unchanged. No renderer/helper tests
+  or visual acceptance claims are added. Timeline/load-older, selection-autoscroll
+  and text-line anchoring still remain unfinished.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
