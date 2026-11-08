@@ -236,6 +236,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	let prompt: TextareaRenderable | undefined,
 		scroll: ScrollBoxRenderable | undefined;
 	const cursorBlink = createPromptCursorBlink();
+	const renderer = useRenderer();
+	let pendingReveal: BoxRenderable | undefined;
 	// The mirror wakes only presentation; native admission still reads the actual
 	// editor buffer. Programmatic restores/clears synchronize both surfaces.
 	const writePrompt = (text: string) => {
@@ -246,10 +248,44 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	// Original final-frame prompt cursor: native glyphs remain untouched, and
 	// only blink transitions wake an otherwise idle renderer.
 	onMount(() => {
-		const renderer = useRenderer();
 		let cursorFocused = false;
 		let paintedCursorVisible = true;
 		const paintCursor = (buffer: Parameters<typeof paintPromptCursor>[0]) => {
+			// Layout and wrapping have settled before this post-process callback.
+			// A newer selection replaces the target; destroyed rows are never reused.
+			const node = pendingReveal;
+			pendingReveal = undefined;
+			let visibleInScroll = false;
+			if (node && scroll) {
+				let ancestor: BoxRenderable | BoxRenderable["parent"] = node;
+				while (ancestor) {
+					if (ancestor.isDestroyed || !ancestor.visible) break;
+					if (ancestor === scroll) {
+						visibleInScroll = true;
+						break;
+					}
+					ancestor = ancestor.parent;
+				}
+			}
+			if (
+				visibleInScroll &&
+				!helpOpen() &&
+				!paletteOpen() &&
+				scroll &&
+				!scroll.isDestroyed &&
+				node &&
+				!node.isDestroyed &&
+				node.visible &&
+				Number.isFinite(node.screenY) &&
+				Number.isFinite(scroll.viewport.screenY)
+			) {
+				const top = node.screenY - scroll.viewport.screenY + scroll.scrollTop;
+				if (top < scroll.scrollTop) scroll.scrollTo(Math.max(0, top));
+				else if (top + node.height > scroll.scrollTop + scroll.viewport.height)
+					scroll.scrollTo(
+						Math.max(0, top + node.height - scroll.viewport.height),
+					);
+			}
 			const focused = prompt?.focused ?? false;
 			if (focused && !cursorFocused) cursorBlink.reset();
 			cursorFocused = focused;
@@ -263,15 +299,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		}, 100);
 		onCleanup(() => {
 			clearInterval(blinkTimer);
+			pendingReveal = undefined;
 			renderer.removePostProcessFn(paintCursor);
 		});
 	});
 	const reveal = (node: BoxRenderable) => {
-		if (!scroll || !Number.isFinite(node.y)) return;
-		const top = node.y - scroll.viewport.y + scroll.scrollTop;
-		if (top < scroll.scrollTop) scroll.scrollTo(Math.max(0, top));
-		else if (top + node.height > scroll.scrollTop + scroll.viewport.height)
-			scroll.scrollTo(Math.max(0, top + node.height - scroll.viewport.height));
+		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
+		pendingReveal = node;
+		renderer.requestRender();
 	};
 	const update = () => setRevision((value) => value + 1);
 	const removeListener = client.onChange(update);
@@ -334,6 +369,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			navigation.current.scroll = Math.max(0, Math.round(scroll.scrollTop));
 	};
 	const restore = () => {
+		pendingReveal = undefined;
 		setBreadcrumbFocused(false);
 		setCrumbKey(undefined);
 		setProviderCandidate(null);
@@ -2296,22 +2332,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											};
 											update();
 										}}
-										reveal={(node) => {
-											if (!scroll || !Number.isFinite(node.y)) return;
-											const top = node.y - scroll.viewport.y + scroll.scrollTop;
-											if (top < scroll.scrollTop)
-												scroll.scrollTo(Math.max(0, top));
-											else if (
-												top + node.height >
-												scroll.scrollTop + scroll.viewport.height
-											)
-												scroll.scrollTo(
-													Math.max(
-														0,
-														top + node.height - scroll.viewport.height,
-													),
-												);
-										}}
+										reveal={reveal}
 										expanded={current().expanded}
 										toggle={(id) => {
 											navigation.current.expanded = current().expanded.includes(

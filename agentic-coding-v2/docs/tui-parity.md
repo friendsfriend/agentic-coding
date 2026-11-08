@@ -402,6 +402,24 @@ content and bindings, not permission to replace the original presentation.
   Mermaid rendering and viewport anchoring remain unfinished. No rendering or
   presenter tests are added and visual parity remains unverified.
 
+## Post-layout selected-row reveal pass
+
+- Share one reveal path between content action scopes and transcript selection,
+  instead of duplicating immediate scroll calculations across the shell.
+- Coalesce selection into a single pending renderable and request a presentation
+  frame. Apply reveal after layout/wrapping using screen-space row and viewport
+  coordinates, rather than pre-layout/local coordinates. Already-visible rows
+  do not move; rows above/below the viewport use the existing edge placement.
+- Drop destroyed/hidden targets and discard pending reveal on navigation restore,
+  component cleanup, or while help/palette is open. This is transient UI state,
+  not a persisted row identity or native task/session authority.
+- Keep saved numeric-scroll restoration, draft protection, ownership, ingress,
+  provider behavior and native transcript identities unchanged. Persistent
+  reading-place anchors, asynchronous history placement, timeline jumps and
+  bottom-following/window stability remain unfinished.
+- No renderer, mounting, snapshot, presenter or navigation-matrix tests are
+  added. Static checks and public-boundary fixtures do not verify visual parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
