@@ -547,6 +547,24 @@ content and bindings, not permission to replace the original presentation.
   need verification/work. No renderer/helper/presenter tests or visual acceptance
   claims are added; native protocol, permissions and provider behavior are unchanged.
 
+## Original transcript viewport keys
+
+- Restore PageUp/PageDown and Ctrl+U/Ctrl+D for an available native transcript
+  in content focus, using the original one-third-terminal-height step (minimum
+  one line). The viewport layer is inactive for breadcrumb/sidebar focus,
+  settings editing, help/palette overlays and non-native/standalone views.
+- Effective movement supersedes pending viewport placement and marks the same
+  identity-fenced reader intent as pointer gestures. Synchronize OpenTUI's manual
+  scroll state through the original scrollBy/scrollTo sequence, then resample
+  clamping after layout instead of inferring reader intent from geometry alone.
+- Consume boundary keys without modifying the viewport/follow state. Preserve
+  selection and unsent draft; no model input, native task or history fetch occurs.
+  Read-only scrolling remains available while an earlier submission is pending.
+- Include the bindings in shared transcript help and footer; unregister the layer
+  on cleanup. Selection-autoscroll, text-line anchoring, timeline/load-older and
+  visual interaction verification remain unfinished. Public-boundary checks are
+  not visual acceptance; no renderer/helper/presenter tests are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete

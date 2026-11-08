@@ -102,6 +102,7 @@ import {
 	shellKeybinds,
 	textareaBindings,
 	transcriptKeybinds,
+	transcriptViewportKeybinds,
 } from "../ui/keybinds.ts";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
@@ -517,6 +518,45 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		renderer.requestRender();
 		return true;
 	};
+	const markReaderMotion = (id: number, freeze: boolean) => {
+		pendingReaderMotion = id;
+		pendingLatest = null;
+		pendingTranscriptRestore = null;
+		pendingReveal = undefined;
+		readingAnchor = null;
+		followingBottom = false;
+		if (freeze) setAwayFromBottom(true);
+		renderer.requestRender();
+	};
+	const scrollTranscript = (direction: -1 | 1) => {
+		const id = sessionId();
+		if (
+			id === null ||
+			!isTranscript() ||
+			!contentFocused() ||
+			!available() ||
+			!readingRows ||
+			transcript() === null ||
+			!scroll ||
+			scroll.isDestroyed ||
+			settingsEditing() ||
+			helpOpen() ||
+			paletteOpen()
+		)
+			return false;
+		const bottom = Math.max(0, scroll.scrollHeight - scroll.viewport.height);
+		if (direction < 0 ? scroll.scrollTop <= 0 : scroll.scrollTop >= bottom)
+			return true;
+		// Original route step: one third of terminal height, at least one line.
+		markReaderMotion(id, direction < 0 && scroll.scrollTop > 0);
+		scroll.scrollBy(
+			direction * Math.max(1, Math.floor(dimensions().height / 3)),
+		);
+		// Mirror the original manual-scroll synchronization without relying on a
+		// geometry-only scrollbar change as evidence of reader intent.
+		scroll.scrollTo(scroll.scrollTop);
+		return true;
+	};
 	const observeReaderPointer = (event: import("@opentui/core").MouseEvent) => {
 		const id = sessionId();
 		if (
@@ -559,14 +599,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		if (!wheel && !barPointer) return;
 		// Preserve the native pointer handler: this observes intent, never supplies
 		// a delta, prevents default, dispatches work, or infers a layout-only change.
-		pendingReaderMotion = id;
-		pendingLatest = null;
-		pendingTranscriptRestore = null;
-		pendingReveal = undefined;
-		readingAnchor = null;
-		followingBottom = false;
-		if (wheel || scroll.scrollTop < bottom) setAwayFromBottom(true);
-		renderer.requestRender();
+		markReaderMotion(id, wheel || scroll.scrollTop < bottom);
 	};
 	const reveal = (node: BoxRenderable) => {
 		if (!scroll || scroll.isDestroyed || node.isDestroyed) return;
@@ -1249,6 +1282,33 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				)
 			: promptKeybinds;
 	const keymap = useKeymap();
+	const unregisterViewport = keymap.registerLayer({
+		id: "v2.transcriptViewport",
+		priority: 35,
+		enabled: () =>
+			isTranscript() &&
+			contentFocused() &&
+			available() &&
+			transcript() !== null &&
+			readingRows !== null &&
+			!settingsEditing() &&
+			!helpOpen() &&
+			!paletteOpen(),
+		commands: [
+			{
+				id: "transcript.scrollUp",
+				name: "Scroll supplied transcript up",
+				run: () => scrollTranscript(-1),
+			},
+			{
+				id: "transcript.scrollDown",
+				name: "Scroll supplied transcript down",
+				run: () => scrollTranscript(1),
+			},
+		],
+		bindings: bindings(transcriptViewportKeybinds),
+	});
+	onCleanup(unregisterViewport);
 	const unregister = keymap.registerLayer({
 		id: "v2.shell",
 		priority: 10,
@@ -3293,7 +3353,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								...shellKeybinds,
 								...(crumbActive() ? breadcrumbKeybinds : actionKeybinds),
 								...(pageFocusEnabled() ? pageFocusKeybinds : []),
-								...(isTranscript() && !crumbActive() ? transcriptKeybinds : []),
+								...(isTranscript() && !crumbActive()
+									? [...transcriptKeybinds, ...transcriptViewportKeybinds]
+									: []),
 								...(contentFocused() ? promptFooterBindings() : []),
 								...(current().focus === "sessions"
 									? workspaceNavigationKeybinds

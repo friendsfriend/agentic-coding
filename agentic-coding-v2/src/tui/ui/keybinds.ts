@@ -116,6 +116,32 @@ export const breadcrumbKeybinds: Keybind[] = [
 		short: "open",
 	},
 ];
+export const transcriptViewportKeybinds: Keybind[] = [
+	{
+		key: "pageup",
+		cmd: "transcript.scrollUp",
+		action: "Scroll supplied transcript up",
+		short: "scroll ↑",
+	},
+	{
+		key: "pagedown",
+		cmd: "transcript.scrollDown",
+		action: "Scroll supplied transcript down",
+		short: "scroll ↓",
+	},
+	{
+		key: "ctrl+u",
+		cmd: "transcript.scrollUp",
+		action: "Scroll supplied transcript up",
+		standard: true,
+	},
+	{
+		key: "ctrl+d",
+		cmd: "transcript.scrollDown",
+		action: "Scroll supplied transcript down",
+		standard: true,
+	},
+];
 export const transcriptKeybinds: Keybind[] = [
 	{
 		key: "ctrl+up",
@@ -266,7 +292,7 @@ export const textareaBindings = (catalog: Keybind[]) =>
 		}));
 export const keybindCatalogs = {
 	Shell: shellKeybinds,
-	Transcript: transcriptKeybinds,
+	Transcript: [...transcriptKeybinds, ...transcriptViewportKeybinds],
 	Controls: actionKeybinds,
 	Suggestions: paletteKeybinds,
 	"Page focus": pageFocusKeybinds,
