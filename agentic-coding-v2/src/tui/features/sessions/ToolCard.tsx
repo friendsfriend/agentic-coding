@@ -11,6 +11,10 @@ import { ImageView } from "../../ui/ImageView.tsx";
 import { StructuredData } from "../../ui/StructuredData.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
+import {
+	type SuppliedBrowserSection,
+	ToolBrowserObservation,
+} from "./ToolBrowserObservation.tsx";
 import { ToolDialogue } from "./ToolDialogue.tsx";
 import {
 	type SuppliedEditReplacement,
@@ -352,10 +356,10 @@ export function ToolCard(props: {
 			? object(value)
 			: null;
 	});
-	const browserSections = createMemo(() => {
+	const browserSections = createMemo<readonly SuppliedBrowserSection[]>(() => {
 		const value = browserResult();
 		if (!value) return [];
-		return ["observation", "matches"].flatMap((key) =>
+		return (["observation", "matches"] as const).flatMap((key) =>
 			Object.hasOwn(value, key) && value[key] !== null
 				? [{ key, value: value[key] }]
 				: [],
@@ -655,34 +659,11 @@ export function ToolCard(props: {
 								</>
 							)}
 						</Show>
-						<For each={browserSections()}>
-							{(section) => (
-								<>
-									{fold(
-										`:${section.key}`,
-										section.key === "matches" ? "Matches" : "Observation",
-									)}
-									<Show when={open(`:${section.key}`)}>
-										<text fg={color("textMuted")} wrapMode="word">
-											Retained browser {section.key} — refs belong to the
-											recorded snapshot; this display does not resolve or
-											activate them.
-										</text>
-										<Show
-											when={typeof section.value === "string"}
-											fallback={
-												<StructuredData
-													value={section.value}
-													label={`Retained ${section.key}`}
-												/>
-											}
-										>
-											<text wrapMode="word">{string(section.value)}</text>
-										</Show>
-									</Show>
-								</>
-							)}
-						</For>
+						<ToolBrowserObservation
+							sections={browserSections()}
+							open={open}
+							fold={fold}
+						/>
 						<Show when={!specialized() && props.result}>
 							<Show
 								when={structured() !== null}

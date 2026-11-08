@@ -1119,6 +1119,20 @@ content and bindings, not permission to replace the original presentation.
   Integrated load-older, nested-call composition and interactive/visual acceptance
   remain unfinished; static checks do not establish viewport behavior or parity.
 
+## Extracted passive browser sections
+
+- Move the retained observation/match section JSX into `ToolBrowserObservation`,
+  with readonly section keys/display values and owner-created open/fold callbacks.
+  Preserve section order, labels, recorded-ref caveats, structured/text branches,
+  colors, wrapping and exact disclosure suffixes without a new layout wrapper.
+- ToolCard retains structured-result projection, native pairing/status and scoped
+  disclosure state. The component neither parses results nor resolves recorded
+  refs, opens browser sessions, dispatches actions or routes authority fields.
+- Complete retained output and non-text content remain unchanged. No runtime/
+  legacy imports, global listeners or renderer/helper tests are introduced.
+  Integrated load-older, nested-call composition and interactive/visual acceptance
+  remain unfinished; this extraction does not establish visual parity.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
