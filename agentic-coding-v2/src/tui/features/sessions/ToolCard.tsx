@@ -244,7 +244,7 @@ export function ToolCard(props: {
 				(value) => typeof value === "string" && value.trim().length > 0,
 			);
 			const options = Array.isArray(record.options)
-				? record.options.flatMap((item: unknown) => {
+				? record.options.flatMap((item: unknown, index: number) => {
 						const option = object(item);
 						const label = [option.title, option.label, option.value].find(
 							(value) => typeof value === "string",
@@ -252,6 +252,7 @@ export function ToolCard(props: {
 						if (typeof label !== "string" || label.length === 0) return [];
 						return [
 							{
+								index,
 								label,
 								recommended: option.recommended === true,
 								description:
@@ -271,6 +272,7 @@ export function ToolCard(props: {
 				{
 					index,
 					text: typeof text === "string" ? text : null,
+					ident: typeof record.ident === "string" ? record.ident : null,
 					context,
 					options,
 				},
@@ -544,6 +546,7 @@ export function ToolCard(props: {
 											answer or approval control.
 										</text>
 										<text fg={color("text")} wrapMode="word">
+											{question.ident === null ? "" : `[${question.ident}] `}
 											{question.text ?? "Question text not supplied."}
 										</text>
 										<Show when={question.context !== null}>
@@ -571,10 +574,24 @@ export function ToolCard(props: {
 															○{option.recommended ? " ★" : "  "} {option.label}
 														</text>
 														<Show when={option.description !== null}>
-															<box paddingLeft={2} flexShrink={0}>
-																<text fg={color("textMuted")} wrapMode="word">
-																	{option.description ?? ""}
-																</text>
+															<box
+																paddingLeft={2}
+																flexShrink={0}
+																flexDirection="column"
+															>
+																{fold(
+																	`:question:${question.index}:option:${option.index}`,
+																	"Option description",
+																)}
+																<Show
+																	when={open(
+																		`:question:${question.index}:option:${option.index}`,
+																	)}
+																>
+																	<text fg={color("textMuted")} wrapMode="word">
+																		{option.description ?? ""}
+																	</text>
+																</Show>
 															</box>
 														</Show>
 													</box>

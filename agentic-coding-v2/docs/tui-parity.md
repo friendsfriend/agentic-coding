@@ -941,6 +941,22 @@ content and bindings, not permission to replace the original presentation.
   load-older and interactive/visual acceptance remain unfinished. No native calls,
   clarification/approval routing or renderer/helper tests are added.
 
+## Dialogue recorded identifiers and independent option detail folds
+
+- Preserve a supplied string question `ident` as the original bracketed prefix,
+  without trimming, inferring a fallback identifier or treating it as a native
+  clarification identity. Missing question text retains its absence annotation.
+- Restore independently disclosed option descriptions instead of always drawing
+  them beneath each passive option. Use the existing local fold/toggle framing;
+  no selection/answer handlers are attached to the offered option itself.
+- Detail fold keys use the tool-call scope plus original question/option array
+  positions (including omissions), not label/value matching. Duplicate offered
+  labels therefore do not alias detail folds. Disclosure state is UI memory only,
+  never an answer, response pairing, authority or provider operation.
+- Full response/clarification composition, nested-call layout, integrated load-older
+  and visual/interactive acceptance remain unfinished. No renderer/helper tests,
+  native answer/approval controls or runtime calls are added.
+
 ## Still required before claiming parity
 
 - Original workspace filter/pin ordering, side/mode persistence and complete
