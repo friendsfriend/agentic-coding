@@ -306,9 +306,16 @@ export function result<M extends Method>(
 			)
 		)
 			throw new Error("Invalid native history page");
-		for (const entry of entries)
-			if (!integer(entry.id) || typeof entry.kind !== "string")
-				throw new Error("Invalid history entry");
+		const identities = new Set<number>();
+		for (const entry of entries) {
+			if (
+				!integer(entry.id) ||
+				typeof entry.kind !== "string" ||
+				identities.has(Number(entry.id))
+			)
+				throw new Error("Invalid or duplicate history entry");
+			identities.add(Number(entry.id));
+		}
 	} else if (method === "evidence.read") {
 		const data = record(value);
 		if (

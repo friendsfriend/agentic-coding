@@ -22,6 +22,9 @@ export class SessionHistory {
 			);
 		if (this.cursors.size >= 64 && cursor === undefined)
 			throw new Error("History cursor capacity reached; wait for expiry");
+		// Reserve the opaque continuation before the awaited read. Concurrent
+		// requests cannot reuse it; failures remain consumed, never auto-replayed.
+		if (cursor !== undefined) this.cursors.delete(cursor);
 		const page = await session.entries(
 			{ order: "descending" },
 			50,
@@ -30,9 +33,6 @@ export class SessionHistory {
 		);
 		// Recheck catalog authority after the non-atomic read.
 		await clientSession(this.app, id, false);
-		// Successful continuation retires its used reference, keeping arbitrarily
-		// long scans bounded without retaining a cursor for every older page.
-		if (cursor !== undefined) this.cursors.delete(cursor);
 		let next: string | null = null;
 		if (page.next) {
 			if (this.cursors.size >= 64)

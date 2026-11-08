@@ -2,6 +2,7 @@
 import type { SyntaxStyle } from "@opentui/core";
 import { For, type JSX, Show } from "solid-js";
 import { color } from "../../ui/theme/index.ts";
+import { SuppliedCode } from "./SuppliedCode.tsx";
 
 /** Local display keys and supplied fragments, not file or operation identities. */
 export type SuppliedEditReplacement = {
@@ -37,23 +38,21 @@ export function ToolEditRequest(props: {
 							Requested old text ·{" "}
 							{edit.oldText.length === 0 ? "empty string" : "supplied fragment"}
 						</text>
-						<code
+						<SuppliedCode
+							identity={`${props.phase}:${edit.key}:old`}
 							content={edit.oldText}
 							filetype="text"
-							syntaxStyle={props.syntax}
-							drawUnstyledText={true}
-							wrapMode="word"
+							syntax={props.syntax}
 						/>
 						<text fg={color("textMuted")}>
 							Requested new text ·{" "}
 							{edit.newText.length === 0 ? "empty string" : "supplied fragment"}
 						</text>
-						<code
+						<SuppliedCode
+							identity={`${props.phase}:${edit.key}:new`}
 							content={edit.newText}
 							filetype="text"
-							syntaxStyle={props.syntax}
-							drawUnstyledText={true}
-							wrapMode="word"
+							syntax={props.syntax}
 						/>
 					</Show>
 				</>

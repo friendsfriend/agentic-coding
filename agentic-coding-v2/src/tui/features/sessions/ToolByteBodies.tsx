@@ -3,6 +3,7 @@ import type { SyntaxStyle } from "@opentui/core";
 import { Show } from "solid-js";
 import { color } from "../../ui/theme/index.ts";
 import { FileContent } from "./FileContent.tsx";
+import { SuppliedCode } from "./SuppliedCode.tsx";
 
 /** UI bytes and owner-proven line position only. No native result or file handle. */
 export function ToolReadBody(props: {
@@ -124,12 +125,17 @@ export function ToolShellBody(props: {
 						execution observation.
 					</text>
 				</Show>
-				<code
+				<SuppliedCode
+					identity={
+						props.partial
+							? "partial-shell"
+							: props.liveOnly
+								? "live-shell"
+								: "requested-shell"
+					}
 					content={typeof props.command === "string" ? props.command : ""}
 					filetype="bash"
-					syntaxStyle={props.syntax}
-					drawUnstyledText={true}
-					wrapMode="word"
+					syntax={props.syntax}
 				/>
 			</Show>
 		</>

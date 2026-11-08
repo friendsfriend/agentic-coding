@@ -143,11 +143,69 @@ test("authenticated native environment staging and retained history remain expli
 		});
 		expect(page.entries.length).toBe(50);
 		expect(page.cursor).not.toBeNull();
-		const older = await client.call("session.history", {
-			id: page.id,
-			cursor: page.cursor ?? undefined,
-		});
+		expect(new Set(page.entries.map((entry) => entry.id)).size).toBe(
+			page.entries.length,
+		);
+		const suppliedBody = `${Array.from({ length: 405 }, (_, i) => `supplied line ${i + 1}`).join("\n")}\n${"x".repeat(23999)}😀\nSDK annotation kept verbatim\n`;
+		await app.home.commit(async (tx) => {
+			await tx.appendEntry(app.home.id, {
+				kind: "fixture.later",
+				data: {
+					retained: "later live observation must not enter the old cursor page",
+					source: suppliedBody,
+					emptySource: "",
+				},
+			});
+		}, context);
+		const continuations = await Promise.allSettled([
+			client.call("session.history", {
+				id: page.id,
+				cursor: page.cursor ?? undefined,
+			}),
+			client.call("session.history", {
+				id: page.id,
+				cursor: page.cursor ?? undefined,
+			}),
+		]);
+		expect(
+			continuations.filter((result) => result.status === "fulfilled"),
+		).toHaveLength(1);
+		expect(
+			continuations.filter((result) => result.status === "rejected"),
+		).toHaveLength(1);
+		const completed = continuations.find(
+			(result) => result.status === "fulfilled",
+		);
+		if (completed?.status !== "fulfilled")
+			throw new Error("Fixture continuation missing");
+		const older = completed.value;
 		expect(older.entries.length).toBeGreaterThan(0);
+		expect(older.entries.some((entry) => entry.kind === "fixture.later")).toBe(
+			false,
+		);
+		const refreshed = await client.call("session.history", { id: page.id });
+		expect(
+			refreshed.entries.some((entry) => entry.kind === "fixture.later"),
+		).toBe(true);
+		expect(
+			refreshed.entries.find((entry) => entry.kind === "fixture.later")?.data,
+		).toMatchObject({ source: suppliedBody, emptySource: "" });
+		const unsupportedHistoryFields = {
+			id: page.id,
+			cursor: refreshed.cursor ?? undefined,
+			filter: "fixture.history",
+		};
+		await expect(
+			client.call("session.history", unsupportedHistoryFields),
+		).rejects.toThrow();
+		expect(
+			(
+				await client.call("session.history", {
+					id: page.id,
+					cursor: refreshed.cursor ?? undefined,
+				})
+			).id,
+		).toBe(page.id);
 		await expect(
 			client.call("session.history", {
 				id: page.id,

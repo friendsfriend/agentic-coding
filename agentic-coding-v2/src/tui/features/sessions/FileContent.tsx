@@ -2,6 +2,7 @@
 import { RGBA, type SyntaxStyle } from "@opentui/core";
 import { createContext, createSignal, For, Show, useContext } from "solid-js";
 import { uiColors } from "../../presentation/theme/colors.ts";
+import { SuppliedCode } from "./SuppliedCode.tsx";
 
 /** Original tool surface hover: the card owns its header, padding and file. */
 export const ToolSurfaceHoverContext = createContext<() => boolean>(
@@ -24,7 +25,7 @@ function liftedDiffColor(color: string): RGBA {
 
 /** Original TranscriptFile body, bound only to retained/requested native bytes.
  * No filesystem reads, synthesized patches, apply controls or syntax ownership.
- * Viewport caching remains a separate restoration step. */
+ * Non-diff source uses bounded local windows; patches stay intact. */
 export function FileContent(props: {
 	path: string;
 	content: string;
@@ -75,10 +76,6 @@ export function FileContent(props: {
 		(props.content.match(/^--- /gm)?.length ?? 0) <= 1 &&
 		(props.content.match(/^diff --git /gm)?.length ?? 0) <= 1 &&
 		(props.content.match(/^Index: /gm)?.length ?? 0) <= 1;
-	const startLine = () =>
-		Number.isSafeInteger(props.startLine) && Number(props.startLine) >= 1
-			? Number(props.startLine)
-			: 1;
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={uiColors.textMuted}>
@@ -97,21 +94,16 @@ export function FileContent(props: {
 				<Show
 					when={props.diff}
 					fallback={
-						<line_number
-							fg={uiColors.textMuted}
-							minWidth={3}
-							paddingRight={1}
-							lineNumberOffset={startLine() - 1}
-						>
-							<code
-								content={props.content}
-								filetype={filetype()}
-								syntaxStyle={props.syntax}
-								drawUnstyledText
-								fg={uiColors.textPrimary}
-								wrapMode="word"
-							/>
-						</line_number>
+						<SuppliedCode
+							identity={`${props.path}:${props.label}`}
+							content={props.content}
+							filetype={filetype()}
+							syntax={props.syntax}
+							fg={uiColors.textPrimary}
+							lineNumberFg={uiColors.textMuted}
+							lineNumbers
+							startLine={props.startLine}
+						/>
 					}
 				>
 					<Show

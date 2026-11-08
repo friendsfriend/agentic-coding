@@ -1424,6 +1424,47 @@ content and bindings, not permission to replace the original presentation.
 - These are functionality and isolation checks, not terminal visual acceptance.
   Original layout, mixed-height reveal and lifecycle parity remain to be completed.
 
+## Integrated retained-history and supplied-source reader batch
+
+- Explicit native history pages now feed a scoped local explorer: supplied-kind
+  filtering, searchable loaded-entry selection, 20-entry mounted windows, previous/
+  next local navigation and explicit cache clearing. Up to 500 records remain held;
+  older paging retains chronological native records and drops newer cached records.
+  Hidden/dropped selections never alias another entry. Full records stay available
+  in the existing bounded expandable data presentation, without interpreting native
+  context/head/fork data or merging it into the live transcript.
+- Folding/opening, filtering, searching and local window navigation never call
+  `session.history`. Only the explicit newest/older read controls do so. Disconnect,
+  disposal and exact source/view changes retire publication. Pending/covered controls
+  are guarded; used continuations are withdrawn before dispatch and never retried
+  automatically after refusal or an uncertain/lost response.
+- Native continuation reservation now happens before the awaited read, preventing
+  concurrent reuse of one opaque cursor. Catalog ownership is still checked before
+  and after the read; expiry, capacity and session binding remain unchanged. Invalid
+  request fields are refused before consuming a cursor. Duplicate native page IDs,
+  repeated cursors and conflicting retained identities are not silently adopted.
+- Introduce one presentation-only supplied-code reader shared by requested source,
+  read/write bodies, shell commands and old/new edit fragments. It mounts at most
+  200 newline boundaries / 24,000 UTF-16 units per text window, offers local previous/
+  next and searchable range selection, preserves exact substrings and keeps surrogate
+  pairs together. Newlines, annotations, explicit empty strings and unavailable
+  source distinctions are unchanged. Body positions are not invented file provenance;
+  supplied read offsets retain their existing owner-checked numbering.
+- Short source preserves its existing code/line-number presentation. Append-only
+  updates within the same source/view retain the selected window; replacement,
+  phase, path or view changes reset it and retire stale choices. Existing file
+  surface hover/colors remain owned by the original card. Unified and multi-file
+  diffs remain intact rather than being sliced into synthetic patches.
+- A root local-choice context grants only presentation callbacks and input/scope
+  guards, not a client or any execution capability. Native and standalone source
+  readers share the same existing searchable modal; no implicit filesystem reads,
+  native history reads, command submission or approval population are introduced.
+- Extend the existing authenticated boundary fixture for concurrent cursor reuse,
+  late append isolation, explicit fresh scans, unsupported field refusal without
+  cursor consumption and exact multiline/long-line/Unicode/empty source retention.
+  These gates establish native boundary behavior, not UI partition/rendering or
+  terminal acceptance. No renderer/helper/navigation-matrix tests are added.
+
 ## Still required before claiming parity
 
 - Remaining workspace resource filters/pin customization, global preference persistence beyond

@@ -2,6 +2,7 @@
 import type { SyntaxStyle } from "@opentui/core";
 import { type JSX, Show } from "solid-js";
 import { color } from "../../ui/theme/index.ts";
+import { SuppliedCode } from "./SuppliedCode.tsx";
 
 /** Supplied UI bytes only; no native result, execution or authority identity. */
 export type SuppliedToolSource = {
@@ -39,12 +40,11 @@ export function ToolRequestedSource(props: {
 									? "Supplied current-round source — no retained intent linked; not proof of completion."
 									: "Retained requested source — not proof of execution or completion."}
 						</text>
-						<code
+						<SuppliedCode
+							identity={`${props.phase}:${source().label}`}
 							content={source().content}
 							filetype={source().filetype}
-							syntaxStyle={props.syntax}
-							drawUnstyledText={true}
-							wrapMode="word"
+							syntax={props.syntax}
 						/>
 					</Show>
 				</>
