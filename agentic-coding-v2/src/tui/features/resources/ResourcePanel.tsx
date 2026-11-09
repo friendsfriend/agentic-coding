@@ -321,17 +321,19 @@ export function ResourcePanel(props: {
 					>
 						<box flexDirection="column" gap={1}>
 							<ActionHeader onActivate={() => select(row)}>
-								<text fg={color("primary")}>
-									{props.selected(row, index()) ? "▾" : "▸"}{" "}
-									{String(row.kind ?? row.state ?? "resource")} ·{" "}
-									{String(row.id ?? "identity not supplied")}
+								<box flexDirection="row">
+									<text fg={color("primary")}>
+										{props.selected(row, index()) ? "▾" : "▸"}{" "}
+										{String(row.kind ?? row.state ?? "resource")} ·{" "}
+										{String(row.id ?? "identity not supplied")}
+									</text>
 									<text fg={color("textMuted")}>
 										{` — ${String(row.state ?? "state not supplied")}`}
 										{props.preferences.pins.includes(String(row.id))
 											? " · pinned"
 											: ""}
 									</text>
-								</text>
+								</box>
 							</ActionHeader>
 							<Show when={!member(row)}>
 								<text fg={color("warning")}>
