@@ -1961,3 +1961,32 @@ field legibility, fold behavior at real widths and theme appearance still requir
 verification. Remaining unfinished parity: original specialized file/shell header/section
 composition for the tool families above, native-history merge, selection/clipboard interactions,
 original modal/list compositions, remaining navigation key catalogs and prompt-history details.
+
+## Explicit older-history pages in the reading view
+
+- The reading transcript can now request older native history pages itself. A page is read only
+  when the local mounted window is exhausted and the reader asks for more; nothing polls, and no
+  page request is issued on mount, on focus or on a live publication.
+- A page is an observation above the retained window, never a continuation of it. Its entries keep
+  their native identities, are de-duplicated by identity, are ordered by that identity, are capped
+  at 400 retained entries, and are shown only above the oldest retained entry. A gap between the
+  page and the retained window is explicitly possible and is stated in the view rather than
+  papered over.
+- The read is fenced the way the standalone history browser already is: the conversation identity,
+  history key and connection state are captured before the await, a reply naming another
+  conversation is refused, a repeated continuation cursor is refused, duplicate or non-integer
+  entry identities refuse the whole page, and conflicting bytes under one identity refuse the page
+  instead of replacing it. A failed or uncertain read clears its continuation locally and is never
+  retried automatically.
+- Pages are local reading state: selecting another conversation, remounting or losing the
+  connection clears them. They never replace the live watch, never renumber or reorder native
+  entries, never adopt another conversation and confer no authority to resume, approve or answer.
+
+Biome (369 files, zero diagnostics), full unfiltered type-check, build, help and 49 boundary tests
+(766 assertions) pass; the history read path itself is exercised by the existing authenticated
+gateway fixture (paging, cursor consumption, refusal of foreign cursors and unsupported fields).
+No renderer, mounting, snapshot, presenter or helper test is added, and no terminal acceptance or
+visual parity is claimed: prelude spacing, markers at real widths, and scroll anchoring across a
+merged page still require manual verification. Remaining unfinished parity: original
+specialized file/shell header/section composition, selection/clipboard interactions, original
+modal/list compositions, remaining navigation key catalogs and prompt-history details.

@@ -3937,6 +3937,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 												}
 											}}
 											value={transcript()}
+											history={(() => {
+												const id = sessionId();
+												if (id === null || !isTranscript()) return null;
+												return {
+													client,
+													id,
+													connected: status() === "connected",
+												};
+											})()}
 											freezeWindow={awayFromBottom()}
 											observation={observation()}
 											observationError={observationError()}

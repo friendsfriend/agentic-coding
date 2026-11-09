@@ -42,7 +42,9 @@ import { ToolContentParts } from "./ToolContentParts.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 import { TranscriptRowsContext } from "./TranscriptRows.ts";
 
-/** Local mounted-entry paging only; never a native history reader. */
+/** Local mounted-entry paging, extended by explicit native history pages the
+ * reader asks for. A page is an observation appended above the retained window,
+ * never a continuation of it and never a replacement watch. */
 export type LocalTranscriptPaging = {
 	token: () => object | null;
 	hasOlder: () => boolean;
@@ -59,6 +61,17 @@ export function Transcript(props: {
 	value: TranscriptData | null;
 	observation: "none" | "resynchronizing" | "watching" | "unavailable";
 	observationError: string | null;
+	/** Supplies an explicit history read for this conversation only. */
+	history?: {
+		client: {
+			call: (
+				method: "session.history",
+				input: { id: number; cursor?: string },
+			) => Promise<{ id: number; entries: Data[]; cursor: string | null }>;
+		};
+		id: number;
+		connected: boolean;
+	} | null;
 	enabled: boolean;
 	interactive: boolean;
 	scope: object;
@@ -152,22 +165,129 @@ export function Transcript(props: {
 		});
 		return true;
 	};
+	// Explicitly requested native history pages. Identity, scope and connection
+	// are captured before the await; a late reply can never adopt another owner.
+	const [history, setHistory] = createSignal<{
+		key: string;
+		entries: Data[];
+		cursor: string | null;
+	}>({ key: "", entries: [], cursor: null });
+	const [historyPending, setHistoryPending] = createSignal(false);
+	const [historyError, setHistoryError] = createSignal<string | null>(null);
+	let historyEpoch = 0;
+	const historyKey = () => (props.history ? String(props.history.id) : "");
+	const historyEntries = () =>
+		history().key === historyKey() ? history().entries : [];
+	const historyCursor = () =>
+		history().key === historyKey() ? history().cursor : null;
+	createEffect(() => {
+		historyKey();
+		historyEpoch++;
+		setHistory({ key: historyKey(), entries: [], cursor: null });
+		setHistoryError(null);
+		setHistoryPending(false);
+	});
+	const loadHistory = async () => {
+		const source = props.history;
+		if (!source?.connected || historyPending() || disposed) return false;
+		const epoch = ++historyEpoch,
+			everything = historyKey(),
+			cursor = historyCursor();
+		const current = () =>
+			!disposed &&
+			epoch === historyEpoch &&
+			historyKey() === everything &&
+			props.history?.connected === true;
+		setHistoryPending(true);
+		setHistoryError(null);
+		try {
+			const page = await source.client.call("session.history", {
+				id: source.id,
+				...(cursor === null ? {} : { cursor }),
+			});
+			if (!current()) return false;
+			if (page.id !== source.id)
+				throw new Error("Wrong native history identity; page not adopted");
+			const seen = new Set<number>();
+			for (const entry of page.entries) {
+				if (
+					!Number.isSafeInteger(entry.id) ||
+					Number(entry.id) < 1 ||
+					seen.has(Number(entry.id))
+				)
+					throw new Error(
+						"Duplicate or invalid native history identity; page not adopted",
+					);
+				seen.add(Number(entry.id));
+			}
+			if (cursor !== null && page.cursor === cursor)
+				throw new Error("Repeated native history cursor; page not adopted");
+			const merged = new Map<number, Data>();
+			for (const entry of [...historyEntries(), ...page.entries]) {
+				const id = Number(entry.id),
+					prior = merged.get(id);
+				if (prior && JSON.stringify(prior) !== JSON.stringify(entry))
+					throw new Error(
+						"Conflicting retained history identity; page not adopted",
+					);
+				if (!prior) merged.set(id, entry);
+			}
+			const ordered = [...merged.values()]
+				.sort((left, right) => Number(left.id) - Number(right.id))
+				.slice(-400);
+			setHistory({ key: everything, entries: ordered, cursor: page.cursor });
+			return true;
+		} catch (cause) {
+			if (current())
+				setHistoryError(
+					`${cause instanceof Error ? cause.message : "History read refused"}. No automatic retry; explicitly request the newest page again.`,
+				);
+			return false;
+		} finally {
+			if (current()) setHistoryPending(false);
+		}
+	};
 	const localPaging: LocalTranscriptPaging = {
 		token: window,
-		hasOlder: () => localStart() > 0,
-		loadOlder: () => expandLocal(false),
+		hasOlder: () => localStart() > 0 || historyCursor() !== null,
+		loadOlder: () => {
+			if (expandLocal(false)) return true;
+			if (historyCursor() !== null && !historyPending()) {
+				void loadHistory();
+				return true;
+			}
+			return false;
+		},
 		expandAll: () => expandLocal(true),
 		collapse: () => setLocalWindow(null),
 	};
+	// The reading window, plus any explicitly requested history pages above it.
+	// History entries keep their native identities; nothing is renumbered, and the
+	// two sources are never claimed to be contiguous.
+	const readingEntries = createMemo<Data[]>(() => {
+		const retained = window()?.entries ?? [];
+		const older = historyEntries();
+		if (older.length === 0) return retained;
+		const boundary = Number(retained[0]?.id ?? Number.POSITIVE_INFINITY);
+		return [
+			...older.filter((entry) => Number(entry.id) < boundary),
+			...retained,
+		];
+	});
+	const mergedOlder = createMemo(
+		() => readingEntries().length - (window()?.entries.length ?? 0),
+	);
 	const visibleEntries = createMemo(
 		() =>
 			new Set<unknown>(
-				(window()?.entries ?? []).slice(localStart()).map((entry) => entry.id),
+				readingEntries()
+					.slice(localStart() + mergedOlder())
+					.map((entry) => entry.id),
 			),
 	);
 	const messages = createMemo<Data[]>(() => {
 		const nextCache = new Map<string, { signature: string; value: Data }>();
-		const retained = (window()?.entries ?? []).flatMap((entry) =>
+		const retained = readingEntries().flatMap((entry) =>
 			dataList(entry.model).map((message, index) => {
 				const value = {
 					...message,
@@ -735,12 +855,35 @@ export function Transcript(props: {
 						Unpaired tool activity is unknown outside this history window.
 					</text>
 				</Show>
-				<Show when={localPaging.hasOlder()}>
+				<Show when={localStart() > 0}>
 					<text fg={color("textMuted")} wrapMode="word">
 						{localStart()} older supplied native entries are not mounted. Scroll
-						upward to expand this local window; no native history read is
-						requested.
+						upward to expand this local window first; a native history read
+						happens only after the retained window is exhausted.
 					</text>
+				</Show>
+				<Show when={historyEntries().length > 0}>
+					<text fg={color("textMuted")} wrapMode="word">
+						{`${historyEntries().length} older native history ${
+							historyEntries().length === 1 ? "entry" : "entries"
+						} read explicitly and shown above the retained window. `}
+						They are a separate read: identities are native and never
+						renumbered, a gap between the page and the retained window is
+						possible, and they are not a continuation of the live watch, another
+						conversation's adoption, or authority to resume anything.
+					</text>
+				</Show>
+				<Show when={historyPending()}>
+					<text fg={color("textMuted")}>
+						Reading one older native history page…
+					</text>
+				</Show>
+				<Show when={historyError()}>
+					{(message) => (
+						<text fg={color("warning")} wrapMode="word">
+							{message()}
+						</text>
+					)}
 				</Show>
 				<For each={messageSlots()}>
 					{(messageSlot) => {
