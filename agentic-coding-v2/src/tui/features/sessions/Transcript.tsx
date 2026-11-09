@@ -182,6 +182,7 @@ export function Transcript(props: {
 		history().key === historyKey() ? history().cursor : null;
 	createEffect(() => {
 		historyKey();
+		props.history?.connected;
 		historyEpoch++;
 		setHistory({ key: historyKey(), entries: [], cursor: null });
 		setHistoryError(null);
@@ -238,13 +239,19 @@ export function Transcript(props: {
 			setHistory({ key: everything, entries: ordered, cursor: page.cursor });
 			return true;
 		} catch (cause) {
-			if (current())
+			if (current()) {
+				setHistory((previous) => ({ ...previous, cursor: null }));
 				setHistoryError(
 					`${cause instanceof Error ? cause.message : "History read refused"}. No automatic retry; explicitly request the newest page again.`,
 				);
+			}
 			return false;
 		} finally {
-			if (current()) setHistoryPending(false);
+			// A dropped connection must not strand the in-flight marker: the same
+			// conversation has to be able to ask again once it is connected, so
+			// pending clears for this key even though the reply was not adopted.
+			if (!disposed && epoch === historyEpoch && historyKey() === everything)
+				setHistoryPending(false);
 		}
 	};
 	const localPaging: LocalTranscriptPaging = {
