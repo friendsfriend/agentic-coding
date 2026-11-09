@@ -291,7 +291,7 @@ export type Methods = {
 		input: EnvironmentAction;
 		output: { taskId: number };
 	};
-	"environment.logs": { input: { app: string }; output: unknown };
+	"environment.logs": { input: { app: string }; output: string };
 	"wiki.list": { input: Data; output: Data[] };
 	"wiki.read": {
 		input: { id: string };

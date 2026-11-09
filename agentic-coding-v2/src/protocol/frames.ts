@@ -678,7 +678,12 @@ export function result<M extends Method>(
 	) {
 		if (Array.isArray(value)) list(value);
 		else record(value);
-	} else if (method !== "providers.read" && method !== "environment.logs") {
+	} else if (method === "environment.logs") {
+		// Supplied output, not native log history: the server already tails its own
+		// aggregate to this budget, so anything larger cannot be what it sent.
+		if (typeof value !== "string" || value.length > 64000)
+			throw new Error("Invalid environment log text");
+	} else if (method !== "providers.read") {
 		const data = record(value);
 		const expected =
 			method === "state.subscribe"

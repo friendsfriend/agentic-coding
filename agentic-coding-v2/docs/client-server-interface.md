@@ -158,3 +158,21 @@ Standalone OpenCode/Pi authority adapters and complete selected-specialized pres
 Tool cards additionally name the supplied fields of the native tool families whose results are structural rather than prose: `request_review` (path/title plus recorded review id, state, digest, revision, comments, timestamp), `attach_image`/`attach_evidence` (kind/path/caption plus retained id, media type, filename), `start_task` (`topic`/`profile`/`baseRef`/`workspaceMode` plus recorded task/state/conversation identifiers), `task_result`/`cancel_task` (requested task plus recorded state/status/reason), `environment_action` and `env_start`/`env_status`/`env_stop` (requested apps/action/target/profile/runtime plus recorded state/holders/run). Named values are clipped at 400 characters with an explicit note that the complete value remains under Arguments/Details/Output, and the section states that these are supplied values for this card only: not current child status, completion, approval, adoption or a linked transcript. Unrecognized tools keep the generic retained-output composition, and no field here confers authority.
 
 The client registers no tool that calls `executeTool()`, so v2 never creates nested tool calls: the retained per-call `NestedCallDoc` family stays empty and is deliberately not read or rendered. Live nested slots remain validated and composed defensively (a slot must name its parent task and call), and the sidebar/transcript never infers a parent from ordering.
+
+## Supplied environment output is text, not history
+
+`environment.logs` used to return `unknown`, so the only method whose result the client
+never bounded was also the one whose result the reader pane displayed. It now carries an
+explicit `string` output and is validated at the same client boundary as every other
+result: a non-string value and a value above the server's own 64000 UTF-16 unit tail are
+refused whole rather than truncated or wrapped, and the refusal names the shape it
+expected.
+
+The command behind it also stops being an unchecked identity read. `/logs APP` now
+requires the environments page, an `APP` identity that the currently supplied
+environment observation actually names, and the same post-await fence the other detail
+reads use: the originating view, its detail epoch, the connection state and the supplied
+identity are re-checked before the text is placed into the detail record, so a reply that
+arrives after the reader navigated elsewhere is refused instead of written onto a stale
+view. The accompanying notice states what the text is: a bounded tail of supplied output,
+not native log history, a complete capture or an acknowledgement.

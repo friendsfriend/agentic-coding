@@ -136,6 +136,24 @@ describe("native transcript frames", () => {
 	});
 });
 
+describe("supplied environment output", () => {
+	test("accepts bounded supplied log text and refuses anything else whole", () => {
+		expect(result("environment.logs", "")).toBe("");
+		expect(result("environment.logs", "service started\n")).toBe(
+			"service started\n",
+		);
+		expect(() => result("environment.logs", null)).toThrow(
+			"Invalid environment log text",
+		);
+		expect(() => result("environment.logs", { logs: "text" })).toThrow(
+			"Invalid environment log text",
+		);
+		expect(() => result("environment.logs", "x".repeat(64001))).toThrow(
+			"Invalid environment log text",
+		);
+	});
+});
+
 describe("server envelopes", () => {
 	test("refuses an unknown method and an unversioned frame", () => {
 		expect(() =>

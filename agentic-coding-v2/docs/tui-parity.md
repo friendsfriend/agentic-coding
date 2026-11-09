@@ -1990,3 +1990,20 @@ visual parity is claimed: prelude spacing, markers at real widths, and scroll an
 merged page still require manual verification. Remaining unfinished parity: original
 specialized file/shell header/section composition, selection/clipboard interactions, original
 modal/list compositions, remaining navigation key catalogs and prompt-history details.
+
+## Bounded supplied output in the environment detail
+
+- `/logs APP` no longer hands an unchecked value into the detail pane. It requires the
+  environments page and an app identity the currently supplied environment observation
+  names, and it re-checks the originating view, detail epoch, connection and identity
+  after the await before writing the text.
+- The client refuses a non-string or oversized `environment.logs` result whole, so the
+  pane can only ever display a bounded string. Nothing here polls, retries or infers a
+  newer tail: the reader asks again.
+
+Biome (369 files, zero diagnostics), full unfiltered type-check, build, help and 50
+boundary tests (771 assertions) pass. No renderer, mounting, snapshot, presenter or helper
+test is added, and no terminal acceptance is claimed: the detail pane's appearance at real
+widths, and the log tail's colour and fold behaviour, still require manual verification.
+Remaining unfinished parity: original specialized file/shell header/section composition,
+original modal/list compositions and prompt-history details.

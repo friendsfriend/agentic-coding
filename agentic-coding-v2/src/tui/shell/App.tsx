@@ -3383,10 +3383,32 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					setEvidence(value);
 					clear();
 				} else if (command === "logs") {
+					const epoch = detailEpoch,
+						observed = dataList(state()?.environments.projects).some(
+							(project) => String(project.id) === args,
+						);
+					if (origin.page !== "environments" || !observed)
+						throw new Error(
+							"Select an observed environment project identity on the environments page",
+						);
 					const logs = await client.call("environment.logs", { app: args });
+					if (
+						navigation.current !== origin ||
+						epoch !== detailEpoch ||
+						status() !== "connected" ||
+						!dataList(state()?.environments.projects).some(
+							(project) => String(project.id) === args,
+						)
+					)
+						throw new Error(
+							"Environment selection changed; read supplied output explicitly again",
+						);
 					origin.detail = { logs };
 					clear();
 					update();
+					setNotice(
+						`Read at most the newest 64000 UTF-16 units of supplied ${args} output. Not native log history, a complete capture or an acknowledgement.`,
+					);
 				} else if (["model", "abort", "compact"].includes(command)) {
 					const id = sessionId();
 					if (id === null)
