@@ -117,26 +117,15 @@ export function WikiPanel(props: {
 	};
 	return (
 		<box flexDirection="column" gap={1}>
-			<text fg={color("primary")}>
-				Native wiki · private pi-durable document storage
-			</text>
-			<text wrapMode="word">
-				Pages/comments are untrusted documentation, never approval or execution
-				authority. No legacy wiki or arbitrary filesystem import. Native
-				retention is 64 pages/128 comments, without deletion or pruning. Local
-				ranges cannot recover unretained records. Save needs exact fresh
-				snapshot confirmation. Comment submission admits an explicit read-only
-				wiki-comment task with agreed profile/repository/Git base; proposals
-				never apply themselves.
+			<text fg={color("primary")}>Wiki · {props.rows.length} pages</text>
+			<text wrapMode="word" fg={color("textMuted")}>
+				Comments are proposals: submitting one admits a read-only review task
 			</text>
 			<Show when={props.error}>
 				<text fg={color("warning")}>{props.error}</text>
 			</Show>
 			<Show when={!props.connected || !props.fresh}>
-				<text fg={color("warning")}>
-					Documents are cached/disconnected; no mutation replay or command
-					preparation. Local drafts and source browsing confer no authority.
-				</text>
+				<text fg={color("warning")}>Disconnected · showing the last read</text>
 			</Show>
 			<SuppliedRecordWindow
 				rows={props.rows}
@@ -289,13 +278,12 @@ export function WikiPanel(props: {
 				}}
 			</Show>
 			<text fg={color("primary")}>
-				Ephemeral {props.mode} JSON editor · not saved in viewpoints
+				{props.mode === "page" ? "Page draft" : "Comment draft"}
 			</text>
-			<text wrapMode="word">
-				Page: id/title/content/baseRevision (0 for a new page). Comment:
-				pageId/pageRevision/comment/profile/repository/baseRef/requestId. All
-				text/targets explicit; no credentials. Editing never submits; automatic
-				reads never replace existing drafts.
+			<text wrapMode="word" fg={color("textMuted")}>
+				{props.mode === "page"
+					? "id · title · content · baseRevision (0 for a new page)"
+					: "pageId · pageRevision · comment · profile · repository · baseRef · requestId"}
 			</text>
 			<ActionHeader
 				scope={controls()}
@@ -304,7 +292,7 @@ export function WikiPanel(props: {
 					if (ready()) props.edit("page");
 				}}
 			>
-				<text fg={color("accent")}>Edit page candidate JSON</text>
+				<text fg={color("accent")}>Edit page</text>
 			</ActionHeader>
 			<ActionHeader
 				scope={controls()}
@@ -313,32 +301,32 @@ export function WikiPanel(props: {
 					if (ready()) props.edit("comment");
 				}}
 			>
-				<text fg={color("accent")}>Edit read-only comment-task JSON</text>
+				<text fg={color("accent")}>Edit comment</text>
 			</ActionHeader>
-			<LocalJsonEditor
-				value={props.mode === "page" ? props.pageDraft : props.commentDraft}
-				scope={editorScope()}
-				editing={props.editing}
-				interactive={ready()}
-				enter={() => {
-					if (ready()) props.edit(props.mode);
-				}}
-				change={(value) => {
-					if (ready()) {
-						if (props.mode === "page") props.changePage(value);
-						else props.changeComment(value);
-					}
-				}}
-			/>
+			<Show when={props.editing}>
+				<LocalJsonEditor
+					value={props.mode === "page" ? props.pageDraft : props.commentDraft}
+					scope={editorScope()}
+					editing={props.editing}
+					interactive={ready()}
+					enter={() => {
+						if (ready()) props.edit(props.mode);
+					}}
+					change={(value) => {
+						if (ready()) {
+							if (props.mode === "page") props.changePage(value);
+							else props.changeComment(value);
+						}
+					}}
+				/>
+			</Show>
 			<Show when={ready()}>
 				<ActionHeader
 					scope={controls()}
 					interactive={ready()}
 					onActivate={() => prepare("/wiki-new")}
 				>
-					<text fg={color("accent")}>
-						Prepare resetting page editor for a new page
-					</text>
+					<text fg={color("accent")}>New page</text>
 				</ActionHeader>
 				<Show when={document()}>
 					<ActionHeader
@@ -348,10 +336,7 @@ export function WikiPanel(props: {
 							if (document()) prepare("/wiki-reset");
 						}}
 					>
-						<text fg={color("accent")}>
-							Prepare resetting both editors to selected revision (discards
-							edits only on submission)
-						</text>
+						<text fg={color("textMuted")}>Reload this page</text>
 					</ActionHeader>
 				</Show>
 				<ActionHeader
@@ -359,19 +344,14 @@ export function WikiPanel(props: {
 					interactive={ready()}
 					onActivate={() => prepare("/wiki-preview")}
 				>
-					<text fg={color("accent")}>
-						Prepare immutable page preview (no save)
-					</text>
+					<text fg={color("accent")}>Preview page</text>
 				</ActionHeader>
 				<ActionHeader
 					scope={controls()}
 					interactive={ready()}
 					onActivate={() => prepare("/wiki-comment")}
 				>
-					<text fg={color("warning")}>
-						Prepare explicit read-only comment-task admission (submit only after
-						inspecting JSON)
-					</text>
+					<text fg={color("warning")}>Submit comment for review</text>
 				</ActionHeader>
 			</Show>
 			<Show when={props.candidate} keyed>

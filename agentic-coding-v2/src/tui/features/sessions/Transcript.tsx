@@ -849,7 +849,9 @@ export function Transcript(props: {
 						interactive={props.interactive}
 						onActivate={() => chooseCards()}
 					>
-						<text fg={color("textMuted")}>▸ Select card</text>
+						<text fg={color("textMuted")}>
+							▸ Jump to a card · {controls().length}
+						</text>
 					</ActionHeader>
 				</Show>
 				<Show when={standalone().some((row) => row.ambiguous)}>

@@ -65,13 +65,11 @@ export function TaskPanel(props: {
 	);
 	return (
 		<box flexDirection="column" gap={1}>
-			<text fg={color("primary")}>
-				Native tasks · {props.rows.length} matching
-			</text>
+			<text fg={color("primary")}>Tasks · {props.rows.length}</text>
 			<SuppliedRecordWindow
 				rows={props.rows}
 				scope={source()}
-				label="task catalog records"
+				label="tasks"
 				title={(row) =>
 					`#${String(row.id ?? "not supplied")} · ${String(row.skill ?? "not supplied")} · ${String(row.detail ?? "not supplied")}`
 				}
