@@ -2007,3 +2007,31 @@ test is added, and no terminal acceptance is claimed: the detail pane's appearan
 widths, and the log tail's colour and fold behaviour, still require manual verification.
 Remaining unfinished parity: original specialized file/shell header/section composition,
 original modal/list compositions and prompt-history details.
+
+## File-family and shell headers name the verb and the supplied extent
+
+- `read`, `write` and `edit` cards use the original two-part header again: the verb and the
+  path in the label (`Read src/x.ts`, `Edit src/x.ts`), and the extent the supplied result
+  actually reports in the hint. Pending calls use the pending verb (`Reading`, `Writing`,
+  `Editing`), so an unreturned call is never spelled as a completed one.
+- Every hint part is a supplied value or absent. A `read` hint is the supplied range
+  (`12-40 of 900`), the supplied continuation notice (`+140 more`), or the line count of
+  the file text that was actually supplied; a pending read shows only its requested
+  `from N` / `N lines`. A `write` hint is the line count of the supplied content, plus the
+  character count while it streams. An `edit` hint is the supplied edit count plus `+a −b`
+  counted from the supplied patch body, and is omitted when that body is not a patch.
+  Nothing is counted from a value the client does not have.
+- `bash`/`shell` cards keep the command as the header and take their hint from the
+  supplied output: `exit N` when the output reports an exit line, `failed` for an error
+  result, otherwise the output line count in the original wording. A pending shell keeps
+  no hint.
+- The tool name is no longer repeated as the hint for these families; the family glyph and
+  the verb carry it, as in the original composition. Unrecognized tools keep their generic
+  label/hint pairing.
+
+Biome (369 files, zero diagnostics), full unfiltered type-check, build, help and 50 boundary
+tests (771 assertions) pass. No renderer, mounting, snapshot, presenter or helper test is
+added, and no terminal acceptance or visual parity is claimed: header spacing at real
+widths, hint truncation behaviour and how the two-part header reads with a long path still
+require manual verification. Remaining unfinished parity: original modal/list compositions,
+prompt-history details and the terminal interaction audit.

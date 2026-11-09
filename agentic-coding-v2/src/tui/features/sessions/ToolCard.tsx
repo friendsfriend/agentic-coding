@@ -299,7 +299,103 @@ export function ToolCard(props: {
 						: string(args().app) ||
 							string(args().title) ||
 							string(args().query);
+	// Original file-family headers name the verb, and their hint carries the extent
+	// that the supplied result actually reports. A pending call uses the pending
+	// verb, so an unreturned read is never spelled as a completed one.
+	const fileVerbs: Record<string, { done: string; pending: string }> = {
+		read: { done: "Read", pending: "Reading" },
+		write: { done: "Write", pending: "Writing" },
+		edit: { done: "Edit", pending: "Editing" },
+	};
+	const countLines = (text: string) => {
+		if (text.length === 0) return 0;
+		let lines = 1;
+		for (let index = 0; index < text.length; index++)
+			if (text.charCodeAt(index) === 10) lines++;
+		return text.endsWith("\n") ? lines - 1 : lines;
+	};
+	const formatChars = (count: number) =>
+		count >= 10000
+			? `${Math.round(count / 1000)}K chars`
+			: count >= 1000
+				? `${(count / 1000).toFixed(1)}K chars`
+				: `${count} chars`;
+	const positive = (value: unknown) =>
+		typeof value === "number" && Number.isSafeInteger(value) && value > 0
+			? value
+			: undefined;
+	const patchCounts = () => {
+		const supplied = patch();
+		if (!supplied) return undefined;
+		let added = 0,
+			removed = 0;
+		for (const line of supplied.split("\n")) {
+			if (line.startsWith("+") && !line.startsWith("+++")) added++;
+			else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+		}
+		return added > 0 || removed > 0 ? `+${added} −${removed}` : undefined;
+	};
+	const readHint = () => {
+		if (!props.result) {
+			const offset = positive(args().offset),
+				limit = positive(args().limit);
+			return (
+				[
+					offset === undefined ? undefined : `from ${offset}`,
+					limit === undefined ? undefined : `${limit} lines`,
+				]
+					.filter((part): part is string => part !== undefined)
+					.join(" · ") || undefined
+			);
+		}
+		const notice = readProjection().notice,
+			range = notice
+				? /^\[Showing lines (\d+)-(\d+) of (\d+)/.exec(notice)
+				: null;
+		if (range) return `${range[1]}-${range[2]} of ${range[3]}`;
+		const more = notice ? /(\d+) more lines/.exec(notice) : null;
+		if (more) return `+${more[1]} more`;
+		const file = readProjection().file;
+		return file === null || file === ""
+			? undefined
+			: `${countLines(file)} lines`;
+	};
+	const fileHint = () => {
+		if (name() === "read") return readHint();
+		const content = string(args().content);
+		if (name() === "write") {
+			if (content === "") return undefined;
+			const lines = `${countLines(content)} lines`;
+			// A streaming write is measured, not rendered; the finished one keeps the
+			// line count alone, exactly as the original header did.
+			return props.result ? lines : `${lines} · ${formatChars(content.length)}`;
+		}
+		const edits = Array.isArray(args().edits)
+				? (args().edits as unknown[]).length
+				: 0,
+			counts = patchCounts();
+		return (
+			[edits > 0 ? `${edits} edit${edits === 1 ? "" : "s"}` : undefined, counts]
+				.filter((part): part is string => part !== undefined)
+				.join(" · ") || undefined
+		);
+	};
+	const shellHint = () => {
+		// Only a supplied result can report an exit line; a pending shell has no
+		// hint, exactly as the original card had none.
+		if (!props.result) return undefined;
+		const exit = /exited with code (\d+)/.exec(output());
+		if (exit) return `exit ${exit[1]}`;
+		if (props.result.isError === true) return "failed";
+		const text = output();
+		return text.length === 0 ? undefined : `${countLines(text)} lines`;
+	};
 	const headerLabel = () => {
+		const fileVerb = fileVerbs[name()];
+		if (fileVerb) {
+			const path = string(args().path);
+			return `${props.result ? fileVerb.done : fileVerb.pending} ${path || name()}`;
+		}
 		if (!browserActions.has(name())) return summary() || name();
 		const verb = name().slice("browser_".length).replaceAll("_", " ");
 		const target =
@@ -517,7 +613,15 @@ export function ToolCard(props: {
 						browser={name().startsWith("browser_")}
 						icon={Object.hasOwn(icons, name()) ? (icons[name()] ?? "•") : "•"}
 						label={headerLabel()}
-						hint={headerLabel() !== name() ? name() : undefined}
+						hint={
+							fileVerbs[name()]
+								? fileHint()
+								: shellSource()
+									? shellHint()
+									: headerLabel() !== name()
+										? name()
+										: undefined
+						}
 						timestamp={props.result?.timestamp}
 						durationMs={props.result?.durationMs}
 						onToggle={() => activate()}
