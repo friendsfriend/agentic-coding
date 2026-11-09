@@ -141,7 +141,7 @@ export function ResourceDetails(props: {
 						}}
 					>
 						<text fg={color("accent")}>
-							Open supplied active task #{String(props.row.activeTask)}
+							Open task #{String(props.row.activeTask)}
 						</text>
 					</ActionHeader>
 				</Show>
@@ -150,20 +150,13 @@ export function ResourceDetails(props: {
 						props.row.lastError !== undefined && props.row.lastError !== null
 					}
 				>
-					{disclosure(
-						"error",
-						"Last recorded error (not current outcome)",
-						props.row.lastError,
-					)}
+					{disclosure("error", "Last error", props.row.lastError)}
 				</Show>
-				{disclosure("timing", "Supplied timing and invocation fields", {
+				{disclosure("timing", "Timing and invocation", {
 					timing: props.row.timing,
 					invocation: props.row.invocation,
 				})}
-				<text fg={color("textMuted")}>
-					Retained occurrences: {history().length}. Display order is supplied;
-					missing/clipped history never proves no activity.
-				</text>
+				<text fg={color("textMuted")}>Occurrences · {history().length}</text>
 				<SuppliedRecordWindow
 					rows={history()}
 					scope={source()}
@@ -182,8 +175,8 @@ export function ResourceDetails(props: {
 							paddingLeft={1}
 						>
 							<text wrapMode="word">
-								{index() + 1}. Due {String(entry.due ?? "not supplied")} (epoch
-								ms) · recorded outcome {String(entry.result ?? "not supplied")}
+								{index() + 1}. {String(entry.due ?? "not supplied")} ·{" "}
+								{String(entry.result ?? "outcome not supplied")}
 							</text>
 							<Show when={taskId(entry.task)}>
 								<ActionHeader
@@ -199,23 +192,15 @@ export function ResourceDetails(props: {
 									}}
 								>
 									<text fg={color("accent")}>
-										Open supplied occurrence task #{String(entry.task)}
+										Open task #{String(entry.task)}
 									</text>
 								</ActionHeader>
 							</Show>
-							{disclosure(
-								`occurrence:${index()}`,
-								"Supplied occurrence record",
-								entry,
-							)}
+							{disclosure(`occurrence:${index()}`, "Record", entry)}
 						</box>
 					)}
 				</SuppliedRecordWindow>
-				{disclosure(
-					"history",
-					"Serialized retained occurrence history",
-					props.row.history,
-				)}
+				{disclosure("history", "History record", props.row.history)}
 				<Show
 					when={
 						resourceCommandToken(props.row.id) && taskId(props.row.revision)
@@ -234,23 +219,16 @@ export function ResourceDetails(props: {
 								);
 						}}
 					>
-						<text fg={color("warning")}>
-							Prepare revision-fenced deletion (does not submit or cancel
-							admitted tasks)
-						</text>
+						<text fg={color("warning")}>Delete schedule</text>
 					</ActionHeader>
 				</Show>
 			</Show>
 			<Show when={props.kind === "environments"}>
-				<text wrapMode="word">
-					Repository {String(props.row.repository ?? "not supplied")} · targets{" "}
-					{targets().length} · matching supplied runs {runs().length}
+				<text wrapMode="word" fg={color("textMuted")}>
+					{String(props.row.repository ?? "no repository")} · {targets().length}{" "}
+					targets · {runs().length} runs
 				</text>
-				{disclosure(
-					"requires",
-					"Supplied prerequisites (not readiness)",
-					props.row.requires,
-				)}
+				{disclosure("requires", "Prerequisites", props.row.requires)}
 				<For
 					each={["run", "build", "test"].filter((action) =>
 						targets().some((target) => target.action === action),
@@ -265,7 +243,11 @@ export function ResourceDetails(props: {
 							}}
 						>
 							<text fg={color("accent")}>
-								Choose supplied {action} target/profile bundle (prepare only)
+								{action === "run"
+									? "Run"
+									: action === "build"
+										? "Build"
+										: "Test"}
 							</text>
 						</ActionHeader>
 					)}
@@ -282,21 +264,15 @@ export function ResourceDetails(props: {
 					{(target, index) => (
 						<box flexDirection="column" gap={1}>
 							<text fg={color("primary")}>
-								{index() + 1}. {String(target.id ?? "identity not supplied")} ·{" "}
-								{String(target.action ?? "not supplied")} ·{" "}
-								{String(target.runtime ?? "not supplied")} · profile{" "}
-								{String(target.profile ?? "not supplied")}
+								{index() + 1}. {String(target.id ?? "no identity")} ·{" "}
+								{String(target.action ?? "no action")} ·{" "}
+								{String(target.runtime ?? "no runtime")} ·{" "}
+								{String(target.profile ?? "no profile")}
 							</text>
 							<Show when={!targetMember(target)}>
-								<text fg={color("warning")}>
-									Ambiguous target identity; command preparation disabled.
-								</text>
+								<text fg={color("warning")}>Ambiguous target · disabled</text>
 							</Show>
-							{disclosure(
-								`target:${index()}`,
-								"Supplied target definition / availability",
-								target,
-							)}
+							{disclosure(`target:${index()}`, "Target definition", target)}
 							<Show
 								when={
 									targetMember(target) &&
@@ -321,8 +297,7 @@ export function ResourceDetails(props: {
 									}}
 								>
 									<text fg={color("accent")}>
-										Prepare supplied {String(target.action)} task; native exact
-										approval remains required
+										Prepare {String(target.action)}
 									</text>
 								</ActionHeader>
 							</Show>
@@ -346,11 +321,11 @@ export function ResourceDetails(props: {
 							gap={1}
 						>
 							<text wrapMode="word">
-								{index() + 1}. Run {String(run.id ?? "identity not supplied")} ·{" "}
-								{String(run.state ?? "state not supplied")} · owner #
-								{String(run.owner ?? "not supplied")} · recorded readiness{" "}
-								{String(run.ready ?? "unknown")} · revision{" "}
-								{String(run.revision ?? "not supplied")}
+								{index() + 1}. {String(run.id ?? "no identity")} ·{" "}
+								{String(run.state ?? "no state")} · owner #
+								{String(run.owner ?? "none")} · ready{" "}
+								{String(run.ready ?? "unknown")} · rev{" "}
+								{String(run.revision ?? "none")}
 							</text>
 							<Show when={runMember(run) && taskId(run.owner)}>
 								<ActionHeader
@@ -362,28 +337,20 @@ export function ResourceDetails(props: {
 									}}
 								>
 									<text fg={color("accent")}>
-										Open exact supplied owner task (not lease adoption)
+										Open owner task #{String(run.owner)}
 									</text>
 								</ActionHeader>
 							</Show>
 							<Show when={!runMember(run)}>
 								<text fg={color("warning")}>
-									Ambiguous supplied run identity; owner navigation disabled.
+									Ambiguous run · owner navigation disabled
 								</text>
 							</Show>
-							{disclosure(
-								`run:${index()}`,
-								"Supplied run / idle / cleanup record; not lease authority",
-								run,
-							)}
+							{disclosure(`run:${index()}`, "Run record", run)}
 						</box>
 					)}
 				</SuppliedRecordWindow>
-				{disclosure(
-					"waiters",
-					"Supplied matching acquisition waiters",
-					waiters(),
-				)}
+				{disclosure("waiters", "Waiters", waiters())}
 				<Show when={resourceCommandToken(props.row.id)}>
 					<ActionHeader
 						scope={controls()}
@@ -393,9 +360,7 @@ export function ResourceDetails(props: {
 								prepare(`/logs ${props.row.id}`);
 						}}
 					>
-						<text fg={color("accent")}>
-							Prepare explicit logs read (no restart, release or takeover)
-						</text>
+						<text fg={color("accent")}>Logs</text>
 					</ActionHeader>
 				</Show>
 			</Show>

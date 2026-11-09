@@ -148,19 +148,14 @@ export function DiagnosticsComposer(props: {
 			borderColor={color("border")}
 			paddingTop={1}
 		>
-			<text fg={color("primary")}>
-				Protected read-only diagnostics composer
-			</text>
+			<text fg={color("primary")}>Diagnostics</text>
 			<text wrapMode="word" fg={color("textMuted")}>
-				No backend request on navigation, editor focus or selection. This only
-				prepares an unsent request in an existing owned workspace-write
-				conversation. Draft stays local, outside input history, bookmarks and
-				viewpoints.
+				Prepares an unsent read-only request in an owned conversation · nothing
+				executes here
 			</text>
 			<Show when={!props.connected || !props.fresh}>
 				<text fg={color("warning")}>
-					Cached ownership or disconnected client; owner selection and request
-					preparation unavailable. Local text remains editable.
+					Disconnected · owner selection unavailable, text stays editable
 				</text>
 			</Show>
 			<SuppliedRecordWindow
@@ -182,17 +177,15 @@ export function DiagnosticsComposer(props: {
 						}}
 					>
 						<text fg={color("accent")}>
-							Choose supplied owner task #{String(session.task)} / conversation
-							#{session.id}
-							{String(session.task) === draft().task ? " (selected)" : ""}
+							Owner task #{String(session.task)} · conversation #{session.id}
+							{String(session.task) === draft().task ? " · selected" : ""}
 						</text>
 					</ActionHeader>
 				)}
 			</SuppliedRecordWindow>
 			<Show when={!owners().length}>
 				<text fg={color("warning")}>
-					No unique writable workspace-write task/conversation owner supplied.
-					Nothing will be submitted or automatically created.
+					No writable conversation is available to own a diagnostic request
 				</text>
 			</Show>
 			<ActionHeader
@@ -208,11 +201,8 @@ export function DiagnosticsComposer(props: {
 				}}
 			>
 				<text fg={color("accent")}>
-					Operation:{" "}
-					{draft().kind === "http"
-						? "reviewed HTTP GET"
-						: "reviewed PostgreSQL SELECT/WITH"}{" "}
-					· switch locally
+					{draft().kind === "http" ? "HTTP GET" : "PostgreSQL SELECT/WITH"}
+					{" · switch"}
 				</text>
 			</ActionHeader>
 			<For each={["app", "target", "body"] as const}>

@@ -5,6 +5,7 @@ import type { UiResourcePreferences } from "../../../protocol/viewpoints.ts";
 import { dataList } from "../../client/connection.ts";
 import { Selectable } from "../../presentation/components/Selectable.tsx";
 import { ActionHeader as NativeActionHeader } from "../../ui/ActionHeader.tsx";
+import { DetailsFold } from "../../ui/DetailsFold.tsx";
 import type { LocalChoice } from "../../ui/LocalChoice.ts";
 import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
@@ -107,9 +108,9 @@ export function ResourcePanel(props: {
 			rows: targets.map((target) => ({
 				key: String(target.id),
 				label: String(target.id),
-				detail: `${String(target.runtime)} · profile: ${String(target.profile ?? "not supplied")} · availability: ${JSON.stringify(target.availability ?? "not supplied")}`,
+				detail: `${String(target.runtime)} · ${String(target.profile ?? "no profile")} · ${JSON.stringify(target.availability ?? "not supplied")}`,
 			})),
-			note: "Supplied runtime/profile bundle · command preparation only · native approval still required",
+			note: "Supplied target · approval still required",
 			valid,
 			choose: (key) => {
 				if (!valid() || !targets.some((target) => target.id === key))
@@ -145,7 +146,7 @@ export function ResourcePanel(props: {
 			title,
 			rows: choices,
 			initialKey,
-			note: "Local display state only · no reads, execution, leases or approval",
+			note: "Display state only",
 			valid,
 			choose: (key) =>
 				valid() && choices.some((row) => row.key === key) && apply(key),
@@ -225,28 +226,25 @@ export function ResourcePanel(props: {
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={color("primary")}>
-				{props.kind === "schedules"
-					? "Native schedules"
-					: "Configured native environments"}{" "}
-				· {props.rows.length} matching
+				{props.kind === "schedules" ? "Schedules" : "Environments"} ·{" "}
+				{props.rows.length}
+				{props.connected ? "" : " · disconnected, last read"}
 			</text>
-			<text fg={color("textMuted")}>
-				{props.connected
-					? "Last observed inventory; not live readiness or execution authority"
-					: "Cached inventory; current activity unknown"}
-			</text>
-			<box flexDirection="column" gap={1}>
-				<text fg={color("textMuted")} wrapMode="word">
-					Text filter: {props.filter || "none"} · category:{" "}
-					{props.preferences.category ?? "all"} · order:{" "}
-					{props.preferences.order} · {props.preferences.pins.length} local pins
-					(missing pins retained, never adopted)
-				</text>
+			<DetailsFold
+				label="Filter and order"
+				summary={[
+					props.filter ? `filter ${props.filter}` : "no filter",
+					props.preferences.category ?? "all categories",
+					`${props.preferences.order} order`,
+					`${props.preferences.pins.length} pinned`,
+				].join(" · ")}
+				scope={controlScope()}
+			>
 				<ActionHeader onActivate={searchRows}>
-					<text fg={color("accent")}>Search matching resources</text>
+					<text fg={color("accent")}>Find a resource</text>
 				</ActionHeader>
 				<ActionHeader onActivate={categoryChoice}>
-					<text fg={color("accent")}>Choose supplied category</text>
+					<text fg={color("accent")}>Category</text>
 				</ActionHeader>
 				<ActionHeader
 					onActivate={() => {
@@ -258,15 +256,13 @@ export function ResourcePanel(props: {
 					}}
 				>
 					<text fg={color("accent")}>
-						{props.preferences.pinnedOnly
-							? "Show all matching rows"
-							: "Show pinned rows only"}
+						{props.preferences.pinnedOnly ? "Show all" : "Show pinned only"}
 					</text>
 				</ActionHeader>
 				<ActionHeader
 					onActivate={() =>
 						displayChoice(
-							"Choose local resource ordering",
+							"Order",
 							[
 								{
 									key: "inventory",
@@ -286,28 +282,21 @@ export function ResourcePanel(props: {
 						)
 					}
 				>
-					<text fg={color("accent")}>Choose resource ordering</text>
+					<text fg={color("accent")}>Order</text>
 				</ActionHeader>
 				<ActionHeader
 					onActivate={() => {
 						if (props.interactive) props.prepare("/filter ");
 					}}
 				>
-					<text fg={color("accent")}>
-						Prepare text filter command (does not replace a draft)
-					</text>
+					<text fg={color("accent")}>Filter text</text>
 				</ActionHeader>
-			</box>
+			</DetailsFold>
 			<Show when={props.rows.length === 0}>
 				<text fg={color("textMuted")}>
-					No supplied rows match these display preferences. Hidden selection is
-					retained; no replacement resource is chosen.
-				</text>
-			</Show>
-			<Show when={props.kind === "schedules"}>
-				<text fg={color("textMuted")}>
-					Create/update stays with the orchestrator. Deletion retires future
-					timing, not an already admitted task.
+					{props.inventory.length === 0
+						? "Nothing configured yet."
+						: "No rows match the filter."}
 				</text>
 			</Show>
 			<SuppliedRecordWindow
@@ -334,25 +323,27 @@ export function ResourcePanel(props: {
 							<ActionHeader onActivate={() => select(row)}>
 								<text fg={color("primary")}>
 									{props.selected(row, index()) ? "▾" : "▸"}{" "}
-									{String(row.id ?? "identity not supplied")} ·{" "}
-									{String(row.state ?? row.kind ?? "unknown")}
-									{props.preferences.pins.includes(String(row.id))
-										? " · pinned"
-										: ""}
+									{String(row.kind ?? row.state ?? "resource")} ·{" "}
+									{String(row.id ?? "identity not supplied")}
+									<text fg={color("textMuted")}>
+										{` — ${String(row.state ?? "state not supplied")}`}
+										{props.preferences.pins.includes(String(row.id))
+											? " · pinned"
+											: ""}
+									</text>
 								</text>
 							</ActionHeader>
 							<Show when={!member(row)}>
 								<text fg={color("warning")}>
-									Missing or ambiguous resource identity; navigation/preparation
-									disabled.
+									Identity is missing or ambiguous · navigation disabled
 								</text>
 							</Show>
 							<Show when={props.selected(row, index())}>
 								<ActionHeader onActivate={() => togglePin(row)}>
 									<text fg={color("accent")}>
 										{props.preferences.pins.includes(String(row.id))
-											? "Unpin this resource (display only)"
-											: "Pin this resource (display only)"}
+											? "Unpin"
+											: "Pin"}
 									</text>
 								</ActionHeader>
 								<ResourceDetails

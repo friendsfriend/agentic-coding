@@ -109,6 +109,7 @@ import { type Route, routeKey } from "../presentation/routes.ts";
 import { ActionScope } from "../ui/ActionScope.tsx";
 import { CommandPalette } from "../ui/CommandPalette.tsx";
 import { type ClipboardResult, copyToClipboard } from "../ui/clipboard.ts";
+import { DetailsFold } from "../ui/DetailsFold.tsx";
 import {
 	actionKeybinds,
 	bindings,
@@ -4359,82 +4360,94 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										current().page === "observability"
 									}
 								>
-									<EnvironmentWorkbench
+									<DetailsFold
+										label="Environment operations"
+										summary="reads, drafts and native intentions"
 										scope={workspaceScope()}
-										interactive={!helpOpen() && !paletteOpen() && !busy()}
-										fresh={snapshotFresh()}
-										projects={dataList(state()?.environments.projects)}
-										choose={openLocalChoice}
-										client={client}
-										memory={environmentEditor()}
-										remember={setEnvironmentEditor}
-										focused={
-											contentFocused() &&
-											!helpOpen() &&
-											resourceEditor() !== "diagnostics"
-										}
-										editing={
-											settingsEditing() &&
-											!helpOpen() &&
-											resourceEditor() !== "diagnostics"
-										}
-										connected={status() === "connected"}
-										resource={current().resource}
-										edit={(value) => {
-											if (value) {
-												setResourceEditor("workbench");
-												setSettingsEditing(true);
-											} else if (resourceEditor() === "workbench") {
-												setResourceEditor(null);
-												setSettingsEditing(false);
+									>
+										<EnvironmentWorkbench
+											scope={workspaceScope()}
+											interactive={!helpOpen() && !paletteOpen() && !busy()}
+											fresh={snapshotFresh()}
+											projects={dataList(state()?.environments.projects)}
+											choose={openLocalChoice}
+											client={client}
+											memory={environmentEditor()}
+											remember={setEnvironmentEditor}
+											focused={
+												contentFocused() &&
+												!helpOpen() &&
+												resourceEditor() !== "diagnostics"
 											}
-										}}
-									/>
-									<DiagnosticsComposer
-										fresh={snapshotFresh()}
-										memory={diagnosticDraft()}
-										remember={setDiagnosticDraft}
-										tasks={state()?.tasks ?? []}
-										sessions={state()?.sessions ?? []}
-										connected={status() === "connected"}
-										focused={
-											contentFocused() &&
-											!helpOpen() &&
-											resourceEditor() !== "workbench"
-										}
-										editing={
-											settingsEditing() &&
-											!helpOpen() &&
-											resourceEditor() !== "workbench"
-										}
-										edit={(value) => {
-											if (value) {
-												setResourceEditor("diagnostics");
-												setSettingsEditing(true);
-											} else if (resourceEditor() === "diagnostics") {
-												setResourceEditor(null);
-												setSettingsEditing(false);
+											editing={
+												settingsEditing() &&
+												!helpOpen() &&
+												resourceEditor() !== "diagnostics"
 											}
-										}}
-										prepare={(conversation, content) => {
-											if (
-												!snapshotFresh() ||
-												!state()?.sessions.some(
-													(session) =>
-														session.id === conversation &&
-														session.writable &&
-														session.task !== null,
-												)
-											) {
-												setNotice(
-													"Native diagnostic owner is no longer writable; draft remains unsent.",
-												);
-												return false;
+											connected={status() === "connected"}
+											resource={current().resource}
+											edit={(value) => {
+												if (value) {
+													setResourceEditor("workbench");
+													setSettingsEditing(true);
+												} else if (resourceEditor() === "workbench") {
+													setResourceEditor(null);
+													setSettingsEditing(false);
+												}
+											}}
+										/>
+									</DetailsFold>
+									<DetailsFold
+										label="Diagnostics"
+										summary="prepare a diagnostic request"
+										scope={workspaceScope()}
+									>
+										<DiagnosticsComposer
+											fresh={snapshotFresh()}
+											memory={diagnosticDraft()}
+											remember={setDiagnosticDraft}
+											tasks={state()?.tasks ?? []}
+											sessions={state()?.sessions ?? []}
+											connected={status() === "connected"}
+											focused={
+												contentFocused() &&
+												!helpOpen() &&
+												resourceEditor() !== "workbench"
 											}
-											go("session", String(conversation));
-											return prepareCommand(content);
-										}}
-									/>
+											editing={
+												settingsEditing() &&
+												!helpOpen() &&
+												resourceEditor() !== "workbench"
+											}
+											edit={(value) => {
+												if (value) {
+													setResourceEditor("diagnostics");
+													setSettingsEditing(true);
+												} else if (resourceEditor() === "diagnostics") {
+													setResourceEditor(null);
+													setSettingsEditing(false);
+												}
+											}}
+											prepare={(conversation, content) => {
+												if (
+													!snapshotFresh() ||
+													!state()?.sessions.some(
+														(session) =>
+															session.id === conversation &&
+															session.writable &&
+															session.task !== null,
+													)
+												) {
+													setNotice(
+														"Native diagnostic owner is no longer writable; draft remains unsent.",
+													);
+													return false;
+												}
+												go("session", String(conversation));
+												return prepareCommand(content);
+											}}
+										/>
+									</DetailsFold>
 								</Show>
 								<Show when={current().page === "providers"}>
 									<ProviderPanel
@@ -4597,13 +4610,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											"settings",
 											"providers",
 											"observability",
+											"environments",
+											"schedules",
 										].includes(current().page) && !rows().length
 									}
 								>
-									<text fg={color("textMuted")}>
-										No matching resources. Viewpoints do not create or revive
-										resources.
-									</text>
+									<text fg={color("textMuted")}>No matching resources.</text>
 								</Show>
 								<Show
 									when={

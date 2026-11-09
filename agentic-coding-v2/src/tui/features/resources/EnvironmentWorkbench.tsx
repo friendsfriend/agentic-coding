@@ -346,16 +346,10 @@ export function EnvironmentWorkbench(props: {
 	};
 	return (
 		<box flexDirection="column" gap={1} border={true} padding={1}>
-			<text fg={color("primary")}>
-				Native environment authoring & diagnostics workbench
-			</text>
-			<text wrapMode="word" fg={color("warning")}>
-				Explicit reads only; no probe on navigation. Staging is inert private
-				text, not deployment. Preflight, promotion, revocation and cleanup
-				retain their native ownership/revision/inspection/approval fences. A UI
-				snapshot approval does not replace the native promotion approval in the
-				payload. No credentials in drafts. No implicit restart, release or
-				retry.
+			<text fg={color("primary")}>Environment operations</text>
+			<text wrapMode="word" fg={color("textMuted")}>
+				Explicit reads only · drafts are local · approval stays native · no
+				credentials in drafts
 			</text>
 			<ActionHeader
 				onActivate={() => {
@@ -369,8 +363,8 @@ export function EnvironmentWorkbench(props: {
 			>
 				<text fg={color("accent")}>
 					{mode() === "read"
-						? "Read-only diagnostics / records · switch to authoring"
-						: "Authoring intention · switch to read-only"}
+						? "Read-only · switch to authoring"
+						: "Authoring · switch to read-only"}
 				</text>
 			</ActionHeader>
 			<ActionHeader onActivate={operationChoice}>
@@ -384,9 +378,7 @@ export function EnvironmentWorkbench(props: {
 				</ActionHeader>
 				<Show when={mode() === "write"}>
 					<ActionHeader onActivate={() => bodyChoice("target")}>
-						<text fg={color("accent")}>
-							Choose supplied target/profile bundle into local JSON
-						</text>
+						<text fg={color("accent")}>Target and profile</text>
 					</ActionHeader>
 				</Show>
 			</Show>
