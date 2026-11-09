@@ -10,18 +10,45 @@ export class SessionHistory {
 		{ id: number; cursor: Cursor; expiresAt: number }
 	>();
 	constructor(private app: Runtime) {}
+	/** Expired first, then the soonest-expiring live reference. A fresh read never
+	 * depends on a prior cursor, so refusing it would only deny an observation that
+	 * is already permitted; an evicted continuation fails closed on its next use. */
+	private evict(now: number) {
+		for (const [key, value] of this.cursors)
+			if (value.expiresAt <= now) this.cursors.delete(key);
+		while (this.cursors.size >= 64) {
+			let oldest: string | undefined;
+			let expiry = Number.POSITIVE_INFINITY;
+			for (const [key, value] of this.cursors)
+				if (value.expiresAt < expiry) {
+					expiry = value.expiresAt;
+					oldest = key;
+				}
+			if (oldest === undefined) return;
+			this.cursors.delete(oldest);
+		}
+	}
+	private reserve(id: number, cursor: Cursor) {
+		this.evict(Date.now());
+		if (this.cursors.size >= 64)
+			throw new Error("History cursor capacity reached; wait for expiry");
+		const next = crypto.randomUUID();
+		this.cursors.set(next, {
+			id,
+			cursor,
+			expiresAt: Date.now() + 600000,
+		});
+		return next;
+	}
 	async read(id: number, cursor?: string) {
 		const session = await clientSession(this.app, id, false);
-		for (const [key, value] of this.cursors)
-			if (value.expiresAt <= Date.now()) this.cursors.delete(key);
+		this.evict(Date.now());
 		const continuation =
 			cursor === undefined ? undefined : this.cursors.get(cursor);
 		if (cursor !== undefined && (!continuation || continuation.id !== id))
 			throw new Error(
 				"History cursor is missing, expired or belongs to another session",
 			);
-		if (this.cursors.size >= 64 && cursor === undefined)
-			throw new Error("History cursor capacity reached; wait for expiry");
 		// Reserve the opaque continuation before the awaited read. Concurrent
 		// requests cannot reuse it; failures remain consumed, never auto-replayed.
 		if (cursor !== undefined) this.cursors.delete(cursor);
@@ -33,17 +60,7 @@ export class SessionHistory {
 		);
 		// Recheck catalog authority after the non-atomic read.
 		await clientSession(this.app, id, false);
-		let next: string | null = null;
-		if (page.next) {
-			if (this.cursors.size >= 64)
-				throw new Error("History cursor capacity reached; wait for expiry");
-			next = crypto.randomUUID();
-			this.cursors.set(next, {
-				id,
-				cursor: page.next,
-				expiresAt: Date.now() + 600000,
-			});
-		}
+		const next = page.next === undefined ? null : this.reserve(id, page.next);
 		return {
 			id,
 			entries: [...page.items].reverse().map((entry) => ({ ...entry })),

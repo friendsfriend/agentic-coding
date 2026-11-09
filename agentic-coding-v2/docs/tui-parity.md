@@ -2144,3 +2144,25 @@ were corrected to match. No boundary method, retention size, page size or native
 changed. Biome (370 files, zero diagnostics), full unfiltered type-check and the 14-file
 boundary suite (50 tests / 773 assertions) pass; build and help were re-checked. No
 renderer or mounting test was added, and no manual terminal acceptance was performed.
+
+### History continuation registry pressure
+
+The host-private continuation registry was a hard wall: once 64 live references existed,
+even a *fresh* `session.history` read — which depends on no prior cursor — failed with a
+capacity error, so a reader browsing several long conversations could be denied an
+observation that its own catalog authority already permitted. The registry now evicts
+expired references first and then the soonest-expiring live ones to make room, and keeps
+the size fence as a defensive check that is no longer reachable through ordinary use.
+
+Eviction cannot widen authority: an evicted continuation is simply unknown, so the owning
+client receives the existing "missing, expired or belongs to another session" refusal,
+with no automatic retry, and the TUI requires an explicit restart. A page read that
+succeeds but cannot reserve its successor no longer discards the page it already
+observed. Page size, expiry, cursor opacity, single-use consumption and the before/after
+native ownership checks are unchanged.
+
+Biome (370 files, zero diagnostics), full unfiltered type-check, build, help and the
+authenticated gateway/runtime/standalone/observation suites pass. Registry pressure is not
+covered by a boundary test, because reaching the cap at the authenticated surface needs
+more than sixty long native sessions; the eviction path is small, additive and fails
+closed. No native read, model call or deployment was performed.
