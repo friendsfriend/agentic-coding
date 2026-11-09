@@ -176,3 +176,15 @@ identity are re-checked before the text is placed into the detail record, so a r
 arrives after the reader navigated elsewhere is refused instead of written onto a stale
 view. The accompanying notice states what the text is: a bounded tail of supplied output,
 not native log history, a complete capture or an acknowledgement.
+
+### Reading-prelude cursor lifecycle
+
+The TUI distinguishes “not requested yet” from a terminal null history cursor. Reads
+are explicit (an upward read intent after expanding the local window, or a local page
+action), not mount/focus/poll effects. It clears a single-use continuation before awaiting
+its reply and stops at 400 retained history entries. A page crossing that bound is
+refused whole, not partially adopted. An explicit restart after failure/capacity clears
+only the local prelude and starts from the newest native history page. No retry or
+watch-continuation claim is implied. Client/conversation/connection changes retire the
+read lifecycle. Gateway fixtures verify cursor exhaustion and single consumption;
+TUI scroll/layout behavior remains outside those tests.

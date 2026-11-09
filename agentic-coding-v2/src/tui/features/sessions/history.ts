@@ -31,10 +31,14 @@ export class DraftHistory {
 	private readonly viewLimit = 32;
 	private readonly byteLimit = 64000;
 	private sensitive(text: string) {
-		const command = /^\/(\S+)/.exec(text)?.[1];
+		const command = /^\/(\S+)/.exec(text.trimStart())?.[1];
 		return (
 			text.includes("approve:") ||
-			Boolean(command && !text.startsWith("//") && !readCommands.has(command))
+			Boolean(
+				command &&
+					!text.trimStart().startsWith("//") &&
+					!readCommands.has(command),
+			)
 		);
 	}
 	admitted(key: string, text: string) {

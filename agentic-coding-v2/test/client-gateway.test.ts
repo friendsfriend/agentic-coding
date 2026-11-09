@@ -302,6 +302,34 @@ test("authenticated native environment staging and retained history remain expli
 		expect(older.entries.some((entry) => entry.kind === "fixture.later")).toBe(
 			false,
 		);
+		// Walk the frozen cursor chain to its terminal null. Even a newer entry
+		// committed between reads must never leak into this observation.
+		const historyIds = new Set(
+			[...page.entries, ...older.entries].map((entry) => entry.id),
+		);
+		let continuation = older.cursor;
+		for (let remaining = 8; continuation !== null; remaining--) {
+			if (remaining === 0) throw new Error("Fixture history failed to exhaust");
+			const consumed = continuation;
+			const tail = await client.call("session.history", {
+				id: page.id,
+				cursor: consumed,
+			});
+			expect(tail.id).toBe(page.id);
+			for (const entry of tail.entries) {
+				expect(historyIds.has(entry.id)).toBe(false);
+				expect(entry.kind).not.toBe("fixture.later");
+				historyIds.add(entry.id);
+			}
+			await expect(
+				client.call("session.history", { id: page.id, cursor: consumed }),
+			).rejects.toThrow();
+			continuation = tail.cursor;
+		}
+		expect(continuation).toBeNull();
+		expect(historyIds.size).toBeGreaterThanOrEqual(
+			page.entries.length + older.entries.length,
+		);
 		const refreshed = await client.call("session.history", { id: page.id });
 		expect(
 			refreshed.entries.some((entry) => entry.kind === "fixture.later"),

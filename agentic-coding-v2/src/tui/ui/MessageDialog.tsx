@@ -2,8 +2,11 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
-import { onCleanup } from "solid-js";
-import { HelpText } from "../presentation/components/HelpText.tsx";
+import { createMemo, For, onCleanup } from "solid-js";
+import {
+	HelpText,
+	wrapHelpEntries,
+} from "../presentation/components/HelpText.tsx";
 import { ReadOnlyModalFrame } from "../presentation/components/ReadOnlyModalFrame.tsx";
 import { SearchHeader } from "../presentation/components/SearchHeader.tsx";
 import { useTerminalDimensions } from "../presentation/hooks/useTerminalDimensions.ts";
@@ -19,6 +22,19 @@ export function MessageDialog(props: {
 }) {
 	const dimensions = useTerminalDimensions();
 	const item = props.item;
+	const width = () => Math.max(1, Math.floor(dimensions().width * 0.7));
+	const height = () => Math.max(1, Math.floor(dimensions().height * 0.55));
+	const footer = createMemo(() =>
+		wrapHelpEntries(
+			[
+				{ key: "j/k", action: "Scroll" },
+				{ key: "PgUp/PgDn", action: "Page" },
+				{ key: "Home/End", action: "First/last" },
+				{ key: "Esc", action: "Close" },
+			],
+			Math.max(1, width() - 4),
+		),
+	);
 	let disposed = false;
 	let scroll: ScrollBoxRenderable | undefined;
 	const enabled = () => !disposed && props.active && props.item === item;
@@ -31,19 +47,29 @@ export function MessageDialog(props: {
 	const move = (dy: number) => {
 		if (enabled()) scroll?.scrollBy(dy);
 	};
+	const page = () =>
+		Math.max(1, scroll?.viewport.height ?? height() - 5 - footer().length);
+	const edge = (last: boolean) => {
+		if (enabled())
+			scroll?.scrollTo(
+				last ? Math.max(0, scroll.scrollHeight - scroll.viewport.height) : 0,
+			);
+	};
 	const unregister = useKeymap().registerLayer({
 		id: `v2.diagnostic.${item.id}`,
 		priority: 200,
 		enabled,
 		bindings: [
 			{ key: "escape", cmd: close },
+			{ key: "pageup", cmd: () => move(-page()) },
+			{ key: "pagedown", cmd: () => move(page()) },
+			{ key: "home", cmd: () => edge(false) },
+			{ key: "end", cmd: () => edge(true) },
 			...[
 				["j", 1],
 				["down", 1],
 				["k", -1],
 				["up", -1],
-				["pagedown", 8],
-				["pageup", -8],
 			].map(([key, dy]) => ({ key: String(key), cmd: () => move(Number(dy)) })),
 		],
 	});
@@ -54,11 +80,11 @@ export function MessageDialog(props: {
 	});
 	return (
 		<ReadOnlyModalFrame
-			width={Math.max(1, Math.floor(dimensions().width * 0.7))}
-			height={Math.max(1, Math.floor(dimensions().height * 0.55))}
+			width={width()}
+			height={height()}
 			close={close}
 			active={enabled()}
-			footerHeight={2}
+			footerHeight={footer().length + 1}
 			header={
 				<SearchHeader>
 					<text
@@ -71,14 +97,17 @@ export function MessageDialog(props: {
 			}
 			footer={
 				<>
-					<HelpText
-						entries={[
-							{ key: "j/k", action: "Scroll" },
-							{ key: "Esc", action: "Close" },
-						]}
-						activatable={() => true}
-						onActivate={(entry) => (entry.key === "Esc" ? close() : move(1))}
-					/>
+					<For each={footer()}>
+						{(entries) => (
+							<HelpText
+								entries={entries}
+								activatable={(entry) => enabled() && entry.key === "Esc"}
+								onActivate={(entry) => {
+									if (entry.key === "Esc") close();
+								}}
+							/>
+						)}
+					</For>
 					<text fg={uiColors.textMuted} truncate>
 						Read-only display; no native acknowledgement, retry or approval.
 					</text>

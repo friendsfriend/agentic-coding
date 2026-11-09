@@ -4783,6 +4783,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 												: prompt.logicalCursor.row >= prompt.lineCount - 1;
 										if (
 											edge &&
+											!suggestionsOpen() &&
 											history.canBrowseArrows(historyKey(), text) &&
 											recall(name === "up" ? -1 : 1, true)
 										) {

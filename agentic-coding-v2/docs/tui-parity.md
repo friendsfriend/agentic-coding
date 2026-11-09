@@ -2035,3 +2035,40 @@ added, and no terminal acceptance or visual parity is claimed: header spacing at
 widths, hint truncation behaviour and how the two-part header reads with a long path still
 require manual verification. Remaining unfinished parity: original modal/list compositions,
 prompt-history details and the terminal interaction audit.
+
+## Reading-window bounds and modal/list navigation batch
+
+This audit corrects earlier implementation claims: the history prelude had no reachable
+first-page request, and the mounted-entry filter still excluded its fetched entries. Both
+paths are now wired. Exhausting the local supplied window makes the first native read
+available; each subsequent upward read intent requests at most one continuation. An
+explicit local action can also request one page. Initial, exhausted, uncertain and
+capacity-limited states are distinct. A null terminal cursor no longer means “start again.”
+Continuations are cleared before awaiting a request, and failures require an explicit
+restart that discards the old local prelude. The 400-entry limit stops further reads;
+a page crossing it is refused whole instead of silently dropping its older entries.
+Connection/client/conversation lifecycle changes reset this reading state. The gateway
+fixture now checks terminal cursor exhaustion as well as concurrent single consumption.
+These checks cover native paging, not TUI mounting or scroll anchoring.
+
+The existing original-style read-only modal/list ports now offer PageUp/PageDown and
+Home/End in the chooser and diagnostic dialog. Diagnostic page movement uses the live
+viewport height rather than an eight-row constant; help wraps to the dialog width.
+Combined keyboard hints are not misleading one-direction pointer buttons. Chooser
+inactive state reaches the modal backdrop, long row details are width-bounded, and
+scrollbar thumbs stay within the allocated track. Visible list rows retain their supplied
+ordinal rather than rediscovering it through `indexOf`, so repeated equal item references
+do not acquire the first row's identity. Resizing retires an unfinished row gesture.
+
+Multiline prompt history already used logical first/last-line guards and retained the
+original eligible draft. This batch preserves those guards and gives open suggestions
+priority over plain-arrow recall; explicit Alt-arrow recall remains separate. Leading
+whitespace cannot disguise a mutation/confirmation command as eligible history. No
+persistence, execution, admission or automatic replay is introduced.
+
+Biome (369 files, zero diagnostics), full unfiltered type-check, build, help and the
+14-file boundary suite pass: 50 tests / 773 assertions. No renderer, mounting, snapshot,
+presenter, helper or navigation-matrix tests were added. The remaining modal families
+are not all ported by this batch. Real-width modal geometry, selection/clipboard,
+multiline cursor behavior, history prepend anchoring and visual parity still require
+manual terminal acceptance; none was performed. No deployment/restart was performed.

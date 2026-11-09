@@ -71,6 +71,8 @@ export function ReadOnlyChoicePicker(props: {
 					]
 				: [
 						{ key: "j/k", action: "Navigate" },
+						{ key: "PgUp/PgDn", action: "Page" },
+						{ key: "Home/End", action: "First/last" },
 						{ key: "/", action: "Filter" },
 						{ key: "Enter", action: "Select" },
 						{ key: "Esc", action: "Cancel" },
@@ -120,6 +122,10 @@ export function ReadOnlyChoicePicker(props: {
 		if (name === "escape") props.close();
 		else if (name === "j" || name === "down") move(1);
 		else if (name === "k" || name === "up") move(-1);
+		else if (name === "pagedown") move(lines());
+		else if (name === "pageup") move(-lines());
+		else if (name === "home") select(0);
+		else if (name === "end") select(rows().length - 1);
 		else if (name === "/") {
 			changeQuery("");
 			setFiltering(true);
@@ -169,6 +175,10 @@ export function ReadOnlyChoicePicker(props: {
 				"k",
 				"up",
 				"down",
+				"pageup",
+				"pagedown",
+				"home",
+				"end",
 				"enter",
 				"return",
 				"escape",
@@ -185,6 +195,7 @@ export function ReadOnlyChoicePicker(props: {
 			width={width()}
 			height={height()}
 			close={() => control("escape")}
+			active={props.active}
 			footerHeight={footerHeight()}
 			header={
 				<SearchHeader
@@ -281,7 +292,13 @@ export function ReadOnlyChoicePicker(props: {
 								</text>
 								<Show when={row.detail}>
 									{(detail) => (
-										<text fg={uiColors.textMuted} flexShrink={0}>
+										<text
+											fg={uiColors.textMuted}
+											flexShrink={0}
+											maxWidth={Math.max(1, Math.floor((width() - 6) * 0.45))}
+											wrapMode="none"
+											truncate
+										>
 											{detail()}
 										</text>
 									)}

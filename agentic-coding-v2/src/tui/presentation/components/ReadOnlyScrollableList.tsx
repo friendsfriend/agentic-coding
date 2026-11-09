@@ -31,6 +31,7 @@ export function ReadOnlyScrollableList<T>(props: {
 		// movement/selection deliberately does not. No global pointer state.
 		props.active;
 		props.items;
+		props.availableLines;
 		retireGesture();
 	});
 	onCleanup(retireGesture);
@@ -40,7 +41,10 @@ export function ReadOnlyScrollableList<T>(props: {
 			0,
 			Math.min(props.start, Math.max(0, props.items.length - lines())),
 		);
-	const visible = () => props.items.slice(start(), start() + lines());
+	const visible = () =>
+		props.items
+			.slice(start(), start() + lines())
+			.map((item, offset) => ({ item, index: start() + offset }));
 	const needsScrollbar = () => props.items.length > lines();
 	const thumbTop = () =>
 		props.items.length > 0
@@ -50,7 +54,10 @@ export function ReadOnlyScrollableList<T>(props: {
 		props.items.length > 0
 			? Math.max(
 					1,
-					Math.ceil((lines() * visible().length) / props.items.length),
+					Math.min(
+						lines() - thumbTop(),
+						Math.ceil((lines() * visible().length) / props.items.length),
+					),
 				)
 			: 1;
 	const wheel = useWheelScroll({
@@ -93,8 +100,9 @@ export function ReadOnlyScrollableList<T>(props: {
 					}}
 				>
 					<For each={visible()}>
-						{(item) => {
-							const index = () => props.items.indexOf(item);
+						{(row) => {
+							const item = row.item;
+							const index = () => row.index;
 							const selected = () =>
 								index() >= 0 && index() === props.selectedIndex;
 							const mouse = useRowMouse({

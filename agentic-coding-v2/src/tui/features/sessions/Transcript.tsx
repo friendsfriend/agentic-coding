@@ -173,24 +173,48 @@ export function Transcript(props: {
 		cursor: string | null;
 	}>({ key: "", entries: [], cursor: null });
 	const [historyPending, setHistoryPending] = createSignal(false);
+	const [historyLoaded, setHistoryLoaded] = createSignal(false);
 	const [historyError, setHistoryError] = createSignal<string | null>(null);
 	let historyEpoch = 0;
-	const historyKey = () => (props.history ? String(props.history.id) : "");
+	const historySource = createMemo(
+		() => ({
+			id: props.history?.id,
+			client: props.history?.client,
+			connected: props.history?.connected,
+		}),
+		undefined,
+		{
+			equals: (a, b) =>
+				a.id === b.id && a.client === b.client && a.connected === b.connected,
+		},
+	);
+	const historyKey = () => {
+		const id = historySource().id;
+		return id === undefined ? "" : String(id);
+	};
 	const historyEntries = () =>
 		history().key === historyKey() ? history().entries : [];
 	const historyCursor = () =>
 		history().key === historyKey() ? history().cursor : null;
 	createEffect(() => {
-		historyKey();
-		props.history?.connected;
+		historySource();
 		historyEpoch++;
 		setHistory({ key: historyKey(), entries: [], cursor: null });
 		setHistoryError(null);
+		setHistoryLoaded(false);
 		setHistoryPending(false);
 	});
+	const canLoadHistory = () =>
+		Boolean(
+			props.history?.connected &&
+				!historyPending() &&
+				!historyError() &&
+				(!historyLoaded() ||
+					(historyCursor() !== null && historyEntries().length < 400)),
+		);
 	const loadHistory = async () => {
 		const source = props.history;
-		if (!source?.connected || historyPending() || disposed) return false;
+		if (!source?.connected || !canLoadHistory() || disposed) return false;
 		const epoch = ++historyEpoch,
 			everything = historyKey(),
 			cursor = historyCursor();
@@ -199,6 +223,8 @@ export function Transcript(props: {
 			epoch === historyEpoch &&
 			historyKey() === everything &&
 			props.history?.connected === true;
+		// Single-use continuation: uncertainty must never leave it reusable.
+		setHistory((previous) => ({ ...previous, cursor: null }));
 		setHistoryPending(true);
 		setHistoryError(null);
 		try {
@@ -233,9 +259,14 @@ export function Transcript(props: {
 					);
 				if (!prior) merged.set(id, entry);
 			}
-			const ordered = [...merged.values()]
-				.sort((left, right) => Number(left.id) - Number(right.id))
-				.slice(-400);
+			if (merged.size > 400)
+				throw new Error(
+					"History page exceeds the 400-entry local limit; page not adopted",
+				);
+			const ordered = [...merged.values()].sort(
+				(left, right) => Number(left.id) - Number(right.id),
+			);
+			setHistoryLoaded(true);
 			setHistory({ key: everything, entries: ordered, cursor: page.cursor });
 			return true;
 		} catch (cause) {
@@ -256,10 +287,10 @@ export function Transcript(props: {
 	};
 	const localPaging: LocalTranscriptPaging = {
 		token: window,
-		hasOlder: () => localStart() > 0 || historyCursor() !== null,
+		hasOlder: () => localStart() > 0 || canLoadHistory(),
 		loadOlder: () => {
 			if (expandLocal(false)) return true;
-			if (historyCursor() !== null && !historyPending()) {
+			if (canLoadHistory()) {
 				void loadHistory();
 				return true;
 			}
@@ -288,7 +319,7 @@ export function Transcript(props: {
 		() =>
 			new Set<unknown>(
 				readingEntries()
-					.slice(localStart() + mergedOlder())
+					.slice(localStart() > 0 ? localStart() + mergedOlder() : 0)
 					.map((entry) => entry.id),
 			),
 	);
@@ -878,6 +909,44 @@ export function Transcript(props: {
 						renumbered, a gap between the page and the retained window is
 						possible, and they are not a continuation of the live watch, another
 						conversation's adoption, or authority to resume anything.
+					</text>
+				</Show>
+				<Show when={localStart() === 0 && props.history?.connected}>
+					<ActionHeader
+						scope={historySource()}
+						interactive={
+							props.interactive &&
+							!historyPending() &&
+							Boolean(
+								canLoadHistory() ||
+									historyError() ||
+									historyEntries().length >= 400,
+							)
+						}
+						onActivate={() => {
+							if (historyError() || historyEntries().length >= 400) {
+								setHistory({ key: historyKey(), entries: [], cursor: null });
+								setHistoryLoaded(false);
+								setHistoryError(null);
+							}
+							void loadHistory();
+						}}
+					>
+						<text fg={color("accent")}>
+							{historyError() || historyEntries().length >= 400
+								? "Restart explicit history read (discard this local prelude)"
+								: !historyLoaded()
+									? "Read newest native history page"
+									: historyCursor() !== null
+										? "Read one older native history page"
+										: "Native history exhausted · no further page"}
+						</text>
+					</ActionHeader>
+				</Show>
+				<Show when={historyEntries().length >= 400}>
+					<text fg={color("warning")}>
+						400-entry local history limit reached; older reads are stopped, not
+						silently discarded.
 					</text>
 				</Show>
 				<Show when={historyPending()}>
