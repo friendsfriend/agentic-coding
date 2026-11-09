@@ -54,6 +54,7 @@ import {
 	type DiagnosticDraft,
 	DiagnosticsComposer,
 } from "../features/resources/DiagnosticsComposer.tsx";
+import { EnvironmentsMenu } from "../features/resources/EnvironmentsMenu.tsx";
 import {
 	EnvironmentWorkbench,
 	type WorkbenchMemory,
@@ -109,7 +110,6 @@ import { type Route, routeKey } from "../presentation/routes.ts";
 import { ActionScope } from "../ui/ActionScope.tsx";
 import { CommandPalette } from "../ui/CommandPalette.tsx";
 import { type ClipboardResult, copyToClipboard } from "../ui/clipboard.ts";
-import { DetailsFold } from "../ui/DetailsFold.tsx";
 import {
 	actionKeybinds,
 	bindings,
@@ -128,6 +128,7 @@ import {
 } from "../ui/keybinds.ts";
 import { type LocalChoice, LocalChoiceContext } from "../ui/LocalChoice.ts";
 import { MessageDialog } from "../ui/MessageDialog.tsx";
+import { menuKeybinds } from "../ui/menuKeys.ts";
 import { createNotifications, type LocalNotice } from "../ui/notifications.ts";
 import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
@@ -3595,6 +3596,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					]),
 		];
 	};
+	// Menu pages (settings, environments) read j/k/Enter/Escape only while the
+	// content is focused with an empty prompt, so typing a command is never eaten.
+	const menuKeysActive = () =>
+		contentFocused() &&
+		!settingsEditing() &&
+		!helpOpen() &&
+		!paletteOpen() &&
+		!busy() &&
+		!suggestionsOpen() &&
+		localChoice() === null &&
+		messageDialog() === null &&
+		promptText().length === 0;
 	// Embedded conversations, workbenches and review/wiki/schedule bodies own Tab.
 	// Explicit breadcrumb pointer focus can always be left with Tab or Escape.
 	const pageFocusEnabled = () =>
@@ -4204,12 +4217,123 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}
 									/>
 								</Show>
-								<Show
-									when={
-										current().page === "environments" ||
-										current().page === "schedules"
-									}
-								>
+								<Show when={current().page === "environments"}>
+									<EnvironmentsMenu
+										scope={workspaceScope()}
+										preferences={resourcePreferences()}
+										changePreferences={changeResourcePreferences}
+										inventory={dataList(state()?.environments.projects)}
+										rows={rows()}
+										environments={state()?.environments}
+										interactive={workspaceInteractive() && !settingsEditing()}
+										connected={status() === "connected"}
+										fresh={snapshotFresh()}
+										expanded={current().expanded}
+										toggle={toggleDetail}
+										select={(row, index) => {
+											navigation.current.selection = index;
+											navigation.current.resource = String(row.id);
+											update();
+										}}
+										choose={openLocalChoice}
+										prepare={(command) => {
+											remember();
+											if (navigation.current.draft.trim()) return false;
+											prepareCommand(command);
+											return navigation.current.draft === command;
+										}}
+										openTask={(id) => {
+											if (state()?.tasks.some((task) => task.id === id))
+												go("tasks", String(id));
+											else
+												setNotice(
+													"Owner task is not in the native catalog; no arbitrary native task is adopted.",
+												);
+										}}
+										keys={menuKeysActive}
+										operations={() => (
+											<EnvironmentWorkbench
+												scope={workspaceScope()}
+												interactive={!helpOpen() && !paletteOpen() && !busy()}
+												fresh={snapshotFresh()}
+												projects={dataList(state()?.environments.projects)}
+												choose={openLocalChoice}
+												client={client}
+												memory={environmentEditor()}
+												remember={setEnvironmentEditor}
+												focused={
+													contentFocused() &&
+													!helpOpen() &&
+													resourceEditor() !== "diagnostics"
+												}
+												editing={
+													settingsEditing() &&
+													!helpOpen() &&
+													resourceEditor() !== "diagnostics"
+												}
+												connected={status() === "connected"}
+												resource={current().resource}
+												edit={(value) => {
+													if (value) {
+														setResourceEditor("workbench");
+														setSettingsEditing(true);
+													} else if (resourceEditor() === "workbench") {
+														setResourceEditor(null);
+														setSettingsEditing(false);
+													}
+												}}
+											/>
+										)}
+										diagnostics={() => (
+											<DiagnosticsComposer
+												fresh={snapshotFresh()}
+												memory={diagnosticDraft()}
+												remember={setDiagnosticDraft}
+												tasks={state()?.tasks ?? []}
+												sessions={state()?.sessions ?? []}
+												connected={status() === "connected"}
+												focused={
+													contentFocused() &&
+													!helpOpen() &&
+													resourceEditor() !== "workbench"
+												}
+												editing={
+													settingsEditing() &&
+													!helpOpen() &&
+													resourceEditor() !== "workbench"
+												}
+												edit={(value) => {
+													if (value) {
+														setResourceEditor("diagnostics");
+														setSettingsEditing(true);
+													} else if (resourceEditor() === "diagnostics") {
+														setResourceEditor(null);
+														setSettingsEditing(false);
+													}
+												}}
+												prepare={(conversation, content) => {
+													if (
+														!snapshotFresh() ||
+														!state()?.sessions.some(
+															(session) =>
+																session.id === conversation &&
+																session.writable &&
+																session.task !== null,
+														)
+													) {
+														setNotice(
+															"Native diagnostic owner is no longer writable; draft remains unsent.",
+														);
+														return false;
+													}
+													go("session", String(conversation));
+													return prepareCommand(content);
+												}}
+											/>
+										)}
+									/>
+								</Show>
+								<Show when={current().page === "schedules"}>
 									<ResourcePanel
 										preferences={resourcePreferences()}
 										changePreferences={changeResourcePreferences}
@@ -4350,96 +4474,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}}
 									/>
 								</Show>
-								<Show when={current().page === "environments"}>
-									<DetailsFold
-										label="Environment operations"
-										summary="reads, drafts and native intentions"
-										scope={workspaceScope()}
-									>
-										<EnvironmentWorkbench
-											scope={workspaceScope()}
-											interactive={!helpOpen() && !paletteOpen() && !busy()}
-											fresh={snapshotFresh()}
-											projects={dataList(state()?.environments.projects)}
-											choose={openLocalChoice}
-											client={client}
-											memory={environmentEditor()}
-											remember={setEnvironmentEditor}
-											focused={
-												contentFocused() &&
-												!helpOpen() &&
-												resourceEditor() !== "diagnostics"
-											}
-											editing={
-												settingsEditing() &&
-												!helpOpen() &&
-												resourceEditor() !== "diagnostics"
-											}
-											connected={status() === "connected"}
-											resource={current().resource}
-											edit={(value) => {
-												if (value) {
-													setResourceEditor("workbench");
-													setSettingsEditing(true);
-												} else if (resourceEditor() === "workbench") {
-													setResourceEditor(null);
-													setSettingsEditing(false);
-												}
-											}}
-										/>
-									</DetailsFold>
-									<DetailsFold
-										label="Diagnostics"
-										summary="prepare a diagnostic request"
-										scope={workspaceScope()}
-									>
-										<DiagnosticsComposer
-											fresh={snapshotFresh()}
-											memory={diagnosticDraft()}
-											remember={setDiagnosticDraft}
-											tasks={state()?.tasks ?? []}
-											sessions={state()?.sessions ?? []}
-											connected={status() === "connected"}
-											focused={
-												contentFocused() &&
-												!helpOpen() &&
-												resourceEditor() !== "workbench"
-											}
-											editing={
-												settingsEditing() &&
-												!helpOpen() &&
-												resourceEditor() !== "workbench"
-											}
-											edit={(value) => {
-												if (value) {
-													setResourceEditor("diagnostics");
-													setSettingsEditing(true);
-												} else if (resourceEditor() === "diagnostics") {
-													setResourceEditor(null);
-													setSettingsEditing(false);
-												}
-											}}
-											prepare={(conversation, content) => {
-												if (
-													!snapshotFresh() ||
-													!state()?.sessions.some(
-														(session) =>
-															session.id === conversation &&
-															session.writable &&
-															session.task !== null,
-													)
-												) {
-													setNotice(
-														"Native diagnostic owner is no longer writable; draft remains unsent.",
-													);
-													return false;
-												}
-												go("session", String(conversation));
-												return prepareCommand(content);
-											}}
-										/>
-									</DetailsFold>
-								</Show>
 								<Show when={current().page === "providers"}>
 									<ProviderPanel
 										catalog={providerData()}
@@ -4536,6 +4570,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										candidate={settingsCandidate()}
 										connected={status() === "connected"}
 										prepare={prepareCommand}
+										keys={menuKeysActive}
 									/>
 								</Show>
 								<Show when={current().page === "wiki"}>
@@ -4919,6 +4954,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									...shellKeybinds,
 									...(crumbActive() ? breadcrumbKeybinds : actionKeybinds),
 									...(pageFocusEnabled() ? pageFocusKeybinds : []),
+									...(menuKeysActive() &&
+									(current().page === "settings" ||
+										current().page === "environments")
+										? menuKeybinds
+										: []),
 									...(isTranscript() && !crumbActive()
 										? [...transcriptKeybinds, ...transcriptViewportKeybinds]
 										: []),
@@ -4959,6 +4999,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							},
 							...Object.entries({
 								...keybindCatalogs,
+								Menus: menuKeybinds,
 								Workspaces: workspaceNavigationKeybinds,
 								Agents: nativeAgentNavigationKeybinds,
 								Help: helpOverlayKeybinds,
