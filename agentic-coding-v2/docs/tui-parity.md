@@ -2166,3 +2166,14 @@ authenticated gateway/runtime/standalone/observation suites pass. Registry press
 covered by a boundary test, because reaching the cap at the authenticated surface needs
 more than sixty long native sessions; the eviction path is small, additive and fails
 closed. No native read, model call or deployment was performed.
+
+### Settings and environment pages read like the original screens
+The remaining parity gap was presentation, not behavior: the settings page and the environment pages carried every fence as visible prose, so neither looked like the original settings screen or the original environment screen even where the underlying data was the same.
+
+Settings is now the original shape — a list of rows grouped into Orchestrator, Profiles, Repositories and Providers, each row stating the effective value, the editor opening under the activated row, add/remove as explicit rows, and the JSON editors, draft inspection and "settings on disk" moved behind Advanced. Saving is still an explicit prepare whose apply command carries the exact digest placeholder; nothing auto-validates, nothing writes.
+
+Environments keep the original composition of a list plus a selected detail: the count leads, filter/category/order/pin live behind one row stating their current values, rows read `kind · identity — state`, and the selected row exposes Run/Build/Test/Logs plus its targets, runs, waiters and occurrences as folds. The environment operation composer and the diagnostics composer are folds at the end of the page instead of eleven-line bordered boxes at the top.
+
+Every other page follows the same rule: summaries on the surface, supplied records folded, actions named for what they do. Provider write actions now read "Preview change", "Start a new change", "Refresh attempts"; profiles say "Credential present" and "Switch conversation #1 to X"; skills say "Read instructions" and "Discuss in orchestrator"; the wiki says "New page", "Preview page" and "Submit comment for review".
+
+Verified on the built binary through the pty probe across orchestrator, settings, environments, providers, profiles, skills, journals, tasks, schedules and wiki with zero renderer diagnostics, alongside Biome, full unfiltered type-check, build, compiled help and the 15-file boundary suite. Manual visual and interactive acceptance of these screens is still unverified; the probe establishes that the pages render and what they render, not that they feel right to a human.
