@@ -3,7 +3,7 @@ import { useKeymap } from "@opentui/keymap/solid";
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { PromptSuggestions } from "../presentation/components/PromptSuggestions.tsx";
 import { uiColors } from "../presentation/theme/colors.ts";
-import { bindings, paletteKeybinds } from "./keybinds.ts";
+import { bindings, layerCommands, paletteKeybinds } from "./keybinds.ts";
 import { color } from "./theme/index.ts";
 export type PaletteEntry = { command: string; description: string };
 /** Search prepares text only. Enter here cannot dispatch a gateway method. */
@@ -75,7 +75,7 @@ export function CommandPalette(props: {
 		id: "v2.command-palette",
 		priority: 50,
 		enabled: active,
-		commands: [
+		commands: layerCommands([
 			{
 				id: "palette.previous",
 				name: "Previous command suggestion",
@@ -98,7 +98,7 @@ export function CommandPalette(props: {
 					if (active()) props.close();
 				},
 			},
-		],
+		]),
 		bindings: bindings(paletteKeybinds),
 	});
 	onCleanup(unregister);

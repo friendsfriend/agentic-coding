@@ -9,7 +9,7 @@ import {
 	untrack,
 } from "solid-js";
 import { type ActionAnchor, ActionRegistry } from "./ActionHeader.tsx";
-import { actionKeybinds, bindings } from "./keybinds.ts";
+import { actionKeybinds, bindings, layerCommands } from "./keybinds.ts";
 /** Keyboard parity for rendered read/navigation/preparation controls. No backend methods here. */
 export function ActionScope(props: {
 	enabled: boolean;
@@ -56,7 +56,7 @@ export function ActionScope(props: {
 			keymap.registerLayer({
 				id: "v2.ui-controls",
 				priority: 25,
-				commands: [
+				commands: layerCommands([
 					{
 						id: "controls.next",
 						name: "Select next rendered UI control",
@@ -77,7 +77,7 @@ export function ActionScope(props: {
 							anchor?.activate();
 						},
 					},
-				],
+				]),
 				bindings: bindings(actionKeybinds),
 			}),
 		);

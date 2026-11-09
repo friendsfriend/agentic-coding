@@ -371,6 +371,21 @@ export const keybindCatalogs = {
 };
 export const bindings = (catalog: Keybind[]) =>
 	catalog.map(({ key, cmd }) => ({ key, cmd }));
+/**
+ * A keymap command is authored here as a stable `id` plus the human label a
+ * footer or help surface may show. The keymap registry reserves `name` for the
+ * command identifier and keeps any other property as command metadata, so the
+ * label travels as `label`: passing prose as `name` makes the registry reject
+ * the command and the binding silently does nothing.
+ */
+export type LayerCommand = {
+	id: string;
+	name: string;
+	run: () => void;
+	[key: string]: unknown;
+};
+export const layerCommands = (commands: readonly LayerCommand[]) =>
+	commands.map(({ id, name, ...rest }) => ({ ...rest, name: id, label: name }));
 export const keyLabel = (key: string) =>
 	key
 		.split("+")

@@ -109,7 +109,7 @@ import { BreadcrumbRow } from "../presentation/navigation/BreadcrumbRow.tsx";
 import { type Route, routeKey } from "../presentation/routes.ts";
 import { ActionScope } from "../ui/ActionScope.tsx";
 import { CommandPalette } from "../ui/CommandPalette.tsx";
-import { copyToClipboard } from "../ui/clipboard.ts";
+import { type ClipboardResult, copyToClipboard } from "../ui/clipboard.ts";
 import {
 	actionKeybinds,
 	bindings,
@@ -117,6 +117,7 @@ import {
 	editorKeybinds,
 	keybindCatalogs,
 	keyLabel,
+	layerCommands,
 	pageFocusKeybinds,
 	paletteKeybinds,
 	promptKeybinds,
@@ -2120,6 +2121,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			},
 		});
 	}
+	function publishCopyResult(result: ClipboardResult, subject: string) {
+		notifications.publish(
+			result === "accepted"
+				? `Clipboard helper accepted ${subject}`
+				: result === "sent-unverified"
+					? `${subject} copy request queued as OSC 52; clipboard contents unverified`
+					: result === "too-large"
+						? `${subject} exceeds the 256000-byte clipboard limit; select a smaller range`
+						: `Clipboard unavailable; ${subject} retained`,
+			result === "accepted" ? "success" : "warning",
+		);
+	}
 	function copySelection() {
 		if (renderer.isDestroyed) return;
 		const selection = renderer.getSelection();
@@ -2129,22 +2142,36 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			return;
 		}
 		const result = copyToClipboard(text);
-		notifications.publish(
-			result === "accepted"
-				? "Clipboard helper accepted selection"
-				: result === "sent-unverified"
-					? "OSC 52 selection request queued; clipboard contents unverified"
-					: result === "too-large"
-						? "Selection exceeds the 256000-byte clipboard limit; select a smaller range"
-						: "Clipboard unavailable; selection retained",
-			result === "accepted" ? "success" : "warning",
-		);
+		publishCopyResult(result, "selection");
 		if (
 			(result === "accepted" || result === "sent-unverified") &&
 			renderer.getSelection() === selection
 		)
 			renderer.clearSelection();
 	}
+	// The renderer's diagnostics console owns its own text selection and copies
+	// nothing unless this callback is installed, so its advertised copy binding
+	// would silently discard what the operator selected.
+	createEffect(() => {
+		if (renderer.isDestroyed) return;
+		const overlay = renderer.console;
+		overlay.onCopySelection = (text) => {
+			if (!text) {
+				notifications.publish(
+					"Console has no selected text to copy",
+					"warning",
+				);
+				return;
+			}
+			publishCopyResult(copyToClipboard(text), "console selection");
+		};
+		// A plain Ctrl+C copy reaches the console even where the terminal cannot
+		// distinguish Ctrl+Shift+C from Ctrl+C; this shell binds no Ctrl+C itself.
+		overlay.keyBindings = [{ name: "c", ctrl: true, action: "copy-selection" }];
+		onCleanup(() => {
+			overlay.onCopySelection = undefined;
+		});
+	});
 	let selectionOwner: readonly unknown[] | undefined;
 	createEffect(() => {
 		const owner = [
@@ -2169,13 +2196,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const unregisterCopy = keymap.registerLayer({
 		id: "v2.explicitSelectionCopy",
 		priority: 205,
-		commands: [
+		commands: layerCommands([
 			{
 				id: "shell.copySelection",
 				name: "Explicitly copy selected terminal text",
 				run: copySelection,
 			},
-		],
+		]),
 		bindings: [
 			{ key: "ctrl+shift+c", cmd: "shell.copySelection" },
 			{ key: "meta+c", cmd: "shell.copySelection" },
@@ -2194,7 +2221,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			!settingsEditing() &&
 			!helpOpen() &&
 			!paletteOpen(),
-		commands: [
+		commands: layerCommands([
 			{
 				id: "transcript.scrollUp",
 				name: "Scroll supplied transcript up",
@@ -2205,7 +2232,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				name: "Scroll supplied transcript down",
 				run: () => scrollTranscript(1),
 			},
-		],
+		]),
 		bindings: bindings(transcriptViewportKeybinds),
 	});
 	onCleanup(unregisterViewport);
@@ -2214,7 +2241,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		priority: 10,
 		enabled: () =>
 			messageDialog() === null && !quitConfirmation() && usageWindow() === null,
-		commands: [
+		commands: layerCommands([
 			{
 				id: "shell.quit",
 				name: "Confirm local terminal exit",
@@ -2387,7 +2414,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				name: page,
 				run: () => go(page as Page),
 			})),
-		],
+		]),
 		bindings: bindings(
 			shellKeybinds.filter((binding) => binding.cmd !== "shell.copySelection"),
 		),
@@ -3632,21 +3659,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		id: "v2.page-focus",
 		priority: 25,
 		enabled: pageFocusEnabled,
-		commands: [
+		commands: layerCommands([
 			{ id: "page.focusNext", name: "Cycle page focus", run: cyclePageFocus },
 			{
 				id: "page.focusPrevious",
 				name: "Cycle page focus backwards",
 				run: cyclePageFocus,
 			},
-		],
+		]),
 		bindings: bindings(pageFocusKeybinds),
 	});
 	const unregisterBreadcrumbs = keymap.registerLayer({
 		id: "v2.breadcrumbs",
 		priority: 25,
 		enabled: () => crumbActive() && crumbInteractionEnabled(),
-		commands: [
+		commands: layerCommands([
 			{
 				id: "breadcrumb.previous",
 				name: "Previous structural ancestor",
@@ -3666,7 +3693,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					if (route) navigateCrumb(route);
 				},
 			},
-		],
+		]),
 		bindings: bindings(breadcrumbKeybinds),
 	});
 	onCleanup(unregisterPageFocus);

@@ -10,7 +10,7 @@ import {
 import type { Data, Session } from "../../../protocol/index.ts";
 import type { AgentSidebarRow } from "../../presentation/agent-sidebar-model.ts";
 import { AgentSidebar } from "../../presentation/components/AgentSidebar.tsx";
-import { bindings, type Keybind } from "../../ui/keybinds.ts";
+import { bindings, type Keybind, layerCommands } from "../../ui/keybinds.ts";
 export const nativeAgentNavigationKeybinds: Keybind[] = [
 	{
 		key: "f",
@@ -159,7 +159,7 @@ export function NativeAgentNavigation(props: {
 		id: "v2.native-agent-navigation",
 		priority: 15,
 		enabled: () => props.active && interactive(),
-		commands: [
+		commands: layerCommands([
 			{
 				id: "agents.filter",
 				name: "Switch Active/All filter",
@@ -182,7 +182,7 @@ export function NativeAgentNavigation(props: {
 			},
 			{ id: "agents.next", name: "Next native agent", run: () => move(1) },
 			{ id: "agents.open", name: "Open native agent transcript", run: open },
-		],
+		]),
 		bindings: bindings(nativeAgentNavigationKeybinds),
 	});
 	onCleanup(unregister);

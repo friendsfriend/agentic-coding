@@ -3,7 +3,7 @@ import { useKeymap } from "@opentui/keymap/solid";
 import { createEffect, createSignal, onCleanup } from "solid-js";
 import { HelpModal } from "../presentation/components/HelpModal.tsx";
 import type { KeybindSection } from "../presentation/components/keybinds.ts";
-import { bindings, type Keybind } from "../ui/keybinds.ts";
+import { bindings, type Keybind, layerCommands } from "../ui/keybinds.ts";
 
 export const helpOverlayKeybinds: Keybind[] = [
 	{ key: "j", cmd: "help.next", action: "Scroll help down", standard: true },
@@ -53,7 +53,7 @@ export function HelpOverlay(props: {
 	const unregister = keymap.registerLayer({
 		id: "v2.help-overlay",
 		priority: 100,
-		commands: [
+		commands: layerCommands([
 			{ id: "help.next", name: "Scroll help down", run: () => move(1) },
 			{ id: "help.previous", name: "Scroll help up", run: () => move(-1) },
 			{ id: "help.pageNext", name: "Next help page", run: () => move(lines()) },
@@ -69,7 +69,7 @@ export function HelpOverlay(props: {
 				run: () => setOffset(maximum()),
 			},
 			{ id: "help.close", name: "Close help", run: close },
-		],
+		]),
 		bindings: bindings(helpOverlayKeybinds),
 	});
 	const allowed = helpOverlayKeybinds.map((binding) =>

@@ -422,11 +422,8 @@ export function ToolCard(props: {
 			};
 		return null;
 	});
-	const fields = createMemo(() =>
-		props.result
-			? nativeFields(name(), props.call.arguments, structured())
-			: null,
-	);
+	// Declared before `fields`, which reads it: a memo computes on creation, so a
+	// later declaration would be read inside its own temporal dead zone.
 	const structured = createMemo(() => {
 		const textParts = dataList(props.result?.content).filter(
 			(part) => part.type === "text",
@@ -443,6 +440,11 @@ export function ToolCard(props: {
 			return null;
 		}
 	});
+	const fields = createMemo(() =>
+		props.result
+			? nativeFields(name(), props.call.arguments, structured())
+			: null,
+	);
 	const requestedEdits = createMemo<readonly SuppliedEditReplacement[]>(() => {
 		if (name() !== "edit") return [];
 		const value = args();

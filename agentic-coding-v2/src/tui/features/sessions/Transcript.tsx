@@ -29,7 +29,11 @@ import { UserPrompt } from "../../presentation/components/UserPrompt.tsx";
 import { createKeyedItems } from "../../presentation/components/utils/keyedItems.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { ImageView } from "../../ui/ImageView.tsx";
-import { bindings, transcriptKeybinds } from "../../ui/keybinds.ts";
+import {
+	bindings,
+	layerCommands,
+	transcriptKeybinds,
+} from "../../ui/keybinds.ts";
 import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
@@ -713,7 +717,7 @@ export function Transcript(props: {
 			keymap.registerLayer({
 				id: "v2.transcript",
 				priority: 30,
-				commands: [
+				commands: layerCommands([
 					{
 						id: "transcript.choose",
 						name: "Choose a mounted observed card",
@@ -758,7 +762,7 @@ export function Transcript(props: {
 						name: `Toggle native ${name}`,
 						run: () => toggleSection(suffix ?? ""),
 					})),
-				],
+				]),
 				bindings: bindings(transcriptKeybinds),
 			}),
 		);

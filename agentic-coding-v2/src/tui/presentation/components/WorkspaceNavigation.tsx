@@ -15,7 +15,7 @@ import {
 	type UiWorkspaceFilter,
 	uiWorkspaceFilters,
 } from "../../../protocol/viewpoints.ts";
-import { bindings, type Keybind } from "../../ui/keybinds.ts";
+import { bindings, type Keybind, layerCommands } from "../../ui/keybinds.ts";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors.ts";
 import { useHover } from "./mouse/useHover.ts";
@@ -200,7 +200,7 @@ export function WorkspaceNavigation(props: {
 		id: `v2.workspace-navigation.${props.side}`,
 		priority: 15,
 		enabled: () => props.active && interactive(),
-		commands: [
+		commands: layerCommands([
 			{
 				id: "workspace.filter",
 				name: "Cycle native task filter",
@@ -232,7 +232,7 @@ export function WorkspaceNavigation(props: {
 				run: () => move(1),
 			},
 			{ id: "workspace.open", name: "Open workspace entry", run: open },
-		],
+		]),
 		bindings: bindings(workspaceNavigationKeybinds),
 	});
 	onCleanup(unregister);
