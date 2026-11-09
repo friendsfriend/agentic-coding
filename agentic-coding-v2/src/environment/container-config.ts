@@ -13,6 +13,8 @@ export type ContainerTarget = {
 	name?: string;
 	command: string[];
 	entrypoint?: string;
+	shmSize?: number;
+	extraHosts?: Record<string, string>;
 	ports: {
 		host: number;
 		container: number;
@@ -121,6 +123,8 @@ export function readContainer(raw: unknown): ContainerTarget {
 		"buildArgs",
 		"health",
 		"completion",
+		"shmSize",
+		"extraHosts",
 	]);
 	const socket = readLocalSocket(data.socket);
 	const image = text(data.image, "container image", 512);
@@ -147,6 +151,24 @@ export function readContainer(raw: unknown): ContainerTarget {
 	)
 		throw new Error("Invalid container ports/mounts");
 	const health = readHealth(data.health);
+	const shmSize = data.shmSize;
+	if (
+		shmSize !== undefined &&
+		(!Number.isSafeInteger(shmSize) ||
+			Number(shmSize) < 1 ||
+			Number(shmSize) > 8589934592)
+	)
+		throw new Error("Shared memory must be explicit bytes between 1 and 8 GiB");
+	const extraHosts = object(data.extraHosts ?? {});
+	if (Object.keys(extraHosts).length > 32)
+		throw new Error("Too many container host mappings");
+	for (const [host, address] of Object.entries(extraHosts))
+		if (
+			!/^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$/.test(host) ||
+			typeof address !== "string" ||
+			!(isIP(address) || address === "host-gateway")
+		)
+			throw new Error("Invalid container host mapping");
 	if (data.completion !== undefined && typeof data.completion !== "boolean")
 		throw new Error("Container completion must be a boolean");
 	const readiness = data.readiness ?? "running";
@@ -161,6 +183,10 @@ export function readContainer(raw: unknown): ContainerTarget {
 			? {}
 			: { entrypoint: text(data.entrypoint, "container entrypoint", 4096) }),
 		buildArgs,
+		...(shmSize === undefined ? {} : { shmSize: Number(shmSize) }),
+		...(Object.keys(extraHosts).length
+			? { extraHosts: extraHosts as Record<string, string> }
+			: {}),
 		...(health ? { health } : {}),
 		...(data.completion === true ? { completion: true } : {}),
 		readiness,

@@ -464,7 +464,7 @@ test("Compose unsupported effects are refused, and daemon loss quarantines the c
 }, 20000);
 
 test("Compose health overrides reach the engine and unsupported forms are refused before any effect", async () => {
-	for (const scenario of ["declared", "exec-form", "disable-mixed"] as const) {
+	for (const scenario of ["declared", "empty-exec", "disable-mixed"] as const) {
 		const { app, config, fake, invocation } = await fixture(
 			false,
 			configureCompose,
@@ -472,8 +472,8 @@ test("Compose health overrides reach the engine and unsupported forms are refuse
 		const override =
 			scenario === "declared"
 				? "    healthcheck:\n      test: [CMD-SHELL, 'curl -f http://localhost/']\n      interval: 5s\n      retries: 4\n      start_period: 2s\n"
-				: scenario === "exec-form"
-					? "    healthcheck:\n      test: [CMD, curl, -f]\n"
+				: scenario === "empty-exec"
+					? "    healthcheck:\n      test: [CMD]\n"
 					: "    healthcheck:\n      disable: true\n      test: ignore\n";
 		await composeFile(
 			invocation.repository,

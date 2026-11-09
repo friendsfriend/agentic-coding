@@ -40,12 +40,28 @@ const refusedSources: Array<[string, string]> = [
 		"services:\n  api:\n    image: fixture:latest\n    depends_on:\n      db:\n        condition: whenever\n  db:\n    image: fixture:latest\n",
 	],
 	[
-		"exec-form healthcheck",
-		`services:\n  api:\n    image: fixture:latest\n    healthcheck:\n      test: [CMD, curl, localhost]\n`,
+		"empty exec-form healthcheck",
+		`services:\n  api:\n    image: fixture:latest\n    healthcheck:\n      test: [CMD]\n`,
 	],
 	[
 		"healthcheck disable combination",
 		`services:\n  api:\n    image: fixture:latest\n    healthcheck:\n      disable: true\n      test: curl localhost\n`,
+	],
+	[
+		"literal service secret instead of a reference",
+		`services:\n  api:\n    image: fixture:latest\n    x-secret-refs:\n      TOKEN: not-an-env-reference!\n`,
+	],
+	[
+		"literal overrides service secret",
+		`services:\n  api:\n    image: fixture:latest\n    x-secret-refs:\n      TOKEN: FIXTURE_TOKEN\n    environment:\n      TOKEN: public-override\n`,
+	],
+	[
+		"oversized shared memory",
+		`services:\n  api:\n    image: fixture:latest\n    shm_size: 9g\n`,
+	],
+	[
+		"host mapping argument injection",
+		`services:\n  api:\n    image: fixture:latest\n    extra_hosts: ['--privileged:host-gateway']\n`,
 	],
 	[
 		"named volume",

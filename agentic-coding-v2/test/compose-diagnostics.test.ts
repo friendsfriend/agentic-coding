@@ -583,3 +583,91 @@ test.each(["rotation", "sibling-replacement", "cancellation"])(
 	},
 	30000,
 );
+
+test("Compose parity options reach only approved service creations with scoped, redacted secrets", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		writeDefinition(config, engineTarget(config));
+		fs.writeFileSync(
+			path.join(config.configDir, ".env"),
+			"PARITY_WEB_TOKEN=disposable-web-token\n",
+			{ mode: 0o600 },
+		);
+	});
+	await compose(invocation.repository, {
+		web: {
+			...service(),
+			"x-secret-refs": { SERVICE_TOKEN: "PARITY_WEB_TOKEN" },
+			shm_size: "512m",
+			extra_hosts: ["host.docker.internal:host-gateway"],
+			healthcheck: {
+				test: ["CMD", "probe", "$(must-not-execute)", "it's literal"],
+			},
+		},
+		sidecar: service(),
+	});
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", {
+			path: ".",
+			title: "Hold service-scoped parity fixture",
+		}),
+	]);
+	const task = await app.startTask(invocation);
+	const review = await pendingReview(app, task);
+	expect(review.snapshot).toContain("PARITY_WEB_TOKEN");
+	expect(review.snapshot).not.toContain("disposable-web-token");
+	await approve(app, task);
+	await pendingReview(app, task, "Hold service-scoped parity fixture");
+	const state = readEngineFile(path.join(config.configDir, "engine.json"));
+	const creates = state.history.filter(
+		(args) => args.includes("create") && args.includes("--network-alias"),
+	);
+	const web = creates.find((args) => args.includes("web"));
+	const sidecar = creates.find((args) => args.includes("sidecar"));
+	expect(web).toBeDefined();
+	expect(sidecar).toBeDefined();
+	expect(web).toContain("SERVICE_TOKEN");
+	expect(sidecar).not.toContain("SERVICE_TOKEN");
+	expect(web).toContain("--shm-size");
+	expect(web).toContain("536870912");
+	expect(web).toContain("host.docker.internal=host-gateway");
+	expect(web).toContain(
+		"exec 'probe' '$(must-not-execute)' 'it'\\''s literal'",
+	);
+	const runs = await app.environments.snapshot();
+	expect(JSON.stringify(runs)).not.toContain("disposable-web-token");
+	// Cleanup must use frozen references even after the credential file is gone.
+	fs.unlinkSync(path.join(config.configDir, ".env"));
+	await app.cancel(task);
+	const stopped = readEngineFile(path.join(config.configDir, "engine.json"));
+	expect(Object.keys(stopped.containers)).toHaveLength(0);
+	expect(Object.keys(stopped.networks ?? {})).toHaveLength(0);
+}, 30000);
+
+test("missing service references refuse the whole stack before network creation", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		writeDefinition(config, engineTarget(config));
+	});
+	await compose(invocation.repository, {
+		first: service(),
+		last: {
+			...service(),
+			"x-secret-refs": { SERVICE_TOKEN: "MISSING_DISPOSABLE_PARITY_TOKEN" },
+		},
+	});
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", {
+			path: ".",
+			title: "Missing service reference refused",
+		}),
+	]);
+	const task = await app.startTask(invocation);
+	await approve(app, task);
+	await pendingReview(app, task, "Missing service reference refused");
+	const state = readEngineFile(path.join(config.configDir, "engine.json"));
+	expect(state.history).toHaveLength(0);
+	expect(Object.keys(state.containers)).toHaveLength(0);
+	expect(Object.keys(state.networks ?? {})).toHaveLength(0);
+	await app.cancel(task);
+}, 30000);

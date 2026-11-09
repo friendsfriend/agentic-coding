@@ -335,6 +335,12 @@ export class ContainerProcess {
 				`${port.address.includes(":") ? `[${port.address}]` : port.address}:${port.host}:${port.container}/${port.protocol}`,
 			]),
 			...mounts,
+			...(this.spec.shmSize === undefined
+				? []
+				: ["--shm-size", String(this.spec.shmSize)]),
+			...Object.entries(this.spec.extraHosts ?? {}).flatMap(
+				([host, address]) => ["--add-host", `${host}=${address}`],
+			),
 			...variables.flatMap((key) => ["--env", key]),
 			...(this.spec.entrypoint ? ["--entrypoint", this.spec.entrypoint] : []),
 			...(this.spec.health

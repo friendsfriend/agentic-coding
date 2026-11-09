@@ -44,8 +44,54 @@ function dependencies(raw: unknown): Dependency[] {
 		throw new Error("Duplicate Compose dependency");
 	return result;
 }
-/** Compose health overrides are narrowed to one engine command form; exec-form
- * argv and disable-plus-settings combinations are refused rather than reinterpreted. */
+/** Exec-form health argv is shell-quoted word by word, never evaluated as source. */
+function shellWord(value: string) {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+function sharedMemory(raw: unknown) {
+	if (raw === undefined) return undefined;
+	if (typeof raw === "number") return raw;
+	if (typeof raw !== "string")
+		throw new Error("Invalid Compose shared memory size");
+	const match = /^(\d+)([bkmg])?$/i.exec(raw);
+	if (!match) throw new Error("Invalid Compose shared memory size");
+	return (
+		Number(match[1]) *
+		({ b: 1, k: 1024, m: 1048576, g: 1073741824 }[
+			match[2]?.toLowerCase() ?? "b"
+		] ?? 1)
+	);
+}
+function hosts(raw: unknown) {
+	if (!Array.isArray(raw)) return raw;
+	const pairs = raw.map((entry) => {
+		if (typeof entry !== "string")
+			throw new Error("Invalid Compose host mapping");
+		const match = /^([^=:]+)[=:](.+)$/.exec(entry);
+		if (!match) throw new Error("Invalid Compose host mapping");
+		return [match[1], match[2]] as const;
+	});
+	if (new Set(pairs.map(([host]) => host)).size !== pairs.length)
+		throw new Error("Duplicate Compose host mapping");
+	return Object.fromEntries(pairs);
+}
+function serviceSecrets(raw: unknown) {
+	const refs = object(raw ?? {});
+	if (Object.keys(refs).length > 100)
+		throw new Error("Too many service secret references");
+	return Object.fromEntries(
+		Object.entries(refs).map(([key, ref]) => {
+			if (
+				!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ||
+				["WORKSPACE", "CONFIG_DIR", "PATH", "HOME"].includes(key) ||
+				typeof ref !== "string" ||
+				!/^[A-Za-z_][A-Za-z0-9_]*$/.test(ref)
+			)
+				throw new Error("Invalid service secret reference");
+			return [key, ref];
+		}),
+	);
+}
 function healthcheck(raw: unknown) {
 	if (raw === undefined) return undefined;
 	const value = object(raw);
@@ -74,14 +120,25 @@ function healthcheck(raw: unknown) {
 	else if (Array.isArray(test)) {
 		const [kind, ...rest] = test;
 		if (
-			kind !== "CMD-SHELL" ||
-			rest.length !== 1 ||
-			typeof rest[0] !== "string"
-		)
-			throw new Error(
-				"Compose healthcheck supports the string form or exactly [CMD-SHELL, command]; exec-form argv is unsupported",
-			);
-		command = rest[0];
+			kind === "CMD" &&
+			rest.length > 0 &&
+			rest.every(
+				(word) =>
+					typeof word === "string" && word.length > 0 && !/[\0\r\n]/.test(word),
+			)
+		) {
+			command = `exec ${rest.map((word) => shellWord(String(word))).join(" ")}`;
+		} else {
+			if (
+				kind !== "CMD-SHELL" ||
+				rest.length !== 1 ||
+				typeof rest[0] !== "string"
+			)
+				throw new Error(
+					"Compose healthcheck requires a string, [CMD-SHELL, command], or non-empty bounded CMD argv",
+				);
+			command = rest[0];
+		}
 	} else throw new Error("Invalid Compose healthcheck test");
 	const duration = (key: string) => {
 		const selected = value[key];
@@ -343,6 +400,9 @@ export function compileComposeSource(
 					"healthcheck",
 					"restart",
 					"env_file",
+					"x-secret-refs",
+					"shm_size",
+					"extra_hosts",
 				]);
 				const envFile =
 					service.env_file === undefined
@@ -368,6 +428,11 @@ export function compileComposeSource(
 						return [key, value];
 					}),
 				);
+				const secretRefs = serviceSecrets(service["x-secret-refs"]);
+				if (Object.keys(secretRefs).some((key) => key in environment))
+					throw new Error(
+						"Service environment cannot override a secret reference",
+					);
 				const volumes = service.volumes ?? [];
 				if (!Array.isArray(volumes) || volumes.length > 64)
 					throw new Error("Invalid Compose bind mounts");
@@ -383,6 +448,8 @@ export function compileComposeSource(
 				const serviceHealth = healthcheck(service.healthcheck);
 				const container = readContainer({
 					socket: definition.socket,
+					shmSize: sharedMemory(service.shm_size),
+					extraHosts: hosts(service.extra_hosts),
 					image: service.image,
 					command: service.command,
 					entrypoint: service.entrypoint,
@@ -416,6 +483,7 @@ export function compileComposeSource(
 					id,
 					container,
 					environment,
+					...(Object.keys(secretRefs).length ? { secretRefs } : {}),
 					...(envFile
 						? { envFile: envFile.file, envFileDigest: envFile.digest }
 						: {}),
@@ -453,6 +521,17 @@ export function bindComposeDiagnostics(
 	target: Target,
 	plan: ComposePlan,
 ): ComposePlan {
+	for (const service of plan.services)
+		if (
+			Object.entries(service.secretRefs ?? {}).some(
+				([key, ref]) =>
+					key in target.environment ||
+					(key in target.secretRefs && target.secretRefs[key] !== ref),
+			)
+		)
+			throw new Error(
+				"Service secret reference conflicts with target environment",
+			);
 	const selected = new Set<string>();
 	const bind = (id: string | undefined, host: string, port: number) => {
 		const service = plan.services.find((entry) => entry.id === id);
@@ -528,5 +607,6 @@ export function containerPlans(plan: Plan): Plan[] {
 		app: `${plan.app}-${service.id}`,
 		container: service.container,
 		environment: { ...plan.environment, ...service.environment },
+		secretRefs: { ...plan.secretRefs, ...service.secretRefs },
 	}));
 }

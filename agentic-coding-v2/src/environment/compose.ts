@@ -20,6 +20,8 @@ export class ComposeProcess implements EnvironmentProcess {
 	private failedCleanup = false;
 	private network: ComposeNetwork | null = null;
 	private frozen: ReturnType<typeof processEnvironment>;
+	private plans: Plan[];
+	private serviceEnvironments: ReturnType<typeof processEnvironment>[];
 	private observing: Promise<void> = Promise.resolve();
 	constructor(
 		private plan: Plan,
@@ -27,7 +29,44 @@ export class ComposeProcess implements EnvironmentProcess {
 		private stateDir: string,
 		private run: string,
 	) {
-		this.frozen = processEnvironment(configDir, plan);
+		const parent = processEnvironment(configDir, plan);
+		this.plans = containerPlans(plan);
+		// Resolve every service before creating a network or container. A missing
+		// later-service reference cannot leave a partially started stack.
+		const environments = this.plans.map((service) =>
+			processEnvironment(configDir, service),
+		);
+		// One longest-first set across the stack also protects overlapping secrets
+		// in sibling logs; per-service sequential redaction could expose suffixes.
+		const hidden = [
+			...new Set(
+				this.plans.flatMap((service, index) =>
+					Object.keys(service.secretRefs).flatMap((key) => {
+						const env: Record<string, string> | undefined =
+							environments[index]?.env;
+						const value = env?.[key];
+						return value
+							? [value, ...value.split(/\r?\n/)].filter(Boolean)
+							: [];
+					}),
+				),
+			),
+		].sort((a, b) => b.length - a.length);
+		const redact = (value: string) =>
+			environments.reduce(
+				(text, environment) => environment.redact(text),
+				parent.redact(
+					hidden.reduce(
+						(text, secret) => text.replaceAll(secret, "[REDACTED]"),
+						value,
+					),
+				),
+			);
+		this.frozen = { ...parent, redact };
+		this.serviceEnvironments = environments.map((environment) => ({
+			...environment,
+			redact,
+		}));
 		if (plan.compose?.network !== "isolated")
 			this.network = new ComposeNetwork(
 				plan,
@@ -175,7 +214,7 @@ export class ComposeProcess implements EnvironmentProcess {
 			),
 			deadline = Date.now() + this.plan.timeoutMs;
 		await this.network?.start(deadline - Date.now(), this.controller.signal);
-		for (const [index, plan] of containerPlans(this.plan).entries()) {
+		for (const [index, plan] of this.plans.entries()) {
 			this.controller.signal.throwIfAborted();
 			const left = deadline - Date.now();
 			if (left <= 0) throw new Error("Compose startup timed out");
@@ -186,6 +225,8 @@ export class ComposeProcess implements EnvironmentProcess {
 			const alias = this.plan.composePlan?.services[index]?.id;
 			if (attachment && !alias)
 				throw new Error("Compose service alias is missing");
+			const environment = this.serviceEnvironments[index];
+			if (!environment) throw new Error("Missing frozen service environment");
 			const child = new ContainerProcess(
 				{ ...plan, timeoutMs: deadline - Date.now() },
 				this.configDir,
@@ -195,8 +236,8 @@ export class ComposeProcess implements EnvironmentProcess {
 					? { id: attachment.id, aliases: [alias] }
 					: undefined,
 				{
-					...this.frozen,
-					env: { ...this.frozen.env, ...plan.environment },
+					...environment,
+					env: environment.env,
 					queryCredentials: () =>
 						plan.queryConnection ? this.frozen.queryCredentials() : undefined,
 					authorization: (endpoint) =>
