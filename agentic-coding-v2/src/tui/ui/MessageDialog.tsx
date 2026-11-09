@@ -48,7 +48,7 @@ export function MessageDialog(props: {
 		if (enabled()) scroll?.scrollBy(dy);
 	};
 	const page = () =>
-		Math.max(1, scroll?.viewport.height ?? height() - 5 - footer().length);
+		Math.max(1, scroll?.viewport.height ?? height() - 4 - footer().length);
 	const edge = (last: boolean) => {
 		if (enabled())
 			scroll?.scrollTo(

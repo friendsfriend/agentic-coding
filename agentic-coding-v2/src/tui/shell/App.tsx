@@ -29,6 +29,7 @@ import type {
 	SkillDocument,
 	SkillSummary,
 	TaskDetails,
+	Transcript as TranscriptData,
 } from "../../protocol/index.ts";
 import type {
 	ProviderActionCandidate,
@@ -65,6 +66,7 @@ import {
 	NativeAgentNavigation,
 	nativeAgentNavigationKeybinds,
 } from "../features/sessions/NativeAgentNavigation.tsx";
+import { ReportedUsageModal } from "../features/sessions/ReportedUsageModal.tsx";
 import { ReportedUsage } from "../features/sessions/ResponseFooter.tsx";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
 import { StandalonePanel } from "../features/sessions/StandalonePanel.tsx";
@@ -152,6 +154,7 @@ const help = [
 	"/models · /model [PROFILE] · /thinking · choose supplied model/thinking profile bundles",
 	"/standalone-model ID@REVISION PROFILE · explicit observed standalone configuration",
 	"/abort · /compact [instructions] · /latest · /timeline",
+	"/usage · reported usage in the supplied native transcript window only",
 	"/workspace expanding|permanent left|right · UI layout only; no configuration write",
 	"/workspace filter active|attention|all · observed native tasks only; f cycles in sidebar",
 	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
@@ -265,11 +268,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const [messageDialog, setMessageDialog] = createSignal<LocalNotice | null>(
 		null,
 	);
+	const [usageWindow, setUsageWindow] = createSignal<{
+		snapshot: TranscriptData;
+		origin: View;
+	} | null>(null);
 	const [quitConfirmation, setQuitConfirmation] = createSignal(false);
 	// Existing helpOpen guards are shell interaction fences, including the two
 	// higher-priority local dialogs. Actual help rendering uses helpRequested.
 	const helpOpen = () =>
-		helpRequested() || messageDialog() !== null || quitConfirmation();
+		helpRequested() ||
+		messageDialog() !== null ||
+		quitConfirmation() ||
+		usageWindow() !== null;
 	const notifications = createNotifications(() =>
 		`${navigation.current.page} ${navigation.current.resource ?? ""}`.trim(),
 	);
@@ -1288,6 +1298,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		setCrumbKey(undefined);
 		setProviderCandidate(null);
 		setEvidence(null);
+		setUsageWindow(null);
 		setWikiCandidate(null);
 		setSettingsCandidate(null);
 		setSettingsEditing(false);
@@ -1322,6 +1333,16 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		revision();
 		return client.transcript?.id === sessionId() ? client.transcript : null;
 	};
+	createEffect(() => {
+		const saved = usageWindow();
+		if (
+			saved &&
+			(status() !== "connected" ||
+				current() !== saved.origin ||
+				sessionId() !== saved.snapshot.id)
+		)
+			setUsageWindow(null);
+	});
 	const observation = () => {
 		revision();
 		return client.observation;
@@ -1916,6 +1937,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		...[
 			"/help",
 			"/input-history",
+			"/usage",
 			"/models",
 			"/thinking",
 			"/workspace expanding left",
@@ -2184,7 +2206,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const unregister = keymap.registerLayer({
 		id: "v2.shell",
 		priority: 10,
-		enabled: () => messageDialog() === null && !quitConfirmation(),
+		enabled: () =>
+			messageDialog() === null && !quitConfirmation() && usageWindow() === null,
 		commands: [
 			{
 				id: "shell.quit",
@@ -2380,6 +2403,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		const admittedHistoryKey = historyKey();
 		const diagnosticOrigin = `${origin.page} ${origin.resource ?? ""}`.trim();
 		if (!content.trim()) return;
+		if (content.trim() === "/usage") {
+			const supplied = transcript();
+			if (!supplied || status() !== "connected") {
+				setNotice(
+					"Open a connected native conversation with a supplied transcript window first; usage was not fetched.",
+				);
+				return;
+			}
+			origin.draft = "";
+			origin.focus = "content";
+			writePrompt("");
+			setUsageWindow({ snapshot: supplied, origin });
+			update();
+			return;
+		}
 		if (content.trim() === "/input-history") {
 			origin.draft = "";
 			origin.focus = "content";
@@ -4913,6 +4951,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							})),
 						]}
 					/>
+				</Show>
+				<Show when={usageWindow()} keyed>
+					{(saved) => (
+						<ReportedUsageModal
+							snapshot={saved.snapshot}
+							active={
+								usageWindow() === saved &&
+								!messageDialog() &&
+								!quitConfirmation() &&
+								!helpRequested()
+							}
+							close={() => {
+								if (usageWindow() === saved) setUsageWindow(null);
+							}}
+						/>
+					)}
 				</Show>
 				<Show when={quitConfirmation() && !messageDialog()}>
 					<QuitDialog

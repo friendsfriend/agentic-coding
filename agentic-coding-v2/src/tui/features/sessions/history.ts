@@ -12,6 +12,7 @@ const readCommands = new Set([
 	"evidence",
 	"inspect-model",
 	"skill",
+	"usage",
 ]);
 /** Bounded client-memory history. No confirmations/writes, disk persistence or replay. */
 export class DraftHistory {

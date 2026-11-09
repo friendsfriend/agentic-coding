@@ -2072,3 +2072,33 @@ presenter, helper or navigation-matrix tests were added. The remaining modal fam
 are not all ported by this batch. Real-width modal geometry, selection/clipboard,
 multiline cursor behavior, history prepend anchoring and visual parity still require
 manual terminal acceptance; none was performed. No deployment/restart was performed.
+
+## Reported-usage window port
+
+The original cost-breakdown modal is now ported as a local read-only window over one
+supplied native transcript observation (`/usage`). It reuses the original overview
+composition — a fixed-row list of supplied assistant responses with reported token and
+cost columns, a window summary line, and an `Enter` detail pane of the exact supplied
+fields — through the same local modal frame, scrollable list and selection marker as
+the other ports. PageUp/PageDown and Home/End move the list, and in the detail pane
+they move the viewport; `Esc` returns from the detail pane before it closes the window.
+
+The window is an observation of what the native surface already supplied. It does not
+fetch history, group responses into invented agents, sum a lifetime or billing total,
+report context occupancy or capacity, infer throughput, or treat a reported zero as
+proof of free billing. Reasoning and 1h cache-write counts stay labelled as subsets.
+Recorded durations are shown as recorded values, never a running clock. Missing fields
+remain absent rather than being filled in.
+
+Opening the window requires a connected conversation with a supplied transcript and
+takes no backend call; the snapshot is captured once, so a later watch update does not
+silently change what the reader is inspecting. Navigation, session change, disconnect,
+quit confirmation and exit retire or fence the window. The shell interaction layer,
+prompt submission and the help overlay are fenced while it is open. `/usage` is a local
+read command and is admitted to prompt history on that basis only; nothing is replayed.
+
+Biome (370 files, zero diagnostics), full unfiltered type-check, build, help and the
+14-file boundary suite pass: 50 tests / 773 assertions. No new boundary method, no
+renderer/mounting/snapshot/presenter test and no native call were added. Column widths,
+narrow-terminal truncation, detail-pane scrolling and overall visual parity of this
+modal remain manually unverified; no terminal acceptance or deployment was performed.
