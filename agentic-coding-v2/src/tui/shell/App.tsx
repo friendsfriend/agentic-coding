@@ -4350,12 +4350,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}}
 									/>
 								</Show>
-								<Show
-									when={
-										current().page === "environments" ||
-										current().page === "observability"
-									}
-								>
+								<Show when={current().page === "environments"}>
 									<DetailsFold
 										label="Environment operations"
 										summary="reads, drafts and native intentions"
