@@ -73,23 +73,17 @@ export function ProviderPanel(props: {
 		);
 	return (
 		<box flexDirection="column" gap={1}>
-			<text fg={color("primary")}>
-				Configured native providers · {props.rows.length} matching
-			</text>
+			<text fg={color("primary")}>Providers · {props.rows.length}</text>
 			<text fg={color("textMuted")}>
-				Registry is local configuration/token presence, not authentication or
-				reachability proof. No outbound request on navigation, reconnect, local
-				range search or viewpoint restoration.
+				{props.connected && props.fresh
+					? "Configured locally · token presence is not connectivity"
+					: "Disconnected · showing the last read"}
 			</text>
 			<Show when={props.error}>
 				<text fg={color("warning")}>{props.error}</text>
 			</Show>
 			<Show when={!props.connected || !props.fresh}>
-				<text fg={color("warning")}>
-					Cached/disconnected registry and inspection; no read-command
-					preparation. Local observations do not establish current upstream
-					state.
-				</text>
+				<text fg={color("warning")}>Disconnected · reads unavailable</text>
 			</Show>
 			<SuppliedRecordWindow
 				rows={props.rows}
@@ -107,17 +101,7 @@ export function ProviderPanel(props: {
 				}}
 			>
 				{(provider, index) => (
-					<box
-						flexDirection="column"
-						border={true}
-						borderColor={
-							props.selected(provider, index())
-								? color("accent")
-								: color("border")
-						}
-						padding={1}
-						gap={1}
-					>
+					<box flexDirection="column" gap={1}>
 						<ActionHeader
 							scope={registry()}
 							interactive={member(provider)}
@@ -125,33 +109,28 @@ export function ProviderPanel(props: {
 								if (member(provider)) props.select(provider, index());
 							}}
 						>
-							<text fg={color("primary")}>
-								{props.selected(provider, index()) ? "▾" : "▸"}{" "}
-								{String(provider.name)} · {String(provider.type)} · token{" "}
-								{provider.has_token === true ? "present" : "missing"}
-							</text>
+							<box flexDirection="row">
+								<text fg={color("primary")}>
+									{props.selected(provider, index()) ? "▾" : "▸"}{" "}
+									{String(provider.name)}
+								</text>
+								<text fg={color("textMuted")}>
+									{` — ${String(provider.type)} · token ${provider.has_token === true ? "present" : "missing"}`}
+								</text>
+							</box>
 						</ActionHeader>
 						<Show when={props.selected(provider, index())}>
-							<text wrapMode="word">
-								Configured origin {String(provider.baseUrl)} · username{" "}
-								{String(provider.username || "not configured")}
-							</text>
-							<text fg={color("textMuted")}>
-								Tokens are never displayed/persisted in viewpoints. Writes need
-								a separate sealed operator intention and manual digest
-								confirmation. Inspections never approve or dispatch writes.
+							<text wrapMode="word" fg={color("textMuted")}>
+								{String(provider.baseUrl)} ·{" "}
+								{String(provider.username || "no username")}
 							</text>
 							<Show when={!safe(provider)}>
 								<text fg={color("warning")}>
-									Missing/ambiguous/unsafe provider identity; command generation
-									withheld.
+									Provider identity is missing or ambiguous · reads withheld
 								</text>
 							</Show>
 							<Show when={ready(provider)}>
-								<text fg={color("textMuted")}>
-									Prepare a read command, edit placeholders and explicitly
-									submit:
-								</text>
+								<text fg={color("textMuted")}>Reads</text>
 								<For
 									each={[
 										"repos QUERY",
@@ -205,23 +184,15 @@ export function ProviderPanel(props: {
 					return (
 						<box flexDirection="column" gap={1}>
 							<text fg={color("primary")}>
-								Retained explicit inspection · {String(saved.provider)} ·{" "}
-								{String(saved.operation)}
-							</text>
-							<text fg={color("textMuted")}>
-								Cached response, never refreshed/replayed automatically. Lists
-								may reflect upstream page limits; absent/empty patches never
-								prove no changes. URLs remain inert.
+								{String(saved.operation)} · {String(saved.provider)}
 							</text>
 							<Show when={saved.provider !== selectedName()}>
 								<text fg={color("warning")}>
-									Retained response belongs to another/missing provider
-									selection, never substituted for the selected registry owner.
+									This response belongs to another provider
 								</text>
 							</Show>
-							<text wrapMode="word">
-								Received locally {String(saved.receivedAt ?? "not recorded")}{" "}
-								(epoch ms, not upstream revision).
+							<text wrapMode="word" fg={color("textMuted")}>
+								Read {String(saved.receivedAt ?? "at an unrecorded time")}
 							</text>
 							<SuppliedObservation
 								value={saved.input}
@@ -242,8 +213,7 @@ export function ProviderPanel(props: {
 									)
 										? "▾"
 										: "▸"}{" "}
-									Inspect complete returned value separately from record
-									summaries
+									Full response
 								</text>
 							</ActionHeader>
 							<Show
@@ -292,10 +262,7 @@ export function ProviderPanel(props: {
 												<Show
 													when={item.patch !== ""}
 													fallback={
-														<text fg={color("textMuted")}>
-															Native empty patch; not proof of upstream omission
-															or lack of changes.
-														</text>
+														<text fg={color("textMuted")}>Empty patch</text>
 													}
 												>
 													<SuppliedObservation

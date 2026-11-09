@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createMemo, Show } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { DetailsFold } from "../../ui/DetailsFold.tsx";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
@@ -30,35 +31,30 @@ export function ObservabilityPanel(props: {
 		props.rows.some((entry) => entry === row);
 	return (
 		<box flexDirection="column" gap={1}>
-			<text fg={color("primary")}>
-				Native diagnostic journals · {props.rows.length} matching supplied
-				records
-			</text>
+			<text fg={color("primary")}>Journals · {props.rows.length}</text>
 			<text fg={color("textMuted")}>
-				{props.connected
-					? "Last observed inventory, not an atomic system revision"
-					: "Cached inventory; current activity unknown"}
-				. No external telemetry/backend request runs on navigation.
-			</text>
-			<text wrapMode="word">
-				HTTP: newest {String(props.environments?.httpHistoryLimit ?? "unknown")}{" "}
-				of {String(props.environments?.httpOperationsTotal ?? "unknown")}{" "}
-				observed operations · query history limit{" "}
-				{String(props.environments?.queryHistoryLimit ?? "unknown")} · wait
-				history limit{" "}
+				{props.connected ? "Last observed" : "Disconnected, last read"} · HTTP{" "}
+				{String(props.environments?.httpHistoryLimit ?? "unknown")} of{" "}
+				{String(props.environments?.httpOperationsTotal ?? "unknown")} · query{" "}
+				{String(props.environments?.queryHistoryLimit ?? "unknown")} · wait{" "}
 				{String(props.environments?.waitHistoryLimit ?? "unknown")}
 			</text>
-			<text wrapMode="word">
-				{String(
-					props.environments?.referenceGraphScope ??
-						"Reference graph scope unavailable",
-				)}
-			</text>
-			<text fg={color("warning")}>
-				Issued means pending/uncertain, never completed execution or verified
-				rollback. Reference graphs are observations, not live lease/control
-				authority. No spans or remote logs are fetched by this view.
-			</text>
+			<DetailsFold
+				label="Scope"
+				summary="which observations this view holds"
+				scope={source()}
+			>
+				<text wrapMode="word" fg={color("textMuted")}>
+					{String(
+						props.environments?.referenceGraphScope ??
+							"Reference graph scope unavailable",
+					)}
+				</text>
+				<text fg={color("textMuted")}>
+					Issued means pending, not completed or rolled back. No spans or remote
+					logs are read here.
+				</text>
+			</DetailsFold>
 			<SuppliedRecordWindow
 				rows={props.rows}
 				scope={source()}
@@ -80,15 +76,7 @@ export function ObservabilityPanel(props: {
 							`diagnostic:${createHash("sha256").update(JSON.stringify(row)).digest("hex")}:${index()}`,
 					);
 					return (
-						<box
-							flexDirection="column"
-							border={true}
-							borderColor={
-								props.selected(row, index()) ? color("accent") : color("border")
-							}
-							padding={1}
-							gap={1}
-						>
+						<box flexDirection="column" gap={1}>
 							<ActionHeader
 								scope={source()}
 								interactive={member(row)}
@@ -96,23 +84,29 @@ export function ObservabilityPanel(props: {
 									if (member(row)) props.select(row, index());
 								}}
 							>
-								<text fg={color("primary")}>
-									{props.selected(row, index()) ? "▾" : "▸"}{" "}
-									{String(row.journal ?? "not supplied")} ·{" "}
-									{String(row.nativeIdentity ?? "not supplied")} ·{" "}
-									{String(row.state ?? row.observation ?? "unknown")}
-								</text>
+								<box flexDirection="row">
+									<text fg={color("primary")}>
+										{props.selected(row, index()) ? "▾" : "▸"}{" "}
+										{String(row.journal ?? "journal")} ·{" "}
+										{String(row.nativeIdentity ?? "no identity")}
+									</text>
+									<text fg={color("textMuted")}>
+										{` — ${String(row.state ?? row.observation ?? "unknown")}`}
+									</text>
+								</box>
 							</ActionHeader>
 							<Show when={!member(row)}>
 								<text fg={color("warning")}>
-									Missing or ambiguous identity; navigation disabled.
+									Identity is missing or ambiguous · navigation disabled
 								</text>
 							</Show>
 							<Show when={props.selected(row, index())}>
-								<text wrapMode="word">
-									App {String(row.app ?? "not supplied")} · run{" "}
-									{String(row.run ?? "not supplied")} · owner{" "}
-									{String(row.owner ?? "not supplied")}
+								<text wrapMode="word" fg={color("textMuted")}>
+									{String(row.app ?? "no app")} · run{" "}
+									{String(row.run ?? "none")} · owner{" "}
+									{String(row.owner ?? "none")} · issued{" "}
+									{String(row.issuedAt ?? "unrecorded")} · observed{" "}
+									{String(row.observedAt ?? "unrecorded")}
 								</text>
 								<Show when={row.issuedAt !== undefined}>
 									<text>
@@ -145,8 +139,7 @@ export function ObservabilityPanel(props: {
 										}}
 									>
 										<text fg={color("accent")}>
-											Open supplied catalog-owned task #{String(row.owner)} (no
-											lease adoption)
+											Open owner task #{String(row.owner)}
 										</text>
 									</ActionHeader>
 								</Show>
@@ -155,14 +148,13 @@ export function ObservabilityPanel(props: {
 									onActivate={() => props.toggle(key())}
 								>
 									<text fg={color("accent")}>
-										{props.expanded.includes(key()) ? "▾" : "▸"} Supplied
-										journal record in bounded local source windows
+										{props.expanded.includes(key()) ? "▾" : "▸"} Record
 									</text>
 								</ActionHeader>
 								<Show when={props.expanded.includes(key())}>
 									<SuppliedObservation
 										value={row}
-										label="Supplied native journal record"
+										label="Journal record"
 										scope={source()}
 									/>
 								</Show>
@@ -172,10 +164,7 @@ export function ObservabilityPanel(props: {
 				}}
 			</SuppliedRecordWindow>
 			<Show when={!props.rows.length}>
-				<text fg={color("textMuted")}>
-					No matching recorded observations. Not proof of no activity or
-					successful cleanup.
-				</text>
+				<text fg={color("textMuted")}>No journal records.</text>
 			</Show>
 		</box>
 	);

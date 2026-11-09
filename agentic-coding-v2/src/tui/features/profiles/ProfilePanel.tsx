@@ -2,6 +2,7 @@
 import { createMemo, onCleanup, Show } from "solid-js";
 import type { Data, Session } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { DetailsFold } from "../../ui/DetailsFold.tsx";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
@@ -69,23 +70,15 @@ export function ProfilePanel(props: {
 		row.available === true;
 	return (
 		<box flexDirection="column" gap={1}>
-			<text fg={color("primary")}>Native profiles & conversation models</text>
-			<text wrapMode="word">
-				Running-host definitions, not saved restart-required settings.
-				Registry/auth availability is an observed hint, not successful
-				generation or connectivity proof. No model discovery, credential fetch
-				or provider probe runs here.
+			<text fg={color("primary")}>Profiles and models</text>
+			<text fg={color("textMuted")}>
+				Profiles the running host loaded · changing one affects that
+				conversation only
 			</text>
 			<Show when={!ready()}>
-				<text fg={color("warning")}>
-					Inventory/inspection is cached or disconnected;
-					configuration/inspection command preparation withheld. Local browsing
-					remains available.
-				</text>
+				<text fg={color("warning")}>Disconnected · switching withheld</text>
 			</Show>
-			<text fg={color("primary")}>
-				Choose an explicit unique native conversation target
-			</text>
+			<text fg={color("textMuted")}>Conversation</text>
 			<SuppliedRecordWindow
 				rows={props.sessions}
 				scope={source()}
@@ -148,16 +141,13 @@ export function ProfilePanel(props: {
 											props.prepare(`/inspect-model ${session.id}`);
 									}}
 								>
-									<text fg={color("accent")}>
-										Prepare current model/thinking inspection (explicit read)
-									</text>
+									<text fg={color("accent")}>Read current model</text>
 								</ActionHeader>
 							</Show>
 						</Show>
 						<Show when={!sessionMember(session)}>
 							<text fg={color("warning")}>
-								Missing/ambiguous native identity; no standalone UUID alias,
-								arbitrary adoption or target selection.
+								Identity is missing or ambiguous · cannot be targeted
 							</text>
 						</Show>
 					</box>
@@ -165,18 +155,15 @@ export function ProfilePanel(props: {
 			</SuppliedRecordWindow>
 			<Show when={props.target !== null && !target()}>
 				<text fg={color("warning")}>
-					Selected conversation #{props.target} is missing or ambiguous in the
-					supplied catalog. No adoption/configuration attempted.
+					Conversation #{props.target} is no longer in the catalog
 				</text>
 			</Show>
 			<Show when={inspection()} keyed>
 				{(saved) => (
 					<box flexDirection="column" gap={1}>
-						<text wrapMode="word">
-							Cached native inspection · received {String(saved.observedAt)} ·
-							model {String(saved.model ?? "none")} · thinking{" "}
-							{String(saved.thinking)}. Inspection and live inventory are
-							non-atomic; refresh explicitly to verify a switch.
+						<text wrapMode="word" fg={color("textMuted")}>
+							Current model {String(saved.model ?? "none")} · thinking{" "}
+							{String(saved.thinking)} · read {String(saved.observedAt)}
 						</text>
 						<SuppliedObservation
 							value={saved}
@@ -187,10 +174,7 @@ export function ProfilePanel(props: {
 				)}
 			</Show>
 			<Show when={!props.rows.length}>
-				<text>
-					No profiles in the current filtered host inventory. Saved settings do
-					not hot-load here.
-				</text>
+				<text fg={color("textMuted")}>No profiles match the filter.</text>
 			</Show>
 			<SuppliedRecordWindow
 				rows={props.rows}
@@ -223,14 +207,17 @@ export function ProfilePanel(props: {
 								if (rowMember(row)) props.select(row, index());
 							}}
 						>
-							<text fg={color("primary")}>
-								{props.selected(row, index()) ? "▾" : "▸"} {String(row.id)} ·{" "}
-								{String(row.provider)}/{String(row.modelId)} · thinking{" "}
-								{String(row.thinking)}
-							</text>
+							<box flexDirection="row">
+								<text fg={color("primary")}>
+									{props.selected(row, index()) ? "▾" : "▸"} {String(row.id)}
+								</text>
+								<text fg={color("textMuted")}>
+									{` — ${String(row.provider)}/${String(row.modelId)} · ${String(row.thinking)}`}
+								</text>
+							</box>
 						</ActionHeader>
 						<Show when={props.selected(row, index())}>
-							<text wrapMode="word">
+							<text wrapMode="word" fg={color("textMuted")}>
 								{String(row.description ?? "No description")}
 							</text>
 							<text
@@ -238,20 +225,13 @@ export function ProfilePanel(props: {
 									row.available === true ? color("success") : color("warning")
 								}
 							>
-								Registry/auth hint:{" "}
-								{row.available === true ? "available" : "unavailable/unknown"}.
-								No token value or generation proof.
-							</text>
-							<text wrapMode="word">
-								Switch changes this conversation's native model/thinking only,
-								not task admission metadata, saved profiles, future defaults,
-								schedules or other conversations. No implied rollback, replay,
-								cancellation or replacement of an in-flight generation.
+								{row.available === true
+									? "Credential present"
+									: "Credential missing or unknown"}
 							</text>
 							<Show when={!commandSafe(row)}>
 								<text fg={color("warning")}>
-									Missing, ambiguous or unsafe profile identity; command
-									generation withheld.
+									Profile identity is missing or ambiguous · switching withheld
 								</text>
 							</Show>
 							<Show when={switchable(row)}>
@@ -267,16 +247,21 @@ export function ProfilePanel(props: {
 									}}
 								>
 									<text fg={color("accent")}>
-										Prepare switching conversation #{props.target} to{" "}
-										{String(row.id)} (submit explicitly)
+										Switch conversation #{props.target} to {String(row.id)}
 									</text>
 								</ActionHeader>
 							</Show>
-							<SuppliedObservation
-								value={row}
+							<DetailsFold
+								label="Profile"
+								summary="supplied fields"
 								scope={source()}
-								label="Complete supplied host profile"
-							/>
+							>
+								<SuppliedObservation
+									value={row}
+									scope={source()}
+									label="Profile"
+								/>
+							</DetailsFold>
 						</Show>
 					</box>
 				)}

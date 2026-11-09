@@ -1544,15 +1544,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			providerActionEpoch++;
 		});
 		if (!provider) {
-			setProviderWriteError(
-				"Select an exact configured provider name before preparing a write intention; drafts remain local.",
-			);
+			setProviderWriteError("Choose a provider first.");
 			return;
 		}
 		if (!connected) {
-			setProviderWriteError(
-				"Disconnected; local intention only. No candidate can be applied.",
-			);
+			setProviderWriteError("Disconnected · changes cannot be prepared.");
 			return;
 		}
 		setProviderWriteError(

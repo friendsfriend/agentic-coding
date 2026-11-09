@@ -6,6 +6,7 @@ import type {
 	ProviderActionReceipt,
 } from "../../../protocol/provider-actions.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { DetailsFold } from "../../ui/DetailsFold.tsx";
 import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
 import { PreparedCandidate } from "../../ui/PreparedCandidate.tsx";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
@@ -79,35 +80,26 @@ export function ProviderWritePanel(props: {
 		/^[A-Za-z0-9_-]{1,128}$/.test(attempt.id);
 	return (
 		<box flexDirection="column" gap={1}>
-			<text fg={color("primary")}>
-				Native provider write intentions · no outbound request on edit/preview
-			</text>
-			<text wrapMode="word" fg={color("warning")}>
-				Exactly one manual approval of an immutable
-				provider/destination/operation/payload snapshot permits one dispatch
-				attempt. Uncertain attempts never automatically retry on
-				apply/startup/reconnect/journal read. Acknowledgement is not remote
-				completion; inspect explicitly. GitHub CI numbers are RUN IDs, not job
-				IDs.
-			</text>
-			<text wrapMode="word" fg={color("textMuted")}>
-				Supported: comment-change, approve-exact-change (full reviewed 40-hex
-				SHA; preflight and host commit binding), unapprove-change,
-				comment-issue, close-issue, retry-job, cancel-job, rebase-change
-				(GitLab), reply-discussion, resolve-discussion (GitLab),
-				set-issue-labels, set-issue-assignees. No arbitrary route, merge or
-				unsigned approval. Rebase/issue/job intentions are exact targets, not
-				remote revision CAS.
-			</text>
+			<text fg={color("primary")}>Provider changes</text>
 			<Show when={props.error}>
 				<text fg={color("warning")}>{props.error}</text>
 			</Show>
 			<Show when={!props.connected || !props.fresh}>
-				<text fg={color("warning")}>
-					Cached/disconnected owner; command preparation withheld. Local
-					source/receipt browsing never grants replay.
-				</text>
+				<text fg={color("warning")}>Disconnected · changes withheld</text>
 			</Show>
+			<DetailsFold
+				label="Supported changes"
+				summary="will be approved one at a time"
+				scope={controls()}
+			>
+				<text wrapMode="word" fg={color("textMuted")}>
+					comment-change, approve-exact-change (full reviewed 40-hex SHA),
+					unapprove-change, comment-issue, close-issue, retry-job, cancel-job,
+					rebase-change (GitLab), reply-discussion, resolve-discussion (GitLab),
+					set-issue-labels, set-issue-assignees. GitHub CI numbers are run IDs,
+					not job IDs.
+				</text>
+			</DetailsFold>
 			<ActionHeader
 				scope={controls()}
 				interactive={!disposed && props.connected}
@@ -116,63 +108,51 @@ export function ProviderWritePanel(props: {
 				}}
 			>
 				<text fg={color("accent")}>
-					{props.editing
-						? "Leave intention editor"
-						: "Edit local provider intention"}
+					{props.editing ? "Leave editor" : "Edit change"}
 				</text>
 			</ActionHeader>
-			<text fg={color("textMuted")}>
-				Local editor limit: 128000 UTF-16 units; oversize input restores the
-				prior exact draft. Native snapshot/field bounds and validation remain
-				final.
-			</text>
-			<LocalJsonEditor
-				value={props.draft}
-				scope={editorOwner()}
-				maxLength={128000}
-				editing={props.editing}
-				interactive={!disposed && props.connected}
-				height={10}
-				enter={() => {
-					if (!disposed && props.connected) props.edit(true);
-				}}
-				change={props.change}
-			/>
+			<Show when={props.editing}>
+				<LocalJsonEditor
+					value={props.draft}
+					scope={editorOwner()}
+					maxLength={128000}
+					editing={props.editing}
+					interactive={!disposed && props.connected}
+					height={10}
+					enter={() => {
+						if (!disposed && props.connected) props.edit(true);
+					}}
+					change={props.change}
+				/>
+			</Show>
 			<Show when={ready()}>
 				<ActionHeader
 					scope={controls()}
 					interactive={ready()}
 					onActivate={() => prepare("/provider-preview")}
 				>
-					<text fg={color("accent")}>
-						Prepare sealed preview (explicit submission; no outbound request)
-					</text>
+					<text fg={color("accent")}>Preview change</text>
 				</ActionHeader>
 				<ActionHeader
 					scope={controls()}
 					interactive={ready()}
 					onActivate={() => prepare("/provider-new OPERATION")}
 				>
-					<text fg={color("accent")}>
-						Prepare new blank intention/request identity (explicit submission
-						discards draft)
-					</text>
+					<text fg={color("accent")}>Start a new change</text>
 				</ActionHeader>
 				<ActionHeader
 					scope={controls()}
 					interactive={ready()}
 					onActivate={() => prepare("/provider-attempts")}
 				>
-					<text fg={color("accent")}>
-						Prepare refreshing native attempt journal (no remote call)
-					</text>
+					<text fg={color("accent")}>Refresh attempts</text>
 				</ActionHeader>
 			</Show>
 			<PreparedCandidate
 				candidate={props.candidate}
 				scope={controls()}
 				ready={ready() && props.candidate?.provider === props.provider}
-				label="Provider intention (one dispatch attempt, not remote completion)"
+				label="Provider change"
 				metadata={
 					props.candidate ? { provider: props.candidate.provider } : undefined
 				}
@@ -183,7 +163,7 @@ export function ProviderWritePanel(props: {
 			<SuppliedRecordWindow
 				rows={props.attempts}
 				scope={journal()}
-				label="native provider attempt receipts"
+				label="provider attempts"
 				title={(attempt) =>
 					`${attempt.id} · ${attempt.operation} · ${attempt.target} · ${attempt.status}`
 				}

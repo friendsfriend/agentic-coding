@@ -108,7 +108,7 @@ export function ContextPanel(props: {
 				onActivate={() => void inspect()}
 			>
 				<text fg={color("accent")}>
-					{pending() ? "Reading context…" : "Context"}
+					{pending() ? "Reading context…" : "Read context"}
 				</text>
 			</ActionHeader>
 			<Show when={error()}>

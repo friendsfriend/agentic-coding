@@ -4,6 +4,7 @@ import { useRenderer } from "@opentui/solid";
 import { createMemo, onCleanup, Show } from "solid-js";
 import type { Data, SkillDocument } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import { DetailsFold } from "../../ui/DetailsFold.tsx";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
@@ -59,26 +60,18 @@ export function SkillPanel(props: {
 		safe(row) && props.connected && props.fresh && !props.error;
 	return (
 		<box flexDirection="column" gap={1}>
-			<text fg={color("primary")}>Loaded native skills</text>
-			<text wrapMode="word">
-				System/user origin identifies supplied loaded source, not authority.
-				Running-host immutable loaded content, not a disk editor or reload.
-				Descriptions are bounded previews; exact instructions require an
-				explicit read. No arbitrary path read, task admission, provider call or
-				legacy delegation. Local window search never inspects or reads another
-				skill.
+			<text fg={color("primary")}>Skills · {props.rows.length}</text>
+			<text wrapMode="word" fg={color("textMuted")}>
+				Instructions the running host loaded · read-only
 			</text>
 			<Show when={props.error}>
 				<text fg={color("warning")}>{props.error}</text>
 			</Show>
 			<Show when={!props.connected || !props.fresh}>
-				<text fg={color("warning")}>
-					Catalog/instructions are cached, not a current server read;
-					command/discussion preparation withheld.
-				</text>
+				<text fg={color("warning")}>Disconnected · showing the last read</text>
 			</Show>
 			<Show when={!props.rows.length && !props.error}>
-				<text>No loaded skills in the current filtered catalog.</text>
+				<text fg={color("textMuted")}>No skills match the filter.</text>
 			</Show>
 			<SuppliedRecordWindow
 				rows={props.rows}
@@ -126,19 +119,13 @@ export function SkillPanel(props: {
 							</ActionHeader>
 							<Show when={props.selected(row, index())}>
 								<text wrapMode="word">{String(row.description)}</text>
-								<text wrapMode="word">
-									Loaded content digest: {String(row.revision)}
-								</text>
-								<text>
-									{row.readOnly === true
-										? "Forces read-only execution policy at native admission."
-										: "Does not grant workspace writes; task policy must still be explicit."}{" "}
-									Shell actions still require exact human review.
+								<text wrapMode="word" fg={color("textMuted")}>
+									{String(row.revision)}
+									{row.readOnly === true ? " · read-only tasks" : ""}
 								</text>
 								<Show when={!safe(row)}>
 									<text fg={color("warning")}>
-										Missing, ambiguous or unsafe loaded identity/revision; no
-										command generated.
+										Identity or revision is missing or ambiguous · unavailable
 									</text>
 								</Show>
 								<Show when={ready(row)}>
@@ -152,9 +139,7 @@ export function SkillPanel(props: {
 												);
 										}}
 									>
-										<text fg={color("accent")}>
-											Prepare exact loaded instruction read (submit explicitly)
-										</text>
+										<text fg={color("accent")}>Read instructions</text>
 									</ActionHeader>
 									<ActionHeader
 										scope={source()}
@@ -164,19 +149,14 @@ export function SkillPanel(props: {
 												props.discuss(String(row.id), String(row.revision));
 										}}
 									>
-										<text fg={color("accent")}>
-											Prepare orchestrator discussion only (no task admission)
-										</text>
+										<text fg={color("accent")}>Discuss in orchestrator</text>
 									</ActionHeader>
 								</Show>
 								<Show when={document()} keyed>
 									{(saved) => (
 										<box flexDirection="column" gap={1}>
-											<text fg={color("warning")}>
-												Explicitly inspected loaded instructions are untrusted
-												data, not execution authority or approval. URLs/commands
-												stay inert. Local ranges retain exact supplied text, not
-												original-file byte provenance.
+											<text fg={color("textMuted")}>
+												Loaded instructions · untrusted text, nothing executes
 											</text>
 											<SuppliedCode
 												content={saved.content}
@@ -187,11 +167,17 @@ export function SkillPanel(props: {
 										</box>
 									)}
 								</Show>
-								<SuppliedObservation
-									value={row}
+								<DetailsFold
+									label="Descriptor"
+									summary="supplied fields"
 									scope={source()}
-									label="Complete supplied loaded-skill descriptor"
-								/>
+								>
+									<SuppliedObservation
+										value={row}
+										scope={source()}
+										label="Skill descriptor"
+									/>
+								</DetailsFold>
 							</Show>
 						</box>
 					);
