@@ -2126,3 +2126,21 @@ Biome (370 files, zero diagnostics), full unfiltered type-check, build, help and
 14-file boundary suite pass: 50 tests / 773 assertions. Scroll anchoring, prepend
 geometry and the reader's perceived position remain unverified without manual terminal
 acceptance, which was not performed; no deployment or restart was performed.
+
+### History explorer retention is refuse, not evict
+
+The transcript's older-page rule and the history explorer's cache now agree: a bounded
+local store refuses a page that would exceed its limit instead of deleting what it
+already holds. The explorer previously kept the oldest 500 entries and silently discarded
+the newest cached ones as an older page arrived, which removed exactly the rows the
+reader had just been inspecting while the scan continued. It now refuses that page whole,
+keeps the existing cache and cursor-null state, and states that the cache must be cleared
+explicitly and scanned again. The continuation was already consumed before the request,
+so no cursor is left reusable and no automatic retry exists; the existing
+"clear local history cache (no native deletion)" action is the recovery path.
+
+The static explanation, the full-cache notice and the documented client/server contract
+were corrected to match. No boundary method, retention size, page size or native read was
+changed. Biome (370 files, zero diagnostics), full unfiltered type-check and the 14-file
+boundary suite (50 tests / 773 assertions) pass; build and help were re-checked. No
+renderer or mounting test was added, and no manual terminal acceptance was performed.

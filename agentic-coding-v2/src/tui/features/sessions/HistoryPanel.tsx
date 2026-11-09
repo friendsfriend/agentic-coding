@@ -158,7 +158,13 @@ export function HistoryPanel(props: {
 					);
 				if (!prior) retained.set(Number(entry.id), entry);
 			}
-			const next = [...retained.values()].slice(0, 500);
+			// A bounded local cache must refuse a page whole rather than silently
+			// dropping the newest entries the reader was already looking at.
+			if (retained.size > 500)
+				throw new Error(
+					"History page exceeds the 500-entry local retention limit; page not adopted. Clear the local cache and scan again.",
+				);
+			const next = [...retained.values()];
 			setEntries(next);
 			setCursor(page.cursor);
 			setLoaded(true);
@@ -256,7 +262,8 @@ export function HistoryPanel(props: {
 					Explicit read-only native pages; at most 500 entries held locally and
 					20 mounted at once. Native fork/context/head metadata remains
 					uninterpreted. Search, kind filtering and local windows perform no
-					backend read. Older scans drop newest cached entries; reconnect clears
+					backend read. An older page that would exceed the local limit is
+					refused whole instead of discarding cached entries; reconnect clears
 					cursor state and never replays.
 				</text>
 				<Show when={props.connected && !pending()}>
@@ -345,8 +352,8 @@ export function HistoryPanel(props: {
 				</Show>
 				<Show when={entries().length >= 500}>
 					<text fg={color("warning")}>
-						Local retention is full. Older paging continues while dropping newer
-						cached entries; refresh newest explicitly to return.
+						Local retention is full. Further older pages are refused rather than
+						dropping cached entries; clear the local cache and scan again.
 					</text>
 				</Show>
 				<Show when={pending()}>
