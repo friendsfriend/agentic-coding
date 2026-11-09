@@ -4,7 +4,12 @@ import {
 	InboxDoc,
 	LiveDoc,
 } from "@earendil-works/pi-durable";
-import type { Session, Snapshot, Transcript } from "../../../protocol/index.ts";
+import type {
+	Session,
+	SessionContext,
+	Snapshot,
+	Transcript,
+} from "../../../protocol/index.ts";
 import { record } from "../../../protocol/index.ts";
 import type { Runtime } from "../../../runtime.ts";
 
@@ -62,6 +67,53 @@ export async function clientSession(app: Runtime, id: number, writable = true) {
 	const native = await app.harness.conversation(id as ConversationId, context);
 	if (!native) throw new Error("Native session is unavailable");
 	return native;
+}
+/** Explicit inspection only. Native context assembly reads committed entries;
+ * it neither submits work nor invokes a model. Context, agent and catalogue are
+ * separately observed, not an atomic revision or the final provider request. */
+export async function readContext(
+	app: Runtime,
+	id: number,
+): Promise<SessionContext> {
+	const session = await clientSession(app, id, false);
+	const view = await session.context(context);
+	const agent = await session.agent(context);
+	const model = agent.model
+		? app.models.getModel(agent.model.provider, agent.model.modelId)
+		: undefined;
+	const positive = (value: number | undefined) =>
+		typeof value === "number" && Number.isFinite(value) && value > 0
+			? value
+			: null;
+	const result: SessionContext = {
+		id,
+		head: view.head ? { ...view.head } : null,
+		entries: view.entries.map((entry) => ({ ...entry })),
+		contributions: view.contributions.map((messages) =>
+			messages.map((message) => ({ ...message })),
+		),
+		messages: view.messages.map((message) => ({ ...message })),
+		model: agent.model
+			? {
+					...agent.model,
+					catalogued: model !== undefined,
+					contextWindow: positive(model?.contextWindow),
+					maxOutput: positive(model?.maxTokens),
+				}
+			: null,
+		thinking: agent.thinkingLevel,
+	};
+	// Never silently trim an active context or sever entry/contribution alignment.
+	// Leave ample room for the authenticated response envelope below the frame cap.
+	if (
+		result.entries.length !== result.contributions.length ||
+		Buffer.byteLength(JSON.stringify(result), "utf8") > 400000
+	)
+		throw new Error("Native context projection exceeds the inspection budget");
+	// Native identity remains catalog-owned even if task retention/ownership changed
+	// while assembling the separate observations. Read access is not writability.
+	await clientSession(app, id, false);
+	return result;
 }
 export async function readSession(
 	app: Runtime,

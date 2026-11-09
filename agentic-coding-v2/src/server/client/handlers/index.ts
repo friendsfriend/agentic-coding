@@ -15,7 +15,12 @@ import {
 import { readEvidence } from "./evidence.ts";
 import { SessionHistory } from "./history.ts";
 import { inspectProvider } from "./providers.ts";
-import { clientSession, clientSnapshot, readSession } from "./sessions.ts";
+import {
+	clientSession,
+	clientSnapshot,
+	readContext,
+	readSession,
+} from "./sessions.ts";
 import { listSkills, readSkill } from "./skills.ts";
 import { readTask } from "./tasks.ts";
 
@@ -131,6 +136,9 @@ export async function dispatch(
 			fields(input, ["id"]);
 			await app.standalone.abort(text(input.id, "standalone identity", 80));
 			return { aborted: true };
+		case "session.context":
+			fields(input, ["id"]);
+			return readContext(app, integer(input.id));
 		case "session.read":
 			fields(input, ["id"]);
 			return readSession(app, integer(input.id));

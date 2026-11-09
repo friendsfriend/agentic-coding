@@ -64,6 +64,22 @@ export type Progress = {
 	compactionFailure: Data | null;
 	inbox: { id: number; mode: "steer" | "followUp" | "write" }[];
 };
+/** Explicit read-only native context projection; no approval revision or token estimate. */
+export type SessionContext = {
+	id: number;
+	head: Data | null;
+	entries: Data[];
+	contributions: Data[][];
+	messages: Data[];
+	model: {
+		provider: string;
+		modelId: string;
+		catalogued: boolean;
+		contextWindow: number | null;
+		maxOutput: number | null;
+	} | null;
+	thinking: string;
+};
 export type SessionHistoryPage = {
 	id: number;
 	entries: Data[];
@@ -229,6 +245,7 @@ export type Methods = {
 	};
 	"state.read": { input: Data; output: Snapshot };
 	"state.subscribe": { input: Data; output: { subscribed: true } };
+	"session.context": { input: { id: number }; output: SessionContext };
 	"session.read": { input: { id: number }; output: Transcript };
 	"session.history": {
 		input: { id: number; cursor?: string };
@@ -373,6 +390,7 @@ export const methods: Method[] = [
 	"state.read",
 	"state.subscribe",
 	"session.read",
+	"session.context",
 	"session.history",
 	"session.watch",
 	"standalone.read",

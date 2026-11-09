@@ -1834,3 +1834,66 @@ Biome (359 files, zero diagnostics), full unfiltered type-check, build, help and
 or manual TTY acceptance are added. Native nested-child transcript composition,
 timing/context/Mermaid completion and visual/interactive acceptance remain separate
 unfinished work; no real integration, deployment, restart or migration is claimed.
+
+## Integrated native context, reported usage and recorded timing batch
+
+- Add an explicit authenticated `session.context` read through the installed
+  native `Conversation.context()` API. Preserve the native applicable head, raw
+  active entries, position-aligned contributions after edits/exclusions (including
+  empty contributions) and ordered derived model messages. Never substitute the
+  retained-history window or rebuild ordering/context in the renderer. Recheck
+  catalog ownership after assembly; terminal native children remain readable,
+  never writable merely because their context can be inspected. Standalone UUIDs
+  and arbitrary/extra selectors do not become durable-session targets.
+- Return separately observed configured model/thinking and local catalogue context
+  capacity/maximum output. Missing/nonpositive/nonfinite catalogue limits stay
+  unavailable. These observations are not atomic, provider-request assembly,
+  context occupancy, capacity percentages, current response budgets or approval
+  revisions. No provider request, credential/resource discovery, queued-input
+  placement, fork, reset, compaction, configuration or adoption accompanies a read.
+  The complete serialized projection refuses above 400000 UTF-8 bytes; no silent
+  truncation, partial alignment or synthetic continuation is emitted. This bounds
+  the reply, not the SDK's internal active-context read.
+- Integrate an explicit native context inspector beside retained-history browsing.
+  Reads are manual and never polled or replayed. Inspect immutable entry/contribution
+  carriers and ordered message records in independent 20-record local windows;
+  complete serialized supplied sources retain the existing 200-line / 24000-unit
+  source windows. Capture alignment inside the carrier, not a mutable window
+  offset. Model/catalogue/head fields stay distinct. Scope/connection replacement
+  retires old data and choices, refresh removes the old snapshot before dispatch,
+  and late responses cannot adopt another owner. Subsequent commits do not make
+  an inspected snapshot current; the inspector explicitly says so.
+- Restore the assistant/model footer and original right-edge `Stamp` composition
+  with actual supplied request-start timestamps and monotonic recorded response
+  durations. Keep recorded zero values and distinguish partial/pending observations
+  from retained responses; neither proves task completion. Do not invent completion
+  clocks, running timers, thought durations or tokens/second. Exact supplied model,
+  response/effort IDs, stop/error/diagnostic fields, usage and timing remain available
+  behind scoped bounded metadata disclosure, including empty/absent distinctions.
+- Show reported input/output/cache-read/cache-write/cost separately for each
+  response and the returned history window. Reasoning and one-hour cache writes
+  remain labelled subsets, never added again. Rounded summaries retain separate
+  exact source fields; a reported zero is not proof of free billing. Window totals
+  remain neither current context size nor lifetime/verified billing totals.
+- Replace unbounded inline progress-error/retry/compaction strings with scoped
+  supplied-source disclosure. Preserve bounded compaction summaries and failure
+  warning, independent 20-record compaction/inbox windows and complete supplied
+  run/input records. Retry/deferred clocks are recorded scheduling observations,
+  not countdowns, execution, readiness, completion, child navigation or recovery
+  controls. Existing parent interaction and captured-choice fences remain in force.
+
+Four additional authenticated faux-loopback boundary fixtures cover 27 active
+entry/contribution records, ordered multipart Unicode/combining/CRLF data, exact
+zero/empty usage and timing metadata, native omission/replacement edits and reset
+heads without history erasure, reconnect equality, whole-projection budget refusal
+and next-small-response transport health, completed-child read/write separation,
+and 27 native queued follow-ups behind a held generation. Repeated context reads
+neither place queued inputs nor create/resume a model request. Setup uses public
+native admissions and disposable storage, never storage surgery or injected frames.
+Biome (364 files, zero diagnostics), full unfiltered type-check, build, help and
+39 boundary tests (729 assertions) pass. No renderer/helper/mounting/presenter tests
+or manual TTY acceptance are added. Full original visual/interactive parity,
+native nested-child transcript composition, Mermaid and remaining timing/context
+presentation still need work; clipboard and real integrations remain unverified.
+No deployment, existing-app call, real provider/model/cluster call, restart or
+migration is claimed.

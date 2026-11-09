@@ -58,12 +58,14 @@ import {
 	type WorkbenchMemory,
 } from "../features/resources/EnvironmentWorkbench.tsx";
 import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
+import { ContextPanel } from "../features/sessions/ContextPanel.tsx";
 import { HistoryPanel } from "../features/sessions/HistoryPanel.tsx";
 import { DraftHistory } from "../features/sessions/history.ts";
 import {
 	NativeAgentNavigation,
 	nativeAgentNavigationKeybinds,
 } from "../features/sessions/NativeAgentNavigation.tsx";
+import { ReportedUsage } from "../features/sessions/ResponseFooter.tsx";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
 import { StandalonePanel } from "../features/sessions/StandalonePanel.tsx";
 import {
@@ -3893,13 +3895,29 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										}
 									>
 										<Show when={transcript()}>
-											<text fg={color("textMuted")}>
-												History window · input {transcript()?.usage.input ?? 0}{" "}
-												· output {transcript()?.usage.output ?? 0} · cached{" "}
-												{transcript()?.usage.cacheRead ?? 0} · reported $
-												{(transcript()?.usage.cost ?? 0).toFixed(4)}
-											</text>
+											{(value) => (
+												<>
+													<ReportedUsage usage={value().usage} window />
+													<SuppliedObservation
+														scope={[workspaceScope(), value()]}
+														interactive={
+															!busy() && !helpOpen() && !paletteOpen()
+														}
+														label="Exact reported history-window usage; not active context size, lifetime totals or billing verification"
+														value={value().usage}
+													/>
+												</>
+											)}
 										</Show>
+										<ContextPanel
+											scope={workspaceScope()}
+											interactive={!busy() && !helpOpen() && !paletteOpen()}
+											client={client}
+											id={sessionId() ?? Number.NaN}
+											connected={
+												status() === "connected" && observation() === "watching"
+											}
+										/>
 										<HistoryPanel
 											scope={workspaceScope()}
 											interactive={!busy() && !helpOpen() && !paletteOpen()}

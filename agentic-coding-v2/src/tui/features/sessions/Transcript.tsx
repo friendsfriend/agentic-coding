@@ -33,6 +33,8 @@ import { bindings, transcriptKeybinds } from "../../ui/keybinds.ts";
 import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { NativeProgress } from "./NativeProgress.tsx";
+import { ResponseFooter } from "./ResponseFooter.tsx";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import type { PromptTimelineRow } from "./TimelinePicker.tsx";
 import { ToolCard } from "./ToolCard.tsx";
@@ -679,44 +681,11 @@ export function Transcript(props: {
 				</Show>
 				<Show when={progress()}>
 					{(live) => (
-						<>
-							<text fg={color("textMuted")}>
-								{live().run
-									? `Native run task #${live().run?.taskId} · inputs ${live().run?.inputs.join(", ")}`
-									: "No native run recorded in this observation"}{" "}
-								· queued inputs {live().inbox.length}
-							</text>
-							<Show when={live().generation}>
-								{(generation) => (
-									<text fg={color("textMuted")}>
-										Native generation · attempt {generation().attempt} ·
-										committed partials only
-										{generation().retry
-											? ` · retry recorded at ${generation().retry?.at}: ${generation().retry?.error}`
-											: ""}
-										{generation().deferred
-											? ` · deferred poll recorded at ${generation().deferred?.pollAt}`
-											: ""}
-									</text>
-								)}
-							</Show>
-							<For each={live().compactions}>
-								{(item) => (
-									<text fg={color("textMuted")}>
-										Native compaction #{String(item.taskId)} ·{" "}
-										{String(item.reason)} · attempt {String(item.attempt)}
-										{item.retry ? ` · retry ${JSON.stringify(item.retry)}` : ""}
-									</text>
-								)}
-							</For>
-							<Show when={live().compactionFailure}>
-								{(failure) => (
-									<text fg={color("warning")}>
-										Native compaction failure · {String(failure().error)}
-									</text>
-								)}
-							</Show>
-						</>
+						<NativeProgress
+							value={live()}
+							scope={props.scope}
+							interactive={active()}
+						/>
 					)}
 				</Show>
 
@@ -1011,6 +980,13 @@ export function Transcript(props: {
 										);
 									}}
 								</For>
+								<Show when={message().role === "assistant"}>
+									<ResponseFooter
+										message={message()}
+										scope={messageObservation()}
+										interactive={active()}
+									/>
+								</Show>
 								<Show
 									when={
 										message().role === "toolResult" &&
