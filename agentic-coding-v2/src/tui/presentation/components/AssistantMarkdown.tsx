@@ -1,5 +1,8 @@
 /** @jsxImportSource @opentui/solid */
+
+import { useRenderer } from "@opentui/solid";
 import { createMemo, For } from "solid-js";
+import { createSessionMermaidRenderer } from "../mermaid/renderer.ts";
 import { uiColors } from "../theme/colors.ts";
 import { MarkdownViewer } from "./MarkdownViewer.tsx";
 import {
@@ -20,8 +23,9 @@ function holdBackTrailingLine(source: string): string {
 
 /** Original assistant top-level markdown flow. Settled parts retain identity;
  * a growing tail updates its mounted renderer until its code/prose shape changes.
- * Mermaid's custom diagram renderer is not ported here: its source stays an
- * ordinary fence, without introducing a render service or execution authority. */
+ * Mermaid fences use the vendored original terminal renderer, scoped to this
+ * message's Markdown renderable. Nothing is fetched or executed: an unparsable,
+ * oversized or unsupported fence stays ordinary readable source. */
 export function AssistantMarkdown(props: {
 	transcript: (key: string, text: string) => readonly MarkdownBlockPart[];
 	partKey: string;
@@ -33,6 +37,7 @@ export function AssistantMarkdown(props: {
 	const slots = createKeyedItems(parts, (part, index) =>
 		JSON.stringify([props.partKey, index, part.code]),
 	);
+	const mermaid = createSessionMermaidRenderer(useRenderer());
 	return (
 		<box flexDirection="column">
 			<For each={slots()}>
@@ -40,6 +45,7 @@ export function AssistantMarkdown(props: {
 					const part = slot.value;
 					return (
 						<MarkdownViewer
+							renderNode={mermaid}
 							content={(() => {
 								if (index() !== parts().length - 1)
 									return part().source.replace(/\s+$/, "");

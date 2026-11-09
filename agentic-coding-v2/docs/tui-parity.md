@@ -1612,7 +1612,7 @@ content and bindings, not permission to replace the original presentation.
   automatic-copy or terminal-placement parity.
 - Remaining orchestrator/durable transcript composition: text-line/source-offset
   anchoring beyond the integrated bounded local expansion, native-history merge,
-  Mermaid diagram rendering, remaining specialized tool families and
+  remaining specialized tool families and
   file/shell header/section composition, remaining timing coverage and
   progress/context arrangement,
   remaining prompt history details, resource/run argument and profile pickers,
@@ -1897,3 +1897,41 @@ native nested-child transcript composition, Mermaid and remaining timing/context
 presentation still need work; clipboard and real integrations remain unverified.
 No deployment, existing-app call, real provider/model/cluster call, restart or
 migration is claimed.
+
+## Vendored Mermaid transcript rendering batch
+
+- Vendor the pinned upstream terminal Mermaid renderer (`anomalyco/opencode`,
+  `packages/merman/src`, commit `5e066ac…`, MIT, license retained) as source inside
+  `src/tui/presentation/mermaid/vendor`. This is a source copy, not a runtime import
+  of the previous application: no legacy module, adapter, plugin registration or
+  private service is loaded, and no `src/web/*` or embedded-workflow artifact changes.
+- Restore the original diagram binding for assistant prose only: the transcript's
+  Markdown renderable opts into the fenced-code hook, and the vendored layout reads
+  the live theme palette. Every other Markdown surface keeps ordinary fences, and
+  transcript data, native authority and retained bytes are untouched.
+- Keep the original trust boundary. Diagram layout is synchronous, local and bounded
+  (32768 source characters, 500 lines, canvas-size layout); oversize, unparsable,
+  unsupported or non-fitting fences stay readable fenced source. Rendering draws
+  supplied text only: it never fetches a URL, resolves a `click` target, invokes a
+  tool, reads a file or grants approval. A diagram is a presentation of text, not
+  evidence, current child status or execution.
+- Retain upstream streaming behavior: an incomplete trailing fence keeps its last
+  successful diagram for the same block identity, so a diagram does not collapse
+  back to raw source on every chunk; the cache is scoped to the claiming renderable
+  and retired when it is destroyed. Reachable diagram widths follow the actual
+  transcript width rather than a fixed column count.
+- Vendored files are excluded from Biome formatting/lint to preserve upstream diffs,
+  while remaining inside the unfiltered type-check, the build and the runtime. The
+  local adapter is the palette and hook only; no non-null assertion or widened
+  authority was added to first-party code.
+- Upstream renderable-mounting tests are deliberately not copied. Two local pure
+  checks cover family detection across all six supported grammars, ordinary-source
+  fallback and bounded parser/layout output for Unicode content in this runtime.
+
+Biome (365 files, zero diagnostics, vendor excluded), full unfiltered type-check,
+build, help and 41 boundary tests (747 assertions) pass. No renderer, mounting,
+snapshot or presenter test is added, and no terminal visual acceptance is claimed:
+diagram legibility, layout at real widths, theme appearance and drag-scrolling still
+require manual verification. Native nested-child transcript composition and remaining
+timing/context arrangement remain unfinished; clipboard, real integrations,
+deployment, restart and migration remain unverified.

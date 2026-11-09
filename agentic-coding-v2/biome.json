@@ -3,6 +3,7 @@
 	"files": {
 		"includes": [
 			"src/**",
+			"!src/tui/presentation/mermaid/vendor",
 			"test/**",
 			"scripts/**",
 			"biome.json",
