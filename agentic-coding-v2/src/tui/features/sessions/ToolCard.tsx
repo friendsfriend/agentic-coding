@@ -267,8 +267,8 @@ export function ToolCard(props: {
 			? "Native in-flight call — still being generated, not execution status"
 			: props.result
 				? props.result.isError === true
-					? "Native tool error"
-					: "Result recorded"
+					? "Error"
+					: ""
 				: props.progress
 					? `Native slot ${props.progress.status}${props.progress.status === "running" ? " — may be waiting on owned work/review" : props.progress.status === "done" ? " — no terminal result linked" : ""}${props.progress.summary?.isError === true ? " · nested summary reports an error" : ""}`
 					: props.pairing === "ambiguous"

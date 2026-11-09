@@ -824,24 +824,13 @@ export function Transcript(props: {
 			}}
 		>
 			<box flexDirection="column" gap={1}>
-				<text
-					fg={
-						props.observation === "watching"
-							? color("textMuted")
-							: color("warning")
-					}
-				>
-					{props.observation === "watching"
-						? "Watching native commits · last observed projection (not an atomic revision)"
-						: `Native activity unknown · observation ${props.observation}`}
-					{props.observationError ? ` · ${props.observationError}` : ""}
-				</text>
-				<Show when={props.freezeWindow && window()}>
+				<Show when={props.observation !== "watching" || props.observationError}>
 					<text fg={color("warning")} wrapMode="word">
-						Frozen bounded retained-history window while reading. Newer commits
-						may be outside this display; header usage/counters and live activity
-						below describe the separately supplied current projection, not this
-						frozen window. Jump to latest to release the window.
+						{props.observation === "watching"
+							? `Last read failed · ${props.observationError}`
+							: `Transcript unavailable · observation ${props.observation}${
+									props.observationError ? ` · ${props.observationError}` : ""
+								}`}
 					</text>
 				</Show>
 				<Show when={progress()}>
@@ -854,71 +843,40 @@ export function Transcript(props: {
 					)}
 				</Show>
 
-				<Show when={controls().length > 0}>
+				<Show when={controls().length > 1}>
 					<ActionHeader
 						scope={[props.scope, controls()]}
 						interactive={props.interactive}
 						onActivate={() => chooseCards()}
 					>
-						<text fg={color("accent")}>
-							Choose observed thinking/tool card (local navigation)
-						</text>
+						<text fg={color("textMuted")}>▸ Select card</text>
 					</ActionHeader>
 				</Show>
 				<Show when={standalone().some((row) => row.ambiguous)}>
 					<text fg={color("warning")} wrapMode="word">
-						Repeated native slot identities remain read-only observations; no
-						selected card or parent/child target is inferred from their order.
-					</text>
-				</Show>
-				<Show
-					when={
-						selected() &&
-						slotFor(props.selected ?? "")?.parentTaskId !== undefined
-					}
-				>
-					<text fg={color("textMuted")} wrapMode="word">
-						Nested navigation follows both supplied parent task and call
-						pointers only. Missing, clipped or ambiguous parents are not
-						adopted; Ctrl+Alt+Left/Right navigates uniquely linked mounted
-						cards.
+						Some cards share an identity and stay read-only.
 					</text>
 				</Show>
 				<Show when={props.selected && !selected()}>
 					<text fg={color("warning")}>
-						Saved card is not mounted in the currently observed transcript
-						(local or clipped history or ended/disconnected live activity).
-						Selection is not replaced automatically; choose an observed card
-						explicitly.
+						The saved card is not in this transcript.
 					</text>
 				</Show>
 				<Show when={window()?.truncated}>
-					<text fg={color("warning")}>
-						{props.freezeWindow
-							? "Showing a frozen bounded native-entry window."
-							: "Retaining the newest 200 native entries for this bounded view."}{" "}
-						Unpaired tool activity is unknown outside this history window.
-					</text>
+					<text fg={color("textMuted")}>Showing the newest 200 entries.</text>
 				</Show>
 				<Show when={localStart() > 0}>
-					<text fg={color("textMuted")} wrapMode="word">
-						{localStart()} older supplied native entries are not mounted. Scroll
-						upward to expand this local window first; a native history read
-						happens only after the retained window is exhausted.
+					<text fg={color("textMuted")}>
+						{localStart()} older entries hidden · scroll up to load
 					</text>
 				</Show>
 				<Show when={historyEntries().length > 0}>
-					<text fg={color("textMuted")} wrapMode="word">
-						{`${historyEntries().length} older native history ${
-							historyEntries().length === 1 ? "entry" : "entries"
-						} read explicitly and shown above the retained window. `}
-						They are a separate read: identities are native and never
-						renumbered, a gap between the page and the retained window is
-						possible, and they are not a continuation of the live watch, another
-						conversation's adoption, or authority to resume anything.
+					<text fg={color("textMuted")}>
+						{historyEntries().length} older{" "}
+						{historyEntries().length === 1 ? "entry" : "entries"} loaded
 					</text>
 				</Show>
-				<Show when={localStart() === 0 && props.history?.connected}>
+				<Show when={localStart() > 0 && props.history?.connected}>
 					<ActionHeader
 						scope={historySource()}
 						interactive={
@@ -941,25 +899,17 @@ export function Transcript(props: {
 					>
 						<text fg={color("accent")}>
 							{historyError() || historyEntries().length >= 400
-								? "Restart explicit history read (discard this local prelude)"
+								? "Restart history read"
 								: !historyLoaded()
-									? "Read newest native history page"
+									? "Load history"
 									: historyCursor() !== null
-										? "Read one older native history page"
-										: "Native history exhausted · no further page"}
+										? "Load older history"
+										: "History exhausted"}
 						</text>
 					</ActionHeader>
 				</Show>
-				<Show when={historyEntries().length >= 400}>
-					<text fg={color("warning")}>
-						400-entry local history limit reached; older reads are stopped, not
-						silently discarded.
-					</text>
-				</Show>
 				<Show when={historyPending()}>
-					<text fg={color("textMuted")}>
-						Reading one older native history page…
-					</text>
+					<text fg={color("textMuted")}>Loading history…</text>
 				</Show>
 				<Show when={historyError()}>
 					{(message) => (
@@ -1147,8 +1097,8 @@ export function Transcript(props: {
 																		? "▾"
 																		: "▸"}{" "}
 																	{message().nativePartial === true
-																		? "Thinking… · committed partial"
-																		: "Thinking… · retained"}
+																		? "Thinking…"
+																		: "Thought"}
 																</text>
 																<Stamp timestamp={message().timestamp} />
 															</box>

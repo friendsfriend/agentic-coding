@@ -204,7 +204,7 @@ export function HistoryPanel(props: {
 			title,
 			rows,
 			initialKey,
-			note: "Search loaded native entries only · no older-page read, live context adoption or execution",
+			note: "Search only · no older-page read, live context adoption or execution",
 			valid,
 			choose: (key) => {
 				if (!valid() || !rows.some((row) => row.key === key)) return false;
@@ -246,48 +246,38 @@ export function HistoryPanel(props: {
 			},
 		);
 	return (
-		<box flexDirection="column" border={true} padding={1} gap={1}>
+		<box flexDirection="column">
 			<ActionHeader
 				onActivate={() => {
 					if (props.interactive && !pending()) setOpen((value) => !value);
 				}}
 			>
 				<text fg={color("accent")}>
-					{open() ? "▾" : "▸"} Retained native history explorer ·{" "}
-					{entries().length} loaded
+					{open() ? "▾" : "▸"} History · {entries().length} loaded
 				</text>
 			</ActionHeader>
 			<Show when={open()}>
-				<text fg={color("textMuted")} wrapMode="word">
-					Explicit read-only native pages; at most 500 entries held locally and
-					20 mounted at once. Native fork/context/head metadata remains
-					uninterpreted. Search, kind filtering and local windows perform no
-					backend read. An older page that would exceed the local limit is
-					refused whole instead of discarding cached entries; reconnect clears
-					cursor state and never replays.
-				</text>
 				<Show when={props.connected && !pending()}>
 					<ActionHeader onActivate={() => void load()}>
 						<text fg={color("accent")}>
-							{loaded()
-								? "Explicitly refresh newest retained page"
-								: "Read newest retained page"}
+							{loaded() ? "Refresh newest page" : "Load newest page"}
 						</text>
 					</ActionHeader>
 				</Show>
+				<text fg={color("textMuted")} wrapMode="word">
+					Read-only · up to 500 held, 20 shown · filters stay local.
+				</text>
 				<Show when={entries().length > 0}>
 					<ActionHeader onActivate={find}>
-						<text fg={color("accent")}>Search loaded native entries</text>
+						<text fg={color("accent")}>Search</text>
 					</ActionHeader>
 					<ActionHeader onActivate={chooseKind}>
-						<text fg={color("accent")}>
-							Choose retained kind · {kind() ?? "all"}
-						</text>
+						<text fg={color("accent")}>Kind · {kind() ?? "all"}</text>
 					</ActionHeader>
 					<text fg={color("textMuted")}>
-						Local rows {matching().length ? offset() + 1 : 0}–
-						{Math.min(offset() + 20, matching().length)} / {matching().length}{" "}
-						matching · selected native entry {selected() ?? "none"}
+						{Math.min(offset() + 20, matching().length)} of {matching().length}{" "}
+						shown
+						{selected() === null ? "" : ` · #${selected()} selected`}
 					</text>
 					<Show
 						when={
@@ -296,8 +286,7 @@ export function HistoryPanel(props: {
 						}
 					>
 						<text fg={color("warning")}>
-							Selected entry left the local retention window; no replacement is
-							adopted.
+							The selected entry is no longer held.
 						</text>
 					</Show>
 					<Show when={offset() > 0}>
@@ -306,9 +295,7 @@ export function HistoryPanel(props: {
 								if (props.interactive) setStart(Math.max(0, offset() - 20));
 							}}
 						>
-							<text fg={color("accent")}>
-								Previous local history window (no native read)
-							</text>
+							<text fg={color("accent")}>Previous 20</text>
 						</ActionHeader>
 					</Show>
 					<For each={visible()}>
@@ -325,9 +312,7 @@ export function HistoryPanel(props: {
 								if (props.interactive) setStart(offset() + 20);
 							}}
 						>
-							<text fg={color("accent")}>
-								Next local history window (no native read)
-							</text>
+							<text fg={color("accent")}>Next 20</text>
 						</ActionHeader>
 					</Show>
 					<ActionHeader
@@ -335,29 +320,24 @@ export function HistoryPanel(props: {
 							if (props.interactive && !pending()) clear();
 						}}
 					>
-						<text fg={color("accent")}>
-							Clear local history cache (no native deletion)
-						</text>
+						<text fg={color("accent")}>Clear loaded history</text>
 					</ActionHeader>
 				</Show>
 				<Show when={props.connected && !pending() && cursor()}>
 					<ActionHeader onActivate={() => void load(true)}>
-						<text fg={color("accent")}>Read next older native page</text>
+						<text fg={color("accent")}>Load older page</text>
 					</ActionHeader>
 				</Show>
 				<Show when={loaded() && !cursor() && !pending() && !error()}>
-					<text fg={color("textMuted")}>
-						Native scan reached its end at this observation.
-					</text>
+					<text fg={color("textMuted")}>End of history.</text>
 				</Show>
 				<Show when={entries().length >= 500}>
 					<text fg={color("warning")}>
-						Local retention is full. Further older pages are refused rather than
-						dropping cached entries; clear the local cache and scan again.
+						500 entries held · clear to load more.
 					</text>
 				</Show>
 				<Show when={pending()}>
-					<text fg={color("textMuted")}>Native history read pending</text>
+					<text fg={color("textMuted")}>Loading…</text>
 				</Show>
 				<Show when={error()}>
 					<text fg={color("error")} wrapMode="word">

@@ -6,6 +6,7 @@ import {
 	formatCost,
 	formatTokenCount,
 } from "../../presentation/components/transcriptFormat.ts";
+import { DetailsFold } from "../../ui/DetailsFold.tsx";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
 
@@ -94,9 +95,7 @@ export function ResponseFooter(props: {
 				<text fg={color("textMuted")} flexGrow={1} wrapMode="word">
 					Assistant · {modelLabel(props.message.provider)}/
 					{modelLabel(props.message.model)} ·{" "}
-					{props.message.nativePartial === true
-						? "native committed partial"
-						: "retained response"}
+					{props.message.nativePartial === true ? "streaming" : "retained"}
 				</text>
 				<Stamp
 					timestamp={props.message.timestamp}
@@ -110,12 +109,19 @@ export function ResponseFooter(props: {
 				/>
 			</box>
 			<ReportedUsage usage={props.message.usage} />
-			<SuppliedObservation
+			<DetailsFold
 				interactive={props.interactive}
 				scope={source()}
-				label="Supplied response metadata, usage and recorded timing; not task completion evidence. Missing fields remain absent; reported zero is not proof of free billing"
-				value={metadata()}
-			/>
+				label="Response details"
+				summary={`${Object.keys(metadata()).length} supplied fields`}
+			>
+				<SuppliedObservation
+					interactive={props.interactive}
+					scope={source()}
+					label="Supplied response metadata, usage and recorded timing; not task completion evidence. Missing fields remain absent; reported zero is not proof of free billing"
+					value={metadata()}
+				/>
+			</DetailsFold>
 		</box>
 	);
 }

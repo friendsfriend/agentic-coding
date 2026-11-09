@@ -67,7 +67,6 @@ import {
 	nativeAgentNavigationKeybinds,
 } from "../features/sessions/NativeAgentNavigation.tsx";
 import { ReportedUsageModal } from "../features/sessions/ReportedUsageModal.tsx";
-import { ReportedUsage } from "../features/sessions/ResponseFooter.tsx";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
 import { StandalonePanel } from "../features/sessions/StandalonePanel.tsx";
 import {
@@ -3987,21 +3986,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											</text>
 										}
 									>
-										<Show when={transcript()}>
-											{(value) => (
-												<>
-													<ReportedUsage usage={value().usage} window />
-													<SuppliedObservation
-														scope={[workspaceScope(), value()]}
-														interactive={
-															!busy() && !helpOpen() && !paletteOpen()
-														}
-														label="Exact reported history-window usage; not active context size, lifetime totals or billing verification"
-														value={value().usage}
-													/>
-												</>
-											)}
-										</Show>
 										<ContextPanel
 											scope={workspaceScope()}
 											interactive={!busy() && !helpOpen() && !paletteOpen()}

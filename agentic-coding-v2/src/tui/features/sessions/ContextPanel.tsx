@@ -108,9 +108,7 @@ export function ContextPanel(props: {
 				onActivate={() => void inspect()}
 			>
 				<text fg={color("accent")}>
-					{pending()
-						? "Reading native committed context…"
-						: "Inspect native committed context (explicit read)"}
+					{pending() ? "Reading context…" : "Context"}
 				</text>
 			</ActionHeader>
 			<Show when={error()}>
@@ -129,38 +127,30 @@ export function ContextPanel(props: {
 							onActivate={() => setOpen(!open())}
 						>
 							<text fg={color("textMuted")}>
-								{open() ? "▾" : "▸"} Inspected context ·{" "}
-								{value().entries.length} active entries ·{" "}
-								{value().messages.length} derived messages
+								{open() ? "▾" : "▸"} {value().entries.length} entries ·{" "}
+								{value().messages.length} messages
+								{value().model?.contextWindow
+									? ` · window ${value().model?.contextWindow}`
+									: ""}
 							</text>
 						</ActionHeader>
 						<Show when={open()}>
-							<text fg={color("warning")} wrapMode="word">
-								Read-only point-in-time projection, not refreshed with commits.
-								Context, configured agent and catalogue are separate
-								observations, not an atomic revision. Native derived messages
-								are not the complete provider request; request-time hooks,
-								system/tool assembly and provider transforms are not
-								reconstructed here. No token occupancy, capacity percentage or
-								approval authority is inferred.
-							</text>
 							<text fg={color("textMuted")} wrapMode="word">
-								Catalogue context capacity:{" "}
-								{value().model?.contextWindow ?? "not supplied"} · catalogue
-								maximum output: {value().model?.maxOutput ?? "not supplied"}.
-								These limits do not measure context tokens or the budget used by
-								a response.
+								Read-only as inspected. Catalogue window{" "}
+								{value().model?.contextWindow ?? "not supplied"} · maximum
+								output {value().model?.maxOutput ?? "not supplied"}; these are
+								catalogue limits, not measured occupancy.
 							</text>
 							<SuppliedObservation
 								interactive={active()}
 								scope={source()}
-								label="Configured model/catalogue and thinking observation; not the model of every retained response"
+								label="Model and thinking"
 								value={{ model: value().model, thinking: value().thinking }}
 							/>
 							<SuppliedObservation
 								interactive={active()}
 								scope={source()}
-								label="Native applicable context head; null means none supplied"
+								label="Context head"
 								value={value().head}
 							/>
 							<SuppliedRecordWindow
@@ -178,13 +168,13 @@ export function ContextPanel(props: {
 										<SuppliedObservation
 											interactive={active()}
 											scope={source()}
-											label="Native raw active entry; displayed ID is not a write target"
+											label="Entry"
 											value={row.entry}
 										/>
 										<SuppliedObservation
 											interactive={active()}
 											scope={source()}
-											label="Aligned native contribution after edits/exclusions, before result ordering; empty is preserved"
+											label="Contribution"
 											value={row.contribution}
 										/>
 									</box>
@@ -202,7 +192,7 @@ export function ContextPanel(props: {
 									<SuppliedObservation
 										interactive={active()}
 										scope={source()}
-										label="Native ordered derived message; ordinal is local browsing only"
+										label="Derived message"
 										value={message}
 									/>
 								)}
