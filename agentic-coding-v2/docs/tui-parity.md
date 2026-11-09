@@ -1935,3 +1935,29 @@ diagram legibility, layout at real widths, theme appearance and drag-scrolling s
 require manual verification. Native nested-child transcript composition and remaining
 timing/context arrangement remain unfinished; clipboard, real integrations,
 deployment, restart and migration remain unverified.
+
+## Native tool-field and client-validation batch
+
+- Validate the `session.context` result at the same client boundary as every other native
+  result: unpaired entries/contributions, an unreportable model record, a non-string thinking
+  value and a projection over the 400,000-character budget are refused whole, never trimmed.
+  `head` remains an opaque object or `null`, so no revision can be read out of it.
+- Name the supplied fields of the native tool families whose results are structural
+  (`request_review`, `attach_image`/`attach_evidence`, `start_task`, `task_result`,
+  `cancel_task`, `environment_action`, `env_start`/`env_status`/`env_stop`) in a folded card
+  section, clipped at 400 characters with the complete value left under
+  Arguments/Details/Output. The section states that supplied fields are not child status,
+  completion, approval, adoption or a linked transcript; unrecognized tools keep the generic
+  composition, and no field is an affordance.
+- Record why nested-call composition stops at live slots: v2 registers no tool that calls
+  `executeTool()`, so no nested call is ever created, the retained `NestedCallDoc` family stays
+  empty, and it is neither read nor rendered. Live nested slots stay validated (parent task and
+  call named) and are composed defensively without inferring a parent from ordering.
+
+Biome (369 files, zero diagnostics), full unfiltered type-check, build, help and 49 boundary
+tests (766 assertions) pass, now including client protocol validation. No renderer, mounting,
+snapshot or presenter test is added, and no terminal acceptance or visual parity is claimed:
+field legibility, fold behavior at real widths and theme appearance still require manual
+verification. Remaining unfinished parity: original specialized file/shell header/section
+composition for the tool families above, native-history merge, selection/clipboard interactions,
+original modal/list compositions, remaining navigation key catalogs and prompt-history details.

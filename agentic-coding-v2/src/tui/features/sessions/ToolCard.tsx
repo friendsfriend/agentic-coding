@@ -35,6 +35,7 @@ import {
 	type SuppliedEditReplacement,
 	ToolEditRequest,
 } from "./ToolEditRequest.tsx";
+import { nativeFields, ToolNativeFields } from "./ToolNativeFields.tsx";
 import {
 	type SuppliedToolSource,
 	ToolRequestedSource,
@@ -325,6 +326,11 @@ export function ToolCard(props: {
 			};
 		return null;
 	});
+	const fields = createMemo(() =>
+		props.result
+			? nativeFields(name(), props.call.arguments, structured())
+			: null,
+	);
 	const structured = createMemo(() => {
 		const textParts = dataList(props.result?.content).filter(
 			(part) => part.type === "text",
@@ -851,6 +857,19 @@ export function ToolCard(props: {
 								scope={observation()}
 								imagesOnly
 							/>
+						</Show>
+						<Show when={fields()}>
+							{(rows) => (
+								<>
+									{fold(
+										":fields",
+										"Named native fields — supplied observation only",
+									)}
+									<Show when={open(":fields")}>
+										<ToolNativeFields rows={rows()} />
+									</Show>
+								</>
+							)}
 						</Show>
 						<Show when={detailsValue() !== undefined}>
 							{fold(

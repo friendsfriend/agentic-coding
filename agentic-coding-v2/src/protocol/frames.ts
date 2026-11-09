@@ -167,6 +167,48 @@ export function transcript(value: unknown): Transcript {
 		throw new Error("Invalid reported usage");
 	return data as Transcript;
 }
+/** Context is a bounded observation, never an atomic revision or a capacity claim:
+ * entries and their position-aligned contributions must pair, and the whole
+ * projection stays inside the same budget the server refuses to exceed. */
+function contextObservation(value: unknown) {
+	const data = record(value);
+	if (
+		!Array.isArray(data.contributions) ||
+		!data.contributions.every((contribution) => Array.isArray(contribution))
+	)
+		throw new Error("Invalid native context observation");
+	const entries = list(data.entries),
+		contributions = data.contributions.map(list),
+		messages = list(data.messages);
+	if (
+		!integer(data.id) ||
+		entries.length > 8192 ||
+		messages.length > 8192 ||
+		contributions.length !== entries.length ||
+		contributions.some((contribution) => contribution.length > 64) ||
+		typeof data.thinking !== "string" ||
+		data.thinking.length > 512 ||
+		!(data.head === null || typeof data.head === "object") ||
+		JSON.stringify(data).length > 400000
+	)
+		throw new Error("Invalid native context observation");
+	if (data.model !== null) {
+		const model = record(data.model);
+		if (
+			typeof model.provider !== "string" ||
+			model.provider.length > 256 ||
+			typeof model.modelId !== "string" ||
+			model.modelId.length > 256 ||
+			typeof model.catalogued !== "boolean" ||
+			!(
+				model.contextWindow === null ||
+				(integer(model.contextWindow, 1) && Number(model.contextWindow) > 0)
+			) ||
+			!(model.maxOutput === null || integer(model.maxOutput, 1))
+		)
+			throw new Error("Invalid native context model");
+	}
+}
 export function frame(value: unknown): Frame {
 	const data = record(value);
 	if (data.version !== 1) throw new Error("Unsupported server protocol");
@@ -316,7 +358,8 @@ export function result<M extends Method>(
 				throw new Error("Invalid or duplicate history entry");
 			identities.add(Number(entry.id));
 		}
-	} else if (method === "evidence.read") {
+	} else if (method === "session.context") contextObservation(value);
+	else if (method === "evidence.read") {
 		const data = record(value);
 		if (
 			typeof data.id !== "string" ||
