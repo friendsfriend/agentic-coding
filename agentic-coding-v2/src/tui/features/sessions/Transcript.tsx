@@ -48,6 +48,8 @@ import { TranscriptRowsContext } from "./TranscriptRows.ts";
 export type LocalTranscriptPaging = {
 	token: () => object | null;
 	hasOlder: () => boolean;
+	/** The local mount window can still grow; unrelated to a native read. */
+	canExpand: () => boolean;
 	loadOlder: () => boolean;
 	expandAll: () => boolean;
 	collapse: () => void;
@@ -288,6 +290,7 @@ export function Transcript(props: {
 	const localPaging: LocalTranscriptPaging = {
 		token: window,
 		hasOlder: () => localStart() > 0 || canLoadHistory(),
+		canExpand: () => localStart() > 0,
 		loadOlder: () => {
 			if (expandLocal(false)) return true;
 			if (canLoadHistory()) {

@@ -2102,3 +2102,27 @@ Biome (370 files, zero diagnostics), full unfiltered type-check, build, help and
 renderer/mounting/snapshot/presenter test and no native call were added. Column widths,
 narrow-terminal truncation, detail-pane scrolling and overall visual parity of this
 modal remain manually unverified; no terminal acceptance or deployment was performed.
+
+### Reading-window restore and expansion separation
+
+Extending the mount window and requesting one older native page are distinct operations
+and are now separated in the paging contract (`canExpand` versus `hasOlder`). The shell
+restore path previously used the single "older content exists" predicate before calling
+a full local expansion, so a transcript whose local window was already fully expanded
+but which could still request a native page skipped position restoration entirely and
+left the restore pending. Restoration now expands only when the local window can grow,
+and otherwise restores against the current content — which is the same content the
+reader left, because explicitly read native pages survive within the same conversation,
+client and connection.
+
+An upward read at the physical top now marks the reader away from the bottom before the
+sample that decides the request, so the first explicit request expands the local window
+instead of reaching the boundary before the window is frozen. The bounded local window
+grows by 40 up to 200 entries, and only then does the same intent become a native read;
+the 400-entry cap, single-use continuation, exhaustion and restart states are unchanged.
+No automatic read, retry, loop or position restore is introduced by this change.
+
+Biome (370 files, zero diagnostics), full unfiltered type-check, build, help and the
+14-file boundary suite pass: 50 tests / 773 assertions. Scroll anchoring, prepend
+geometry and the reader's perceived position remain unverified without manual terminal
+acceptance, which was not performed; no deployment or restart was performed.

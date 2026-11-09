@@ -564,9 +564,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					const follow =
 						target.detail.transcriptFollowId === id &&
 						target.detail.transcriptFollowing === true;
-					if (!follow && saved.top > 0 && localPaging?.hasOlder()) {
+					if (!follow && saved.top > 0 && localPaging?.canExpand()) {
 						// Restore old numeric positions against the same full supplied bound,
-						// not against the new smaller initial mount. No history read.
+						// not against the new smaller initial mount. No history read: a
+						// requestable native page must never stand in for a local expansion.
 						setAwayFromBottom(true);
 						if (localPaging.expandAll()) renderer.requestRender();
 					} else {
@@ -911,6 +912,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		const bottom = Math.max(0, scroll.scrollHeight - scroll.viewport.height);
 		if (direction < 0 ? scroll.scrollTop <= 0 : scroll.scrollTop >= bottom) {
 			if (direction < 0 && localPaging?.hasOlder()) {
+				// An upward read at the top is a reader position, not follow mode, so
+				// the local expansion is eligible in the same pass. Otherwise the first
+				// request could reach the boundary before the window was frozen.
+				setAwayFromBottom(true);
+				followingBottom = false;
 				markReaderMotion(id, true);
 				pendingOlderMotion = id;
 			}
