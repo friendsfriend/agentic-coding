@@ -34,20 +34,17 @@ export function ReportedUsage(props: { usage: unknown; window?: boolean }) {
 	const cost = () => (props.window ? usage().cost : fields(usage().cost).total);
 	return (
 		<text fg={color("textMuted")} wrapMode="word">
-			{props.window
-				? "History-window reported usage"
-				: "Response reported usage"}{" "}
-			· {reported(cost(), true)} · tok {reported(usage().input)}→
-			{reported(usage().output)} · cache read {reported(usage().cacheRead)} ·
-			cache write {reported(usage().cacheWrite)}
+			{props.window ? "Usage, window · " : "Usage · "}
+			{reported(cost(), true)} · {reported(usage().input)}→
+			{reported(usage().output)} tok · cache {reported(usage().cacheRead)}/
+			{reported(usage().cacheWrite)}
 			<Show when={usage().reasoning !== undefined}>
 				{" "}
-				· reasoning {reported(usage().reasoning)} (included in output)
+				· reasoning {reported(usage().reasoning)}
 			</Show>
 			<Show when={usage().cacheWrite1h !== undefined}>
 				{" "}
-				· 1h cache write {reported(usage().cacheWrite1h)} (included in cache
-				write)
+				· 1h cache write {reported(usage().cacheWrite1h)}
 			</Show>
 		</text>
 	);
