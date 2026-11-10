@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { type Config, digest } from "../config.ts";
 import type { TaskInfo } from "../state.ts";
+import { discoverRepositoryTargets } from "./repository-targets.ts";
 
 const candidates = [
 	"package.json",
@@ -45,6 +46,8 @@ type Suggestion = {
 	invocation: string[];
 	source: string;
 	trusted: false;
+	profile?: string;
+	readiness?: "process-start-only";
 };
 const record = (value: unknown): Record<string, unknown> | null =>
 	value !== null && typeof value === "object" && !Array.isArray(value)
@@ -267,6 +270,26 @@ export function discoverDefinitions(
 				});
 		}
 	}
+	const tooling = discoverRepositoryTargets(
+		config,
+		repository,
+		owner,
+		directory,
+	);
+	for (const hint of tooling.targets)
+		if (hint.source !== "package.json")
+			suggestions.push({
+				...hint,
+				script: `${hint.profile}:${hint.action}`,
+				runtime: "shell",
+			});
+	for (const source of tooling.evidence) {
+		const previous = evidence.find((entry) => entry.path === source.path);
+		if (previous) {
+			if (source.contentsRead) Object.assign(previous, source);
+		} else evidence.push({ ...source, state: "regular" });
+	}
+	findings.push(...tooling.findings);
 	const totalSuggestions = suggestions.length;
 	suggestions.splice(24);
 	const report = {
@@ -282,7 +305,7 @@ export function discoverDefinitions(
 			written: false,
 		},
 		coverage:
-			"Fixed manifest/lock/container/build-file names in one explicitly selected directory (root by default). Only package.json contents are read; no scripts are executed, and script bodies are withheld. Private .env/provider files are never inspected. Symlinks and other file contents are not followed/read. No recursive traversal or automatic nested-layout inference. Profiles, services, ports, readiness and compatibility are not inferred. Metadata may change immediately after observation; digests are observations, not approved validation or promotion authority. Not an OS sandbox.",
+			"Fixed public manifest/lock/container/build-tool names in one explicitly selected directory (root by default). Only package.json and bounded make/just/task recipe metadata contents are read; no scripts are executed, and bodies are withheld. Private .env/provider files and symlinks are never inspected/followed. No recursive traversal or automatic nested-layout inference. Recognized tool profiles and untrusted invocation hints are not executable definitions, CLI availability or service readiness. Generic run hints mean process-start-only, without inferred ports/endpoints/health/dependencies. Native strict package-manager evidence has no npm fallback. Metadata/digests are observations, not approved validation or promotion authority. Not an OS sandbox.",
 		evidence,
 		packageManager: manager,
 		suggestions,

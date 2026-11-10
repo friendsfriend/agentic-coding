@@ -264,3 +264,111 @@ test("read-only skill discovery uses its captured worktree and refuses another c
 	expect(observed).toBe(true);
 	expect((await app.snapshot()).reviews).toHaveLength(0);
 });
+
+test("authenticated discovery exposes bounded native language/recipe profile hints without running tools, reading their bodies or following wrapper links", async () => {
+	const { app, config } = await fixture();
+	const repository = config.repositories[0] ?? "",
+		marker = "private-recipe-body-withheld";
+	for (const name of [
+		"go.mod",
+		"Cargo.toml",
+		"pom.xml",
+		"gradlew",
+		"build.gradle",
+		"pyproject.toml",
+	])
+		fs.writeFileSync(path.join(repository, name), marker);
+	fs.writeFileSync(
+		path.join(repository, "package.json"),
+		JSON.stringify({
+			packageManager: "bun@1.4.4",
+			scripts: { build: marker, test: marker, dev: marker },
+		}),
+	);
+	for (const name of ["Makefile", "justfile"])
+		fs.writeFileSync(
+			path.join(repository, name),
+			`build:\n\ttouch discovery-tool-ran # ${marker}\ntest:\n\techo ${marker}\nrun:\n\techo ${marker}\n`,
+		);
+	fs.writeFileSync(
+		path.join(repository, "Taskfile.yml"),
+		`tasks:\n  build:\n    cmds: ["${marker}"]\n  test:\n    cmds: ["${marker}"]\n  run:\n    cmds: ["${marker}"]\n`,
+	);
+	const host = serve(app),
+		url = new URL(host.url),
+		token = new URLSearchParams(url.hash.slice(1)).get("token"),
+		headers = { Authorization: `Bearer ${token}` },
+		route = `/api/environments/discovery?repository=${encodeURIComponent(repository)}`;
+	try {
+		const response = await fetch(new URL(route, url), { headers });
+		expect(response.status).toBe(200);
+		const report = await response.json();
+		for (const [profile, action, invocation] of [
+			["maven", "build", ["mvn", "package"]],
+			["gradle", "test", ["./gradlew", "test"]],
+			["cargo", "run", ["cargo", "run"]],
+			["go", "test", ["go", "test", "./..."]],
+			["poetry", "test", ["poetry", "run", "pytest"]],
+			["make", "build", ["make", "build"]],
+			["just", "test", ["just", "test"]],
+			["task", "test", ["task", "test"]],
+		])
+			expect(report.suggestions).toContainEqual(
+				expect.objectContaining({
+					profile,
+					action,
+					invocation,
+					trusted: false,
+				}),
+			);
+		expect(
+			report.suggestions.find(
+				(hint: { profile?: string; action: string }) =>
+					hint.profile === "cargo" && hint.action === "run",
+			).readiness,
+		).toBe("process-start-only");
+		expect(
+			report.evidence.find(
+				(entry: { path: string }) => entry.path === "Makefile",
+			).contentsRead,
+		).toBe(true);
+		expect(
+			report.evidence.find(
+				(entry: { path: string }) => entry.path === "pom.xml",
+			).contentsRead,
+		).toBe(false);
+		expect(report.omittedSuggestions).toBe(1);
+		expect(Buffer.byteLength(JSON.stringify(report))).toBeLessThanOrEqual(
+			12000,
+		);
+		expect(JSON.stringify(report)).not.toContain(marker);
+		fs.mkdirSync(config.configDir);
+		fs.writeFileSync(path.join(config.configDir, "private-wrapper"), marker);
+		fs.unlinkSync(path.join(repository, "gradlew"));
+		fs.symlinkSync(
+			path.join(config.configDir, "private-wrapper"),
+			path.join(repository, "gradlew"),
+		);
+		fs.writeFileSync(path.join(repository, "Makefile"), marker.repeat(5000));
+		const refused = await (
+			await fetch(new URL(route, url), { headers })
+		).json();
+		expect(
+			refused.suggestions.some(
+				(hint: { profile?: string }) =>
+					hint.profile === "gradle" || hint.profile === "make",
+			),
+		).toBe(false);
+		expect(refused.findings.join(" ")).toContain("64 KiB");
+		expect(JSON.stringify(refused)).not.toContain(marker);
+		expect(fs.existsSync(path.join(repository, "discovery-tool-ran"))).toBe(
+			false,
+		);
+		expect(
+			fs.existsSync(path.join(config.configDir, "environments.json")),
+		).toBe(false);
+		expect((await app.environments.snapshot()).runs).toHaveLength(0);
+	} finally {
+		host.stop();
+	}
+});

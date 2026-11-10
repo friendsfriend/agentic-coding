@@ -257,3 +257,229 @@ test("authenticated definition staging supports installation-sized captured bund
 		host.stop();
 	}
 }, 15000);
+
+test("offline native repository migration preserves language profiles, v1 package fallback and explicit defaults without enabling an unmigrated default dependency", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+		fs.chmodSync(config.stateDir, 0o700);
+	});
+	const root = path.dirname(config.configDir),
+		source = path.join(root, "v1-repositories"),
+		output = path.join(root, "repository-preview"),
+		sdk = path.join(root, "sdk"),
+		repository = config.repositories[0] ?? "",
+		marker = "repository-private-body-never-returned";
+	fs.mkdirSync(sdk);
+	config.repositories.push(fs.realpathSync(sdk));
+	for (const directory of [
+		"apps/build",
+		"apps/compose",
+		"apps/run",
+		"apps/defaults",
+		"infrastructure/compose",
+	])
+		fs.mkdirSync(path.join(source, directory), { recursive: true });
+	fs.writeFileSync(
+		path.join(config.configDir, "config.json"),
+		JSON.stringify({ profiles: {}, repositories: config.repositories }),
+	);
+	const base = JSON.stringify({
+		version: 1,
+		projects: [
+			{
+				id: "demo",
+				kind: "app",
+				repository,
+				targets: [
+					{
+						id: "preferred-old",
+						action: "build",
+						runtime: "shell",
+						profile: "default",
+						command: "true",
+					},
+				],
+			},
+			{ id: "blocked", kind: "app", repository, targets: [] },
+			{
+				id: "grid-allocation-backend",
+				kind: "app",
+				repository,
+				defaults: { build: "build-shell" },
+				targets: [
+					{
+						id: "build-shell",
+						action: "build",
+						runtime: "shell",
+						command:
+							'sh "$CONFIG_DIR/scripts/grid-allocation-backend-build.sh"',
+					},
+				],
+			},
+			{
+				id: "sdk",
+				kind: "library",
+				repository: fs.realpathSync(sdk),
+				targets: [],
+			},
+		],
+	});
+	fs.writeFileSync(path.join(config.configDir, "environments.json"), base);
+	fs.writeFileSync(
+		path.join(repository, "package.json"),
+		JSON.stringify({
+			scripts: {
+				build: marker,
+				test: marker,
+				dev: "touch migration-must-not-run",
+			},
+			credentials: marker,
+		}),
+	);
+	fs.writeFileSync(
+		path.join(repository, "gradlew"),
+		"#!/bin/sh\ntouch migration-must-not-run\n",
+	);
+	fs.writeFileSync(path.join(repository, "pom.xml"), marker);
+	fs.writeFileSync(
+		path.join(source, "apps/build/grid-allocation-backend-build.sh"),
+		"#!/bin/sh\nmvn package\ndocker build .\n",
+	);
+	const nativeUnitTest =
+		"#!/bin/sh\n# devenv:name=Host unit tests\nexec mvn test -P unit-test\n";
+	fs.writeFileSync(
+		path.join(source, "apps/build/grid-allocation-backend-test.sh"),
+		nativeUnitTest,
+	);
+	fs.writeFileSync(path.join(sdk, "Cargo.toml"), marker);
+	fs.writeFileSync(path.join(sdk, "pyproject.toml"), marker);
+	fs.writeFileSync(
+		path.join(source, "apps/defaults/demo.json"),
+		JSON.stringify({ build: "app/demo/build/shell/maven", test: "shell" }),
+	);
+	fs.writeFileSync(
+		path.join(source, "apps/compose/blocked-compose.yml"),
+		"services:\n  api:\n    image: fixture:latest\n    unknown_effect: true\n",
+	);
+	const result = Bun.spawnSync(
+		[
+			process.execPath,
+			path.join(import.meta.dir, "../scripts/preview-environment-migration.ts"),
+			"--source-config",
+			source,
+			"--current-config",
+			config.configDir,
+			"--output",
+			output,
+			"--socket",
+			path.join(config.stateDir, "never-contacted.sock"),
+		],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	expect({
+		code: result.exitCode,
+		error: result.stderr.toString(),
+	}).toMatchObject({ code: 0 });
+	const report = JSON.parse(
+			fs.readFileSync(path.join(output, "report.json"), "utf8"),
+		),
+		content = fs.readFileSync(path.join(output, "environments.json"), "utf8"),
+		converted = JSON.parse(content),
+		demo = converted.projects.find(
+			(project: { id: string }) => project.id === "demo",
+		),
+		library = converted.projects.find(
+			(project: { id: string }) => project.id === "sdk",
+		),
+		blocked = converted.projects.find(
+			(project: { id: string }) => project.id === "blocked",
+		);
+	expect(demo.targets).toHaveLength(9);
+	expect(library.targets).toHaveLength(4);
+	expect(blocked.targets).toHaveLength(8);
+	expect(
+		demo.targets.find(
+			(target: { id: string }) => target.id === "run-shell-package-npm",
+		).command,
+	).toBe('"npm" "run" "dev"');
+	expect(demo.defaults.build).toBe("build-shell-maven");
+	expect(demo.defaults.test).toBe("test-shell-gradle");
+	expect(library.defaults).toEqual({
+		build: "build-shell-cargo",
+		test: "test-shell-cargo",
+	});
+	expect(
+		library.targets.some(
+			(target: { action: string }) => target.action === "run",
+		),
+	).toBe(false);
+	expect(blocked.defaults.run).toBeUndefined();
+	const backend = converted.projects.find(
+		(project: { id: string }) => project.id === "grid-allocation-backend",
+	);
+	expect(
+		backend.targets.some(
+			(target: { id: string }) => target.id === "build-shell",
+		),
+	).toBe(false);
+	expect(backend.defaults.build).toBeUndefined();
+	expect(backend.defaults.test).toBe("test-shell-default");
+	expect(
+		backend.targets.find(
+			(target: { id: string }) => target.id === "test-shell-default",
+		),
+	).toMatchObject({ command: nativeUnitTest, label: "Host unit tests" });
+	expect(content).not.toContain("docker build");
+	expect(report.defaultDecisions).toContainEqual(
+		expect.objectContaining({
+			app: "grid-allocation-backend",
+			action: "build",
+			status: "blocked",
+		}),
+	);
+	expect(report.defaultDecisions).toContainEqual(
+		expect.objectContaining({
+			app: "blocked",
+			action: "run",
+			status: "blocked",
+		}),
+	);
+	expect(
+		report.repositoryDiscovery
+			.find((entry: { app: string }) => entry.app === "demo")
+			.report.findings.join(" "),
+	).toContain("v1 npm fallback");
+	expect(
+		report.rows.filter((row: { status: string }) => row.status === "candidate"),
+	).toHaveLength(29);
+	expect(content).not.toContain(marker);
+	expect(JSON.stringify(report)).not.toContain(marker);
+	expect(fs.existsSync(path.join(repository, "migration-must-not-run"))).toBe(
+		false,
+	);
+	expect(fs.existsSync(path.join(sdk, "migration-must-not-run"))).toBe(false);
+	expect(
+		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
+	).toBe(base);
+	const host = serve(app);
+	try {
+		const post = client(host),
+			staged = await (
+				await post("/api/environments/drafts", {
+					requestId: "repository-profiles",
+					content,
+				})
+			).json();
+		const response = await post("/api/environments/drafts/preflight", {
+			requestId: "repository-profile-check",
+			id: staged.id,
+			revision: staged.revision,
+			digest: staged.digest,
+		});
+		expect(response.status).toBe(200);
+		expect((await response.json()).schemaAccepted).toBe(true);
+		expect((await app.environments.snapshot()).runs).toHaveLength(0);
+	} finally {
+		host.stop();
+	}
+}, 15000);

@@ -13,6 +13,7 @@ import {
 	composeEnvironment,
 } from "../src/environment/compose-values.ts";
 import { definitionByteLimit } from "../src/environment/definition-limits.ts";
+import { discoverRepositoryTargets } from "../src/environment/repository-targets.ts";
 
 class Refusal extends Error {}
 function flag(name: string, required = true) {
@@ -458,6 +459,88 @@ for (const project of projects) {
 		}
 	}
 }
+const repositoryDiscovery: {
+	app: string;
+	report?: ReturnType<typeof discoverRepositoryTargets>;
+	reason?: string;
+}[] = [];
+for (const project of projects) {
+	if (project.kind === "infrastructure") continue;
+	const id = String(project.id),
+		repository = String(project.repository);
+	try {
+		const report = discoverRepositoryTargets(
+			config,
+			repository,
+			undefined,
+			".",
+			"v1",
+		);
+		repositoryDiscovery.push({ app: id, report });
+		for (const hint of report.targets) {
+			if (project.kind === "library" && hint.action === "run") continue;
+			const targetId = `${hint.action}-shell-${hint.profile}`,
+				target = {
+					id: targetId,
+					action: hint.action,
+					runtime: "shell",
+					profile: hint.profile,
+					command: hint.invocation
+						.map((part) => JSON.stringify(part))
+						.join(" "),
+					timeoutMs: hint.action === "run" ? 180000 : 3600000,
+				};
+			const old = project.targets.find((entry) => entry.id === targetId);
+			if (old) {
+				rows.push({
+					app: id,
+					source: `repository:${id}/${hint.source}`,
+					target: targetId,
+					status: "already-present",
+					reason:
+						"Existing native target ID retained; metadata is not overwrite authority",
+				});
+				continue;
+			}
+			validateProjects(config, {
+				version: 1,
+				projects: [
+					{
+						...project,
+						targets: [target],
+						defaults: undefined,
+						requires: undefined,
+						prerequisites: undefined,
+					},
+				],
+			});
+			project.targets.push(target);
+			rows.push({
+				app: id,
+				source: `repository:${id}/${hint.source}`,
+				target: targetId,
+				status: "candidate",
+				reason:
+					hint.action === "run"
+						? "Native process-start-only run; no service health, endpoint, credentials or prerequisites inferred"
+						: "Native fixed tool invocation; repository code remains subject to exact execution review",
+			});
+		}
+	} catch {
+		repositoryDiscovery.push({
+			app: id,
+			reason:
+				"Repository discovery unavailable or native metadata refused; values withheld",
+		});
+		rows.push({
+			app: id,
+			source: `repository:${id}`,
+			status: "blocked",
+			reason:
+				"Authorized repository metadata unavailable or refused; no commands executed",
+		});
+	}
+}
 // The known dev-server script is self-contained shell code, not a legacy runtime
 // wrapper. Its metadata becomes native readiness and explicit prerequisite edges.
 const frontend = projects.find(
@@ -582,7 +665,90 @@ for (const directory of ["apps/build", "apps/run", "infrastructure/compose"]) {
 				typeof target.command === "string" && target.command.includes(name),
 		);
 		try {
-			capture(relative);
+			const capturedScript = capture(relative);
+			if (
+				directory === "apps/build" &&
+				name === "grid-allocation-backend-build.sh" &&
+				owner
+			) {
+				const removed = owner.targets.filter(
+					(target) =>
+						target.runtime === "shell" &&
+						typeof target.command === "string" &&
+						target.command.includes(name),
+				);
+				owner.targets = owner.targets.filter(
+					(target) => !removed.includes(target),
+				);
+				const defaults = { ...object(owner.defaults ?? {}) };
+				for (const [action, target] of Object.entries(defaults))
+					if (removed.some((entry) => entry.id === target))
+						delete defaults[action];
+				owner.defaults = defaults;
+				rows.push({
+					app: String(owner.id),
+					source: relative,
+					status: "blocked",
+					reason:
+						"Known Maven/Java/image-packaging source needs a native multi-phase build; obsolete shell Docker wrapper removed from preview rather than enabled as native parity",
+				});
+				continue;
+			}
+			if (
+				directory === "apps/build" &&
+				owner &&
+				[
+					"grid-allocation-backend-test.sh",
+					"grid-allocation-frontend-build.sh",
+					"grid-allocation-frontend-test.sh",
+				].includes(name)
+			) {
+				if (capturedScript.length > 16000)
+					throw new Refusal(
+						"Known self-contained shell source exceeds native command bounds",
+					);
+				const selected = owner.targets.filter(
+					(target) =>
+						target.runtime === "shell" &&
+						typeof target.command === "string" &&
+						(target.command.includes(name) ||
+							target.command === capturedScript),
+				);
+				if (selected.length > 1)
+					throw new Refusal(
+						"Known shell source matches conflicting native targets",
+					);
+				const action = name.endsWith("-build.sh") ? "build" : "test",
+					id = `${action}-shell-default`;
+				let target = selected[0];
+				if (!target) {
+					if (owner.targets.some((entry) => entry.id === id))
+						throw new Refusal(
+							"Known shell source would overwrite another native target",
+						);
+					target = {
+						id,
+						action,
+						runtime: "shell",
+						profile: "default",
+						timeoutMs: 3600000,
+						command: capturedScript,
+					};
+					owner.targets.push(target);
+				}
+				target.command = capturedScript;
+				const label = /^# devenv:name=(.+)$/m.exec(capturedScript)?.[1]?.trim();
+				if (label && label.length <= 200) target.label = label;
+				rows.push({
+					app: String(owner.id),
+					source: relative,
+					target: String(target.id),
+					status: "candidate",
+					reason:
+						"Self-contained shell source captured in the reviewed definition; no mutable v1/config script dispatcher retained",
+				});
+				continue;
+			}
 			rows.push({
 				app: owner ? String(owner.id) : "infrastructure",
 				source: relative,
@@ -608,6 +774,195 @@ for (const directory of ["apps/build", "apps/run", "infrastructure/compose"]) {
 		}
 	}
 }
+const defaultDecisions: {
+	app: string;
+	action: string;
+	status: string;
+	target?: string;
+	reason?: string;
+}[] = [];
+for (const project of projects) {
+	const id = String(project.id),
+		defaults = { ...object(project.defaults ?? {}) },
+		relative = `apps/defaults/${id}.json`;
+	let declared: Record<string, unknown> = {};
+	try {
+		if (fs.existsSync(path.join(source, relative))) {
+			declared = object(JSON.parse(capture(relative)));
+			if (
+				Object.entries(declared).some(
+					([action, value]) =>
+						!["build", "test", "run"].includes(action) ||
+						typeof value !== "string" ||
+						!value.trim(),
+				)
+			)
+				throw new Refusal("Malformed default declaration");
+		}
+	} catch {
+		rows.push({
+			app: id,
+			source: relative,
+			status: "blocked",
+			reason: "Default declaration unavailable/malformed; values withheld",
+		});
+		continue;
+	}
+	for (const action of ["build", "test", "run"]) {
+		if (defaults[action] !== undefined) {
+			defaultDecisions.push({
+				app: id,
+				action,
+				status: "existing-native-retained",
+				target: String(defaults[action]),
+			});
+			continue;
+		}
+		const all = project.targets.filter(
+			(target) => target.action === action && target.runtime !== "kubernetes",
+		);
+		const legacyRuntime = (target: Record<string, unknown>) =>
+			target.runtime === "compose" ? "docker" : String(target.runtime);
+		const runtimeRank = (target: Record<string, unknown>) =>
+			[
+				"docker",
+				"shell",
+				"podman",
+				"systemshell",
+				"powershell",
+				"kubernetes",
+			].indexOf(legacyRuntime(target));
+		const preferred = all.filter(
+				(target) =>
+					target.profile === undefined || target.profile === "default",
+			),
+			considered = (preferred.length ? preferred : all).sort(
+				(a, b) =>
+					runtimeRank(a) - runtimeRank(b) ||
+					`${a.profile ?? ""}/${a.id}`.localeCompare(
+						`${b.profile ?? ""}/${b.id}`,
+					),
+			);
+		let chosen: Record<string, unknown> | undefined;
+		const wanted = declared[action];
+		if (
+			id === "grid-allocation-backend" &&
+			action === "build" &&
+			rows.some(
+				(row) =>
+					row.source === "apps/build/grid-allocation-backend-build.sh" &&
+					row.status === "blocked",
+			)
+		) {
+			defaultDecisions.push({
+				app: id,
+				action,
+				status: "blocked",
+				reason:
+					"Host Maven plus image packaging has not been translated; a plain Maven target is not an equivalent default",
+			});
+			continue;
+		}
+		if (typeof wanted === "string") {
+			const matchesDeclaration = (target: Record<string, unknown>) => {
+				const runtime = legacyRuntime(target),
+					profile =
+						typeof target.profile === "string" ? target.profile : "default";
+				return [
+					target.id,
+					target.label,
+					runtime,
+					...(["docker", "podman"].includes(runtime)
+						? ["container"]
+						: runtime === "shell"
+							? ["command-shell", "script"]
+							: []),
+					`app/${id}/${action}/${runtime}`,
+					`app/${id}/${action}/${runtime}/${profile}`,
+					`app/${id}/action/${action}/${runtime}/${profile}`,
+				].includes(wanted.trim());
+			};
+			const preferredMatches = considered.filter(matchesDeclaration),
+				matches = preferredMatches.length
+					? preferredMatches
+					: all.filter(matchesDeclaration);
+			if (
+				matches.length === 1 ||
+				(matches.length &&
+					[
+						"docker",
+						"podman",
+						"shell",
+						"container",
+						"script",
+						"command-shell",
+						"systemshell",
+						"powershell",
+					].includes(wanted.trim()))
+			)
+				chosen = matches[0];
+			else {
+				defaultDecisions.push({
+					app: id,
+					action,
+					status: "blocked",
+					reason:
+						"Declared v1 default is missing or ambiguous in converted targets; no fallback",
+				});
+				continue;
+			}
+		} else {
+			const blockedDefault = rows.some(
+				(row) =>
+					row.app === id &&
+					row.status === "blocked" &&
+					(action === "run"
+						? row.source === `apps/compose/${id}-compose.yml` ||
+							row.source === `apps/run/${id}-default.sh`
+						: row.source === `apps/build/${id}-${action}.Dockerfile`),
+			);
+			if (blockedDefault) {
+				defaultDecisions.push({
+					app: id,
+					action,
+					status: "blocked",
+					reason:
+						"An unmigrated default-profile source must not silently fall back to another tool/profile",
+				});
+				continue;
+			}
+			const families = new Set(
+				considered.map((target) =>
+					["docker", "podman"].includes(legacyRuntime(target))
+						? "container"
+						: legacyRuntime(target),
+				),
+			);
+			if (considered.length && (families.size === 1 || action === "run"))
+				chosen = considered[0];
+		}
+		if (chosen && typeof chosen.id === "string") {
+			defaults[action] = chosen.id;
+			defaultDecisions.push({
+				app: id,
+				action,
+				status:
+					typeof wanted === "string"
+						? "declared-v1"
+						: "v1-profile-family-order",
+				target: chosen.id,
+			});
+		} else if (all.length)
+			defaultDecisions.push({
+				app: id,
+				action,
+				status: "ambiguous",
+				reason:
+					"Different synchronous runtime families require an explicit default; none invented",
+			});
+	}
+	if (Object.keys(defaults).length) project.defaults = defaults;
+}
 const content = `${JSON.stringify({ version: 1, projects }, null, 2)}\n`;
 if (Buffer.byteLength(content) > definitionByteLimit)
 	throw new Refusal("Converted preview exceeds native definition bundle bound");
@@ -628,11 +983,14 @@ const report = {
 	references: [...required].sort(),
 	sources: [...manifest.values()].sort((a, b) => a.file.localeCompare(b.file)),
 	rows,
+	repositoryDiscovery,
+	defaultDecisions,
 	remaining: [
+		"native host-Maven/Java/image-packaging build pipeline (never shell Docker bypass)",
 		"global/shared infrastructure topology and live network lifetime",
 		"application-prerequisite migration where the required backend target remains unavailable",
 		"container telemetry transport and attribution",
-		"repository-discovered targets and defaults/profiles",
+		"default reconciliation for existing native overrides and any blocked/ambiguous declarations; generic process-start hints are not service health",
 		"Helm-discovered targets",
 		"literal/default/embedded credentials and missing reference inputs",
 		"exact native developer publication approval",
@@ -657,6 +1015,12 @@ console.log(
 		targets: report.targets,
 		candidates: rows.filter((row) => row.status === "candidate").length,
 		blocked: rows.filter((row) => row.status === "blocked").length,
+		blockedDefaults: defaultDecisions.filter(
+			(decision) => decision.status === "blocked",
+		).length,
+		ambiguousDefaults: defaultDecisions.filter(
+			(decision) => decision.status === "ambiguous",
+		).length,
 		credentialValuesCopied: false,
 		workloadsExecuted: false,
 	}),
