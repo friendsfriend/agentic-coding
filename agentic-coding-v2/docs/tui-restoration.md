@@ -111,3 +111,35 @@ Unchanged agreement: few functional tests at the authenticated public boundary
 still requires one). No renderer, mount, snapshot, presenter, helper or
 navigation-matrix tests. Visual/terminal parity is verified manually by the
 developer against v1.
+
+## Progress: environments restored (step 1)
+
+- `src/tui/devenv/` is the v1 devenv TUI ported by copy: `ui/` (packages/ui),
+  `types/` (devenv/types), `app/` (devenv/cli/src/tui), `core/` (the client
+  facade, logger, slot/stage/domain-event types). Imports are rewritten to
+  relative paths; no v1 module or `@agentic-coding/ui` is imported at runtime.
+  The logger writes under v2's state dir; preferences use v2's config dir.
+- `core/client.ts` keeps v1's `DevEnvClient` method signatures, but every method
+  dispatches by name to a `DevEnvBackend`. `gateway-backend.ts` is the only v2
+  backend:
+  - apps/infrastructure/libraries, status, slots and action definitions are
+    projected from the authenticated `state.read` snapshot;
+  - `startActionRun`/`runApp`/`buildApp`/`testApp`/`startApp` call
+    `environment.action` (interactive approval: no review gate);
+  - stop/cancel/release cancel the owning operator task (`task.cancel`) and
+    refuse runs held by any other task;
+  - logs read `environment.inspect logs`; native runs are presented as v1
+    action-run events, so the original action modal renders them;
+  - every other v1 method rejects with a visible "not available in v2 yet"
+    error dialog. Nothing falls back to a shell, Docker or a v1 server.
+- `EnvironmentsFeature.tsx` mounts v1's `TUIApp` in embedded mode inside the v2
+  shell, registers v1's keymap fields and gates its layers with
+  `shell.feature`. The environments page has no prompt; the old
+  `EnvironmentsMenu`/`EnvironmentWorkbench`/`DiagnosticsComposer` are removed.
+- Test: `test/operator-environment.test.ts` "the restored v1 environments
+  client runs, reads and stops a native run through the gateway".
+- Still missing native backends (shown as v1 error dialogs until added): git
+  pull/push/fetch/branches/worktrees, container restart/stats streams,
+  Kubernetes cluster status/lifecycle beyond the implicit devenv entry, scripts,
+  providers/issues/change requests inside the environments views, action
+  history beyond the retained native runs.

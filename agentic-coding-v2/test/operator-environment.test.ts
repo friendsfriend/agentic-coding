@@ -7,6 +7,8 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server/index.ts";
 import { ClientConnection } from "../src/tui/client/connection.ts";
+import { DevEnvClient } from "../src/tui/devenv/core/client.ts";
+import { GatewayBackend } from "../src/tui/devenv/gateway-backend.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
@@ -363,4 +365,63 @@ test("a direct TUI action is the developer's approval and executes without a sep
 		await host.stop();
 	}
 	expect(config.repositories).toHaveLength(1);
+});
+
+test("the restored v1 environments client runs, reads and stops a native run through the gateway", async () => {
+	const { app } = await fixture(false, (config) => {
+		config.profiles = [];
+		fs.mkdirSync(config.configDir);
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify(definitions(config.repositories[0] ?? "")),
+		);
+	});
+	const host = serve(app),
+		connection = new ClientConnection(host.client),
+		errors: string[] = [];
+	const client = new DevEnvClient(
+		new GatewayBackend(connection, (title, message) =>
+			errors.push(`${title}: ${message}`),
+		),
+	);
+	try {
+		connection.connect();
+		await eventually(
+			async () => connection.state,
+			(state) => state !== null,
+		);
+		expect(await client.health()).toBe(true);
+		expect((await client.getApps()).map((item) => item.ident)).toEqual(["api"]);
+		expect((await client.getInfraServices()).map((item) => item.ident)).toEqual(
+			["cache"],
+		);
+		const run = (await client.getActionDefinitions("api")).actions.find(
+			(definition) => definition.type === "run",
+		);
+		if (!run) throw new Error("Missing run definition");
+		await client.startActionRun(run.id);
+		await eventually(
+			async () => (await client.getApps())[0]?.runtimeStatus?.state,
+			(state) => state === "running",
+		);
+		expect(
+			(await client.getAppSlots()).find((slot) => slot.app === "api")?.holder,
+		).toMatch(/^task:/);
+		expect(await client.getContainerLogs("api")).toContain("OPERATOR READY");
+		await client.stopApp("api");
+		await eventually(
+			async () => (await client.getApps())[0]?.runtimeStatus?.state,
+			(state) => state !== "running" && state !== "starting",
+		);
+		await expect(client.gitPull("api")).rejects.toThrow("not available");
+		expect(
+			(await app.snapshot()).reviews.every(
+				(review) => review.state !== "pending",
+			),
+		).toBe(true);
+		expect(errors).toEqual([]);
+	} finally {
+		connection.close();
+		await host.stop();
+	}
 });

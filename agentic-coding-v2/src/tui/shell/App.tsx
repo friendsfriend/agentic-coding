@@ -46,19 +46,11 @@ import {
 	uiWorkspaceLayout,
 } from "../../protocol/viewpoints.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
+import { EnvironmentsFeature } from "../devenv/EnvironmentsFeature.tsx";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
-import {
-	type DiagnosticDraft,
-	DiagnosticsComposer,
-} from "../features/resources/DiagnosticsComposer.tsx";
-import { EnvironmentsMenu } from "../features/resources/EnvironmentsMenu.tsx";
-import {
-	EnvironmentWorkbench,
-	type WorkbenchMemory,
-} from "../features/resources/EnvironmentWorkbench.tsx";
 import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
 import { ContextPanel } from "../features/sessions/ContextPanel.tsx";
 import { HistoryPanel } from "../features/sessions/HistoryPanel.tsx";
@@ -204,23 +196,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const [localChoice, setLocalChoice] = createSignal<
 		(LocalChoice & { origin: View }) | null
 	>(null);
-	const [diagnosticDraft, setDiagnosticDraft] = createSignal<DiagnosticDraft>({
-		task: "",
-		kind: "http",
-		app: "",
-		target: "",
-		body: "",
-	});
-	const [resourceEditor, setResourceEditor] = createSignal<
-		"workbench" | "diagnostics" | null
-	>(null);
-	const [environmentEditor, setEnvironmentEditor] =
-		createSignal<WorkbenchMemory>({
-			body: "{}",
-			mode: "read",
-			read: "drafts",
-			mutation: "save",
-		});
 	const [revision, setRevision] = createSignal(0),
 		[wikiData, setWikiData] = createSignal<Data[]>([]),
 		[wikiDocument, setWikiDocument] = createSignal<{
@@ -4218,119 +4193,16 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									/>
 								</Show>
 								<Show when={current().page === "environments"}>
-									<EnvironmentsMenu
-										scope={workspaceScope()}
-										preferences={resourcePreferences()}
-										changePreferences={changeResourcePreferences}
-										inventory={dataList(state()?.environments.projects)}
-										rows={rows()}
-										environments={state()?.environments}
-										interactive={workspaceInteractive() && !settingsEditing()}
-										connected={status() === "connected"}
-										fresh={snapshotFresh()}
-										expanded={current().expanded}
-										toggle={toggleDetail}
-										select={(row, index) => {
-											navigation.current.selection = index;
-											navigation.current.resource = String(row.id);
-											update();
-										}}
-										choose={openLocalChoice}
-										prepare={(command) => {
-											remember();
-											if (navigation.current.draft.trim()) return false;
-											prepareCommand(command);
-											return navigation.current.draft === command;
-										}}
-										openTask={(id) => {
-											if (state()?.tasks.some((task) => task.id === id))
-												go("tasks", String(id));
-											else
-												setNotice(
-													"Owner task is not in the native catalog; no arbitrary native task is adopted.",
-												);
-										}}
-										keys={menuKeysActive}
-										operations={() => (
-											<EnvironmentWorkbench
-												scope={workspaceScope()}
-												interactive={!helpOpen() && !paletteOpen() && !busy()}
-												fresh={snapshotFresh()}
-												projects={dataList(state()?.environments.projects)}
-												choose={openLocalChoice}
-												client={client}
-												memory={environmentEditor()}
-												remember={setEnvironmentEditor}
-												focused={
-													contentFocused() &&
-													!helpOpen() &&
-													resourceEditor() !== "diagnostics"
-												}
-												editing={
-													settingsEditing() &&
-													!helpOpen() &&
-													resourceEditor() !== "diagnostics"
-												}
-												connected={status() === "connected"}
-												resource={current().resource}
-												edit={(value) => {
-													if (value) {
-														setResourceEditor("workbench");
-														setSettingsEditing(true);
-													} else if (resourceEditor() === "workbench") {
-														setResourceEditor(null);
-														setSettingsEditing(false);
-													}
-												}}
-											/>
-										)}
-										diagnostics={() => (
-											<DiagnosticsComposer
-												fresh={snapshotFresh()}
-												memory={diagnosticDraft()}
-												remember={setDiagnosticDraft}
-												tasks={state()?.tasks ?? []}
-												sessions={state()?.sessions ?? []}
-												connected={status() === "connected"}
-												focused={
-													contentFocused() &&
-													!helpOpen() &&
-													resourceEditor() !== "workbench"
-												}
-												editing={
-													settingsEditing() &&
-													!helpOpen() &&
-													resourceEditor() !== "workbench"
-												}
-												edit={(value) => {
-													if (value) {
-														setResourceEditor("diagnostics");
-														setSettingsEditing(true);
-													} else if (resourceEditor() === "diagnostics") {
-														setResourceEditor(null);
-														setSettingsEditing(false);
-													}
-												}}
-												prepare={(conversation, content) => {
-													if (
-														!snapshotFresh() ||
-														!state()?.sessions.some(
-															(session) =>
-																session.id === conversation &&
-																session.writable &&
-																session.task !== null,
-														)
-													) {
-														setNotice(
-															"Native diagnostic owner is no longer writable; draft remains unsent.",
-														);
-														return false;
-													}
-													go("session", String(conversation));
-													return prepareCommand(content);
-												}}
-											/>
-										)}
+									<EnvironmentsFeature
+										client={props.client}
+										active={() =>
+											current().page === "environments" &&
+											contentFocused() &&
+											!helpOpen() &&
+											!paletteOpen() &&
+											messageDialog() === null &&
+											!quitConfirmation()
+										}
 									/>
 								</Show>
 								<Show when={current().page === "schedules"}>
@@ -4787,139 +4659,142 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								)}
 							</Show>
 						</Show>
-						<SessionPrompt
-							scope={(() => {
-								current();
-								return navigation.current;
-							})()}
-							interactive={
-								!paletteOpen() &&
-								!helpOpen() &&
-								!busy() &&
-								!settingsEditing() &&
-								snapshotFresh() &&
-								((state()?.sessions.some(
-									(entry) => entry.id === sessionId() && entry.writable,
-								) &&
-									isTranscript()) ||
-									(standaloneFresh() &&
-										selectedStandalone()?.status === "ready"))
-							}
-							onModel={() => openProfilePicker("model")}
-							onThinking={() => openProfilePicker("thinking")}
-							meter={promptUsage()}
-							role={
-								current().page === "orchestrator"
-									? "Orchestrator"
-									: current().page === "pi"
-										? "Pi"
-										: current().page === "opencode"
-											? "OpenCode"
-											: isTranscript()
-												? "Agent"
-												: "Command"
-							}
-							model={
-								isTranscript() && typeof transcript()?.model === "string"
-									? String(transcript()?.model)
-									: selectedStandalone()
-										? `profile: ${selectedStandalone()?.profile}`
-										: undefined
-							}
-							thinking={
-								isTranscript() && typeof transcript()?.thinking === "string"
-									? String(transcript()?.thinking)
-									: undefined
-							}
-							working={
-								(isTranscript() &&
-									observation() === "watching" &&
-									Boolean(transcript()?.progress?.run)) ||
-								(standaloneFresh() && selectedStandalone()?.status === "busy")
-							}
-						>
-							<textarea
-								showCursor={false}
-								onCursorChange={() => cursorBlink.reset()}
-								ref={(value) => {
-									prompt = value;
-								}}
-								focused={
-									contentFocused() &&
-									!settingsEditing() &&
+						{/* v1 had no prompt on the environments page. */}
+						<Show when={current().page !== "environments"}>
+							<SessionPrompt
+								scope={(() => {
+									current();
+									return navigation.current;
+								})()}
+								interactive={
 									!paletteOpen() &&
-									!helpOpen()
+									!helpOpen() &&
+									!busy() &&
+									!settingsEditing() &&
+									snapshotFresh() &&
+									((state()?.sessions.some(
+										(entry) => entry.id === sessionId() && entry.writable,
+									) &&
+										isTranscript()) ||
+										(standaloneFresh() &&
+											selectedStandalone()?.status === "ready"))
 								}
-								initialValue={current().draft}
-								placeholder={
-									isTranscript() ||
-									current().page === "pi" ||
-									current().page === "opencode"
-										? "Ask anything…"
-										: "Prompt command (/help)…"
+								onModel={() => openProfilePicker("model")}
+								onThinking={() => openProfilePicker("thinking")}
+								meter={promptUsage()}
+								role={
+									current().page === "orchestrator"
+										? "Orchestrator"
+										: current().page === "pi"
+											? "Pi"
+											: current().page === "opencode"
+												? "OpenCode"
+												: isTranscript()
+													? "Agent"
+													: "Command"
 								}
-								keyBindings={textareaBindings(promptKeybinds)}
-								onKeyDown={(event) => {
-									const name = event.name.toLowerCase();
-									const text = prompt?.plainText ?? current().draft;
-									if (name === "?" && text.length === 0) {
-										event.preventDefault();
-										queueMicrotask(() => setHelpOpen(true));
-										return;
+								model={
+									isTranscript() && typeof transcript()?.model === "string"
+										? String(transcript()?.model)
+										: selectedStandalone()
+											? `profile: ${selectedStandalone()?.profile}`
+											: undefined
+								}
+								thinking={
+									isTranscript() && typeof transcript()?.thinking === "string"
+										? String(transcript()?.thinking)
+										: undefined
+								}
+								working={
+									(isTranscript() &&
+										observation() === "watching" &&
+										Boolean(transcript()?.progress?.run)) ||
+									(standaloneFresh() && selectedStandalone()?.status === "busy")
+								}
+							>
+								<textarea
+									showCursor={false}
+									onCursorChange={() => cursorBlink.reset()}
+									ref={(value) => {
+										prompt = value;
+									}}
+									focused={
+										contentFocused() &&
+										!settingsEditing() &&
+										!paletteOpen() &&
+										!helpOpen()
 									}
-									if (event.ctrl || event.meta || event.shift || !prompt)
-										return;
-									if (name === "up" || name === "down") {
-										const edge =
-											name === "up"
-												? prompt.logicalCursor.row === 0
-												: prompt.logicalCursor.row >= prompt.lineCount - 1;
-										if (
-											edge &&
-											!suggestionsOpen() &&
-											history.canBrowseArrows(historyKey(), text) &&
-											recall(name === "up" ? -1 : 1, true)
-										) {
+									initialValue={current().draft}
+									placeholder={
+										isTranscript() ||
+										current().page === "pi" ||
+										current().page === "opencode"
+											? "Ask anything…"
+											: "Prompt command (/help)…"
+									}
+									keyBindings={textareaBindings(promptKeybinds)}
+									onKeyDown={(event) => {
+										const name = event.name.toLowerCase();
+										const text = prompt?.plainText ?? current().draft;
+										if (name === "?" && text.length === 0) {
 											event.preventDefault();
+											queueMicrotask(() => setHelpOpen(true));
 											return;
 										}
-									}
-									if (!suggestionsOpen()) return;
-									const count = suggestions().length;
-									if (name === "up" || name === "down") {
-										event.preventDefault();
-										setSuggestionIndex(
-											(index) =>
-												(index + (name === "down" ? 1 : -1) + count) % count,
-										);
-									} else if (name === "tab") {
-										event.preventDefault();
-										const entry = suggestions()[suggestionIndex()];
-										if (entry) prepareSuggestion(entry.text);
-									}
-								}}
-								onContentChange={(value) => {
-									cursorBlink.reset();
-									navigation.current.draft =
-										typeof value === "string"
-											? value
-											: (prompt?.plainText ?? "");
-									setPromptText(navigation.current.draft);
-									setSuggestionIndex(0);
-								}}
-								onSubmit={() => {
-									if (!completeSelectedSuggestion()) void submit();
-								}}
-								width="100%"
-								minHeight={1}
-								maxHeight={8}
-								wrapMode="word"
-								textColor={color("text")}
-								backgroundColor={color("backgroundPanel")}
-								focusedTextColor={color("text")}
-								focusedBackgroundColor={color("backgroundPanel")}
-							/>
-						</SessionPrompt>
+										if (event.ctrl || event.meta || event.shift || !prompt)
+											return;
+										if (name === "up" || name === "down") {
+											const edge =
+												name === "up"
+													? prompt.logicalCursor.row === 0
+													: prompt.logicalCursor.row >= prompt.lineCount - 1;
+											if (
+												edge &&
+												!suggestionsOpen() &&
+												history.canBrowseArrows(historyKey(), text) &&
+												recall(name === "up" ? -1 : 1, true)
+											) {
+												event.preventDefault();
+												return;
+											}
+										}
+										if (!suggestionsOpen()) return;
+										const count = suggestions().length;
+										if (name === "up" || name === "down") {
+											event.preventDefault();
+											setSuggestionIndex(
+												(index) =>
+													(index + (name === "down" ? 1 : -1) + count) % count,
+											);
+										} else if (name === "tab") {
+											event.preventDefault();
+											const entry = suggestions()[suggestionIndex()];
+											if (entry) prepareSuggestion(entry.text);
+										}
+									}}
+									onContentChange={(value) => {
+										cursorBlink.reset();
+										navigation.current.draft =
+											typeof value === "string"
+												? value
+												: (prompt?.plainText ?? "");
+										setPromptText(navigation.current.draft);
+										setSuggestionIndex(0);
+									}}
+									onSubmit={() => {
+										if (!completeSelectedSuggestion()) void submit();
+									}}
+									width="100%"
+									minHeight={1}
+									maxHeight={8}
+									wrapMode="word"
+									textColor={color("text")}
+									backgroundColor={color("backgroundPanel")}
+									focusedTextColor={color("text")}
+									focusedBackgroundColor={color("backgroundPanel")}
+								/>
+							</SessionPrompt>
+						</Show>
 					</box>
 					<NativeAgentNavigation
 						interactive={!paletteOpen() && !helpOpen()}
