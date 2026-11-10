@@ -225,3 +225,7 @@ Authenticated `POST /api/environments/units/readd` and typed workbench `readd-un
 ## Honest empty-host observation
 
 An empty retained v3 topology remains a real native infrastructure network row under its protected operator, with no container or PID invented for presentation. Idle metadata distinguishes an explicit native owner anchor from a referenced prerequisite and reports no agent activity clock. Initial review discloses persistent empty topology and explicit shutdown behavior; re-add continues to use the existing exact native review surface. No new renderer, web or generated source is involved.
+
+## Infrastructure mapping retains native presentation authority
+
+Captured host infrastructure remains kind `infrastructure`, not invented app roots, and uses the existing protected operator and native review surfaces after explicit publication/repository authorization. Preview output is inert metadata and cannot manufacture a live TUI owner or lease. No web, renderer, generated source, colors, navigation or child hierarchy is changed.

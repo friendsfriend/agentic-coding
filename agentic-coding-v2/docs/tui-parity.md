@@ -2213,3 +2213,7 @@ Re-add uses the existing native review surface and protected operator hierarchy,
 ## Native host anchor checkpoint
 
 The protected operator retains the original empty network without a fake keeper/application row, preserving layout, colors, navigation and native-child hierarchy. Acceptance observes authenticated native lifetime operations and synthetic engine receipts, not renderer/mount/snapshot/presenter/navigation-matrix tests or a manual TTY. This checkpoint is not visual/global-host parity archival.
+
+## Source-backed infrastructure checkpoint
+
+Six source-backed infrastructure units and their original topology are observable through the same authenticated native lifecycle used by the existing environment presentation. Backend acceptance starts/stops only disposable synthetic fixtures; it is not a renderer/mount/snapshot/presenter/navigation test, manual TTY run or visual-parity archival. Real-source mapping remains explicitly incomplete until its separate runtime, input and permission requirements are met.

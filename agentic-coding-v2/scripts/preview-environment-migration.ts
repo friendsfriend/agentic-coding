@@ -6,6 +6,7 @@ import { digest, loadConfig, object } from "../src/config.ts";
 import { validateProjects } from "../src/environment/catalog.ts";
 import {
 	compileCompose,
+	compileComposeSource,
 	readCompose,
 } from "../src/environment/compose-config.ts";
 import { checkComposeTelemetry } from "../src/environment/compose-telemetry.ts";
@@ -39,7 +40,8 @@ const source = flag("--source-config"),
 	output = flag("--output"),
 	socket = flag("--socket"),
 	sourceTree = flag("--source-tree", false),
-	npmrc = flag("--npmrc-reference", false);
+	npmrc = flag("--npmrc-reference", false),
+	infrastructureRepository = flag("--infrastructure-repository", false);
 if (!source || !current || !output || !socket)
 	throw new Refusal("Explicit source/current/output directories required");
 if (process.argv.includes("--apply"))
@@ -86,11 +88,31 @@ function capture(relative: string) {
 	});
 	return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
-const config = loadConfig(
+const loadedConfig = loadConfig(
 	path.join(output, "unused-validation-state"),
 	process.cwd(),
 	current,
 );
+// An explicit preview repository is data-only authorization to propose a mapping,
+// never authorization to modify the live repository allow-list or execute it.
+const infrastructureRoot = infrastructureRepository
+	? fs.realpathSync(infrastructureRepository)
+	: undefined;
+if (infrastructureRoot && !fs.statSync(infrastructureRoot).isDirectory())
+	throw new Refusal("Infrastructure repository must be an existing directory");
+const requiredRepositories =
+	infrastructureRoot &&
+	!loadedConfig.repositories.some(
+		(repository) => fs.realpathSync(repository) === infrastructureRoot,
+	)
+		? [infrastructureRoot]
+		: [];
+const config = requiredRepositories.length
+	? {
+			...loadedConfig,
+			repositories: [...loadedConfig.repositories, ...requiredRepositories],
+		}
+	: loadedConfig;
 const base = fs.readFileSync(path.join(current, "environments.json"), "utf8");
 if (Buffer.byteLength(base) > definitionByteLimit)
 	throw new Refusal("Current definitions exceed bundle bounds");
@@ -389,6 +411,156 @@ function convertedBuild(relative: string) {
 	)
 		throw new Refusal("Unconverted credential bind remains in Dockerfile");
 	return { source, buildSecrets, secretRefs };
+}
+const infrastructureIds = [
+	"redis",
+	"postgres",
+	"mailpit",
+	"activemq",
+	"azurite",
+	"playwright-server",
+] as const;
+const infrastructureProjects = new Set<string>();
+if (infrastructureRoot) {
+	const targetId = "run-compose-default",
+		topologyId = "host-infra-network";
+	const bundle: typeof projects = [],
+		refs = new Set<string>();
+	try {
+		const network = flatten("infrastructure/compose/network-compose.yml");
+		if (
+			Object.keys(network.services).length ||
+			Object.keys(network.volumes).length ||
+			Object.keys(network.networks).join() !== "devenv-local" ||
+			JSON.stringify(object(network.networks["devenv-local"])) !==
+				JSON.stringify({ driver: "bridge" })
+		)
+			throw new Refusal(
+				"Global topology differs from the explicit single bridge; effects cannot be omitted",
+			);
+		bundle.push({
+			id: topologyId,
+			kind: "infrastructure",
+			repository: infrastructureRoot,
+			defaults: { run: targetId },
+			targets: [
+				{
+					id: targetId,
+					action: "run",
+					runtime: "compose",
+					profile: "default",
+					compose: {
+						file: "compose.native.yaml",
+						source: "services: {}\n",
+						provider: "docker",
+						socket,
+						network: "shared",
+						networkOnly: true,
+					},
+				},
+			],
+		});
+		for (const id of infrastructureIds) {
+			const metadata = object(
+				JSON.parse(capture(`infrastructure/definitions/${id}.json`)),
+			);
+			if (
+				Object.keys(metadata).sort().join() !==
+					"containerBaseName,displayName,ident" ||
+				metadata.ident !== id ||
+				typeof metadata.displayName !== "string" ||
+				!metadata.displayName ||
+				metadata.displayName.length > 200 ||
+				typeof metadata.containerBaseName !== "string" ||
+				!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(metadata.containerBaseName)
+			)
+				throw new Refusal(
+					"Global infrastructure metadata differs from its explicit native mapping",
+				);
+			const converted = convertedCompose(
+					`infrastructure/compose/${id}-compose.yml`,
+				),
+				parsed = object(Bun.YAML.parse(converted.source)),
+				services = object(parsed.services);
+			if (
+				Object.keys(services).join() !== id ||
+				object(services[id]).container_name !== metadata.containerBaseName ||
+				JSON.stringify(parsed.networks) !== JSON.stringify(network.networks)
+			)
+				throw new Refusal(
+					"Global service closure differs from its one declared service and exact bridge",
+				);
+			const compose = {
+				file: "compose.native.yaml",
+				source: converted.source,
+				provider: "docker",
+				socket,
+				network: "shared",
+				networkFrom: { app: topologyId, target: targetId },
+			};
+			const parsedNative = compileComposeSource(
+				infrastructureRoot,
+				readCompose(compose),
+				{ source: converted.source, contentDigest: digest(converted.source) },
+			);
+			for (const service of parsedNative.services)
+				for (const ref of Object.values(service.secretRefs ?? {}))
+					refs.add(ref);
+			bundle.push({
+				id: `host-infra-${id}`,
+				kind: "infrastructure",
+				repository: infrastructureRoot,
+				defaults: { run: targetId },
+				targets: [
+					{
+						id: targetId,
+						label: metadata.displayName,
+						action: "run",
+						runtime: "compose",
+						profile: "default",
+						prerequisites: [{ app: topologyId, target: targetId }],
+						compose,
+					},
+				],
+			});
+		}
+		if (
+			bundle.some((project) =>
+				projects.some((existing) => existing.id === project.id),
+			)
+		)
+			throw new Refusal(
+				"Global infrastructure IDs conflict with native definitions; no target or defaults are overwritten",
+			);
+		validateProjects(config, {
+			version: 1,
+			projects: [...projects, ...bundle],
+		});
+		projects.push(...bundle);
+		for (const project of bundle) {
+			infrastructureProjects.add(String(project.id));
+			rows.push({
+				app: String(project.id),
+				source: `infrastructure/compose/${project.id === topologyId ? "network" : String(project.id).slice("host-infra-".length)}-compose.yml`,
+				target: targetId,
+				status: "candidate",
+				reason:
+					"Explicit frozen native infrastructure mapping: independent units on one original protected topology, exact reserved source container names and loopback publications; no existing-container adoption, legacy bridge/volume reuse or cross-owner borrowing",
+			});
+		}
+		for (const ref of refs) required.add(ref);
+	} catch (error) {
+		for (const id of ["network", ...infrastructureIds])
+			rows.push({
+				app: `host-infra-${id}`,
+				source: `infrastructure/compose/${id}-compose.yml`,
+				status: "blocked",
+				reason:
+					error instanceof Refusal
+						? error.message
+						: "Global infrastructure conversion refused atomically; values withheld",
+			});
+	}
 }
 for (const project of projects) {
 	const id = String(project.id),
@@ -952,7 +1124,9 @@ for (const project of projects) {
 			defaultDecisions.push({
 				app: id,
 				action,
-				status: "existing-native-retained",
+				status: infrastructureProjects.has(id)
+					? "captured-infrastructure"
+					: "existing-native-retained",
 				target: String(defaults[action]),
 			});
 			continue;
@@ -1115,6 +1289,30 @@ const report = {
 	status: "inert-incomplete-preview",
 	liveConfigurationChanged: false,
 	execution: "none",
+	runtimeValidated: false,
+	fullParityArchived: false,
+	requiredRepositoryApprovals: requiredRepositories,
+	infrastructureMapping: infrastructureRoot
+		? {
+				status: infrastructureProjects.size === 7 ? "candidate" : "blocked",
+				projects: [...infrastructureProjects],
+				recommendedOperatorLifetime: "operator-infrastructure-v3",
+				lifetimeEnforcedByConfiguration: false,
+				services: infrastructureIds.map((id) => `host-infra-${id}`),
+				effectsNotClaimed: [
+					"existing-container adoption or legacy bridge/volume reuse",
+					"existing legacy volume contents",
+					"all-interface legacy port exposure (native publications are loopback-only)",
+					"cross-owner host consumption",
+					"service health beyond the captured source readiness",
+					"live compatibility or publication approval",
+				],
+			}
+		: {
+				status: "not-requested",
+				reason:
+					"An explicit --infrastructure-repository is required; no repository or host lifetime is inferred",
+			},
 	baseDigest: digest(base),
 	definitionDigest: digest(content),
 	bytes: Buffer.byteLength(content),
@@ -1130,7 +1328,14 @@ const report = {
 	defaultDecisions,
 	remaining: [
 		"changed host-Maven/image source versions and existing-native override reconciliation require explicit metadata review",
-		"global/shared infrastructure topology and live network lifetime",
+		infrastructureProjects.size === 7
+			? "cross-owner host consumption still requires an explicit native attachment authority; protected same-owner source mapping is available"
+			: "global infrastructure source mapping requires an explicit --infrastructure-repository; no host workspace inferred",
+		...(requiredRepositories.length
+			? [
+					"explicit native repository policy approval is required before this proposed infrastructure mapping can pass live preflight",
+				]
+			: []),
 		"application-prerequisite migration where the required backend target remains unavailable",
 		"separately authorized real collector-image/network acceptance; native pinned HTTPS/bearer transport and live attribution are implemented",
 		"default reconciliation for existing native overrides and any blocked/ambiguous declarations; generic process-start hints are not service health",
