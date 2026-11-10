@@ -1,0 +1,235 @@
+/** @jsxImportSource @opentui/solid */
+// Footer bar — one implementation for every surface.
+//
+// The shell keeps it one row high: special keybinds fill a clipping left column
+// and `?` help is pinned right so it stays visible however many keys precede it.
+// A surface whose focused content claims `?` itself can suppress that chip.
+// A surface that spreads keybinds over several rows (the env surface reserves
+// three footer lines) asks for more lines and the entries wrap into them.
+import { TextAttributes } from "@opentui/core";
+import { createMemo, Show } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
+import { uiColors } from "../theme/colors";
+import { HelpText } from "./HelpText.tsx";
+import type { Keybind } from "./keybinds.ts";
+import {
+	activeKeybindCatalog,
+	activeKeybindContext,
+	footerKeybinds,
+	keybindFooterLabel,
+} from "./keybinds.ts";
+import { useKeybindChips } from "./mouse/useKeybindChips.ts";
+import { RunningText } from "./RunningText.tsx";
+
+export type { Keybind };
+
+/** Fallback right-anchored entry so `?` help is advertised on every surface. */
+const FALLBACK_HELP: Keybind = { key: "?", action: "help" };
+
+export interface StatusBarProps {
+	/** Text shown before the keybinds (e.g. a filter prompt). */
+	prompt?: string;
+	/** Explicit keybinds; defaults to the active catalog's special keys. */
+	keybinds?: readonly Keybind[];
+	/** Left/centre/right text cells, as the env surface's footer uses them. */
+	left?: string;
+	center?: string;
+	right?: string;
+	/** A one-line status fact pinned next to `?` help (the shell's diagnostics
+	 * summary: the worst recent main-thread lag the process observed). It is
+	 * plain text — a surface owns its wording and never smuggles styling in. */
+	status?: string;
+	/** Rows the footer may use. `auto` wraps every special key; default 1. */
+	lines?: number | "auto";
+	/** Show the right-anchored `?` help chip. Default true. A surface whose
+	 * focused content consumes `?` itself sets false, because the shell help
+	 * modal is not reachable from there. */
+	showHelp?: boolean;
+	runningTextEnabled?: boolean;
+	runningTextOffset?: number;
+	/** Chip activation: run the key a footer chip advertises (design D6). */
+	onKeybindActivate?: (keybind: Keybind) => void;
+	/** Whether a chip is a pointer target at all. */
+	keybindActivatable?: (keybind: Keybind) => boolean;
+}
+
+export function StatusBar(props: StatusBarProps) {
+	const dimensions = useTerminalDimensions();
+	const chipRunner = useKeybindChips();
+	const lines = () =>
+		props.lines === "auto"
+			? Math.max(1, wrapped().length) +
+				(props.left !== undefined || props.center !== undefined ? 1 : 0)
+			: Math.max(1, props.lines ?? 1);
+	const keybinds = () =>
+		props.keybinds
+			? [...props.keybinds]
+			: footerKeybinds(activeKeybindCatalog(), activeKeybindContext());
+	const help = () =>
+		keybinds().find((keybind) => keybind.key === "?") ?? FALLBACK_HELP;
+	const entries = () => keybinds().filter((keybind) => keybind.key !== "?");
+	/** Chip (pointer) props for the help renderer: the surface's own runner, or
+	 * the shared one that dispatches the key a chip advertises (design D6). */
+	const chips = () =>
+		props.onKeybindActivate
+			? {
+					onActivate: props.onKeybindActivate,
+					...(props.keybindActivatable
+						? { activatable: props.keybindActivatable }
+						: {}),
+				}
+			: {
+					onActivate: chipRunner.onActivate,
+					activatable: chipRunner.activatable,
+				};
+
+	/**
+	 * Wrap the keybinds into the available rows, keeping each `key action` pair
+	 * whole. Used for automatic or explicitly multi-row footers.
+	 */
+	const wrapped = createMemo(() => {
+		const all = entries();
+		if (all.length === 0) return [[]];
+		const reserved =
+			props.left !== undefined || props.center !== undefined
+				? 0
+				: (props.showHelp !== false
+						? help().key.length + keybindFooterLabel(help()).length + 2
+						: 0) + (props.status ? props.status.length + 1 : 0);
+		const width = Math.max(1, dimensions().width - 2 - reserved);
+		const rows: Keybind[][] = [];
+		let row: Keybind[] = [];
+		let used = 0;
+		for (const entry of all) {
+			const chunk = entry.key.length + 1 + keybindFooterLabel(entry).length + 3;
+			if (row.length > 0 && used + chunk > width) {
+				rows.push(row);
+				row = [];
+				used = 0;
+			}
+			row.push(entry);
+			used += chunk;
+		}
+		if (row.length > 0) rows.push(row);
+		return rows;
+	});
+
+	/** The env surface's footer: one cells row, then the keybind rows. */
+	if (props.left !== undefined || props.center !== undefined) {
+		const cell = (
+			value: string | undefined,
+			align: "left" | "center" | "right",
+		) =>
+			value === undefined || value === "" ? null : (
+				<box
+					style={{
+						flexGrow: 1,
+						flexShrink: 1,
+						minWidth: 0,
+						justifyContent:
+							align === "left"
+								? "flex-start"
+								: align === "center"
+									? "center"
+									: "flex-end",
+					}}
+				>
+					<RunningText
+						text={value}
+						align={align === "right" ? "right" : "left"}
+						fg={
+							align === "center" ? uiColors.textMuted : uiColors.textSecondary
+						}
+						enabled={props.runningTextEnabled}
+						offset={props.runningTextOffset}
+					/>
+				</box>
+			);
+		const keybindRows = () => wrapped().slice(0, Math.max(0, lines() - 1));
+		return (
+			<box
+				backgroundColor={uiColors.bgMantle}
+				style={{ width: "100%", height: lines(), flexDirection: "column" }}
+			>
+				<box
+					style={{
+						width: "100%",
+						height: 1,
+						flexShrink: 0,
+						flexDirection: "row",
+						alignItems: "center",
+						paddingLeft: 1,
+						paddingRight: 1,
+					}}
+				>
+					{cell(props.left, "left")}
+					{cell(props.center, "center")}
+					{cell(props.right, "right")}
+				</box>
+				{keybindRows().map((row) => (
+					<box
+						style={{
+							width: "100%",
+							height: 1,
+							flexShrink: 0,
+							flexDirection: "row",
+							alignItems: "center",
+							paddingLeft: 1,
+							paddingRight: 1,
+						}}
+					>
+						<HelpText entries={row} {...chips()} />
+					</box>
+				))}
+			</box>
+		);
+	}
+
+	return (
+		<box
+			backgroundColor={uiColors.bgMantle}
+			style={{
+				width: "100%",
+				height: lines(),
+				flexDirection: "row",
+				paddingLeft: 1,
+				paddingRight: 1,
+			}}
+		>
+			<box
+				style={{
+					flexGrow: 1,
+					flexShrink: 1,
+					minWidth: 0,
+					overflow: "hidden",
+					flexDirection: lines() > 1 ? "column" : "row",
+				}}
+			>
+				<Show when={props.prompt}>
+					<text fg={uiColors.textMuted} attributes={TextAttributes.DIM}>
+						{props.prompt}
+					</text>
+				</Show>
+				{lines() === 1 ? (
+					<HelpText entries={entries()} {...chips()} />
+				) : (
+					wrapped()
+						.slice(0, lines())
+						.map((row) => <HelpText entries={row} {...chips()} />)
+				)}
+			</box>
+			<Show when={props.status}>
+				<box style={{ flexShrink: 0, marginLeft: 1 }}>
+					<text fg={uiColors.textMuted} attributes={TextAttributes.DIM}>
+						{props.status}
+					</text>
+				</box>
+			</Show>
+			<Show when={props.showHelp !== false}>
+				<box style={{ flexShrink: 0, marginLeft: 1 }}>
+					<HelpText entries={[help()]} {...chips()} />
+				</box>
+			</Show>
+		</box>
+	);
+}

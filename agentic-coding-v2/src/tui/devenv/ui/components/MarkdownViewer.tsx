@@ -1,0 +1,89 @@
+/** @jsxImportSource @opentui/solid */
+// One markdown renderer for every surface. The workflow/wiki review modals
+// render parsed blocks through `MarkdownBlockView` (one selectable row per
+// block, anchored to source lines); the environment modal renders the whole
+// document through `MarkdownViewer`. Both use the theme-cached syntax style,
+// so a live theme change restyles markdown everywhere.
+import type { MarkdownOptions } from "@opentui/core";
+import { uiColors } from "../theme/colors";
+import { useMarkdownSyntaxStyle } from "./markdownSyntax.ts";
+
+export interface MarkdownViewerProps {
+	/** Whole-document markdown source. */
+	content: string;
+	/** Opt-in fenced block renderer; ordinary Markdown surfaces leave this unset. */
+	renderNode?: MarkdownOptions["renderNode"];
+	/**
+	 * Render width in terminal cells. Omit it to fill the surrounding box:
+	 * a markdown renderable that only flexes wraps to the width its parent
+	 * actually gives it, which is what the review thread wants (the thread
+	 * sits in a modal whose width is a fraction of the terminal).
+	 */
+	width?: number;
+	fg?: string;
+	/**
+	 * Draw the text immediately instead of waiting for the syntax pass.
+	 *
+	 * Each markdown block is a code renderable that stays blank until its
+	 * asynchronous tree-sitter highlight arrives, so a block that appears (or
+	 * whose text grows) is invisible for the first frames — the whole message
+	 * flashes. Telling the renderable the content is still streaming makes it
+	 * lay the text out with markdown-derived styling first and let the highlight
+	 * refine it in place.
+	 *
+	 * This only draws the text it is given: a caller that streams a document
+	 * into this renderer re-renders it on every frame, so it hands the growing
+	 * tail through `streamingTailSource` and keeps the block from gaining a row
+	 * and taking it back on the next character (see `markdownBlocks.ts`).
+	 */
+	streaming?: boolean;
+	/** Blank rows under the document, as the block flow gives a code block. */
+	marginBottom?: number;
+	/** Blank rows above the document. The transcript uses this to separate its
+	 * top-level markdown parts once, instead of relying on each part's trailing
+	 * blank source line (which the renderer normalizes away). */
+	marginTop?: number;
+}
+
+/** Render a whole markdown document. */
+export function MarkdownViewer(props: MarkdownViewerProps) {
+	const syntaxStyle = useMarkdownSyntaxStyle();
+	return (
+		<markdown
+			content={props.content}
+			renderNode={props.renderNode}
+			streaming={props.streaming ?? false}
+			syntaxStyle={syntaxStyle}
+			fg={props.fg ?? uiColors.textSecondary}
+			{...(props.width === undefined
+				? { flexGrow: 1 }
+				: { width: props.width })}
+			{...(props.marginBottom === undefined
+				? {}
+				: { marginBottom: props.marginBottom })}
+			{...(props.marginTop === undefined ? {} : { marginTop: props.marginTop })}
+		/>
+	);
+}
+
+export interface MarkdownBlockViewProps {
+	/** Raw source of one top-level block (see `parseMarkdownBlocks`). */
+	source: string;
+	width: number;
+	fg: string;
+	flexGrow?: number;
+}
+
+/** Render one parsed markdown block (used by the review modals). */
+export function MarkdownBlockView(props: MarkdownBlockViewProps) {
+	const syntaxStyle = useMarkdownSyntaxStyle();
+	return (
+		<markdown
+			content={props.source}
+			syntaxStyle={syntaxStyle}
+			fg={props.fg}
+			width={props.width}
+			flexGrow={props.flexGrow}
+		/>
+	);
+}

@@ -1,0 +1,132 @@
+import type { Keybind } from "./keybinds.ts";
+
+/**
+ * The host shell's own key bindings: the keys the shell owns on **every**
+ * surface, including while a feature body or one of its dialogs is on screen.
+ *
+ * This is the one registry for them. It is read in exactly three places, so the
+ * three can never drift apart:
+ *
+ * - the shell's always-on key layer (`dash/keymap-setup.ts`) binds these keys,
+ * - the footer/`?` help catalogs (`otel/app/keybinds.ts`, `dash/keybinds.ts`,
+ *   `shared/modalHelp.ts`) render these labels,
+ * - an embedded feature excludes exactly these keys from its own layers
+ *   (`hostOwnedKeys`), because a key the host owns must never be claimed by a
+ *   feature layer that handles nothing for it — that is how the location picker
+ *   and the shared help modal used to go dead on the environment surface.
+ */
+export interface HostKeybind extends Keybind {
+	/** Binding name the key layer registers (`ctrl+p`; labels stay in `key`). */
+	binding: string;
+}
+
+export const HOST_KEYBINDS: readonly HostKeybind[] = [
+	{
+		binding: "ctrl+p",
+		key: "Ctrl+P",
+		action: "locations",
+		short: "locations",
+	},
+	{
+		binding: "?",
+		key: "?",
+		action: "Open help",
+		short: "help",
+	},
+	{
+		// Quit is the shell's, on every surface: a feature that binds `q` for its
+		// own table (the environment's registry lists it) would swallow it.
+		binding: "q",
+		key: "q",
+		action: "quit",
+		standard: true,
+	},
+	{
+		// The right-hand workflow-agent index is a second shell panel. This host
+		// key is present on every page, but its handler yields to modal and text
+		// input owners before changing shell focus.
+		binding: "ctrl+a",
+		key: "Ctrl+A",
+		action: "toggle focus to the agent sidebar",
+		short: "agents",
+	},
+	{
+		// The one sidebar key that must work on every surface, including feature
+		// views whose own layers claim h/l (the environment tables): it toggles
+		// focus between the workspace sidebar and the page body.
+		binding: "ctrl+s",
+		key: "Ctrl+S",
+		action: "toggle the workspace sidebar",
+		short: "sidebar",
+	},
+	{
+		// The workspace cycle, host-owned for the same reason as the sidebar
+		// toggle: it must work while a workflow dashboard or a feature view that
+		// claims h/l holds the keys. The sidebar's entries are the cycle — the
+		// pinned Orchestrator, then the filter's workflow rows — and it wraps at
+		// both ends. Navigation, so it stays out of the footers and is documented
+		// by the `?` help modal.
+		binding: "ctrl+h",
+		key: "Ctrl+H",
+		action: "previous workspace",
+		short: "prev",
+		standard: true,
+	},
+	{
+		binding: "ctrl+l",
+		key: "Ctrl+L",
+		action: "next workspace",
+		short: "next",
+		standard: true,
+	},
+	{
+		// The tmux new-window instinct: open the view being shown in a new tmux
+		// window running this shell attached to the same server.
+		binding: "ctrl+t",
+		key: "Ctrl+T",
+		action: "open this view in a new tmux window",
+		short: "window",
+	},
+	{
+		// Support tool: reports which keymap fields the active surface gates on, so
+		// "nothing responds here" can be told apart from "the keyboard is dead"
+		// without a rebuild. Hidden from footers, listed by `?`.
+		binding: "alt+d",
+		key: "Alt+D",
+		action: "keybind diagnostics",
+		standard: true,
+	},
+];
+
+/** The binding names, in registration order. */
+export const HOST_KEY_BINDINGS: readonly string[] = HOST_KEYBINDS.map(
+	(entry) => entry.binding,
+);
+
+/** The catalog entry for one host key. */
+export function hostKeybind(binding: string): Keybind {
+	const entry = HOST_KEYBINDS.find(
+		(candidate) => candidate.binding === binding,
+	);
+	if (!entry) throw new Error(`unknown host keybind: ${binding}`);
+	const { binding: _binding, ...keybind } = entry;
+	return keybind;
+}
+
+const NO_HOST_KEYS: ReadonlySet<string> = new Set();
+const EMBEDDED_HOST_KEYS: ReadonlySet<string> = new Set(HOST_KEY_BINDINGS);
+
+/** The diagnostics entry, for catalogs that list the host's own keys. */
+export function hostDiagnosticsKeybind(): Keybind {
+	return hostKeybind("alt+d");
+}
+
+/**
+ * Keys an embedded feature must not claim. Standalone the feature has no host
+ * layer above it, so it keeps all of its own bindings.
+ */
+export function hostOwnedKeys(
+	embedded: boolean | undefined,
+): ReadonlySet<string> {
+	return embedded ? EMBEDDED_HOST_KEYS : NO_HOST_KEYS;
+}

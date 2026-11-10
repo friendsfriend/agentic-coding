@@ -1,0 +1,28 @@
+/** @jsxImportSource @opentui/solid */
+// Shared theme picker — single source: src/tui/shared/ThemePicker.tsx. The
+// environment shell keeps its live-search and `/` filter keybind contract.
+import { ThemePicker } from "../components/ThemePicker";
+
+export interface ThemePickerViewProps {
+	selectedIndex: number;
+	activeTheme: string;
+	filterQuery?: string;
+	filterActive?: boolean;
+	themes?: string[];
+	/** Pointer: a tap selects a theme row (the keyboard's `j`/`k`). */
+	onSelectIndex?: (index: number) => void;
+}
+
+export function ThemePickerView(props: ThemePickerViewProps) {
+	return (
+		<ThemePicker
+			{...(props.onSelectIndex ? { onSelect: props.onSelectIndex } : {})}
+			selected={props.selectedIndex}
+			active={props.activeTheme}
+			themes={props.themes}
+			query={props.filterQuery}
+			filtering={props.filterActive}
+			searchMode="live"
+		/>
+	);
+}

@@ -1,0 +1,89 @@
+/** @jsxImportSource @opentui/solid */
+
+import type { ScrollBoxRenderable } from "@opentui/core";
+import { createEffect, createMemo, For, Show } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
+import { uiColors } from "../theme/colors";
+import { GenericModal } from "./GenericModal.tsx";
+import { MarkdownBlockView } from "./MarkdownViewer.tsx";
+import { parseMarkdownBlocks } from "./markdownBlocks.ts";
+import { useMarkdownSyntaxStyle } from "./markdownSyntax.ts";
+import { useModalBackdrop } from "./mouse/useModalBackdrop.ts";
+import { ScrollableContent } from "./ScrollableContent.tsx";
+
+export function VerdictModal(props: {
+	title: string;
+	content: string;
+	offset: number;
+	lines: number;
+	/**
+	 * Opt-in block-level Markdown rendering for OpenSpec artifact content.
+	 * Other callers (verifier verdicts, the Tasks list) keep the plain
+	 * highlighted-source presentation.
+	 */
+	renderMarkdown?: boolean;
+}) {
+	const backdrop = useModalBackdrop({ kind: "markdown-viewer" });
+	const dimensions = useTerminalDimensions();
+	const syntaxStyle = useMarkdownSyntaxStyle();
+	const contentWidth = () =>
+		Math.max(40, Math.floor(dimensions().width * 0.7) - 8);
+	const blocks = createMemo(() =>
+		props.renderMarkdown ? parseMarkdownBlocks(props.content) : [],
+	);
+	let scrollbox: ScrollBoxRenderable | undefined;
+	createEffect(() => scrollbox?.scrollTo(props.offset));
+	return (
+		<GenericModal
+			{...backdrop}
+			title={props.title}
+			widthPercent={0.7}
+			heightPercent={0.75}
+			help={[
+				{ key: "j/k", action: "Scroll" },
+				{ key: "Esc", action: "Close" },
+			]}
+		>
+			<ScrollableContent
+				onScrollBoxReady={(box) => {
+					scrollbox = box;
+				}}
+			>
+				<Show
+					when={props.renderMarkdown}
+					fallback={
+						<code
+							filetype="markdown"
+							content={props.content}
+							syntaxStyle={syntaxStyle}
+							fg={uiColors.textSecondary}
+							width={contentWidth()}
+						/>
+					}
+				>
+					{/* Whole-document block-level Markdown so multi-line constructs
+					    (lists, tables, block quotes, fenced code) render as blocks. */}
+					<box paddingLeft={1} paddingRight={1}>
+						<For each={blocks()}>
+							{(block) => (
+								<box flexDirection="row">
+									<text fg={uiColors.textMuted} flexShrink={0} width={6}>
+										{block.endLine > block.startLine
+											? `${String(block.startLine)}-${String(block.endLine)}`
+											: String(block.startLine)}
+									</text>
+									<MarkdownBlockView
+										source={block.source}
+										fg={uiColors.textSecondary}
+										width={contentWidth()}
+										flexGrow={1}
+									/>
+								</box>
+							)}
+						</For>
+					</box>
+				</Show>
+			</ScrollableContent>
+		</GenericModal>
+	);
+}
