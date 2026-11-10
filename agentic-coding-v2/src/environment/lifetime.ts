@@ -6,13 +6,33 @@ export const referencedLifetime = "referenced-roots-v1";
 export const sharedLifetime = "shared-prerequisites-v1";
 export const operatorInfrastructureLifetime = "operator-infrastructure-v1";
 export const renewableOperatorLifetime = "operator-infrastructure-v2";
+export const hostOperatorLifetime = "operator-infrastructure-v3";
+export type RenewableOperatorLifetime =
+	| typeof renewableOperatorLifetime
+	| typeof hostOperatorLifetime;
+export function renewableOperator(
+	plan: Plan,
+): plan is Plan & { lifetime: RenewableOperatorLifetime } {
+	return (
+		plan.lifetime === renewableOperatorLifetime ||
+		plan.lifetime === hostOperatorLifetime
+	);
+}
+export function operatorHostAnchor(plan: Plan) {
+	return (
+		plan.lifetime === hostOperatorLifetime &&
+		plan.operatorAnchor === true &&
+		plan.projectKind === "infrastructure" &&
+		plan.compose?.networkOnly === true &&
+		plan.operatorRoot === undefined
+	);
+}
 export type OperatorLifetime =
 	| typeof operatorInfrastructureLifetime
-	| typeof renewableOperatorLifetime;
+	| RenewableOperatorLifetime;
 export function operatorInfrastructure(plan: Plan) {
 	return (
-		plan.lifetime === operatorInfrastructureLifetime ||
-		plan.lifetime === renewableOperatorLifetime
+		plan.lifetime === operatorInfrastructureLifetime || renewableOperator(plan)
 	);
 }
 /** Preserve real project kinds: operator infrastructure units are not fake apps. */
@@ -32,7 +52,8 @@ export function operatorInfrastructurePlans(
 	if (lifetime === undefined) return plans;
 	if (
 		(lifetime !== operatorInfrastructureLifetime &&
-			lifetime !== renewableOperatorLifetime) ||
+			lifetime !== renewableOperatorLifetime &&
+			lifetime !== hostOperatorLifetime) ||
 		!roots.length ||
 		new Set(roots).size !== roots.length ||
 		roots.some((root) => !plans.some((plan) => plan.app === root))
@@ -42,6 +63,9 @@ export function operatorInfrastructurePlans(
 		...plan,
 		lifetime,
 		...(roots.includes(plan.app) ? { operatorRoot: true as const } : {}),
+		...(lifetime === hostOperatorLifetime && plan.compose?.networkOnly
+			? { operatorAnchor: true as const }
+			: {}),
 	}));
 	validateOperatorInfrastructure(selected);
 	return selected;
@@ -52,6 +76,7 @@ function validateOperatorInfrastructure(plans: Plan[]) {
 	if (
 		topology.length !== 1 ||
 		!owner?.compose?.networkOnly ||
+		(owner.lifetime === hostOperatorLifetime && !operatorHostAnchor(owner)) ||
 		owner.requires?.length ||
 		plans.some(
 			(plan) =>
@@ -100,10 +125,7 @@ export function referencedRoot(plan: Plan) {
 /** Shared reference mode adds a second, disjoint acquisition that attaches to an
  * already-live prerequisite generation instead of starting another one. */
 export function sharedRoot(plan: Plan) {
-	return (
-		plan.lifetime === sharedLifetime ||
-		plan.lifetime === renewableOperatorLifetime
-	);
+	return plan.lifetime === sharedLifetime || renewableOperator(plan);
 }
 export function scopedRoot(plan: Plan) {
 	return plan.lifetime !== undefined;
@@ -154,13 +176,21 @@ export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 		plans.some(
 			(plan) =>
 				plan.operatorTopology !== undefined &&
-				(plan.lifetime !== renewableOperatorLifetime ||
+				(!renewableOperator(plan) ||
 					plan.operatorRoot !== true ||
 					typeof plan.operatorTopology !== "string"),
 		)
 	)
 		throw new Error(
 			"Original topology pins require a reviewed v2 operator unit",
+		);
+	if (
+		plans.some(
+			(plan) => plan.operatorAnchor !== undefined && !operatorHostAnchor(plan),
+		)
+	)
+		throw new Error(
+			"Persistent topology anchors require their explicit v3 native infrastructure scope",
 		);
 	if (!plans.some(scopedRoot)) return;
 	if (plans.some(operatorInfrastructure)) {

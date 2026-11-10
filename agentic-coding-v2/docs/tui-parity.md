@@ -2209,3 +2209,7 @@ Independent infrastructure stop units remain real native infrastructure rows ben
 ## Fresh native review for re-add
 
 Re-add uses the existing native review surface and protected operator hierarchy, with distinct generation identities and ordinary exact review decisions. The generic workbench gains request/read guidance only. Layout, colors, navigation, web assets and generated source remain unchanged. Acceptance exercises authenticated transport/native phases rather than renderer, mount, snapshot, presenter, navigation-matrix or manual TTY tests. This is not a full visual or global-host parity archival claim.
+
+## Native host anchor checkpoint
+
+The protected operator retains the original empty network without a fake keeper/application row, preserving layout, colors, navigation and native-child hierarchy. Acceptance observes authenticated native lifetime operations and synthetic engine receipts, not renderer/mount/snapshot/presenter/navigation-matrix tests or a manual TTY. This checkpoint is not visual/global-host parity archival.

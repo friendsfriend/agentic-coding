@@ -2,7 +2,11 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { digest, text } from "../config.ts";
 import { Catalog, decode, type TaskInfo, values } from "../state.ts";
-import { renewableOperatorLifetime, sameApprovedPlan } from "./lifetime.ts";
+import {
+	hostOperatorLifetime,
+	renewableOperator,
+	sameApprovedPlan,
+} from "./lifetime.ts";
 import type { Plan } from "./model.ts";
 import {
 	type EnvironmentRun,
@@ -37,16 +41,16 @@ export class OperatorUnitStarts {
 			unit.owner !== saved.owner ||
 			unit.revision !== saved.revision ||
 			unit.state !== "exited" ||
-			unit.exitCode !== 0 ||
-			unit.error ||
+			(unit.plan.lifetime !== hostOperatorLifetime &&
+				(unit.exitCode !== 0 || unit.error)) ||
 			unit.cleanupRetention ||
-			unit.plan.lifetime !== renewableOperatorLifetime ||
+			!renewableOperator(unit.plan) ||
 			unit.plan.operatorRoot !== true ||
 			task?.kind !== "operator-environment" ||
 			task.policy !== "workspace-write" ||
 			!topology ||
 			topology.owner !== saved.owner ||
-			topology.plan.lifetime !== renewableOperatorLifetime ||
+			topology.plan.lifetime !== unit.plan.lifetime ||
 			!topology.plan.compose?.networkOnly ||
 			unit.plan.compose?.networkFrom?.app !== topology.plan.app ||
 			unit.plan.compose.networkFrom.target !== topology.plan.id ||
@@ -61,13 +65,13 @@ export class OperatorUnitStarts {
 					(run.state !== "running" ||
 						run.ready !== true ||
 						run.cleanupRetention ||
-						run.plan.lifetime !== renewableOperatorLifetime),
+						run.plan.lifetime !== unit.plan.lifetime),
 			)
 		)
 			throw new Error(
-				"Re-add requires the latest confirmed released v2 operator unit, its original live topology and settled owner; no old approval upgrade, interrupted ownership, replacement topology or new owner",
+				"Re-add requires the latest confirmed released renewable operator unit, its original live topology and settled owner; no old approval upgrade, interrupted ownership, replacement topology or new owner",
 			);
-		return { unit, topology, owner: task };
+		return { unit, topology, owner: task, lifetime: unit.plan.lifetime };
 	}
 	async closeOwner(owner: number) {
 		await this.authority.store().commit(async (tx) => {

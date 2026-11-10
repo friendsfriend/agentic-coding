@@ -158,3 +158,7 @@ Host-global consumer bindings, incremental service restart/re-add, actual servic
 ## Re-add authority is never a migrated target flag
 
 The v2 lifetime is an explicit direct operator action choice. Its `operatorRoot` and `operatorTopology` plan fields are derived native review data, not accepted target configuration or agent tool permissions. Migration/preflight descriptors cannot mint a unit request, native review, live bridge attachment or resource handle. A re-add refers to a confirmed released native generation and requires a separately approved current plan on the original still-live topology. No native installation configuration, legacy service, secret value or old global network is adopted by this capability.
+
+## Persistent native topology is an explicit action scope
+
+V3 anchor lifetime is an operator action choice with an exact native review disclosure. Neither migration schemas nor a copied `operatorAnchor` flag can grant this scope. The native mapper derives the anchor only for the exact network-only topology in that reviewed action. The scope permits no import/adoption of an existing legacy global bridge or arbitrary new service, and no secret value is copied. A separately published future host-global configuration and explicit consumer authority are still required; prior descriptor counts remain observations rather than runtime parity.

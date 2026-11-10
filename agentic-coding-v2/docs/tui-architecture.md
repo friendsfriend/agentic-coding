@@ -221,3 +221,7 @@ HTTP exposes `POST /api/environments/units/stop` with exact `requestId`, `runId`
 ## Native re-add review cycle
 
 Authenticated `POST /api/environments/units/readd` and typed workbench `readd-unit` queue the same bounded native request. Workbench `unit-starts` reads the latest 64 journal observations, not live authority. Existing generic action guidance describes the input and fresh-review requirement. The protected operator advances through native prepare/review/execute phases and returns to its held state; no secondary lifecycle workflow engine or model is introduced. Unit generation and review identities use a 128-bit request-digest suffix. HTTP review routing preserves exact native review/revision decisions for those identities.
+
+## Honest empty-host observation
+
+An empty retained v3 topology remains a real native infrastructure network row under its protected operator, with no container or PID invented for presentation. Idle metadata distinguishes an explicit native owner anchor from a referenced prerequisite and reports no agent activity clock. Initial review discloses persistent empty topology and explicit shutdown behavior; re-add continues to use the existing exact native review surface. No new renderer, web or generated source is involved.

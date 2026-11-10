@@ -1,6 +1,7 @@
 import {
 	independentRoot,
 	operatorInfrastructure as isOperatorInfrastructure,
+	operatorHostAnchor,
 	referencedRoot,
 } from "./lifetime.ts";
 import { isShellRuntime, type Plan } from "./model.ts";
@@ -16,11 +17,17 @@ export function environmentApproval(
 	return JSON.stringify(
 		{
 			plans,
+			...(plans.some(operatorHostAnchor)
+				? {
+						operatorAnchorScope:
+							"Explicit operator-infrastructure-v3: this original empty topology remains held even after every selected service stops or exits, without a keeper container. Only the original protected native owner retains it; explicit owner cancellation/revocation or host shutdown cleans original members and then the original bridge. No agent idle expiry, empty-topology adoption after restart, new owner, new service selection or cross-owner/global-host sharing. A latest confirmed released unit, including a failed but confirmed cleaned generation, may be re-added only through a fresh native human review. Interrupted/uncertain generations remain refused.",
+					}
+				: {}),
 			waitTimeoutMs: timeoutSec * 1000,
 			...(operatorInfrastructure
 				? {
 						operatorInfrastructureScope:
-							"Explicit protected operator infrastructure: one protected native operator, no model, owns exactly the selected independent infrastructure Compose units and one exact network-only topology. Project kinds remain infrastructure; only operatorRoot markers derived from the exact selected units define stop units. Unselected services, app roots, foreign workspaces, mixed modes, cross-owner/global-host sharing and saved-ID restoration are refused. Each original unit can stop independently after complete atomic startup, retaining the topology for all remaining units. V1 authorizes no second acquisition or re-add. V2 alone permits a separately requested native human review to re-add one confirmed released latest unit on its exact still-live topology, never a live restart, automatic replay, replacement topology or new owner. Direct stop of a referenced topology is refused. Startup failure rolls back the complete new acquisition, and uncertain member cleanup retains/quarantines its references. The operator has no agent idle expiry; explicit cancellation, process exit and host shutdown retain original-receipt dependent-first cleanup.",
+							"Explicit protected operator infrastructure: one protected native operator, no model, owns exactly the selected independent infrastructure Compose units and one exact network-only topology. Project kinds remain infrastructure; only operatorRoot markers derived from the exact selected units define stop units. Unselected services, app roots, foreign workspaces, mixed modes, cross-owner/global-host sharing and saved-ID restoration are refused. Each original unit can stop independently after complete atomic startup, retaining the topology for all remaining units. V1 authorizes no second acquisition or re-add. V2 and V3 permit a separately requested native human review to re-add one confirmed released latest unit on its exact still-live topology, never a live restart, automatic replay, replacement topology or new owner. Direct stop of a referenced topology is refused. Startup failure rolls back the complete new acquisition, and uncertain member cleanup retains/quarantines its references. The operator has no agent idle expiry; explicit cancellation, process exit and host shutdown retain original-receipt dependent-first cleanup.",
 					}
 				: {}),
 			...(plans.some((plan) => plan.container?.hostPreparation)
@@ -115,7 +122,7 @@ export function environmentApproval(
 			...(plans.some((plan) => plan.dependencyBatch)
 				? {
 						dependencyScope: operatorInfrastructure
-							? "Exact operator-selected infrastructure units are acquired atomically with their sole network-only topology, dependency-first, and stop independently after complete startup. The final unit releases the topology. No resource is reclassified as an app or adopted from another owner."
+							? "Exact operator-selected infrastructure units are acquired atomically with their sole network-only topology, dependency-first, and stop independently after complete startup. The final unit releases the topology in V1/V2; V3 alone retains its explicitly approved original anchor until owner cancellation/revocation or host shutdown. No resource is reclassified as an app or adopted from another owner."
 							: plans.every(referencedRoot)
 								? "Declared owned infrastructure is acquired atomically with every requested app, at most 16 projects, and started dependency-first through each configured readiness observation. Referenced-roots-v1 keeps this one acquisition but not the coupled per-member stop: each app root is stopped or expires on its own scoped activity. A prerequisite is retained while any declared root still references it and is cleaned last-reference, dependent-first, through original live handles. Startup failure/cancellation still rolls back the complete new acquisition. Direct stop of a still-referenced prerequisite is refused. No cross-owner/task sharing, extra acquisitions, automatic restart, saved-ID adoption or backfill of older coupled batches."
 								: "Declared owned prerequisites are acquired atomically with every requested app, at most 16 projects (Compose services and Pod replicas retain their own bounds), and started dependency-first through each configured readiness observation. This is one coupled-lifetime batch: stopping ANY member, ANY member exiting, startup failure, task cleanup or host shutdown stops ALL members, dependents before dependencies. No partial release, cross-task sharing, automatic restart or saved-ID adoption. Root target/profile/runtime options do not override explicit prerequisite targets or legacy dependency defaults. Kubernetes dependencies must be explicitly requested with an eligible target/runtime, never implicitly started.",

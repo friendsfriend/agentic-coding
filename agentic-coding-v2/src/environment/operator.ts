@@ -9,6 +9,7 @@ import { type Config, digest, text } from "../config.ts";
 import { git } from "../git.ts";
 import { Catalog, decode } from "../state.ts";
 import {
+	hostOperatorLifetime,
 	operatorInfrastructureLifetime,
 	operatorInfrastructurePlans,
 	renewableOperatorLifetime,
@@ -59,7 +60,8 @@ export class OperatorEnvironments {
 		if (
 			request.lifetime !== undefined &&
 			request.lifetime !== operatorInfrastructureLifetime &&
-			request.lifetime !== renewableOperatorLifetime
+			request.lifetime !== renewableOperatorLifetime &&
+			request.lifetime !== hostOperatorLifetime
 		)
 			throw new Error(
 				"Choose the explicit operator infrastructure lifetime; agent lifetime modes cannot be substituted",

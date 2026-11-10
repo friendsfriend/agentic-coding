@@ -1,5 +1,5 @@
 import { samePlanOwnerScope } from "./dependency-workspaces.ts";
-import { sharedRoot } from "./lifetime.ts";
+import { operatorHostAnchor, sharedRoot } from "./lifetime.ts";
 import { type EnvironmentRun, holdsResource } from "./state.ts";
 
 export class CleanupUncertain extends Error {
@@ -152,6 +152,7 @@ export function cleanupSchedule(
 				);
 			return context.filter(
 				(run) =>
+					!operatorHostAnchor(run.plan) &&
 					referenced.has(run.id) &&
 					!settled.has(run.id) &&
 					unsettledDependents(run.id, current, context, requirements).length ===

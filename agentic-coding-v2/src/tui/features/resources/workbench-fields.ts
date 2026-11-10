@@ -45,7 +45,7 @@ export const mutationFields: Record<EnvironmentMutation, string> = {
 	"acknowledge-attempt":
 		"requestId, id (promotion attempt), acknowledge=true; never redispatches publication",
 	"readd-unit":
-		"requestId, runId of latest confirmed released v2 operator unit, exact revision, reason; queues a fresh native human review only, no execution or replacement topology",
+		"requestId, runId of latest confirmed released renewable operator unit, exact revision, reason; queues a fresh native human review only, no execution or replacement topology",
 	"stop-unit":
 		"requestId, runId, exact positive revision, reason; stops only an original protected operator infrastructure unit, retaining its referenced topology and unrelated units; no agent, topology or saved-ID authority",
 	revoke:

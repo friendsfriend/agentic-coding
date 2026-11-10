@@ -3,7 +3,13 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import { type TaskInfo, values } from "../state.ts";
-import { referencedRoot, referenceRoot, scopedRoot } from "./lifetime.ts";
+import {
+	hostOperatorLifetime,
+	operatorHostAnchor,
+	referencedRoot,
+	referenceRoot,
+	scopedRoot,
+} from "./lifetime.ts";
 import {
 	type EnvironmentRun,
 	EnvironmentState,
@@ -151,6 +157,10 @@ export class IdleLifecycle {
 	) {
 		if (scopedRoot(run.plan) && !holdsResource(run))
 			return "not-known-live-running";
+		if (operatorHostAnchor(run.plan))
+			return this.owners.get(run.owner)?.kind === "operator"
+				? "operator-owner"
+				: "unknown-owner";
 		// A declared prerequisite expires only with its last live root reference.
 		if (referencedRoot(run.plan) && !referenceRoot(run.plan))
 			return "referenced-prerequisite";
@@ -187,26 +197,35 @@ export class IdleLifecycle {
 			: this.activity(run.owner, independent ? run.id : undefined);
 		const protection = this.protection(run, activity, options);
 		return {
-			scope: prerequisite
-				? "referenced-prerequisite-generation"
-				: independent
-					? referenced
-						? "referenced-native-root"
-						: "independent-native-root"
-					: "whole-native-owner-batch",
-			activityScope: prerequisite
-				? "no-own-activity-clock"
-				: independent
-					? "selected-native-root"
-					: "all-held-runs-of-native-owner",
-			acquisitionScope: "one-exclusive-held-run-batch-per-owner",
+			scope: operatorHostAnchor(run.plan)
+				? "protected-operator-host-topology"
+				: prerequisite
+					? "referenced-prerequisite-generation"
+					: independent
+						? referenced
+							? "referenced-native-root"
+							: "independent-native-root"
+						: "whole-native-owner-batch",
+			activityScope: operatorHostAnchor(run.plan)
+				? "no-agent-activity-clock"
+				: prerequisite
+					? "no-own-activity-clock"
+					: independent
+						? "selected-native-root"
+						: "all-held-runs-of-native-owner",
+			acquisitionScope:
+				run.plan.lifetime === hostOperatorLifetime
+					? "protected-native-owner-host-generations"
+					: "one-exclusive-held-run-batch-per-owner",
 			ownerHeldRuns: options.ownerHeldRuns ?? null,
 			ownerBatches: options.ownerBatches ?? null,
-			dependencyScope: run.plan.dependencyBatch
-				? referencedRoot(run.plan)
-					? "referenced-prerequisite-closure"
-					: "exclusive-coupled-batch"
-				: "no-declared-dependency-batch",
+			dependencyScope: operatorHostAnchor(run.plan)
+				? "explicit-native-owner-anchor"
+				: run.plan.dependencyBatch
+					? referencedRoot(run.plan)
+						? "referenced-prerequisite-closure"
+						: "exclusive-coupled-batch"
+					: "no-declared-dependency-batch",
 			ttlMs: activity?.kind === "agent" ? this.policy.ttlMs : null,
 			policySource: this.policy.source,
 			lastActivityAt: activity?.at ?? null,

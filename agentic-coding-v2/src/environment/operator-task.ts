@@ -7,8 +7,9 @@ import { Catalog, decode, type Review, type TaskInfo } from "../state.ts";
 import { environmentApproval } from "./approval.ts";
 import {
 	type OperatorLifetime,
+	operatorHostAnchor,
 	operatorInfrastructurePlans,
-	renewableOperatorLifetime,
+	renewableOperator,
 	validateLifetime,
 } from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
@@ -118,7 +119,7 @@ export function createOperatorTask(config: Config, manager: Environments) {
 					task.input.request.lifetime,
 				);
 				validateLifetime(plans, owner);
-				const snapshot = `${environmentApproval(plans, 30)}\n\nDirect environment control: no model or agent is invoked. ${isolated ? `Commands run in the displayed isolated worktree at captured commit ${task.input.baseCommit}; uncommitted repository changes are not copied.` : `Commands run directly in the displayed authorized developer checkout, including its uncommitted files. HEAD must remain ${task.input.baseCommit} until dispatch. Uncommitted contents are mutable, not a frozen content snapshot. Commands can modify this checkout; worktree isolation is not provided.`} Run resources remain held by this native task until explicitly stopped, process exit or host shutdown. ${task.input.request.lifetime ? "Each explicit infrastructure unit is independently controlled; its exact common topology remains held until every original unit settles. No inferred app root, another native owner or global-host binding is authorized." : "Stopping any coupled batch member stops its dependencies and other members."} Saved state never restores live process authority after restart.`;
+				const snapshot = `${environmentApproval(plans, 30)}\n\nDirect environment control: no model or agent is invoked. ${isolated ? `Commands run in the displayed isolated worktree at captured commit ${task.input.baseCommit}; uncommitted repository changes are not copied.` : `Commands run directly in the displayed authorized developer checkout, including its uncommitted files. HEAD must remain ${task.input.baseCommit} until dispatch. Uncommitted contents are mutable, not a frozen content snapshot. Commands can modify this checkout; worktree isolation is not provided.`} Run resources remain held by this native task until explicitly stopped, process exit or host shutdown. ${plans.some(operatorHostAnchor) ? "V3 retains the original empty topology under this protected native owner until explicit owner cancellation/revocation or host shutdown; no keeper, saved-ID restoration, new owner or cross-owner borrowing is authorized. Confirmed released selected services require fresh native reviews to re-add." : task.input.request.lifetime ? "Each explicit infrastructure unit is independently controlled; its exact common topology remains held until every original unit settles. No inferred app root, another native owner or global-host binding is authorized." : "Stopping any coupled batch member stops its dependencies and other members."} Saved state never restores live process authority after restart.`;
 				await runtime.commit(async (tx) => {
 					const doc = await tx.doc(Catalog);
 					doc.tasks[String(task.id)] = JSON.stringify(owner);
@@ -295,7 +296,7 @@ export function createOperatorTask(config: Config, manager: Environments) {
 							{ target: scope.unit.plan.id },
 						),
 						[scope.unit.plan.app],
-						renewableOperatorLifetime,
+						scope.lifetime,
 					).map((plan) =>
 						plan.operatorRoot
 							? { ...plan, operatorTopology: scope.topology.id }
@@ -454,7 +455,7 @@ export function createOperatorTask(config: Config, manager: Environments) {
 					if (runs.some((run) => run.state === "interrupted"))
 						return "interrupted";
 					if (runs.some(holdsResource)) {
-						if (task.input.request.lifetime === renewableOperatorLifetime) {
+						if (task.state.checkpoint.plans.some(renewableOperator)) {
 							const pending = Object.values(value?.unitStarts ?? {})
 								.map(decode<OperatorUnitStart>)
 								.find(
