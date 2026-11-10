@@ -203,3 +203,5 @@ Checkpoint: the two new authenticated standalone scenarios (fake local OpenCode 
 ## System-shell environment metadata
 
 Native environment catalogs and typed selection now expose the explicit POSIX `systemshell` run runtime. Interpreter selection and immutable approval disclosure stay in the backend; the TUI does not invoke a legacy dispatcher, adopt an external terminal or mint process authority. Existing generic environment presentation remains unchanged. This increment contains no renderer/mount/snapshot tests and makes no new manual TTY acceptance claim.
+
+Profile display/selection now receives original case-preserved metadata, while backend target IDs remain canonical. Selection is exact and ownership/review still belongs to the backend. No renderer or navigation code changed for profile fidelity.

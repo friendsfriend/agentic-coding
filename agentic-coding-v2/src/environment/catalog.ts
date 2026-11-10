@@ -43,6 +43,12 @@ const identifier = (value: unknown) => {
 		throw new Error("Invalid environment identifier");
 	return id;
 };
+function profileName(value: unknown) {
+	const profile = text(value, "environment profile", 64);
+	if (!/^[A-Za-z][A-Za-z0-9._-]*$/.test(profile))
+		throw new Error("Invalid environment profile");
+	return profile;
+}
 function variables(value: unknown): Record<string, string> {
 	return Object.fromEntries(
 		Object.entries(object(value ?? {})).map(([key, value]) => {
@@ -433,7 +439,7 @@ function readTarget(raw: unknown): Target {
 			: "",
 		...(data.profile === undefined
 			? {}
-			: { profile: identifier(data.profile) }),
+			: { profile: profileName(data.profile) }),
 		...(data.label === undefined
 			? {}
 			: { label: text(data.label, "environment target label", 200) }),

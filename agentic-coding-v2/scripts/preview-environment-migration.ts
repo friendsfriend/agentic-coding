@@ -427,12 +427,22 @@ for (const project of projects) {
 			candidates.push({
 				relative: `apps/compose/${name}`,
 				action: "run",
-				profile: safeId(name.slice(id.length + 1, -"-compose.yml".length)),
+				profile: name.slice(id.length + 1, -"-compose.yml".length),
 			});
 	}
 	for (const candidate of candidates) {
-		const targetId = `${candidate.action}-${candidate.action === "run" ? "compose" : "docker"}-${candidate.profile}`;
+		const targetId = `${candidate.action}-${candidate.action === "run" ? "compose" : "docker"}-${safeId(candidate.profile)}`;
 		try {
+			if (
+				candidates.filter(
+					(entry) =>
+						entry.action === candidate.action &&
+						safeId(entry.profile) === safeId(candidate.profile),
+				).length !== 1
+			)
+				throw new Refusal(
+					"Distinct source profiles collide on a native target ID; no source is overwritten and explicit reconciliation is required",
+				);
 			let target: Record<string, unknown>, refs: string[];
 			if (candidate.action === "run") {
 				const converted = convertedCompose(candidate.relative);
