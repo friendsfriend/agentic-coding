@@ -143,3 +143,14 @@ developer against v1.
   Kubernetes cluster status/lifecycle beyond the implicit devenv entry, scripts,
   providers/issues/change requests inside the environments views, action
   history beyond the retained native runs.
+
+## Structure correction: integrate into the existing TUI
+
+The restored shared UI is now integrated into `src/tui/ui/`: components,
+views, hooks, theme assets and the local barrel. Environment-specific stores,
+actions, keymaps and gateway integration live in `src/tui/features/environments/`.
+The temporary `src/tui/devenv/` tree has been removed. All consumers use the
+new locations directly, with no compatibility forwarding modules. The existing
+shell theme entry point is preserved. This relocation changes no backend behavior.
+Validation: unfiltered type-check, Biome (zero diagnostics), and the five native
+operator environment functional tests pass.

@@ -1,0 +1,796 @@
+import { useKeymap } from "@opentui/keymap/solid";
+import { usePaste, useRenderer } from "@opentui/solid";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	onCleanup,
+	onMount,
+} from "solid-js";
+import {
+	getSelectableRows,
+	Header,
+	Layout,
+	StatusBar,
+	setGlobalSelectionMouseUpHandler,
+	useTerminalDimensions,
+} from "../../../ui/index.ts";
+import { type DevEnvBackend, DevEnvClient, getLogger } from "../core/index.ts";
+import type { App } from "../types/index.ts";
+import { APP_VERSION } from "../version.ts";
+import {
+	createAgentActions,
+	createAppActions,
+	createCrActions,
+	createDockerActions,
+	createGitActions,
+	createHelpActions,
+	createIssueActions,
+	createLogActions,
+	createPipelineActions,
+	createProviderActions,
+	createSlotActions,
+	createStageActions,
+	createUtilActions,
+	initializeApp,
+} from "./actions/index.ts";
+import { createColumns, createScriptColumns } from "./columns.ts";
+import {
+	requestedCategory,
+	viewModeForPath,
+	viewPathForMode,
+} from "./destination-sync.ts";
+import { setupLogEffects } from "./effects/log-effects.ts";
+import {
+	abortExitSignal,
+	confirmExitApp,
+	getExitSignal,
+	registerExitGuard,
+	registerGracefulShutdownHandler,
+} from "./exit.ts";
+import {
+	type EnvironmentLaunchTarget,
+	handlePaste,
+	type KeyboardActions,
+	type KeyboardContext,
+	type KeyboardStores,
+	registerGlobalKeymapLayers,
+	registerModalKeymapLayers,
+	registerTableKeymapLayer,
+	registerWorkflowKeymapLayers,
+	syncKeymapRuntimeState,
+} from "./keyboard/index.ts";
+import {
+	createActionRunStore,
+	createAgentStore,
+	createAppDetailStore,
+	createAppStore,
+	createChangeRequestStore,
+	createIssueStore,
+	createLogStore,
+	createProviderStore,
+	createSlotStore,
+	createUiStore,
+} from "./stores/index.ts";
+import {
+	applyTheme,
+	loadCustomThemes,
+	loadThemeName,
+} from "./theme-settings.ts";
+import type { ViewActions, ViewStores } from "./views/index.ts";
+import {
+	ContentRouter,
+	getHeaderInfo,
+	getTabBorderColor,
+	ModalOverlays,
+} from "./views/index.ts";
+
+export interface TUIAppProps {
+	serverUrl: string;
+	/** v2: the native gateway adapter behind v1's client facade. */
+	backend: (
+		showError: (title: string, message: string) => void,
+	) => DevEnvBackend;
+	managedServer?: { stop(timeoutMs?: number): Promise<void> };
+	/** Render only the environment feature content (no devenv header/footer and
+	 * no fixed terminal dimensions) so the unified shell owns the chrome and the
+	 * single renderer. The shell is responsible for exit guards and shutdown. */
+	embedded?: boolean;
+	/** Chrome rows the host renders around this body. Embedded: the shell's logo
+	 * bar + breadcrumb. Absent: this feature's own header/footer. */
+	chromeLines?: number;
+	/** Embedded mode only: publish the environment's live command registrations
+	 * so the shell footer/help are projections of the real keymap metadata rather
+	 * than a hand-written summary (compose-unified-feature-shell task 3.6). */
+	onKeybindCatalog?: (sections: EnvironmentKeybindSections) => void;
+	/** Shell-active predicate. Inactive embedded instances retain view state but
+	 * must not overwrite shared keymap runtime data. */
+	active?: () => boolean;
+	/** Projects the local overlay state into the shell ModalHost. */
+	onModalChange?: (open: boolean) => void;
+	/**
+	 * Shell route authority (replace-nested-tabs-with-page-navigation, task 2.2).
+	 * When the page shell embeds this feature, the destination it is showing
+	 * comes from the route instead of an inner navigation tab row: the shell
+	 * requests a category/view and the feature reports its own changes back, so
+	 * exactly one side is authoritative for each direction.
+	 */
+	destination?: EnvironmentDestination;
+	/**
+	 * Contextual workflow launch (launch-workflows-from-project-and-wiki-pages,
+	 * task 1.3): the unified shell owns the creation form and the start
+	 * boundary. The feature reports the selected project's canonical identity
+	 * and nothing else, so it never duplicates start or Herdr handoff logic.
+	 */
+	onStartWorkflow?: (target: EnvironmentLaunchTarget) => void;
+	/** Open one workflow's dashboard (workspace-sidebar navigation). Supplied by
+	 * the unified shell; absent standalone, where the Slots section reports that
+	 * navigation needs the shell. */
+	onOpenWorkflow?: (workflowId: string) => void;
+}
+
+export interface EnvironmentDestination {
+	/** Category page the shell route names (undefined: no request). */
+	category?: string;
+	/** View path inside the resource page ("changeRequestDetail.jobs", …). */
+	view?: string;
+	/** The feature reports a destination change back to the shell route. */
+	onChange?: (destination: {
+		category: string;
+		view: string;
+		/** Resource identity the view renders, when it has one. */
+		resourceId?: string;
+	}) => void;
+}
+
+type EnvironmentKeybindSections = Array<{
+	title: string;
+	keybinds: Array<{ key: string; action: string }>;
+}>;
+
+export function TUIApp(props: TUIAppProps) {
+	const dimensions = useTerminalDimensions();
+	const renderer = useRenderer();
+
+	// --- Stores ---
+	const appStore = createAppStore();
+	const issueStore = createIssueStore();
+	const logStore = createLogStore();
+	const changeRequestStore = createChangeRequestStore();
+	const providerStore = createProviderStore();
+	const uiStore = createUiStore();
+	const agentStore = createAgentStore();
+	const appDetailStore = createAppDetailStore();
+	const actionRunStore = createActionRunStore();
+	loadCustomThemes();
+	const initialTheme = loadThemeName();
+	applyTheme(initialTheme);
+	uiStore.setActiveThemeName(initialTheme);
+
+	const showError = uiStore.showError;
+	const client = new DevEnvClient(props.backend(showError), props.serverUrl);
+	const slotStore = createSlotStore({ client });
+
+	// --- Actions ---
+	const appActions = createAppActions(
+		appStore,
+		appDetailStore,
+		uiStore,
+		client,
+		showError,
+		actionRunStore,
+	);
+	const issueActions = createIssueActions(
+		appStore,
+		issueStore,
+		client,
+		showError,
+	);
+	const logActions = createLogActions(logStore, appStore, client, showError);
+	const crActions = createCrActions(
+		appStore,
+		changeRequestStore,
+		uiStore,
+		client,
+		showError,
+	);
+	const dockerActions = createDockerActions(
+		appStore,
+		uiStore,
+		client,
+		showError,
+		async () => {
+			appStore.pushModal("actions");
+		},
+	);
+	const gitActions = createGitActions(appStore, uiStore, client, showError);
+	const providerActions = createProviderActions(
+		appStore,
+		providerStore,
+		client,
+		showError,
+		uiStore,
+	);
+	const agentActions = createAgentActions(appStore, agentStore, client);
+	const utilActions = createUtilActions(
+		appStore,
+		agentStore,
+		uiStore,
+		renderer,
+		client,
+		actionRunStore,
+	);
+	const pipelineActions = createPipelineActions(
+		appStore,
+		changeRequestStore,
+		client,
+		showError,
+	);
+	const helpActions = createHelpActions(
+		appStore,
+		issueStore,
+		logStore,
+		changeRequestStore,
+		uiStore,
+	);
+	const slotActions = createSlotActions(
+		appStore,
+		slotStore,
+		uiStore,
+		client,
+		props.onOpenWorkflow,
+	);
+	const stageActions = createStageActions({ uiStore, appStore, client });
+
+	const clearGlobalSelectionMouseUpHandler = setGlobalSelectionMouseUpHandler(
+		utilActions.handleCopySelection,
+	);
+	onCleanup(clearGlobalSelectionMouseUpHandler);
+
+	const launchPi = (sessionPath: string | null) =>
+		agentActions.launchPi(sessionPath, renderer);
+
+	const getSelectedApp = (): App | undefined => {
+		const row = (
+			appStore.viewMode() === "table"
+				? appStore.tableFilteredApps()
+				: appStore.filteredApps()
+		)[appStore.selectedIndex()];
+		return row?.rowKind === "app" ? row : undefined;
+	};
+
+	// --- Effects ---
+	setupLogEffects(logStore, client, props.active);
+
+	// Slots section (show-environment-instances): one subscription per active
+	// feature instance. The store applies domain slot events, re-reads the
+	// snapshot on a stream gap, and mirrors holders into the app store so the app
+	// list can mark an agent-held row.
+	createEffect(() => {
+		if (props.active && !props.active()) return;
+		slotStore.start();
+	});
+	onCleanup(() => slotStore.stop());
+	createEffect(() => {
+		const holders: Record<string, string | null> = {};
+		for (const row of slotStore.rows()) holders[row.app] = row.holder;
+		appStore.setSlotHolders(holders);
+	});
+
+	createEffect(() => {
+		if (props.active && !props.active()) return;
+		if (!uiStore.runningTextEnabled()) return;
+		const runningTextInterval = setInterval(() => {
+			uiStore.setRunningTextOffset((prev) => prev + 1);
+		}, 160);
+		onCleanup(() => clearInterval(runningTextInterval));
+	});
+
+	/* selectedLine removed — no cursor line / visual mode */
+
+	// --- Initialization ---
+	let initialized = false;
+	let initializationInFlight = false;
+	let initController: AbortController | undefined;
+	let removeInitExitListener: (() => void) | undefined;
+	// Owner cleanup runs only when TUIApp is destroyed, not when active flips.
+	// A completed bootstrap/SSE controller therefore survives hide/show.
+	onCleanup(() => {
+		removeInitExitListener?.();
+		initController?.abort();
+	});
+	createEffect(() => {
+		// Keep the mounted feature cheap until the user first visits it. Abort an
+		// in-flight first visit if the shell hides it before bootstrap completes;
+		// once bootstrap succeeds, retain its controller/SSE subscription across
+		// later hide/show transitions.
+		if (props.active && !props.active()) return;
+		if (initialized || initializationInFlight) return;
+		initializationInFlight = true;
+		const controller = new AbortController();
+		initController = controller;
+		const exitSignal = getExitSignal();
+		const abortFromExit = () => controller.abort();
+		exitSignal.addEventListener("abort", abortFromExit, { once: true });
+		removeInitExitListener = () =>
+			exitSignal.removeEventListener("abort", abortFromExit);
+		void initializeApp({
+			client,
+			appStore,
+			appActions,
+			showError,
+			serverUrl: props.serverUrl,
+			refreshProviders: providerActions.refreshProviders,
+			abortSignal: controller.signal,
+		})
+			.then(
+				() => {
+					if (initController === controller && !controller.signal.aborted)
+						initialized = true;
+				},
+				() => {
+					if (initController === controller) initialized = false;
+				},
+			)
+			.finally(() => {
+				if (initController === controller) initializationInFlight = false;
+			});
+	});
+
+	const shutdownDelay = (ms: number) =>
+		new Promise<void>((resolve) => setTimeout(resolve, ms));
+	const runWithTimeout = async (
+		label: string,
+		fn: () => void | Promise<void>,
+		timeoutMs = 2000,
+	) => {
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				Promise.resolve().then(fn),
+				new Promise<never>((_, reject) => {
+					timeout = setTimeout(
+						() => reject(new Error(`${label} timed out`)),
+						timeoutMs,
+					);
+				}),
+			]);
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
+	};
+	const runShutdownStep = async (
+		phase:
+			| "preparing"
+			| "canceling-background-work"
+			| "stopping-input"
+			| "stopping-server"
+			| "destroying-renderer"
+			| "complete",
+		message: string,
+		fn: () => void | Promise<void>,
+		timeoutMs?: number,
+	) => {
+		appStore.setShutdownState({ phase, message, error: null });
+		await shutdownDelay(50);
+		await runWithTimeout(message, fn, timeoutMs);
+	};
+	onMount(() => {
+		// Embedded in the unified shell: the shell owns exit guards and process
+		// shutdown, so the imported environment app must not register competing
+		// handlers or stop a server it does not own.
+		if (props.embedded) return;
+		const unregisterExitGuard = registerExitGuard(() => {
+			const activeRuns = actionRunStore
+				.runs()
+				.filter((run) => run.status === "active" || run.status === "pending");
+			if (activeRuns.length === 0) return true;
+			if (uiStore.showConfirmDialog()) return false;
+
+			const targets = [
+				...new Set(
+					activeRuns
+						.map((run) => run.appIdent)
+						.filter((ident): ident is string => Boolean(ident)),
+				),
+			];
+			const details = activeRuns
+				.slice(0, 5)
+				.map(
+					(run) => `• ${run.title}${run.appIdent ? ` (${run.appIdent})` : ""}`,
+				)
+				.join("\n");
+			const more =
+				activeRuns.length > 5 ? `\n• and ${activeRuns.length - 5} more` : "";
+			uiStore.setConfirmDialogTitle("Running actions");
+			uiStore.setConfirmDialogMessage(
+				`These actions are still running:\n\n${details}${more}\n\nTerminate them and quit?`,
+			);
+			uiStore.setConfirmDialogAction(() => () => {
+				void (async () => {
+					await Promise.all(
+						targets.map(async (ident) => {
+							try {
+								await client.cancelAction(ident);
+							} catch (error) {
+								getLogger().write(
+									"WARN",
+									`Failed to cancel action for ${ident}: ${error instanceof Error ? error.message : String(error)}`,
+								);
+							}
+						}),
+					);
+					await confirmExitApp();
+				})();
+			});
+			uiStore.setShowConfirmDialog(true);
+			return false;
+		});
+		const unregister = registerGracefulShutdownHandler(async () => {
+			appStore.setIsShuttingDown(true);
+			try {
+				await runShutdownStep("preparing", "Preparing DevEnv shutdown...", () =>
+					shutdownDelay(50),
+				);
+				await runShutdownStep(
+					"canceling-background-work",
+					"Canceling background work...",
+					() => abortExitSignal(),
+				);
+				await runShutdownStep(
+					"stopping-input",
+					"Stopping input handlers...",
+					() => shutdownDelay(50),
+				);
+				if (props.managedServer) {
+					appStore.setShutdownState({
+						phase: "stopping-server",
+						message: "Stopping DevEnv server...",
+						error: null,
+					});
+					await shutdownDelay(50);
+					await props.managedServer.stop(2000);
+				}
+				appStore.setShutdownState({
+					phase: "destroying-renderer",
+					message: "Destroying terminal renderer...",
+					error: null,
+				});
+				await shutdownDelay(50);
+				appStore.setShutdownState({
+					phase: "complete",
+					message: "Shutdown complete.",
+					error: null,
+				});
+				await shutdownDelay(120);
+				renderer.destroy();
+			} catch (error) {
+				const currentShutdownPhase = appStore.shutdownState().phase;
+				const failedPhase =
+					currentShutdownPhase === "failed" || currentShutdownPhase === "idle"
+						? "preparing"
+						: currentShutdownPhase;
+				appStore.setShutdownState({
+					phase: "failed",
+					message: "Shutdown failed.",
+					error: error instanceof Error ? error.message : String(error),
+					failedPhase,
+				});
+				abortExitSignal();
+				await shutdownDelay(600);
+				renderer.destroy();
+			}
+		});
+		onCleanup(unregister);
+		onCleanup(unregisterExitGuard);
+	});
+
+	// --- Shell route ↔ destination sync (embedded page shell) ---
+	// The route names a category and a view path; the store owns the data and the
+	// per-tab state. Only a *changed* request is applied: the feature reports its
+	// own moves back to the route, so re-applying the request the route still
+	// names would reopen the view Escape just closed (the route has not caught up
+	// with the report yet). A shell Back to a different view therefore still
+	// restores it, while a feature-side step is left standing.
+	//
+	// ponytail: the request is compared as category+view, so a route that changes
+	// only the resource identity at the same view applies nothing. The route
+	// carries the identity of the *view* here, not of the resource it renders
+	// (`openAppDetail` names the selection), so this is the whole of what the
+	// route can ask for today.
+	let appliedRequest: string | undefined;
+	createEffect(() => {
+		const destination = props.destination;
+		if (!destination) return;
+		const request = `${destination.category ?? ""}|${destination.view ?? ""}`;
+		if (request === appliedRequest) return;
+		appliedRequest = request;
+		const category = requestedCategory(
+			destination.category,
+			appStore.tableTabs().map((tab) => tab.id),
+		);
+		if (category && category !== appStore.activeTab()) {
+			appStore.setActiveTab(category);
+			appStore.setSelectedIndex(0);
+			appStore.setTableSearchQuery("");
+			appStore.setTableSearchMode(false);
+			if (category === "scripts") void appActions.loadScripts();
+		}
+		const requestedView = destination.view;
+		if (requestedView === undefined) return;
+		const wanted = viewModeForPath(requestedView);
+		if (wanted !== appStore.viewMode()) appStore.resetViewStack(wanted);
+	});
+	// The feature reports where it went (a table selection opening the detail
+	// view, a CR detail opening its jobs, …) so the route follows the same
+	// operations the mouse and keys perform.
+	//
+	// A report is a *move*, so only a changed destination is reported. The store
+	// changes for reasons that are not a move — closing a detail clears its
+	// resource, the shell applying a route request lands after this effect has
+	// already been scheduled — and re-reporting the destination the store still
+	// holds would navigate the shell away from the page the user just chose (the
+	// category list made it visible: Enter on a highlighted destination opened
+	// the first one, and a picker jump fell back to the previous category).
+	let reportedDestination: string | undefined;
+	createEffect(() => {
+		const destination = props.destination;
+		if (!destination?.onChange) return;
+		const category = appStore.activeTab();
+		const mode = appStore.viewMode();
+		const view = viewPathForMode(mode);
+		const resourceId =
+			mode === "appDetail" ? appDetailStore.appDetailApp()?.ident : undefined;
+		const identity = `${category}|${view}|${resourceId ?? ""}`;
+		if (identity === reportedDestination) return;
+		reportedDestination = identity;
+		destination.onChange({
+			category,
+			view,
+			...(resourceId !== undefined ? { resourceId } : {}),
+		});
+	});
+
+	// --- Columns ---
+	const columns = createColumns();
+	const scriptColumns = createScriptColumns();
+
+	// --- Keyboard dispatcher ---
+	const kbStores: KeyboardStores = {
+		appStore,
+		issueStore,
+		logStore,
+		changeRequestStore,
+		providerStore,
+		uiStore,
+		agentStore,
+		appDetailStore,
+		actionRunStore,
+		slotStore,
+	};
+	const kbActions: KeyboardActions = {
+		appActions,
+		issueActions,
+		logActions,
+		crActions,
+		dockerActions,
+		gitActions,
+		providerActions,
+		agentActions,
+		utilActions,
+		pipelineActions,
+		helpActions,
+		slotActions,
+		stageActions,
+	};
+	const kbCtx: KeyboardContext = {
+		renderer,
+		client,
+		getSelectedApp,
+		launchPi,
+		getSelectableRows,
+		showError,
+		embedded: props.embedded,
+		active: props.active,
+		...(props.onStartWorkflow ? { startWorkflow: props.onStartWorkflow } : {}),
+	};
+
+	const keymap = useKeymap();
+	helpActions.setKeymap(keymap);
+	onCleanup(() => helpActions.setKeymap(undefined));
+	const [keymapVersion, setKeymapVersion] = createSignal(0);
+	syncKeymapRuntimeState(
+		keymap,
+		kbStores,
+		() => setKeymapVersion((version) => version + 1),
+		props.embedded ? props.active : undefined,
+		Boolean(props.embedded),
+	);
+	createEffect(() => {
+		if (!props.embedded || !props.onModalChange) return;
+		keymapVersion();
+		const active = props.active?.() ?? true;
+		const modal = String(keymap.getData?.("modal.active") ?? "none");
+		props.onModalChange(active && modal !== "none");
+	});
+	const footerKeybinds = createMemo(() => {
+		keymapVersion();
+		// Keymap state is external to Solid. Read panel signals here so StatusBar
+		// rerenders when panel-specific keymap layers become active.
+		appStore.viewMode();
+		appStore.activeTab();
+		appStore.activeModal();
+		actionRunStore.focusedPanel();
+		appStore.kubernetesPanelIndex();
+		appDetailStore.appDetailPanelIndex();
+		issueStore.issueDetailPanelIndex();
+		changeRequestStore.crDetailPanelIndex();
+		return helpActions.getKeybinds();
+	});
+	if (props.embedded && props.onKeybindCatalog) {
+		// Project the environment's live command registrations into the shell
+		// catalog so the shell footer and `?` help advertise real environment
+		// commands (task 3.6).
+		createEffect(() => {
+			const binds = footerKeybinds();
+			props.onKeybindCatalog?.([
+				{
+					title: "Environment",
+					keybinds: binds.map((bind) => ({
+						key: bind.key,
+						action: bind.action,
+					})),
+				},
+			]);
+		});
+	}
+	onMount(() => {
+		const disposeGlobalLayers = registerGlobalKeymapLayers(keymap, {
+			stores: kbStores,
+			actions: kbActions,
+			ctx: kbCtx,
+		});
+		const disposeModalLayers = registerModalKeymapLayers(keymap, {
+			stores: kbStores,
+			actions: kbActions,
+			ctx: kbCtx,
+		});
+		const disposeTableLayer = registerTableKeymapLayer(keymap, {
+			stores: kbStores,
+			actions: kbActions,
+			ctx: kbCtx,
+		});
+		const disposeWorkflowLayers = registerWorkflowKeymapLayers(keymap, {
+			stores: kbStores,
+			actions: kbActions,
+			ctx: kbCtx,
+		});
+		setKeymapVersion((version) => version + 1);
+		onCleanup(() => {
+			disposeWorkflowLayers();
+			disposeTableLayer();
+			disposeModalLayers();
+			disposeGlobalLayers();
+		});
+	});
+
+	usePaste((event) => {
+		if (appStore.isShuttingDown()) return;
+		handlePaste(event, providerStore);
+	});
+
+	// --- View props ---
+	const viewStores: ViewStores = {
+		appStore,
+		issueStore,
+		logStore,
+		changeRequestStore,
+		providerStore,
+		uiStore,
+		agentStore,
+		appDetailStore,
+		actionRunStore,
+		slotStore,
+	};
+	const viewActions: ViewActions = {
+		appActions,
+		issueActions,
+		logActions,
+		crActions,
+		dockerActions,
+		gitActions,
+		providerActions,
+		agentActions,
+		utilActions,
+		pipelineActions,
+		helpActions,
+		slotActions,
+		stageActions,
+	};
+
+	const headerDeps = {
+		appStore,
+		issueStore,
+		changeRequestStore,
+		appDetailStore,
+		helpActions,
+		getSelectedApp,
+	};
+
+	if (props.embedded) {
+		return (
+			<box
+				width="100%"
+				height="100%"
+				flexDirection="column"
+				onMouseUp={utilActions.handleCopySelection}
+			>
+				<ContentRouter
+					stores={viewStores}
+					actions={viewActions}
+					columns={columns}
+					scriptColumns={scriptColumns}
+					dimensions={dimensions()}
+					{...(props.chromeLines !== undefined
+						? { chromeLines: props.chromeLines }
+						: {})}
+					runningTextEnabled={uiStore.runningTextEnabled()}
+					runningTextOffset={uiStore.runningTextOffset()}
+					getTabBorderColor={(tab) => getTabBorderColor(tab, appStore)}
+					active={props.active}
+				/>
+				<ModalOverlays
+					stores={viewStores}
+					actions={viewActions}
+					dimensions={dimensions()}
+				/>
+			</box>
+		);
+	}
+
+	return (
+		<box
+			width={dimensions().width}
+			height={dimensions().height}
+			onMouseUp={utilActions.handleCopySelection}
+		>
+			<Layout
+				footerLines={3}
+				header={
+					<Header
+						{...getHeaderInfo(headerDeps)}
+						version={APP_VERSION}
+						runningTextEnabled={uiStore.runningTextEnabled()}
+						runningTextOffset={uiStore.runningTextOffset()}
+					/>
+				}
+				content={
+					<ContentRouter
+						stores={viewStores}
+						actions={viewActions}
+						columns={columns}
+						scriptColumns={scriptColumns}
+						dimensions={dimensions()}
+						runningTextEnabled={uiStore.runningTextEnabled()}
+						runningTextOffset={uiStore.runningTextOffset()}
+						getTabBorderColor={(tab) => getTabBorderColor(tab, appStore)}
+					/>
+				}
+				footer={
+					<StatusBar
+						lines={3}
+						keybinds={footerKeybinds()}
+						runningTextEnabled={uiStore.runningTextEnabled()}
+						runningTextOffset={uiStore.runningTextOffset()}
+					/>
+				}
+			/>
+
+			<ModalOverlays
+				stores={viewStores}
+				actions={viewActions}
+				dimensions={dimensions()}
+			/>
+		</box>
+	);
+}

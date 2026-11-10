@@ -46,7 +46,7 @@ import {
 	uiWorkspaceLayout,
 } from "../../protocol/viewpoints.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
-import { EnvironmentsFeature } from "../devenv/EnvironmentsFeature.tsx";
+import { EnvironmentsFeature } from "../features/environments/EnvironmentsFeature.tsx";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";

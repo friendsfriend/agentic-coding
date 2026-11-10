@@ -7,8 +7,8 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server/index.ts";
 import { ClientConnection } from "../src/tui/client/connection.ts";
-import { DevEnvClient } from "../src/tui/devenv/core/client.ts";
-import { GatewayBackend } from "../src/tui/devenv/gateway-backend.ts";
+import { DevEnvClient } from "../src/tui/features/environments/core/client.ts";
+import { GatewayBackend } from "../src/tui/features/environments/gateway-backend.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
