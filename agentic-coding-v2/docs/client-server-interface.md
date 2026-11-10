@@ -188,3 +188,8 @@ only the local prelude and starts from the newest native history page. No retry 
 watch-continuation claim is implied. Client/conversation/connection changes retire the
 read lifecycle. Gateway fixtures verify cursor exhaustion and single consumption;
 TUI scroll/layout behavior remains outside those tests.
+
+
+## Direction change: restore the original UI (supersedes conflicting rules above)
+
+Developer decision: the TUI must be the original v1 TUI in layout, styling, views, modals, keybindings and interaction paths. Only agent handling (pi-durable orchestrator/native children) and backend execution (native gateway) differ. Prompt-driven `/command` preparation, unsent action headers, typed `approve:<digest>` confirmations, JSON settings/wiki editors and chat-only OpenCode/Pi are retired as the primary UI. Only the Orchestrator, Pi Durable and native child sessions are transcript views with a prompt; slash commands remain an optional path there. List actions execute directly; a direct user action in the UI is the approval (agent-initiated actions keep human reviews). OpenCode/Pi are embedded PTY terminals as in v1. See [tui-restoration.md](tui-restoration.md), which governs where this document conflicts.
