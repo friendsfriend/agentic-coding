@@ -33,6 +33,10 @@ export type OperatorAction = Selection & {
 type Input = {
 	createdAt: number;
 	request: OperatorAction;
+	/** Admitted by a direct developer action in the authenticated TUI: the key
+	 * press is the approval, recorded as an approved review (no separate gate).
+	 * Never settable by agents or the HTTP API. */
+	interactive?: true;
 	repository: string;
 	baseCommit: string;
 };
@@ -139,9 +143,11 @@ export function createOperatorTask(config: Config, manager: Environments) {
 						title: `Environment ${task.input.request.action}: ${task.input.request.apps.join(", ")}`,
 						snapshot,
 						digest: digest(snapshot),
-						state: "pending",
-						comments: "",
-						revision: 1,
+						state: task.input.interactive ? "approved" : "pending",
+						comments: task.input.interactive
+							? "Approved by the developer's direct UI action"
+							: "",
+						revision: task.input.interactive ? 2 : 1,
 						createdAt: Date.now(),
 					} satisfies Review);
 					return {

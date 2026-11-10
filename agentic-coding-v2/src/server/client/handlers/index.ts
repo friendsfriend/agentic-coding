@@ -252,7 +252,7 @@ export async function dispatch(
 			);
 		case "environment.action":
 			return {
-				taskId: await app.startEnvironmentAction(input as OperatorAction),
+				taskId: await app.startEnvironmentAction(input as OperatorAction, true),
 			};
 		case "environment.logs":
 			fields(input, ["app"]);

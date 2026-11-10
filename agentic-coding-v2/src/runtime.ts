@@ -182,9 +182,16 @@ export class Runtime {
 			throw new Error("Runtime is not accepting work");
 		return this.admission.start(invocation, slot);
 	}
-	async startEnvironmentAction(request: OperatorAction) {
+	/** `interactive` is set only by the authenticated TUI gateway: a direct
+	 * developer action there is its own approval. */
+	async startEnvironmentAction(request: OperatorAction, interactive = false) {
 		if (this.closed) throw new Error("Runtime is closing");
-		return this.operatorEnvironments.start(this.harness, this.home, request);
+		return this.operatorEnvironments.start(
+			this.harness,
+			this.home,
+			request,
+			interactive,
+		);
 	}
 	async ownerOf(id: ConversationId): Promise<TaskInfo> {
 		const owner = await this.harness.commit(

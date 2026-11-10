@@ -37,7 +37,12 @@ export class OperatorEnvironments {
 			tasks: [this.definition],
 		});
 	}
-	async start(harness: Harness, home: Conversation, request: OperatorAction) {
+	async start(
+		harness: Harness,
+		home: Conversation,
+		request: OperatorAction,
+		interactive = false,
+	) {
 		if (
 			Object.keys(request).some(
 				(key) =>
@@ -104,7 +109,9 @@ export class OperatorEnvironments {
 			projects.some((project) => project.repository !== repository)
 		)
 			throw new Error("Environment apps must share one authorized repository");
-		const fingerprint = digest(JSON.stringify(request)),
+		const fingerprint = digest(
+				JSON.stringify(interactive ? { request, interactive } : request),
+			),
 			key = `environment:${request.requestId}`;
 		const previous = (raw: string | undefined) => {
 			if (!raw) return undefined;
@@ -142,7 +149,13 @@ export class OperatorEnvironments {
 			const doc = await tx.doc(Catalog),
 				existing = previous(doc.launches[key]);
 			if (existing !== undefined) return existing;
-			const input = { request, repository, baseCommit, createdAt: Date.now() };
+			const input = {
+				request,
+				repository,
+				baseCommit,
+				createdAt: Date.now(),
+				...(interactive ? { interactive: true as const } : {}),
+			};
 			const id = Number(
 				await tx.createTask(this.definition, input, {
 					ownership: { kind: "conversation" },

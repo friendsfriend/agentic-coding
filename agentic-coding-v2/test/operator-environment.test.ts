@@ -6,6 +6,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server/index.ts";
+import { ClientConnection } from "../src/tui/client/connection.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
@@ -309,4 +310,57 @@ test("the orchestrator retains direct environment target/profile/runtime choices
 	expect(
 		(await app.environments.selectedLogs("api", undefined, {})).runs[0]?.output,
 	).toBe("original build\n");
+});
+
+test("a direct TUI action is the developer's approval and executes without a separate review", async () => {
+	const { app, config } = await fixture(false, (config) => {
+		config.profiles = [];
+		fs.mkdirSync(config.configDir);
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify(definitions(config.repositories[0] ?? "")),
+		);
+	});
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.status,
+			(status) => status === "connected",
+		);
+		const { taskId } = await client.call("environment.action", {
+			apps: ["api"],
+			action: "build",
+			target: "build",
+			profile: "fast",
+			requestId: "tui-build",
+		});
+		expect(
+			(await app.harness.waitForTask(taskId as TaskId, context)).state.outcome
+				.status,
+		).toBe("completed");
+		const review = (await app.snapshot()).reviews.find(
+			(review) => review.taskId === taskId,
+		);
+		expect(review).toMatchObject({ state: "approved" });
+		expect(
+			(await app.environments.selectedLogs("api", undefined, {})).runs[0]
+				?.output,
+		).toBe("original build\n");
+		// The same request is idempotent and never runs twice.
+		expect(
+			await client.call("environment.action", {
+				apps: ["api"],
+				action: "build",
+				target: "build",
+				profile: "fast",
+				requestId: "tui-build",
+			}),
+		).toEqual({ taskId });
+	} finally {
+		client.close();
+		await host.stop();
+	}
+	expect(config.repositories).toHaveLength(1);
 });
