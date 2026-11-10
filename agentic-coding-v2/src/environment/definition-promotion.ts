@@ -7,9 +7,14 @@ import {
 	type Draft,
 	type SourceDraft,
 } from "./definition-draft-data.ts";
+import {
+	definitionByteLimit,
+	definitionProjectLimit,
+	definitionTargetLimit,
+} from "./definition-limits.ts";
 import { within } from "./path-within.ts";
 
-const limit = 65536,
+const limit = definitionByteLimit,
 	name = "environments.json",
 	lockName = `.${name}.lock`;
 function directoryIdentity(config: Config) {
@@ -49,7 +54,7 @@ export function inspectDestination(config: Config) {
 	}
 	if (!stat.isFile() || stat.size > limit)
 		throw new Error(
-			"Live destination must be a regular environments.json of at most 64 KiB; symlinks are unsupported",
+			"Live destination must be a regular environments.json of at most 256 KiB; symlinks are unsupported",
 		);
 	const fd = fs.openSync(
 		destination,
@@ -175,14 +180,14 @@ function payload(config: Config, draft: Draft) {
 			0,
 		);
 	if (
-		projects.length > 32 ||
-		targets > 128 ||
+		projects.length > definitionProjectLimit ||
+		targets > definitionTargetLimit ||
 		projects.some(
 			(project) => fs.realpathSync(project.repository) !== project.repository,
 		)
 	)
 		throw new Error(
-			"Promotable content requires at most 32 projects / 128 targets and unchanged existing authorized repositories",
+			"Promotable content requires at most 64 projects / 256 targets and unchanged existing authorized repositories",
 		);
 	return { bytes: Buffer.from(content, "utf8"), projects, targets };
 }
@@ -255,7 +260,7 @@ function auxiliariesApproval(list: SourceDraft[]): string {
 }
 function auxiliaryBytes(source: SourceDraft): Buffer {
 	if (
-		Buffer.byteLength(source.content) > limit ||
+		Buffer.byteLength(source.content) > 65536 ||
 		Buffer.from(source.content).toString("utf8") !== source.content ||
 		digest(source.content) !== source.digest
 	)
@@ -291,7 +296,7 @@ function readDigest(destination: string): string {
 	);
 	try {
 		const stat = fs.fstatSync(fd),
-			buffer = Buffer.alloc(limit + 1);
+			buffer = Buffer.alloc(65537);
 		if (!stat.isFile())
 			throw new Error("Auxiliary destination changed under promotion");
 		let length = 0;
@@ -306,7 +311,7 @@ function readDigest(destination: string): string {
 			if (!read) break;
 			length += read;
 		}
-		if (length > limit) throw new Error("Auxiliary destination is oversized");
+		if (length > 65536) throw new Error("Auxiliary destination is oversized");
 		return digest(buffer.subarray(0, length));
 	} finally {
 		fs.closeSync(fd);

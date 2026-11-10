@@ -11,6 +11,7 @@ import type { TaskInfo } from "../state.ts";
 import { environmentApproval } from "./approval.ts";
 import { resolvePlans } from "./catalog.ts";
 import { namespaceName } from "./cluster.ts";
+import { definitionByteLimit } from "./definition-limits.ts";
 import { createHttpTools } from "./http-tools.ts";
 import { type Lifetime, validateLifetime } from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
@@ -182,7 +183,10 @@ export function createEnvironmentTools(
 				parameters: Type.Object(
 					{
 						requestId: Type.String({ minLength: 1, maxLength: 128 }),
-						content: Type.String({ minLength: 1, maxLength: 65536 }),
+						content: Type.String({
+							minLength: 1,
+							maxLength: definitionByteLimit,
+						}),
 						id: Type.Optional(Type.String({ maxLength: 80 })),
 						revision: Type.Optional(Type.Integer({ minimum: 1 })),
 					},

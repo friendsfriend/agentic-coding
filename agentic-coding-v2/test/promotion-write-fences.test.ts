@@ -92,7 +92,8 @@ test("a non-regular live destination is refused and left untouched", async () =>
 			if (plant === "directory") fs.mkdirSync(live);
 			else if (plant === "symlink")
 				fs.symlinkSync(path.join(config.configDir, "elsewhere.json"), live);
-			else fs.writeFileSync(live, `{"version":1,"pad":"${"x".repeat(70000)}"}`);
+			else
+				fs.writeFileSync(live, `{"version":1,"pad":"${"x".repeat(262145)}"}`);
 			const refused = await promote(`irregular-${plant}`, created);
 			expect(refused.status).toBe(400);
 			expect(await refused.text()).toContain(

@@ -8,6 +8,11 @@ import {
 	stored,
 } from "./definition-draft-data.ts";
 import {
+	definitionByteLimit,
+	definitionProjectLimit,
+	definitionTargetLimit,
+} from "./definition-limits.ts";
+import {
 	inspectComposeSource,
 	publicComposePath,
 } from "./definition-source-check.ts";
@@ -76,8 +81,9 @@ function candidateInputs(config: Config, draft: Draft) {
 		);
 	if (
 		digest(draft.content) !== draft.digest ||
-		projects.length > 32 ||
-		targetCount > 128 ||
+		Buffer.byteLength(draft.content) > definitionByteLimit ||
+		projects.length > definitionProjectLimit ||
+		targetCount > definitionTargetLimit ||
 		sources.length > 4 ||
 		sources.reduce(
 			(bytes, source) => bytes + Buffer.byteLength(source.content),
@@ -122,6 +128,27 @@ function checkTarget(
 			(source) =>
 				source.repository === project.repository && source.file === file,
 		);
+	if (target.compose.source !== undefined) {
+		if (source) return { ...row, bindingDigest, status: "refused" };
+		const checked = inspectComposeSource(
+			config,
+			draft.content,
+			project.id,
+			target.id,
+		);
+		return {
+			...row,
+			bindingDigest,
+			sourceDigest: digest(target.compose.source),
+			status: checked.accepted ? "parsed" : "refused",
+			...(checked.accepted
+				? {
+						compiledDigest: checked.compiledDigest,
+						serviceCount: checked.serviceCount,
+					}
+				: {}),
+		};
+	}
 	if (!source) return { ...row, bindingDigest, status: "missing-source" };
 	const checked = inspectComposeSource(
 		config,

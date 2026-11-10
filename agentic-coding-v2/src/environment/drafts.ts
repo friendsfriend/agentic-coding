@@ -23,6 +23,7 @@ import {
 	stageSource,
 	stored,
 } from "./definition-draft-data.ts";
+import { definitionByteLimit } from "./definition-limits.ts";
 import { inspectDefinition } from "./definition-preflight.ts";
 import { preflightRequest } from "./definition-preflight-request.ts";
 import { inspectDestination } from "./definition-promotion.ts";
@@ -980,9 +981,9 @@ export class DefinitionDrafts {
 		)
 			throw new Error("Unsupported draft field");
 		const requestId = text(body.requestId, "draft request ID", 128),
-			content = text(body.content, "draft content", 65536);
-		if (Buffer.byteLength(content) > 65536)
-			throw new Error("Draft content exceeds 64 KiB");
+			content = text(body.content, "draft content", definitionByteLimit);
+		if (Buffer.byteLength(content) > definitionByteLimit)
+			throw new Error("Draft content exceeds 256 KiB");
 		const editing = body.id !== undefined;
 		const id = editing
 			? text(body.id, "draft ID", 80)

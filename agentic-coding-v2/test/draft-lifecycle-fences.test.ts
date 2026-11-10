@@ -67,7 +67,7 @@ test("creation refuses unknown fields and oversized content", async () => {
 		expect(await unknown.text()).toContain("Unsupported draft field");
 		const oversized = await create(
 			"oversized",
-			`{"version":1,"pad":"${"x".repeat(65537)}"}`,
+			`{"version":1,"pad":"${"x".repeat(262145)}"}`,
 		);
 		expect(oversized.status).toBe(400);
 	} finally {

@@ -3,6 +3,11 @@ import path from "node:path";
 import { type Config, digest } from "../config.ts";
 import { contained } from "../git.ts";
 import { projectView, validateProjects } from "./catalog.ts";
+import {
+	definitionByteLimit,
+	definitionProjectLimit,
+	definitionTargetLimit,
+} from "./definition-limits.ts";
 import type { Action } from "./selection.ts";
 
 /** Observational metadata only. Never compile sources, resolve secrets, issue
@@ -25,11 +30,13 @@ export function inspectDefinition(config: Config, content: string) {
 		message: string;
 	}[] = [];
 	try {
+		if (Buffer.byteLength(content) > definitionByteLimit)
+			throw new Error("Definition bundle exceeds 256 KiB");
 		const projects = validateProjects(config, JSON.parse(content));
 		if (
-			projects.length > 32 ||
+			projects.length > definitionProjectLimit ||
 			projects.reduce((count, project) => count + project.targets.length, 0) >
-				128 ||
+				definitionTargetLimit ||
 			projects.some((project) =>
 				project.targets.some(
 					(target) =>
@@ -89,7 +96,8 @@ export function inspectDefinition(config: Config, content: string) {
 						});
 					};
 					observe(target.cwd, true);
-					if (target.compose) observe(target.compose.file, false);
+					if (target.compose && target.compose.source === undefined)
+						observe(target.compose.file, false);
 					// Container build context/Dockerfile and arbitrary command source trees are
 					// intentionally NOT inferred. Existing execution adapters remain separate.
 					entries.push({
@@ -97,7 +105,7 @@ export function inspectDefinition(config: Config, content: string) {
 						runtime: target.runtime,
 						status: "observed",
 						metadataDigest: digest(JSON.stringify({ target, observations })),
-						message: `Default selection, availability metadata and contained cwd${target.compose ? "/Compose-file metadata" : ""} observed only. No source contents compiled/read, build-context validation, secrets, daemon/cluster connectivity, dependency expansion or runtime execution.`,
+						message: `Default selection, availability metadata and contained cwd${target.compose?.source !== undefined ? "/config-captured source declaration" : target.compose ? "/Compose-file metadata" : ""} observed only. No source contents compiled/read, build-context validation, secrets, daemon/cluster connectivity, dependency expansion or runtime execution.`,
 					});
 				} catch {
 					entries.push({
@@ -125,7 +133,7 @@ export function inspectDefinition(config: Config, content: string) {
 			schemaAccepted: null,
 			entries: [],
 			message:
-				"Preflight refused: invalid JSON/schema, changed repository identity or scope above 32 projects / 128 targets / 64 PATH entries. Input values and parser/filesystem errors withheld.",
+				"Preflight refused: invalid JSON/schema, changed repository identity or scope above 64 projects / 256 targets / 64 PATH entries. Input values and parser/filesystem errors withheld.",
 		};
 	}
 }
