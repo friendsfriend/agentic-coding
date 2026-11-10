@@ -294,3 +294,7 @@ Cleanup uses an original-UID precondition and foreground propagation for each or
 ### Generation is not update authority
 
 The live Deployment root retains its initial create-response generation in memory only. Missing/malformed initial generations refuse startup; subsequent generation changes fail availability and trigger original-UID cleanup/quarantine, even when the new template is healthy. This is not authorization to update or recreate that controller, and namespace-writer/admission/owner-reference isolation is still not claimed. Resource-version changes caused by status progress remain allowed.
+
+## Helm release lifetime
+
+A `helm-release-v1` run owns exactly the release its original install receipt created, identified by name, namespace, revision 1 and its per-run label. Monitoring rereads Helm metadata every second; any divergence fails the run and starts cleanup, and completion waits for cleanup. Cleanup re-proves ownership before `uninstall`, then requires affirmed absence within 60 s. A missing or invalid receipt, an interrupted read, a failed uninstall or a retained release quarantines the slot and keeps the frozen-chart scratch and client for inspection. Releases are never restored, re-adopted or reconciled from names or labels after a restart.

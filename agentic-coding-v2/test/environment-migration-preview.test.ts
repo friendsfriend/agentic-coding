@@ -819,3 +819,148 @@ test("reviewed collector source migrates to native live TLS binding without rece
 		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
 	).toBe(base);
 }, 15000);
+
+test("v1 Helm chart discovery needs explicit native cluster identity and converts only a frozen-chart fresh release", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+		fs.chmodSync(config.stateDir, 0o700);
+	});
+	const root = path.dirname(config.configDir),
+		source = path.join(root, "v1-source"),
+		repo = config.repositories[0] ?? "";
+	for (const directory of ["apps/build", "apps/compose", "apps/run"])
+		fs.mkdirSync(path.join(source, directory), { recursive: true });
+	fs.writeFileSync(
+		path.join(config.configDir, "config.json"),
+		JSON.stringify({ profiles: {}, repositories: config.repositories }),
+	);
+	for (const [chart, extra] of [
+		[path.join(repo, "chart"), ""],
+		[path.join(repo, "charts", "api-chart"), ""],
+		[
+			path.join(repo, "charts", "hooked-chart"),
+			"metadata:\n  annotations:\n    helm.sh/hook: pre-install\n",
+		],
+	] as const) {
+		fs.mkdirSync(path.join(chart, "templates"), { recursive: true });
+		fs.writeFileSync(
+			path.join(chart, "Chart.yaml"),
+			"apiVersion: v2\nname: fixture\nversion: 0.1.0\n",
+		);
+		fs.writeFileSync(path.join(chart, "values.yaml"), "stage: local\n");
+		fs.writeFileSync(
+			path.join(chart, "templates", "cm.yaml"),
+			`apiVersion: v1\nkind: ConfigMap\n${extra}`,
+		);
+	}
+	const base = JSON.stringify({
+		version: 1,
+		projects: [{ id: "demo", kind: "app", repository: repo, targets: [] }],
+	});
+	fs.writeFileSync(path.join(config.configDir, "environments.json"), base);
+	const run = (output: string, extra: string[]) =>
+		Bun.spawnSync(
+			[
+				process.execPath,
+				path.join(
+					import.meta.dir,
+					"../scripts/preview-environment-migration.ts",
+				),
+				"--source-config",
+				source,
+				"--current-config",
+				config.configDir,
+				"--output",
+				path.join(root, output),
+				"--socket",
+				path.join(config.stateDir, "never-contacted.sock"),
+				...extra,
+			],
+			{ stdout: "pipe", stderr: "pipe", cwd: repo },
+		);
+	expect(run("partial", ["--helm-cluster", "local"]).exitCode).not.toBe(0);
+	const implicitRun = run("implicit", []);
+	expect(implicitRun.stderr.toString()).toBe("");
+	expect(implicitRun.exitCode).toBe(0);
+	const implicit = JSON.parse(
+		fs.readFileSync(path.join(root, "implicit", "report.json"), "utf8"),
+	);
+	const chartRows = (report: { rows: { source: string }[] }) =>
+		report.rows.filter((row) => row.source.endsWith("Chart.yaml"));
+	expect(chartRows(implicit)).toHaveLength(3);
+	for (const row of chartRows(implicit))
+		expect(row).toMatchObject({ status: "blocked" });
+	expect(
+		run("explicit", ["--helm-cluster", "local", "--helm-namespace", "fixtures"])
+			.exitCode,
+	).toBe(0);
+	const report = JSON.parse(
+			fs.readFileSync(path.join(root, "explicit", "report.json"), "utf8"),
+		),
+		content = fs.readFileSync(
+			path.join(root, "explicit", "environments.json"),
+			"utf8",
+		);
+	expect(chartRows(report)).toEqual([
+		expect.objectContaining({
+			app: "demo",
+			target: "run-helm-local",
+			status: "candidate",
+		}),
+		expect.objectContaining({
+			app: "demo",
+			target: "run-helm-api",
+			status: "candidate",
+		}),
+		expect.objectContaining({
+			app: "demo",
+			source: "repository:demo/charts/hooked-chart/Chart.yaml",
+			status: "blocked",
+			reason: expect.stringContaining("Helm hooks"),
+		}),
+	]);
+	const demo = JSON.parse(content).projects[0];
+	expect(
+		demo.targets.map((target: { kubernetes: unknown }) => target.kubernetes),
+	).toEqual([
+		{
+			cluster: "local",
+			namespace: "fixtures",
+			workload: "helm-release-v1",
+			helm: { chart: "chart", release: "demo" },
+		},
+		{
+			cluster: "local",
+			namespace: "fixtures",
+			workload: "helm-release-v1",
+			helm: { chart: path.join("charts", "api-chart"), release: "demo-api" },
+		},
+	]);
+	expect(demo.targets).toHaveLength(2);
+	expect(report.fullParityArchived).toBe(false);
+	expect(
+		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
+	).toBe(base);
+	const host = serve(app);
+	try {
+		const post = client(host),
+			staged = await (
+				await post("/api/environments/drafts", {
+					requestId: "helm-migration-preview",
+					content,
+				})
+			).json();
+		const checked = await (
+			await post("/api/environments/drafts/preflight", {
+				requestId: "helm-migration-check",
+				id: staged.id,
+				revision: staged.revision,
+				digest: staged.digest,
+			})
+		).json();
+		expect(checked.schemaAccepted).toBe(true);
+		expect((await app.snapshot()).tasks).toHaveLength(0);
+	} finally {
+		await host.stop();
+	}
+}, 30000);

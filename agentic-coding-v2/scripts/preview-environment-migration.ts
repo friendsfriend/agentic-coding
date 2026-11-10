@@ -15,6 +15,7 @@ import {
 	composeEnvironment,
 } from "../src/environment/compose-values.ts";
 import { definitionByteLimit } from "../src/environment/definition-limits.ts";
+import { captureHelmChart, readHelm } from "../src/environment/helm-chart.ts";
 import {
 	hostBuildDockerfile,
 	hostBuildSourceDigest,
@@ -42,6 +43,24 @@ const source = flag("--source-config"),
 	sourceTree = flag("--source-tree", false),
 	npmrc = flag("--npmrc-reference", false),
 	infrastructureRepository = flag("--infrastructure-repository", false);
+/** Explicit native cluster/namespace for v1 chart discovery. The legacy
+ * `devenv`/`default` identity is never inferred, and naming them grants no
+ * cluster authority: native cluster configuration and review still apply. */
+function word(name: string) {
+	const args = process.argv.slice(2),
+		at = args.indexOf(name),
+		value = args[at + 1];
+	if (at < 0) return undefined;
+	if (!value || value.startsWith("--"))
+		throw new Refusal(`Required value: ${name}`);
+	return value;
+}
+const helmCluster = word("--helm-cluster"),
+	helmNamespace = word("--helm-namespace");
+if ((helmCluster === undefined) !== (helmNamespace === undefined))
+	throw new Refusal(
+		"--helm-cluster and --helm-namespace must be given together; neither is inferred",
+	);
 if (!source || !current || !output || !socket)
 	throw new Refusal("Explicit source/current/output directories required");
 if (process.argv.includes("--apply"))
@@ -694,6 +713,104 @@ for (const project of projects) {
 		}
 	}
 }
+/** v1 chart locations and profile naming (root/chart/helm/deploy/helm/charts/*);
+ * each becomes an explicit helm-release-v1 run only with explicit cluster and
+ * namespace flags. The frozen-chart checks run offline; nothing renders. */
+function convertHelmCharts(
+	project: (typeof projects)[number],
+	id: string,
+	repository: string,
+) {
+	const candidates = [".", "chart", "helm", path.join("deploy", "helm")];
+	const chartsDir = path.join(repository, "charts");
+	if (fs.existsSync(chartsDir) && fs.lstatSync(chartsDir).isDirectory())
+		for (const entry of fs
+			.readdirSync(chartsDir, { withFileTypes: true })
+			.sort((a, b) => a.name.localeCompare(b.name)))
+			if (entry.isDirectory()) candidates.push(path.join("charts", entry.name));
+	for (const chart of candidates) {
+		const file = path.join(repository, chart, "Chart.yaml");
+		if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue;
+		const base = path.basename(path.resolve(repository, chart)),
+			trimmed = base.toLowerCase().replace(/-chart$/, ""),
+			profile =
+				chart === "." || trimmed === "chart" || trimmed === "helm"
+					? "local"
+					: trimmed,
+			release = profile === "local" ? id : `${id}-${profile}`,
+			targetId = `run-helm-${profile}`,
+			source = `repository:${id}/${path.join(chart, "Chart.yaml")}`;
+		if (!helmCluster || !helmNamespace) {
+			rows.push({
+				app: id,
+				source,
+				status: "blocked",
+				reason:
+					"Helm chart requires explicit --helm-cluster/--helm-namespace; v1 devenv/default identity is not inferred",
+			});
+			continue;
+		}
+		if (project.targets.some((entry) => entry.id === targetId)) {
+			rows.push({
+				app: id,
+				source,
+				target: targetId,
+				status: "already-present",
+				reason:
+					"Existing native target ID retained; metadata is not overwrite authority",
+			});
+			continue;
+		}
+		try {
+			const helm = { chart, release },
+				target = {
+					id: targetId,
+					action: "run",
+					runtime: "kubernetes",
+					profile,
+					timeoutMs: 600000,
+					kubernetes: {
+						cluster: helmCluster,
+						namespace: helmNamespace,
+						workload: "helm-release-v1",
+						helm,
+					},
+				};
+			captureHelmChart(repository, readHelm(helm));
+			validateProjects(config, {
+				version: 1,
+				projects: [
+					{
+						...project,
+						targets: [target],
+						defaults: undefined,
+						requires: undefined,
+						prerequisites: undefined,
+					},
+				],
+			});
+			project.targets.push(target);
+			rows.push({
+				app: id,
+				source,
+				target: targetId,
+				status: "candidate",
+				reason:
+					"Native fresh helm-release-v1 of the frozen chart (no upgrade/hooks/CRDs/namespace creation); chart effects and cluster controllers remain unvalidated",
+			});
+		} catch (error) {
+			rows.push({
+				app: id,
+				source,
+				status: "blocked",
+				reason:
+					error instanceof Error && error.message.startsWith("Helm")
+						? error.message
+						: "Native Helm chart checks refused conversion; values withheld",
+			});
+		}
+	}
+}
 const repositoryDiscovery: {
 	app: string;
 	report?: ReturnType<typeof discoverRepositoryTargets>;
@@ -761,6 +878,7 @@ for (const project of projects) {
 						: "Native fixed tool invocation; repository code remains subject to exact execution review",
 			});
 		}
+		if (project.kind === "app") convertHelmCharts(project, id, repository);
 	} catch {
 		repositoryDiscovery.push({
 			app: id,
@@ -1339,7 +1457,9 @@ const report = {
 		"application-prerequisite migration where the required backend target remains unavailable",
 		"separately authorized real collector-image/network acceptance; native pinned HTTPS/bearer transport and live attribution are implemented",
 		"default reconciliation for existing native overrides and any blocked/ambiguous declarations; generic process-start hints are not service health",
-		"Helm-discovered targets",
+		helmCluster
+			? "helm-release-v1 candidates require native cluster configuration, live CRD/controller availability and separately authorized real install validation"
+			: "Helm-discovered targets require explicit --helm-cluster/--helm-namespace",
 		"literal/default/embedded credentials and missing reference inputs",
 		"exact native developer publication approval",
 	],

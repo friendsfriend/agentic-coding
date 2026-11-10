@@ -73,7 +73,11 @@ export class KubernetesProcess implements EnvironmentProcess {
 		private plan: Plan,
 		run: string,
 	) {
-		if (!plan.kubernetes || plan.kubernetes.workload || !plan.clusterConnection)
+		if (
+			!plan.kubernetes ||
+			plan.kubernetes.workload !== undefined ||
+			!plan.clusterConnection
+		)
 			throw new Error(
 				"An approved explicit Kubernetes connection and bare pod plan are required",
 			);
@@ -217,8 +221,9 @@ export class KubernetesProcess implements EnvironmentProcess {
 		};
 	}
 	private get target() {
-		if (!this.plan.kubernetes) throw new Error("Kubernetes target missing");
-		return this.plan.kubernetes;
+		const target = this.plan.kubernetes;
+		if (!target || target.workload) throw new Error("Bare pod target missing");
+		return target;
 	}
 	private get commands() {
 		if (!this.client) throw new Error("Kubernetes client not initialized");

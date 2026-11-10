@@ -2225,3 +2225,7 @@ Controller availability is a generation-qualified Kubernetes API observation, no
 ### Healthy revisions are still new effects
 
 Native review now distinguishes original controller availability from a later healthy revision. No release/update control or child diagnostic capability is added to the TUI as a consequence of observing a Deployment on the same UID.
+
+## Helm runs
+
+No presentation change: Helm release runs reuse the existing environment run rows and review disclosure (`kubernetesHelmScope`). Visual verification remains unperformed.

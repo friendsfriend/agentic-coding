@@ -140,6 +140,8 @@ export type Plan = Target & {
 	workspace: string;
 	cwd: string;
 	composePlan?: ComposePlan;
+	/** Approval-time chart identity; derived only, never configuration input. */
+	helmChart?: import("./helm-chart.ts").HelmChartCapture;
 	clusterConnection?: ClusterInspection;
 };
 

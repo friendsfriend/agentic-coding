@@ -24,6 +24,7 @@ import type {
 } from "./dependency-workspaces.ts";
 import { readEndpoints } from "./endpoint.ts";
 import { readEndpointCaRefs } from "./endpoint-ca.ts";
+import { captureHelmChart } from "./helm-chart.ts";
 import { readEndpointAuth } from "./http-options.ts";
 import { readKubernetes } from "./kubernetes-config.ts";
 import {
@@ -338,6 +339,7 @@ function readTarget(raw: unknown): Target {
 				: undefined,
 		loopback = (url: URL) =>
 			url.hostname === "127.0.0.1" || url.hostname === "[::1]",
+		helmRelease = kubernetes?.workload === "helm-release-v1",
 		forwarded = (port: number) =>
 			kubernetes?.portForwards?.filter((forward) => forward.local === port)
 				.length === 1,
@@ -397,6 +399,23 @@ function readTarget(raw: unknown): Target {
 				);
 		}
 	}
+	// A chart release owns its manifests, values and secrets; v2 does not bind
+	// target literals, references, diagnostics or telemetry into a chart.
+	if (
+		helmRelease &&
+		(data.endpoints !== undefined ||
+			data.endpointCaRefs !== undefined ||
+			data.endpointAuthRefs !== undefined ||
+			data.endpointServices !== undefined ||
+			data.queryService !== undefined ||
+			queryConnection ||
+			telemetry ||
+			Object.keys(environment).length ||
+			Object.keys(secretRefs).length)
+	)
+		throw new Error(
+			"Helm release targets do not accept environment, secret references, endpoints, query connections or telemetry; chart values and native release observation are the only declared inputs",
+		);
 	// A pod query connection is reachable only through the one loopback forward
 	// this run starts on the query port; a second forward or pod choice is never
 	// inferred, and the declaration is not networking or ownership evidence.
@@ -780,6 +799,13 @@ export async function resolvePlans(
 		if (chosen.kubernetes && selection.replicas !== undefined) {
 			if (selection.replicas > 16)
 				throw new Error("Bare pod replicas must be at most 16");
+			if (
+				chosen.kubernetes.workload === "helm-release-v1" &&
+				!chosen.kubernetes.helm.replicasValuePath
+			)
+				throw new Error(
+					"Helm replica requests require an explicit replicasValuePath; chart defaults are not guessed",
+				);
 		}
 		if (scope && chosen.kubernetes)
 			throw new Error(
@@ -849,14 +875,27 @@ export async function resolvePlans(
 			workspace,
 			cwd,
 			...(composePlan ? { composePlan } : {}),
-			...(chosen.kubernetes
+			...(chosen.kubernetes?.workload === "helm-release-v1"
 				? {
 						kubernetes: {
 							...chosen.kubernetes,
-							replicas: selection.replicas ?? chosen.kubernetes.replicas,
+							helm: {
+								...chosen.kubernetes.helm,
+								...(selection.replicas === undefined
+									? {}
+									: { replicas: selection.replicas }),
+							},
 						},
+						helmChart: captureHelmChart(checkedCwd, chosen.kubernetes.helm),
 					}
-				: {}),
+				: chosen.kubernetes
+					? {
+							kubernetes: {
+								...chosen.kubernetes,
+								replicas: selection.replicas ?? chosen.kubernetes.replicas,
+							},
+						}
+					: {}),
 		});
 	};
 	const roots = apps.map((app) => resolve(app, selection));

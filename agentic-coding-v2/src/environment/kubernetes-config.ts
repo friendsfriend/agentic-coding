@@ -1,8 +1,22 @@
 import { object, text } from "../config.ts";
+import { type HelmSpec, readHelm } from "./helm-chart.ts";
 import { type ReadinessProbe, readReadinessProbe } from "./kubernetes-probe.ts";
-export type KubernetesTarget = {
+/** Explicit chart release: never flattened into pods/Deployments and never an
+ * upgrade of an existing release. Image/argv/env stay chart values. */
+export type HelmTarget = {
+	workload: "helm-release-v1";
+	cluster: string;
+	namespace: string;
+	helm: HelmSpec;
+	replicas?: undefined;
+	portForwards?: undefined;
+	services?: undefined;
+};
+export type KubernetesTarget = PodTarget | HelmTarget;
+export type PodTarget = {
 	/** Explicit controller protocol, never inferred from a chart or replica count. */
 	workload?: "deployment-v1";
+	helm?: undefined;
 	cluster: string;
 	namespace: string;
 	image: string;
@@ -19,6 +33,33 @@ export type KubernetesTarget = {
 };
 export function readKubernetes(raw: unknown): KubernetesTarget {
 	const data = object(raw);
+	if (data.workload === "helm-release-v1") {
+		if (
+			Object.keys(data).some(
+				(key) => !["cluster", "workload", "namespace", "helm"].includes(key),
+			)
+		)
+			throw new Error(
+				"Helm release targets accept only cluster/workload/namespace/helm; image, argv, forwards, probes and services belong to the chart",
+			);
+		const cluster = text(data.cluster, "Kubernetes cluster identifier", 64),
+			namespace = text(data.namespace, "Kubernetes namespace", 63);
+		if (
+			!/^[a-z][a-z0-9-]*$/.test(cluster) ||
+			!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(namespace) ||
+			namespace.startsWith("kube-") ||
+			namespace === "default"
+		)
+			throw new Error(
+				"Choose an explicit non-system Kubernetes namespace and cluster identifier",
+			);
+		return {
+			workload: "helm-release-v1",
+			cluster,
+			namespace,
+			helm: readHelm(data.helm),
+		};
+	}
 	if (
 		Object.keys(data).some(
 			(key) =>

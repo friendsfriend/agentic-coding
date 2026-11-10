@@ -178,3 +178,7 @@ Native schema now admits the explicit deployment-v1 field for a bounded new Depl
 ### No implicit controller release updates
 
 An explicitly mapped deployment-v1 target has a pinned creation generation, not a mutable Helm release generation. No chart upgrader may reuse its UID as implicit update authority. Healthy changed templates do not close the missing native Helm/release-effect implementation gap.
+
+## Helm chart conversion
+
+The inert converter now applies v1 chart discovery (`.`, `chart`, `helm`, `deploy/helm`, `charts/*`, profile from the basename with `-chart` trimmed and `chart`/`helm` → `local`). A chart becomes `run-helm-<profile>` with release `<app>` or `<app>-<profile>` only when `--helm-cluster` and `--helm-namespace` are both given; the legacy `devenv`/`default` identity is never inferred, and naming them grants no cluster authority. Each candidate passes the offline frozen-chart checks and the native schema; refused charts stay blocked with the Helm reason. Previews: `/tmp/v2-environment-migration-preview-helm-1` (no flags, digest identical to host-infrastructure-3, both charts blocked) and `/tmp/v2-environment-migration-preview-helm-2` (`local-review`/`acv2-review` placeholders, both charts candidate, 117 targets). Neither is published; `fullParityArchived` stays false.

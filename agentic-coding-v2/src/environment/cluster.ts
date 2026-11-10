@@ -53,6 +53,7 @@ export function loadClusters(config: Config): Cluster[] {
 							"ALL_PROXY",
 							"NO_PROXY",
 						].includes(key.toUpperCase()) ||
+						key.toUpperCase().startsWith("HELM_") ||
 						typeof value !== "string" ||
 						value.includes("\0") ||
 						value.length > 16000
@@ -288,8 +289,36 @@ export function openClusterClient(
 				"--request-timeout=8s",
 			],
 		);
+		const helmHome = path.join(scratch, "helm");
+		fs.mkdirSync(helmHome, { mode: 0o700 });
+		// Helm state/plugins/repositories are private to this live client; the
+		// developer's Helm home is never read and the release driver is fixed.
+		const helm = new EnvironmentCommands(
+			{
+				...plan,
+				environment: {
+					...inspection.cluster.environment,
+					HELM_CONFIG_HOME: path.join(helmHome, "config"),
+					HELM_CACHE_HOME: path.join(helmHome, "cache"),
+					HELM_DATA_HOME: path.join(helmHome, "data"),
+					HELM_DRIVER: "secret",
+					HELM_NO_PLUGINS: "1",
+				},
+			},
+			config.configDir,
+			"helm",
+			[
+				"--kubeconfig",
+				file,
+				"--kube-context",
+				inspection.cluster.context,
+				"--kube-apiserver",
+				inspection.server,
+			],
+		);
 		return {
 			commands,
+			helm,
 			/** One declared loopback port forward to an owned pod; a local client
 			 * process, never a readiness, ownership or endpoint authority. */
 			forward: (
@@ -339,7 +368,7 @@ export function openClusterClient(
 					runtimeTimestamps: true,
 				}),
 			close: () => {
-				if (!commands.cleanupFailed)
+				if (!commands.cleanupFailed && !helm.cleanupFailed)
 					fs.rmSync(scratch, { recursive: true, force: true });
 			},
 		};

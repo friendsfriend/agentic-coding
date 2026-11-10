@@ -237,3 +237,7 @@ Deployment status is exposed as kind `deployment` with readiness `deployment-ava
 ### Controller review revision disclosure
 
 The native Deployment scope explicitly discloses the pinned create-response generation and refusal to adopt later spec revisions. Controller status remains an observation, never release-update or controller-child authority. No web, generated, renderer, layout or navigation source changed.
+
+## Helm run status
+
+Helm runs report the existing runtime status shape (`kind:"helm-release"`, `readiness:"helm-watcher-deployed"`, id `<namespace>/<release>@<revision>`), so the TUI and web views present them without new components or layout changes.
