@@ -30,6 +30,7 @@ export class KubernetesDeploymentProcess implements EnvironmentProcess {
 	private client: ReturnType<typeof openClusterClient> | null = null;
 	private resources: KubernetesResource[] = [];
 	private deployment: KubernetesResource | null = null;
+	private generation: number | null = null;
 	private uncertain = false;
 	private failure = "";
 	private labels: Record<string, string>;
@@ -205,6 +206,7 @@ export class KubernetesDeploymentProcess implements EnvironmentProcess {
 		if (
 			!Number.isSafeInteger(metadata.generation) ||
 			Number(metadata.generation) < 1 ||
+			metadata.generation !== this.generation ||
 			spec.replicas !== this.target.replicas
 		)
 			throw new Error(
@@ -320,11 +322,17 @@ export class KubernetesDeploymentProcess implements EnvironmentProcess {
 			this.labels,
 		);
 		this.resources.push(this.deployment);
-		await this.deployment.create(
+		const created = await this.deployment.create(
 			this.manifest(),
 			remaining(),
 			this.controller.signal,
 		);
+		const generation = object(created.data.metadata).generation;
+		if (!Number.isSafeInteger(generation) || Number(generation) < 1)
+			throw new Error(
+				"Native Deployment create receipt has no original generation",
+			);
+		this.generation = Number(generation);
 		while (!(await this.observe(remaining(), this.controller.signal))) {
 			this.controller.signal.throwIfAborted();
 			await Bun.sleep(Math.min(100, remaining()));

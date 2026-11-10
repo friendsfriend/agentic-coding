@@ -233,3 +233,7 @@ Captured host infrastructure remains kind `infrastructure`, not invented app roo
 ## Native controller status without invented child control
 
 Deployment status is exposed as kind `deployment` with readiness `deployment-available`; native review has a separate `kubernetesDeploymentScope` rather than claiming the bare-pod scope. It describes original root UID authority, bounded controller behavior and foreground API/GC cleanup. No pod log/forward/HTTP/SQL authority is inferred from a controller selector or ReplicaSet/Pod name. Existing renderer/web/generated files, layout, colors, navigation and native-child hierarchy are untouched.
+
+### Controller review revision disclosure
+
+The native Deployment scope explicitly discloses the pinned create-response generation and refusal to adopt later spec revisions. Controller status remains an observation, never release-update or controller-child authority. No web, generated, renderer, layout or navigation source changed.

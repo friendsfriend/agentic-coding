@@ -13,6 +13,7 @@ const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
 for (const failure of [
 	"availability",
+	"unreviewed-generation",
 	"service-scope",
 	"missing-root",
 ] as const)
@@ -73,7 +74,14 @@ for (const failure of [
 		const original = state.deployments[name].metadata.uid;
 		if (failure === "availability")
 			state.deployments[name].status.availableReplicas = 0;
-		else if (failure === "service-scope")
+		else if (failure === "unreviewed-generation") {
+			// A healthy replacement template on the same UID is still a new
+			// unreviewed revision, not this create-only process's generation.
+			state.deployments[name].metadata.generation = 2;
+			state.deployments[name].status.observedGeneration = 2;
+			state.deployments[name].spec.template.spec.containers[0].image =
+				"fixture/unreviewed:v2";
+		} else if (failure === "service-scope")
 			state.services.api.spec.type = "LoadBalancer";
 		else delete state.deployments[name];
 		fs.writeFileSync(file, JSON.stringify(state));

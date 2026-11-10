@@ -2221,3 +2221,7 @@ Six source-backed infrastructure units and their original topology are observabl
 ## Explicit native Deployment observation
 
 Controller availability is a generation-qualified Kubernetes API observation, not a local forward or invented app health check. Protected native review shows the new controller-root scope; existing bare-pod presentation and ownership fences remain unchanged. Acceptance uses disposable faux-provider/client/controller simulations, not renderer/mount/snapshot/presenter/navigation-matrix tests or a manual TTY. No visual or full-parity archival is claimed.
+
+### Healthy revisions are still new effects
+
+Native review now distinguishes original controller availability from a later healthy revision. No release/update control or child diagnostic capability is added to the TUI as a consequence of observing a Deployment on the same UID.

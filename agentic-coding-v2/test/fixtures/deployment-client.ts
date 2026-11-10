@@ -20,6 +20,8 @@ if(method==="get"){
  const rs=uid();s.descendants[input.metadata.uid]=[{kind:"ReplicaSet",uid:rs,owner:input.metadata.uid},...Array.from({length:input.spec.replicas},()=>({kind:"Pod",uid:uid(),owner:rs}))];
  }else{input.spec.clusterIP="10.96.0.5";input.status={};}
  s[key][name]=input;result=structuredClone(input);if(kind==="Deployment"&&s.invalidReceipt)delete result.metadata.uid;
+ if(kind==="Deployment"&&s.missingGeneration)delete result.metadata.generation;
+ if(kind==="Deployment"&&s.invalidGeneration)result.metadata.generation="1";
  fs.writeFileSync(file,JSON.stringify(s));
 }else{
  const name=decodeURIComponent(url.pathname.split("/").at(-1)),resource=s[key][name];

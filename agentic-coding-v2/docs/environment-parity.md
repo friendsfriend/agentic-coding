@@ -1011,3 +1011,7 @@ The fresh private preview `/tmp/v2-environment-migration-preview-host-infrastruc
 `kubernetes.workload:"deployment-v1"` is now a separate reviewed controller protocol alongside the unchanged default bare-pod protocol. It creates a new apps/v1 Deployment and declared ClusterIP Services, not a chart flattened into individually created pods. Availability requires current observed generation plus updated/ready/available replica counts and Available=True. Original create-response UIDs authorize cleanup; labels, selectors, saved IDs and matching-label replacements cannot issue leases.
 
 This is a runtime primitive needed for complete chart effects, not completion of either Helm choice. Real v1 deployment planning also loads images, applies secrets, runs Helm upgrade/install and waits for deployments. Chart configmaps, jobs/hooks, external-secret/custom resources, routes, scaling/network policies, release lifecycle and default-namespace semantics are still not translated. No Helm target is enabled or counted as supported by this checkpoint. Full parity remains unarchived; no real cluster, image or application was exercised.
+
+### Controller revision fence
+
+The explicit create-only Deployment protocol now pins metadata.generation from its original create response. A later healthy spec/template revision on that same UID is not accepted merely because its observedGeneration and ready counts are current. Revisions still require separately designed/reviewed release authority; this does not implement Helm upgrade/rollback. Full parity remains unarchived.

@@ -174,3 +174,7 @@ The report deliberately calls v3 `recommendedOperatorLifetime` and sets `lifetim
 ## Controller support does not enable Helm migration
 
 Native schema now admits the explicit deployment-v1 field for a bounded new Deployment with one approved container template, 1..16 replicas, fixed Recreate strategy, revisionHistoryLimit=0, disabled service-account token mounting/service links and dropped capabilities. It does not make repository-discovered Helm targets equivalent to native pods/controllers. The migration converter still leaves complete Helm effects unsupported instead of omitting image loads, secret applies, jobs/hooks, custom resources or release behavior. Literal environment and resolved reference values are transmitted only via the approved API client's private stdin, not rendered manifest files or CLI arguments; they remain API-visible, not Secret-object integration or a sandbox.
+
+### No implicit controller release updates
+
+An explicitly mapped deployment-v1 target has a pinned creation generation, not a mutable Helm release generation. No chart upgrader may reuse its UID as implicit update authority. Healthy changed templates do not close the missing native Helm/release-effect implementation gap.

@@ -243,6 +243,8 @@ test("delete races carry the original UID rather than retrying against a replace
 }, 30000);
 for (const failure of [
 	"invalidReceipt",
+	"missingGeneration",
+	"invalidGeneration",
 	"staleGeneration",
 	"wrongList",
 	"occupiedService",
@@ -295,8 +297,16 @@ for (const failure of [
 			expect(
 				calls(config).filter((call) => call.method !== "get"),
 			).toHaveLength(0);
-		} else if (failure === "staleGeneration") {
+		} else if (
+			["staleGeneration", "missingGeneration", "invalidGeneration"].includes(
+				failure,
+			)
+		) {
+			// A valid original UID permits cleanup, but a later list cannot
+			// repair missing or malformed generation authority at creation.
 			expect(read(config).deployments).toEqual({});
+			expect(read(config).services).toEqual({});
+			expect(read(config).descendants).toEqual({});
 			expect(
 				calls(config).filter(
 					(call) =>
