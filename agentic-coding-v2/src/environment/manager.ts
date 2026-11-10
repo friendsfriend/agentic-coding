@@ -38,6 +38,7 @@ import { HeldHttp } from "./http-manager.ts";
 import type { HttpReceipt } from "./http-receipts.ts";
 import { IdleLifecycle } from "./idle.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
+import { KubernetesDeploymentProcess } from "./kubernetes-deployment.ts";
 import {
 	independentRoot,
 	operatorInfrastructure,
@@ -1095,7 +1096,9 @@ export class Environments {
 									bridge,
 								)
 							: plan.runtime === "kubernetes"
-								? new KubernetesProcess(this.config, plan, id)
+								? plan.kubernetes?.workload === "deployment-v1"
+									? new KubernetesDeploymentProcess(this.config, plan, id)
+									: new KubernetesProcess(this.config, plan, id)
 								: new ContainerProcess(
 										plan,
 										this.config.configDir,

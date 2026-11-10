@@ -110,10 +110,12 @@ function document(
 				id: "api",
 				kind: "app",
 				repository: config.repositories[0],
-				requires: ["store"],
 				targets: [
 					{
 						id: "api",
+						// Cluster prerequisites are exact target selections, never an
+						// implicit Kubernetes fallback through legacy requires.
+						prerequisites: [{ app: "store", target: "store" }],
 						action: "run",
 						runtime: "kubernetes",
 						timeoutMs: 8000,

@@ -2217,3 +2217,7 @@ The protected operator retains the original empty network without a fake keeper/
 ## Source-backed infrastructure checkpoint
 
 Six source-backed infrastructure units and their original topology are observable through the same authenticated native lifecycle used by the existing environment presentation. Backend acceptance starts/stops only disposable synthetic fixtures; it is not a renderer/mount/snapshot/presenter/navigation test, manual TTY run or visual-parity archival. Real-source mapping remains explicitly incomplete until its separate runtime, input and permission requirements are met.
+
+## Explicit native Deployment observation
+
+Controller availability is a generation-qualified Kubernetes API observation, not a local forward or invented app health check. Protected native review shows the new controller-root scope; existing bare-pod presentation and ownership fences remain unchanged. Acceptance uses disposable faux-provider/client/controller simulations, not renderer/mount/snapshot/presenter/navigation-matrix tests or a manual TTY. No visual or full-parity archival is claimed.

@@ -229,3 +229,7 @@ An empty retained v3 topology remains a real native infrastructure network row u
 ## Infrastructure mapping retains native presentation authority
 
 Captured host infrastructure remains kind `infrastructure`, not invented app roots, and uses the existing protected operator and native review surfaces after explicit publication/repository authorization. Preview output is inert metadata and cannot manufacture a live TUI owner or lease. No web, renderer, generated source, colors, navigation or child hierarchy is changed.
+
+## Native controller status without invented child control
+
+Deployment status is exposed as kind `deployment` with readiness `deployment-available`; native review has a separate `kubernetesDeploymentScope` rather than claiming the bare-pod scope. It describes original root UID authority, bounded controller behavior and foreground API/GC cleanup. No pod log/forward/HTTP/SQL authority is inferred from a controller selector or ReplicaSet/Pod name. Existing renderer/web/generated files, layout, colors, navigation and native-child hierarchy are untouched.

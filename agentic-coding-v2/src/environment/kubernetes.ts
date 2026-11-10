@@ -73,7 +73,7 @@ export class KubernetesProcess implements EnvironmentProcess {
 		private plan: Plan,
 		run: string,
 	) {
-		if (!plan.kubernetes || !plan.clusterConnection)
+		if (!plan.kubernetes || plan.kubernetes.workload || !plan.clusterConnection)
 			throw new Error(
 				"An approved explicit Kubernetes connection and bare pod plan are required",
 			);

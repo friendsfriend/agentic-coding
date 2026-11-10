@@ -1,6 +1,8 @@
 import { object, text } from "../config.ts";
 import { type ReadinessProbe, readReadinessProbe } from "./kubernetes-probe.ts";
 export type KubernetesTarget = {
+	/** Explicit controller protocol, never inferred from a chart or replica count. */
+	workload?: "deployment-v1";
 	cluster: string;
 	namespace: string;
 	image: string;
@@ -22,6 +24,7 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 			(key) =>
 				![
 					"cluster",
+					"workload",
 					"namespace",
 					"image",
 					"command",
@@ -34,7 +37,7 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 		)
 	)
 		throw new Error(
-			"Unsupported Kubernetes target field; only bare pod targets with ClusterIP services are supported",
+			"Unsupported Kubernetes target field; only explicit native pod/Deployment targets with ClusterIP services are supported",
 		);
 	const cluster = text(data.cluster, "Kubernetes cluster identifier", 64),
 		namespace = text(data.namespace, "Kubernetes namespace", 63),
@@ -60,10 +63,19 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 		Number(replicas) < 1 ||
 		Number(replicas) > 16
 	)
-		throw new Error("Kubernetes bare pod replicas must be from 1 to 16");
+		throw new Error("Kubernetes pod/Deployment replicas must be from 1 to 16");
+	if (data.workload !== undefined && data.workload !== "deployment-v1")
+		throw new Error("Unsupported Kubernetes workload protocol");
+	if (data.workload && data.portForwards !== undefined)
+		throw new Error(
+			"Deployment diagnostics cannot choose or follow controller pods implicitly; pod forwards remain refused",
+		);
 	const forwards = readPortForwards(data.portForwards, Number(replicas));
 	const services = readServices(data.services);
 	return {
+		...(data.workload === "deployment-v1"
+			? { workload: "deployment-v1" as const }
+			: {}),
 		cluster,
 		namespace,
 		image,

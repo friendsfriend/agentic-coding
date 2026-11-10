@@ -18,13 +18,13 @@ export type ServiceLog = {
 };
 export type RuntimeStatus = {
 	runtime: "docker" | "podman" | "kubernetes";
-	kind?: "container" | "network" | "pod";
+	kind?: "container" | "network" | "pod" | "deployment";
 	name: string;
 	id: string | null;
 	state: "running" | "stopped" | "absent" | "unknown";
 	health: "healthy" | "unhealthy" | "starting" | null;
 	// Configured check kind; health remains a Kubernetes API observation, not a local probe.
-	readiness?: "http-probe" | "tcp-probe" | "pod-ready";
+	readiness?: "http-probe" | "tcp-probe" | "pod-ready" | "deployment-available";
 	owned: boolean | null;
 	observedAt: number;
 };
