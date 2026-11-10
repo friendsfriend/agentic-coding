@@ -5,7 +5,6 @@ import { git, prepareWorkspace } from "../git.ts";
 import { waitForReview } from "../reviews.ts";
 import { Catalog, decode, type Review, type TaskInfo } from "../state.ts";
 import { environmentApproval } from "./approval.ts";
-import { resolvePlans } from "./catalog.ts";
 import type { Environments } from "./manager.ts";
 import type { Plan } from "./model.ts";
 import type { Action, Selection } from "./selection.ts";
@@ -79,13 +78,13 @@ export function createOperatorTask(config: Config, manager: Environments) {
 						)
 					: task.input.repository;
 				const owner = operatorOwner(Number(task.id), task.input, workspace);
-				const plans = resolvePlans(
-					manager.projects,
-					owner,
-					task.input.request.apps,
-					task.input.request.action,
-					task.input.request,
-					config.stateDir,
+				const plans = (
+					await manager.resolvePlans(
+						owner,
+						task.input.request.apps,
+						task.input.request.action,
+						task.input.request,
+					)
 				).map((plan) =>
 					plan.kubernetes
 						? {

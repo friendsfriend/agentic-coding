@@ -14,6 +14,26 @@ async function runGit(cwd: string, args: string[], overrides: string[] = []) {
 		"gc.auto=0",
 		...overrides,
 	];
+	// Automatic Git calls have an explicit repository cwd. An inherited shell/CI
+	// selector must not redirect them to another repository, index or object store.
+	const environment = { ...process.env };
+	for (const key of Object.keys(environment))
+		if (
+			[
+				"GIT_DIR",
+				"GIT_WORK_TREE",
+				"GIT_COMMON_DIR",
+				"GIT_INDEX_FILE",
+				"GIT_OBJECT_DIRECTORY",
+				"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+				"GIT_NAMESPACE",
+				"GIT_EXEC_PATH",
+				"GIT_CONFIG_PARAMETERS",
+				"GIT_CONFIG_COUNT",
+			].includes(key) ||
+			/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)
+		)
+			delete environment[key];
 	const child = Bun.spawn(
 		[
 			"git",
@@ -25,7 +45,7 @@ async function runGit(cwd: string, args: string[], overrides: string[] = []) {
 			cwd,
 			stdout: "pipe",
 			stderr: "pipe",
-			env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+			env: { ...environment, GIT_TERMINAL_PROMPT: "0" },
 		},
 	);
 	const [output, error, code] = await Promise.all([

@@ -5,6 +5,7 @@ import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
 import { ComposeProcess } from "./compose.ts";
 import { ContainerProcess } from "./container.ts";
+import { belongsToOwner } from "./dependency-workspaces.ts";
 import {
 	type DiagnosticSelection,
 	diagnosticHistory,
@@ -164,7 +165,7 @@ export class HeldHttp {
 			process.closing ||
 			process.outcome ||
 			process.cleanupFailed ||
-			run.plan.workspace !== owner.workspace ||
+			!belongsToOwner(run.plan, owner) ||
 			(process instanceof ContainerProcess &&
 				(containerStatus?.health !== "healthy" ||
 					containerStatus.owned !== true ||

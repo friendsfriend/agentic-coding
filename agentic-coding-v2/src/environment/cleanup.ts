@@ -1,3 +1,4 @@
+import { samePlanOwnerScope } from "./dependency-workspaces.ts";
 import { sharedLifetime, sharedRoot } from "./lifetime.ts";
 import { type EnvironmentRun, holdsResource } from "./state.ts";
 
@@ -12,7 +13,7 @@ function sameAcquisition(a: EnvironmentRun, b: EnvironmentRun) {
 	return (
 		a.owner === b.owner &&
 		a.batch === b.batch &&
-		a.plan.workspace === b.plan.workspace
+		samePlanOwnerScope(a.plan, b.plan)
 	);
 }
 /** A shared lifetime lets a later acquisition reuse one prerequisite generation,
@@ -22,6 +23,7 @@ function related(a: EnvironmentRun, b: EnvironmentRun) {
 	if (sameAcquisition(a, b)) return true;
 	return (
 		a.owner === b.owner &&
+		samePlanOwnerScope(a.plan, b.plan) &&
 		sharedRoot(a.plan) &&
 		sharedRoot(b.plan) &&
 		a.plan.lifetime === sharedLifetime &&
@@ -57,7 +59,7 @@ function prerequisiteGenerations(
 	};
 	const ordered = new Set<string>(),
 		visiting = new Set([run.plan.app]);
-	const visit = (app: string, depth: number) => {
+	const visit = (app: string, parent: EnvironmentRun, depth: number) => {
 		if (visiting.has(app))
 			throw new Error("Cyclic declared dependency closure");
 		if (depth > 16)
@@ -65,14 +67,25 @@ function prerequisiteGenerations(
 				"Infrastructure dependency chain exceeds the batch limit",
 			);
 		const dependency = pick(app);
-		if (dependency.plan.projectKind !== "infrastructure")
-			throw new Error("Incomplete declared infrastructure dependency closure");
+		if (
+			(dependency.plan.projectKind !== "infrastructure" &&
+				!(
+					dependency.plan.projectKind === "app" &&
+					parent.plan.prerequisiteTargets?.[app] === dependency.plan.id
+				)) ||
+			(parent.plan.prerequisiteTargets?.[app] &&
+				parent.plan.prerequisiteTargets[app] !== dependency.plan.id)
+		)
+			throw new Error(
+				"Incomplete or changed declared prerequisite target closure",
+			);
 		visiting.add(app);
-		for (const next of dependency.plan.requires ?? []) visit(next, depth + 1);
+		for (const next of dependency.plan.requires ?? [])
+			visit(next, dependency, depth + 1);
 		visiting.delete(app);
 		ordered.add(dependency.id);
 	};
-	for (const app of run.plan.requires ?? []) visit(app, 1);
+	for (const app of run.plan.requires ?? []) visit(app, run, 1);
 	return ordered;
 }
 function dependentFirst(

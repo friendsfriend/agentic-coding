@@ -33,6 +33,7 @@ test("offline migration captures an include closure and converts every Maven RUN
 	for (const directory of [
 		"apps/build",
 		"apps/compose",
+		"apps/run",
 		"infrastructure/compose",
 		"templates",
 	])
@@ -50,6 +51,12 @@ test("offline migration captures an include closure and converts every Maven RUN
 				repository: config.repositories[0],
 				targets: [],
 			},
+			...["grid-allocation-backend", "grid-allocation-frontend"].map((id) => ({
+				id,
+				kind: "app",
+				repository: config.repositories[0],
+				targets: [],
+			})),
 		],
 	});
 	fs.writeFileSync(path.join(config.configDir, "environments.json"), base);
@@ -73,6 +80,14 @@ test("offline migration captures an include closure and converts every Maven RUN
 		path.join(source, "infrastructure/compose/network.yml"),
 		"networks:\n  local:\n    driver: bridge\n",
 	);
+	fs.writeFileSync(
+		path.join(source, "apps/compose/grid-allocation-backend-compose.yml"),
+		"services:\n  backend:\n    image: fixture:latest\n",
+	);
+	fs.writeFileSync(
+		path.join(source, "apps/run/grid-allocation-frontend-default.sh"),
+		'#!/bin/sh\n# devenv:requires=[{"app":"grid-allocation-backend","runtime":"docker","profile":"default"}]\n# devenv:ready=http://127.0.0.1:55321/\ntouch must-never-execute\n',
+	);
 	const result = Bun.spawnSync(
 		[
 			process.execPath,
@@ -86,7 +101,7 @@ test("offline migration captures an include closure and converts every Maven RUN
 			"--socket",
 			path.join(config.stateDir, "never-contacted.sock"),
 		],
-		{ stdout: "pipe", stderr: "pipe" },
+		{ stdout: "pipe", stderr: "pipe", cwd: config.repositories[0] },
 	);
 	expect(result.exitCode).toBe(0);
 	const report = JSON.parse(
@@ -94,8 +109,8 @@ test("offline migration captures an include closure and converts every Maven RUN
 	);
 	expect(
 		report.rows.filter((row: { status: string }) => row.status === "candidate"),
-	).toHaveLength(2);
-	expect(report.sources).toHaveLength(5);
+	).toHaveLength(4);
+	expect(report.sources).toHaveLength(7);
 	expect(report.baseDigest).toBe(digest(base));
 	expect(report.liveConfigurationChanged).toBe(false);
 	expect(
@@ -118,6 +133,19 @@ test("offline migration captures an include closure and converts every Maven RUN
 	expect(content).not.toContain("literal-never-copy");
 	expect(content).toContain("ACV2_REDIS_PASSWORD");
 	expect(report.references).toContain("V2_DB_PASSWORD");
+	const frontend = converted.projects.find(
+		(project: { id: string }) => project.id === "grid-allocation-frontend",
+	);
+	expect(frontend.targets[0].prerequisites).toEqual([
+		{ app: "grid-allocation-backend", target: "run-compose-default" },
+	]);
+	expect(frontend.targets[0].readyUrl).toBe("http://127.0.0.1:55321/");
+	expect(frontend.targets[0].command).toContain("touch must-never-execute");
+	expect(
+		fs.existsSync(
+			path.join(config.repositories[0] ?? "", "must-never-execute"),
+		),
+	).toBe(false);
 	const host = serve(app);
 	try {
 		const post = client(host),

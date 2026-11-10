@@ -87,6 +87,7 @@ export type Target = {
 	endpointAuthRefs?: Record<string, EndpointAuth>;
 	queryConnection?: QueryConnection;
 	telemetry?: { protocol: "otlp-http-json"; listen: "127.0.0.1:0" };
+	prerequisites?: { app: string; target: string }[];
 };
 export type Project = {
 	id: string;
@@ -94,6 +95,8 @@ export type Project = {
 	repository: string;
 	targets: Target[];
 	requires?: string[];
+	/** Explicit target-scoped app/infrastructure prerequisites, including authorized foreign repositories. */
+	prerequisites?: { app: string; target: string }[];
 	defaults?: Partial<Record<Action, string>>;
 };
 export type Plan = Target & {
@@ -104,6 +107,9 @@ export type Plan = Target & {
 	app: string;
 	projectKind?: Project["kind"];
 	requires?: string[];
+	/** Explicit target identity for edges beyond the legacy same-repository infrastructure graph. */
+	prerequisiteTargets?: Record<string, string>;
+	dependencyWorkspace?: import("./dependency-workspaces.ts").DependencyWorkspace;
 	dependencyBatch?: boolean;
 	workspace: string;
 	cwd: string;

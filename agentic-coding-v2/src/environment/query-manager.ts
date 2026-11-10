@@ -6,6 +6,7 @@ import type { LiveEnvironmentAuthority } from "./authority.ts";
 import { ComposeProcess } from "./compose.ts";
 import { ContainerProcess } from "./container.ts";
 import { declaredInfrastructure } from "./dependencies.ts";
+import { belongsToOwner, samePlanOwnerScope } from "./dependency-workspaces.ts";
 import {
 	type DiagnosticSelection,
 	diagnosticHistory,
@@ -119,8 +120,7 @@ export class DatabaseDiagnostics {
 				"SQL diagnostics require a workspace-write native task and separate approval",
 			);
 		const runs = (await this.authority.records()).filter(
-				(run) =>
-					run.owner === owner.id && run.plan.workspace === owner.workspace,
+				(run) => run.owner === owner.id && belongsToOwner(run.plan, owner),
 			),
 			matching = runs.filter(
 				(run) =>
@@ -235,7 +235,7 @@ export class DatabaseDiagnostics {
 						(member) =>
 							member.batch === app.batch &&
 							member.owner === app.owner &&
-							member.plan.workspace === app.plan.workspace &&
+							samePlanOwnerScope(member.plan, app.plan) &&
 							member.plan.app === plan.app &&
 							sameApprovedPlan(member.plan, plan),
 					);
@@ -247,7 +247,7 @@ export class DatabaseDiagnostics {
 					const shared = runs.filter(
 						(member) =>
 							member.owner === app.owner &&
-							member.plan.workspace === app.plan.workspace &&
+							samePlanOwnerScope(member.plan, app.plan) &&
 							sharedRoot(member.plan) &&
 							member.plan.app === plan.app &&
 							sameApprovedPlan(member.plan, plan) &&

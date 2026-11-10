@@ -430,6 +430,7 @@ for (const project of projects) {
 						targets: [target],
 						defaults: undefined,
 						requires: undefined,
+						prerequisites: undefined,
 					},
 				],
 			});
@@ -455,6 +456,112 @@ for (const project of projects) {
 						: "Native schema/compiler refused conversion; input values and exception text withheld",
 			});
 		}
+	}
+}
+// The known dev-server script is self-contained shell code, not a legacy runtime
+// wrapper. Its metadata becomes native readiness and explicit prerequisite edges.
+const frontend = projects.find(
+	(project) => project.id === "grid-allocation-frontend",
+);
+const frontendSource = "apps/run/grid-allocation-frontend-default.sh";
+if (frontend && fs.existsSync(path.join(source, frontendSource))) {
+	try {
+		const script = capture(frontendSource);
+		const ready = /^# devenv:ready=(.+)$/m.exec(script)?.[1]?.trim();
+		const declaration = /^# devenv:requires=(.+)$/m.exec(script)?.[1];
+		if (!ready || !declaration || script.length > 16000)
+			throw new Refusal(
+				"Dev-server source requires bounded native command bytes and explicit prerequisite/readiness metadata",
+			);
+		let edges: unknown;
+		try {
+			edges = JSON.parse(declaration);
+		} catch {
+			throw new Refusal("Invalid prerequisite metadata; values withheld");
+		}
+		if (!Array.isArray(edges) || !edges.length || edges.length > 16)
+			throw new Refusal(
+				"Dev-server prerequisite metadata exceeds the native graph bound",
+			);
+		const prerequisites = edges.map((value) => {
+			const edge = object(value);
+			if (
+				Object.keys(edge).some(
+					(key) => !["app", "runtime", "profile"].includes(key),
+				) ||
+				typeof edge.app !== "string" ||
+				edge.runtime !== "docker" ||
+				typeof edge.profile !== "string"
+			)
+				throw new Refusal(
+					"Unknown dev-server prerequisite selection; not inferred",
+				);
+			const dependency = projects.find((project) => project.id === edge.app);
+			const candidates =
+				dependency?.targets.filter(
+					(target) =>
+						target.action === "run" &&
+						(target.runtime === "docker" ||
+							(target.runtime === "compose" &&
+								object(target.compose).provider === "docker")) &&
+						target.profile === edge.profile,
+				) ?? [];
+			const preferred = candidates.filter(
+				(target) => target.id === object(dependency?.defaults ?? {}).run,
+			);
+			const selected = preferred.length === 1 ? preferred : candidates;
+			if (selected.length !== 1 || typeof selected[0]?.id !== "string")
+				throw new Refusal(
+					"Declared backend run target is absent or ambiguous after conversion; frontend is not enabled without its prerequisite",
+				);
+			return { app: edge.app, target: selected[0].id };
+		});
+		const target = {
+			id: "run-shell-default",
+			action: "run",
+			runtime: "shell",
+			profile: "default",
+			label: "Dev Server (vite + local backend)",
+			command: script,
+			readyUrl: ready,
+			timeoutMs: 180000,
+			endpoints: { web: ready },
+			prerequisites,
+		};
+		if (Array.isArray(frontend.prerequisites) && frontend.prerequisites.length)
+			throw new Refusal(
+				"Existing project-level prerequisite selections require explicit reconciliation before target-scoped migration",
+			);
+		const next = {
+			...frontend,
+			targets: [
+				...frontend.targets.filter((entry) => entry.id !== target.id),
+				target,
+			],
+		};
+		validateProjects(config, {
+			version: 1,
+			projects: projects.map((project) =>
+				project === frontend ? next : project,
+			),
+		});
+		Object.assign(frontend, next);
+		rows.push({
+			app: String(frontend.id),
+			source: frontendSource,
+			status: "candidate",
+			target: target.id,
+		});
+	} catch (error) {
+		rows.push({
+			app: String(frontend.id),
+			source: frontendSource,
+			status: "blocked",
+			reason:
+				error instanceof Refusal
+					? error.message
+					: "Native dev-server conversion refused; source values withheld",
+		});
 	}
 }
 for (const directory of ["apps/build", "apps/run", "infrastructure/compose"]) {
@@ -523,7 +630,7 @@ const report = {
 	rows,
 	remaining: [
 		"global/shared infrastructure topology and live network lifetime",
-		"cross-repository app prerequisites",
+		"application-prerequisite migration where the required backend target remains unavailable",
 		"container telemetry transport and attribution",
 		"repository-discovered targets and defaults/profiles",
 		"Helm-discovered targets",

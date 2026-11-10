@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { decode, type TaskInfo, values } from "../state.ts";
+import { belongsToOwner } from "./dependency-workspaces.ts";
 import { sameApprovedPlan, sharedLifetime, sharedRoot } from "./lifetime.ts";
 import type { Plan } from "./model.ts";
 import { captureReferenceGraph } from "./reference-journal.ts";
@@ -139,7 +140,7 @@ export class Acquisitions {
 			receipt.owner !== owner.id ||
 			!receipt.retained ||
 			receipt.state !== "interrupted" ||
-			receipt.plans.some((plan) => plan.workspace !== owner.workspace) ||
+			receipt.plans.some((plan) => !belongsToOwner(plan, owner)) ||
 			this.waiters.some((waiter) => waiter.batch === batch)
 		)
 			throw new Error(
@@ -214,7 +215,7 @@ export class Acquisitions {
 		if (
 			receipt.owner !== owner.id ||
 			!receipt.retained ||
-			receipt.plans.some((plan) => plan.workspace !== owner.workspace)
+			receipt.plans.some((plan) => !belongsToOwner(plan, owner))
 		)
 			throw new Error(
 				"Only the original native owner may continue its retained approved plan",

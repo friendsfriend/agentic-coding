@@ -8,7 +8,6 @@ import {
 import { type Config, digest, text } from "../config.ts";
 import { git } from "../git.ts";
 import { Catalog, decode } from "../state.ts";
-import { resolvePlans } from "./catalog.ts";
 import type { Environments } from "./manager.ts";
 import {
 	createOperatorTask,
@@ -109,13 +108,11 @@ export class OperatorEnvironments {
 			])
 		).trim();
 		// Validate selection before admitting a native task or creating its worktree.
-		resolvePlans(
-			this.manager.projects,
+		await this.manager.resolvePlans(
 			{ policy: "workspace-write", repository, workspace: repository },
 			request.apps,
 			request.action,
 			request,
-			this.config.stateDir,
 		);
 		const id = await home.commit(async (tx) => {
 			const doc = await tx.doc(Catalog),

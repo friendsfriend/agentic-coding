@@ -1,4 +1,5 @@
 import { declaredInfrastructure } from "./dependencies.ts";
+import { samePlanOwnerScope } from "./dependency-workspaces.ts";
 import { referencedRoot, sameApprovedPlan, sharedRoot } from "./lifetime.ts";
 import type { Plan } from "./model.ts";
 import type { EnvironmentProcess } from "./process.ts";
@@ -12,7 +13,7 @@ function sameAcquisition(a: EnvironmentRun, b: EnvironmentRun) {
 	return (
 		a.owner === b.owner &&
 		a.batch === b.batch &&
-		a.plan.workspace === b.plan.workspace
+		samePlanOwnerScope(a.plan, b.plan)
 	);
 }
 /** `undefined` for default coupled runs: their diagnostics keep their existing
@@ -54,7 +55,7 @@ export function referenceScope(
 			const shared = members.filter(
 				(member) =>
 					member.owner === root.owner &&
-					member.plan.workspace === root.plan.workspace &&
+					samePlanOwnerScope(member.plan, root.plan) &&
 					sharedRoot(member.plan) &&
 					member.plan.app === expected.app &&
 					sameApprovedPlan(member.plan, expected) &&

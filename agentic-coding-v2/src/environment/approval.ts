@@ -12,6 +12,12 @@ export function environmentApproval(
 		{
 			plans,
 			waitTimeoutMs: timeoutSec * 1000,
+			...(plans.some((plan) => plan.dependencyWorkspace)
+				? {
+						prerequisiteWorkspaceScope:
+							"Only explicitly declared target-scoped prerequisites may use other configured repositories. Each displayed dependencyWorkspace captures that repository's exact commit, directory identity and this owner's root workspace. After exact approval and atomic reservation, this live host creates a new private detached Git worktree for that owner/repository/commit; native worktree preparation does not copy uncommitted developer checkout contents or execute checkout programs. It does not run hooks, smudge/filter commands, submodule updates, edit the developer checkout, move its branch or automatically build images. Commands start in the displayed dependency worktrees, not the developer checkout; approved commands and explicit dependency/file references are not an OS sandbox. Existing paths, replaced roots, missing captured files and uncertain creation fail closed. Worktrees and their data are retained, never automatically deleted; a saved description/receipt cannot restore worktree control after host restart. Roots remain bound to the task repository. App prerequisites use the coupled batch lifetime, never implicit shared app-generation attachment.",
+					}
+				: {}),
 			...(retainQueue
 				? {
 						retainQueue: true,
@@ -59,14 +65,14 @@ export function environmentApproval(
 			...(plans.some((plan) => plan.projectKind === "infrastructure")
 				? {
 						infrastructureScope:
-							"Exclusive task-owned run resources only, all listed in this approved atomic plan. Declared same-repository owned dependencies may expand the request. Same workspace and live-receipt cleanup fences as apps. No shared/external infrastructure, imported leases, saved-ID adoption, implicit image builds or database query authority.",
+							"Exclusive task-owned run resources only, all listed in this approved atomic plan. Legacy requires edges name same-repository infrastructure; explicit prerequisites edges pin a run target in an authorized repository. Distinct private dependency workspaces retain this native owner's scope and live-receipt cleanup fences. No shared/external infrastructure, imported leases, saved-ID adoption, implicit image builds or database query authority.",
 					}
 				: {}),
 			...(plans.some((plan) => plan.dependencyBatch)
 				? {
 						dependencyScope: plans.every(referencedRoot)
 							? "Declared owned infrastructure is acquired atomically with every requested app, at most 16 projects, and started dependency-first through each configured readiness observation. Referenced-roots-v1 keeps this one acquisition but not the coupled per-member stop: each app root is stopped or expires on its own scoped activity. A prerequisite is retained while any declared root still references it and is cleaned last-reference, dependent-first, through original live handles. Startup failure/cancellation still rolls back the complete new acquisition. Direct stop of a still-referenced prerequisite is refused. No cross-owner/task sharing, extra acquisitions, automatic restart, saved-ID adoption or backfill of older coupled batches."
-							: "Declared owned infrastructure is acquired atomically with every requested app, at most 16 projects (Compose services and Pod replicas retain their own bounds), and started dependency-first through each configured readiness observation. This is one coupled-lifetime batch: stopping ANY member, ANY member exiting, startup failure, task cleanup or host shutdown stops ALL members, dependents before dependencies. No partial release, cross-task sharing, automatic restart or saved-ID adoption. Root target/profile/runtime options do not override automatic dependency defaults. Kubernetes dependencies must be explicitly requested with an eligible target/runtime, never implicitly started.",
+							: "Declared owned prerequisites are acquired atomically with every requested app, at most 16 projects (Compose services and Pod replicas retain their own bounds), and started dependency-first through each configured readiness observation. This is one coupled-lifetime batch: stopping ANY member, ANY member exiting, startup failure, task cleanup or host shutdown stops ALL members, dependents before dependencies. No partial release, cross-task sharing, automatic restart or saved-ID adoption. Root target/profile/runtime options do not override explicit prerequisite targets or legacy dependency defaults. Kubernetes dependencies must be explicitly requested with an eligible target/runtime, never implicitly started.",
 					}
 				: {}),
 			...(action === "run"

@@ -1,6 +1,7 @@
 import { digest } from "../config.ts";
 import { decode, values } from "../state.ts";
 import { declaredInfrastructure } from "./dependencies.ts";
+import { samePlanOwnerScope } from "./dependency-workspaces.ts";
 import type { Plan, ReferenceGraph, ReferenceObservation } from "./model.ts";
 import type { EnvironmentRun } from "./state.ts";
 
@@ -36,7 +37,14 @@ export function captureReferenceGraph(
 	if (
 		byApp.size !== plans.length ||
 		plans.length > 16 ||
-		plans.some((plan) => plan.workspace !== plans[0]?.workspace)
+		plans.some((plan) => !plans[0] || !samePlanOwnerScope(plan, plans[0])) ||
+		plans.some((plan) =>
+			Object.keys(plan.prerequisiteTargets ?? {}).some((app) =>
+				plans.some(
+					(member) => member.app === app && member.projectKind === "app",
+				),
+			),
+		)
 	)
 		return;
 	const roots: ReferenceGraph["roots"] = [];

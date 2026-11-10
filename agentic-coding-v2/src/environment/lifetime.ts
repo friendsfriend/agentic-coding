@@ -62,6 +62,18 @@ export function sameApprovedPlan(left: Plan, right: Plan) {
  * coupled graph or a second acquisition. */
 export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 	if (!plans.some(scopedRoot)) return;
+	if (
+		plans.some((plan) =>
+			Object.keys(plan.prerequisiteTargets ?? {}).some((app) =>
+				plans.some(
+					(member) => member.app === app && member.projectKind === "app",
+				),
+			),
+		)
+	)
+		throw new Error(
+			"Application prerequisites require the default coupled lifetime; independent/shared app-generation attachment is not inferred",
+		);
 	const unsupported = plans.some(
 		(plan) =>
 			!scopedRoot(plan) ||
@@ -96,13 +108,13 @@ export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 		!plans.some((plan) => plan.projectKind === "app")
 	)
 		throw new Error(
-			"Shared lifetimes require one approved request containing at least one app root and its declared same-repository prerequisites",
+			"Shared lifetimes require one approved request containing at least one app root and its explicitly declared owned infrastructure prerequisites",
 		);
 	if (
 		plans.some(referencedRoot) &&
 		!plans.some((plan) => plan.projectKind === "app")
 	)
 		throw new Error(
-			"Referenced lifetimes require one approved request containing at least one app root and its declared same-repository prerequisites",
+			"Referenced lifetimes require one approved request containing at least one app root and its explicitly declared owned infrastructure prerequisites",
 		);
 }

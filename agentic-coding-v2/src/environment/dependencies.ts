@@ -1,5 +1,5 @@
 import type { Plan, Project } from "./model.ts";
-/** Definitions are closed, same-repository graphs, not requests to discover/adopt services. */
+/** Closed declared graphs only. Legacy requires edges stay same-repository infrastructure; new app/foreign edges require an explicit target, never discovery/adoption. */
 export function validateDependencies(projects: Project[]) {
 	const visited = new Set<string>();
 	const visit = (project: Project, stack: Set<string>) => {
@@ -22,6 +22,23 @@ export function validateDependencies(projects: Project[]) {
 				);
 			visit(dependency, next);
 		}
+		for (const edge of [
+			...(project.prerequisites ?? []),
+			...project.targets.flatMap((target) => target.prerequisites ?? []),
+		]) {
+			const dependency = projects.find((item) => item.id === edge.app);
+			if (
+				!dependency ||
+				dependency.kind === "library" ||
+				!dependency.targets.some(
+					(target) => target.id === edge.target && target.action === "run",
+				)
+			)
+				throw new Error(
+					"Prerequisites must name an authorized runnable project and an explicit run target",
+				);
+			visit(dependency, next);
+		}
 		visited.add(project.id);
 	};
 	for (const project of projects) visit(project, new Set());
@@ -39,25 +56,36 @@ export function declaredInfrastructure(
 		);
 	const ordered = new Map<string, Plan>(),
 		visiting = new Set([root.app]);
-	const visit = (app: string) => {
+	const visit = (app: string, parent: Plan) => {
 		if (visiting.has(app))
 			throw new Error("Cyclic declared dependency closure");
 		if (ordered.has(app)) return;
 		const dependency = byApp.get(app);
-		if (dependency?.projectKind !== "infrastructure")
-			throw new Error("Incomplete declared infrastructure dependency closure");
+		if (
+			!dependency ||
+			(dependency.projectKind !== "infrastructure" &&
+				!(
+					dependency.projectKind === "app" &&
+					parent.prerequisiteTargets?.[app] === dependency.id
+				)) ||
+			(parent.prerequisiteTargets?.[app] &&
+				parent.prerequisiteTargets[app] !== dependency.id)
+		)
+			throw new Error(
+				"Incomplete or changed declared prerequisite target closure",
+			);
 		visiting.add(app);
-		for (const next of dependency.requires ?? []) visit(next);
+		for (const next of dependency.requires ?? []) visit(next, dependency);
 		visiting.delete(app);
 		ordered.set(app, dependency);
 	};
-	for (const app of root.requires ?? []) visit(app);
+	for (const app of root.requires ?? []) visit(app, root);
 	return [...ordered.values()];
 }
 /** Dependency-first admission; one exclusive, coupled-lifetime batch, no cross-task sharing. */
 export function expandDependencies(
 	roots: Plan[],
-	resolve: (id: string) => Plan,
+	resolve: (id: string, parent: Plan) => Plan,
 ): Plan[] {
 	const explicit = new Map(roots.map((plan) => [plan.app, plan]));
 	const ordered = new Map<string, Plan>();
@@ -70,7 +98,18 @@ export function expandDependencies(
 			throw new Error("Expanded environment batch exceeds 16 projects");
 		visiting.add(plan.app);
 		for (const id of plan.requires ?? []) {
-			const dependency = explicit.get(id) ?? resolve(id);
+			const dependency = explicit.get(id) ?? resolve(id, plan);
+			if (
+				plan.prerequisiteTargets?.[id] &&
+				dependency.id !== plan.prerequisiteTargets[id]
+			)
+				throw new Error(
+					"Explicit root selection conflicts with the declared prerequisite target",
+				);
+			if (ordered.has(id) && ordered.get(id)?.id !== dependency.id)
+				throw new Error(
+					"Prerequisite graph selects conflicting targets for one project",
+				);
 			if (dependency.kubernetes && !explicit.has(id))
 				throw new Error(
 					"Kubernetes dependencies must be explicitly requested with an eligible target/runtime; no implicit Pod starts",

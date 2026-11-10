@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type Config, object, text } from "../config.ts";
+import { type Config, digest, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
 import { targetAvailability } from "./availability.ts";
@@ -8,11 +8,16 @@ import { buildReferenceKeys } from "./build-secrets.ts";
 import {
 	bindComposeDiagnostics,
 	compileCompose,
+	compileComposeSource,
 	readCompose,
 } from "./compose-config.ts";
 import { prepareVolumes } from "./compose-volumes.ts";
 import { readContainer } from "./container-config.ts";
 import { expandDependencies, validateDependencies } from "./dependencies.ts";
+import type {
+	DependencyWorkspace,
+	DependencyWorkspaces,
+} from "./dependency-workspaces.ts";
 import { readEndpoints } from "./endpoint.ts";
 import { readEndpointCaRefs } from "./endpoint-ca.ts";
 import { readEndpointAuth } from "./http-options.ts";
@@ -57,6 +62,19 @@ function keysOnly(data: Record<string, unknown>, allowed: string[]) {
 			"Unsupported environment configuration field; check the v2 schema (legacy definitions are not loaded)",
 		);
 }
+function readPrerequisites(value: unknown) {
+	const raw = value ?? [];
+	if (!Array.isArray(raw) || raw.length > 16)
+		throw new Error("At most 16 declared prerequisite edges are supported");
+	const edges = raw.map((entry) => {
+		const edge = object(entry);
+		keysOnly(edge, ["app", "target"]);
+		return { app: identifier(edge.app), target: identifier(edge.target) };
+	});
+	if (new Set(edges.map((edge) => edge.app)).size !== edges.length)
+		throw new Error("Prerequisite edges must be distinct");
+	return edges;
+}
 function readTarget(raw: unknown): Target {
 	const data = object(raw);
 	keysOnly(data, [
@@ -82,7 +100,11 @@ function readTarget(raw: unknown): Target {
 		"endpointAuthRefs",
 		"queryConnection",
 		"telemetry",
+		"prerequisites",
 	]);
+	const prerequisites = readPrerequisites(data.prerequisites);
+	if (prerequisites.length && data.action !== "run")
+		throw new Error("Target prerequisites belong only to run actions");
 	if (
 		data.runtime !== "shell" &&
 		data.runtime !== "docker" &&
@@ -345,6 +367,7 @@ function readTarget(raw: unknown): Target {
 	}
 	return {
 		id: identifier(data.id),
+		...(prerequisites.length ? { prerequisites } : {}),
 		...(telemetry ? { telemetry } : {}),
 		...(data.endpoints === undefined ? {} : { endpoints }),
 		...(endpointServices ? { endpointServices } : {}),
@@ -458,6 +481,7 @@ function parseProjects(
 			"targets",
 			"defaults",
 			"requires",
+			"prerequisites",
 		]);
 		const requires = entry.requires === undefined ? [] : entry.requires;
 		if (!Array.isArray(requires) || requires.length > 16)
@@ -465,6 +489,28 @@ function parseProjects(
 				"Requires must be an array of at most 16 infrastructure IDs",
 			);
 		const dependencies = requires.map(identifier);
+		const rawPrerequisites = entry.prerequisites ?? [];
+		if (
+			!Array.isArray(rawPrerequisites) ||
+			rawPrerequisites.length + dependencies.length > 16
+		)
+			throw new Error(
+				"At most 16 distinct declared prerequisite edges are supported",
+			);
+		const prerequisites = rawPrerequisites.map((raw) => {
+			const edge = object(raw);
+			keysOnly(edge, ["app", "target"]);
+			return { app: identifier(edge.app), target: identifier(edge.target) };
+		});
+		if (
+			new Set([...dependencies, ...prerequisites.map((edge) => edge.app)])
+				.size !==
+				dependencies.length + prerequisites.length ||
+			(entry.kind === "library" && prerequisites.length)
+		)
+			throw new Error(
+				"Prerequisite edges must be distinct and belong to runnable projects",
+			);
 		if (
 			new Set(dependencies).size !== dependencies.length ||
 			(entry.kind === "library" && dependencies.length)
@@ -485,6 +531,17 @@ function parseProjects(
 				"Environment repository is not authorized by application configuration",
 			);
 		const targets = entry.targets.map(readTarget);
+		for (const target of targets) {
+			const selected = [
+				...dependencies,
+				...prerequisites.map((edge) => edge.app),
+				...(target.prerequisites ?? []).map((edge) => edge.app),
+			];
+			if (selected.length > 16 || new Set(selected).size !== selected.length)
+				throw new Error(
+					"Project and target prerequisite edges must form a distinct bounded closure",
+				);
+		}
 		if (
 			entry.kind !== "infrastructure" &&
 			targets.some((target) => target.queryConnection)
@@ -510,6 +567,7 @@ function parseProjects(
 			id: identifier(entry.id),
 			kind: entry.kind as Project["kind"],
 			...(dependencies.length ? { requires: dependencies } : {}),
+			...(prerequisites.length ? { prerequisites } : {}),
 			repository,
 			targets,
 			...(entry.defaults === undefined
@@ -579,45 +637,130 @@ function refuseBatchCollisions(plans: Plan[]) {
 			);
 	}
 }
-export function resolvePlans(
+export async function resolvePlans(
 	projects: Project[],
-	owner: Pick<TaskInfo, "policy" | "repository" | "workspace">,
+	owner: Pick<TaskInfo, "policy" | "repository" | "workspace"> & {
+		id?: number;
+	},
 	apps: string[],
 	action: Action,
 	target?: string | Selection,
 	stateDir?: string,
-): Plan[] {
+	workspaces?: DependencyWorkspaces,
+): Promise<Plan[]> {
 	if (owner.policy !== "workspace-write")
 		throw new Error(
 			"Environment execution requires a workspace-write task and separate human approval",
 		);
 	if (!apps.length || apps.length > 16 || new Set(apps).size !== apps.length)
 		throw new Error("Choose 1–16 distinct environment apps");
+	const selection = typeof target === "string" ? { target } : (target ?? {});
+	const selectedTargets = new Map<string, Target>();
+	const scopes = new Map<string, DependencyWorkspace>();
+	for (const app of apps)
+		if (
+			projects.find((project) => project.id === app)?.repository !==
+			owner.repository
+		)
+			throw new Error(
+				"Environment root project must belong to this task's repository",
+			);
+	if (action === "run") {
+		const visited = new Set<string>();
+		const inspect = async (id: string, choice: Selection): Promise<void> => {
+			const project = projects.find((project) => project.id === id);
+			if (!project) throw new Error("Missing declared prerequisite project");
+			const chosen = selectTarget(
+				availableTargets(project),
+				action,
+				choice,
+				project.defaults?.[action],
+			);
+			if (visited.has(id)) {
+				if (selectedTargets.get(id)?.id !== chosen.id)
+					throw new Error(
+						"Prerequisite graph selects conflicting targets for one project",
+					);
+				return;
+			}
+			if (visited.size >= 16)
+				throw new Error("Expanded environment batch exceeds 16 projects");
+			visited.add(id);
+			selectedTargets.set(id, chosen);
+			if (project.repository !== owner.repository) {
+				if (!workspaces || !stateDir)
+					throw new Error(
+						"Foreign prerequisites require native dependency-workspace authority",
+					);
+				if (!scopes.has(project.repository))
+					scopes.set(
+						project.repository,
+						await workspaces.describe(
+							project.repository,
+							owner.workspace,
+							owner.id,
+						),
+					);
+			}
+			for (const id of project.requires ?? []) await inspect(id, {});
+			for (const edge of [
+				...(project.prerequisites ?? []),
+				...(chosen.prerequisites ?? []),
+			])
+				await inspect(edge.app, { target: edge.target });
+		};
+		for (const app of apps) await inspect(app, selection);
+	}
 	const resolve = (app: string, selection: Selection): Plan => {
 		const project = projects.find((project) => project.id === app);
-		if (!project || project.repository !== owner.repository)
-			throw new Error(
-				"Environment project must belong to this task's repository",
+		if (
+			!project ||
+			(project.repository !== owner.repository &&
+				!scopes.has(project.repository))
+		)
+			throw new Error("Project is outside the approved prerequisite closure");
+		const scope = scopes.get(project.repository),
+			workspace = scope?.workspace ?? owner.workspace;
+		const chosen =
+			selectedTargets.get(app) ??
+			selectTarget(
+				availableTargets(project),
+				action,
+				selection,
+				project.defaults?.[action],
 			);
-		const chosen = selectTarget(
-			availableTargets(project),
-			action,
-			selection,
-			project.defaults?.[action],
-		);
 		if (chosen.kubernetes && selection.replicas !== undefined) {
 			if (selection.replicas > 16)
 				throw new Error("Bare pod replicas must be at most 16");
 		}
-		const cwd = contained(owner.workspace, chosen.cwd);
-		if (!fs.statSync(cwd).isDirectory())
+		if (scope && chosen.kubernetes)
+			throw new Error(
+				"Foreign Kubernetes prerequisites require a repository-scoped cluster authorization; not inferred from the root",
+			);
+		if (scope && chosen.compose && chosen.compose.source === undefined)
+			throw new Error(
+				"Foreign Compose prerequisites require config-captured source; developer checkout source bytes are never imported",
+			);
+		const checkedCwd = contained(
+			scope ? project.repository : workspace,
+			chosen.cwd,
+		);
+		const cwd = scope ? path.resolve(workspace, chosen.cwd) : checkedCwd;
+		if (!fs.statSync(checkedCwd).isDirectory())
 			throw new Error(
 				"Environment cwd must be an existing task workspace directory",
 			);
 		const composePlan = chosen.compose
 			? bindComposeDiagnostics(
 					chosen,
-					compileCompose(owner.workspace, chosen.compose),
+					scope
+						? compileComposeSource(project.repository, chosen.compose, {
+								source: chosen.compose.source ?? "",
+								contentDigest: digest(
+									Buffer.from(chosen.compose.source ?? "").toString("base64"),
+								),
+							})
+						: compileCompose(workspace, chosen.compose),
 				)
 			: undefined;
 		if (
@@ -630,14 +773,32 @@ export function resolvePlans(
 			throw new Error(
 				"Compose literals cannot override declared secret references",
 			);
+		const prerequisites = [
+			...(project.prerequisites ?? []),
+			...(chosen.prerequisites ?? []),
+		];
 		return {
 			...chosen,
 			app,
 			projectKind: project.kind,
-			...(action === "run" && project.requires?.length
-				? { requires: project.requires }
+			...(action === "run" &&
+			(project.requires?.length ?? 0) + prerequisites.length
+				? {
+						requires: [
+							...(project.requires ?? []),
+							...prerequisites.map((edge) => edge.app),
+						],
+						...(prerequisites.length
+							? {
+									prerequisiteTargets: Object.fromEntries(
+										prerequisites.map((edge) => [edge.app, edge.target]),
+									),
+								}
+							: {}),
+					}
 				: {}),
-			workspace: owner.workspace,
+			...(scope ? { dependencyWorkspace: scope } : {}),
+			workspace,
 			cwd,
 			...(composePlan ? { composePlan } : {}),
 			...(chosen.kubernetes
@@ -650,11 +811,17 @@ export function resolvePlans(
 				: {}),
 		};
 	};
-	const selection = typeof target === "string" ? { target } : (target ?? {});
 	const roots = apps.map((app) => resolve(app, selection));
 	const plans =
 		action === "run"
-			? expandDependencies(roots, (id) => resolve(id, {}))
+			? expandDependencies(roots, (id, parent) =>
+					resolve(
+						id,
+						parent.prerequisiteTargets?.[id]
+							? { target: parent.prerequisiteTargets[id] }
+							: {},
+					),
+				)
 			: roots;
 	if (plans.some((plan) => plan.composePlan?.volumes?.length) && !stateDir)
 		throw new Error(
@@ -664,7 +831,7 @@ export function resolvePlans(
 		? plans.map((plan) => prepareVolumes(plan, stateDir))
 		: plans;
 	refuseBatchCollisions(prepared);
-	const scopes = new Set<string>();
+	const volumeScopes = new Set<string>();
 	for (const plan of prepared)
 		for (const volume of plan.composePlan?.volumes ?? []) {
 			let socket = plan.compose?.socket ?? "";
@@ -674,11 +841,11 @@ export function resolvePlans(
 				socket = path.resolve(socket);
 			}
 			const key = JSON.stringify([socket, volume.scope]);
-			if (scopes.has(key))
+			if (volumeScopes.has(key))
 				throw new Error(
 					"Environment batch attaches the same native volume scope twice; use one owned prerequisite",
 				);
-			scopes.add(key);
+			volumeScopes.add(key);
 		}
 	return prepared;
 }

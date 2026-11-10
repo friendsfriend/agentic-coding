@@ -5,7 +5,7 @@ import { ProviderApis } from "../providers/providers.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
 import { Acquisitions } from "./acquisitions.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
-import { loadProjects, projectView } from "./catalog.ts";
+import { loadProjects, projectView, resolvePlans } from "./catalog.ts";
 import { CleanupUncertain, cleanupSchedule } from "./cleanup.ts";
 import {
 	createClusterNamespace,
@@ -17,9 +17,18 @@ import {
 } from "./cluster.ts";
 import type { ClusterInspection } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
-import { containerPlans } from "./compose-config.ts";
+import {
+	bindComposeDiagnostics,
+	compileCompose,
+	containerPlans,
+} from "./compose-config.ts";
+import { prepareVolumes } from "./compose-volumes.ts";
 import { ContainerProcess } from "./container.ts";
 import { declaredInfrastructure } from "./dependencies.ts";
+import {
+	belongsToOwner,
+	DependencyWorkspaces,
+} from "./dependency-workspaces.ts";
 import { discoverDefinitions } from "./discovery.ts";
 import { DefinitionDrafts } from "./drafts.ts";
 import { HeldHttp } from "./http-manager.ts";
@@ -53,6 +62,7 @@ import {
 	requiringRoots,
 } from "./reference-scope.ts";
 import { runsConflict } from "./resources.ts";
+import type { Action, Selection } from "./selection.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
 import { assertReadyPortAvailable } from "./shell-readiness.ts";
 import {
@@ -80,6 +90,7 @@ function recentRuns(runs: EnvironmentRun[], history: number) {
 export class Environments {
 	readonly projects;
 	readonly drafts: DefinitionDrafts;
+	private dependencyWorkspaces: DependencyWorkspaces;
 	readonly clusters;
 	readonly http: HeldHttp;
 	readonly database: DatabaseDiagnostics;
@@ -108,6 +119,7 @@ export class Environments {
 	}
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
+		this.dependencyWorkspaces = new DependencyWorkspaces(config.stateDir);
 		this.drafts = new DefinitionDrafts(config, () => this.store);
 		this.idle = new IdleLifecycle(config.configDir, {
 			store: () => this.store,
@@ -161,6 +173,43 @@ export class Environments {
 		this.http = new HeldHttp(config, authority);
 		this.database = new DatabaseDiagnostics(config, authority);
 		this.providers = new ProviderApis(config, () => this.store);
+	}
+	async resolvePlans(
+		owner: Pick<TaskInfo, "policy" | "repository" | "workspace"> & {
+			id?: number;
+		},
+		apps: string[],
+		action: Action,
+		selection?: string | Selection,
+	) {
+		// Same-workspace plan inspection remains read-only after developer release;
+		// preserve the existing exact-review audit, while execute still refuses.
+		// Revoked owners may never mint dependency-workspace capabilities.
+		if (owner.id !== undefined && !this.revoked.has(owner.id))
+			this.check(owner.id);
+		try {
+			const plans = await resolvePlans(
+				this.projects,
+				owner,
+				apps,
+				action,
+				selection,
+				this.config.stateDir,
+				owner.id !== undefined && this.revoked.has(owner.id)
+					? undefined
+					: this.dependencyWorkspaces,
+			);
+			if (
+				owner.id !== undefined &&
+				plans.some((plan) => plan.dependencyWorkspace)
+			)
+				this.check(owner.id);
+			return plans;
+		} catch (error) {
+			if (owner.id !== undefined && this.revoked.has(owner.id))
+				this.dependencyWorkspaces.forgetOwner(owner.id);
+			throw error;
+		}
 	}
 	discover(repository: string, owner?: TaskInfo, directory = ".") {
 		return discoverDefinitions(this.config, repository, owner, directory);
@@ -787,6 +836,21 @@ export class Environments {
 		pollId = batch,
 	) {
 		validateLifetime(plans, owner);
+		if (
+			plans.some(
+				(plan) =>
+					!belongsToOwner(plan, owner) ||
+					(plan.dependencyWorkspace &&
+						!this.projects.some(
+							(project) =>
+								project.id === plan.app &&
+								project.repository === plan.dependencyWorkspace?.repository,
+						)),
+			)
+		)
+			throw new Error(
+				"Environment plan has a foreign owner/repository workspace scope",
+			);
 		this.idle.observe(owner);
 		const operation = this.perform(
 			batch,
@@ -907,6 +971,35 @@ export class Environments {
 							);
 					}, background);
 					continue;
+				}
+				if (plan.dependencyWorkspace) {
+					try {
+						await this.dependencyWorkspaces.realize(plan, owner);
+						if (plan.compose) {
+							const rebuilt = prepareVolumes(
+								{
+									...plan,
+									composePlan: bindComposeDiagnostics(
+										plan,
+										compileCompose(plan.workspace, plan.compose),
+									),
+								},
+								this.config.stateDir,
+							);
+							if (!sameApprovedPlan(rebuilt, plan))
+								throw new Error(
+									"Dependency source changed from the approved plan",
+								);
+						}
+					} catch {
+						await this.update(`${batch}:${plan.app}`, {
+							state: "interrupted",
+							error:
+								"Dependency workspace creation/identity could not be established; retained files and Git metadata require inspection. No command was dispatched for this member and no path was adopted.",
+						});
+						throw new Error("Dependency workspace unavailable");
+					}
+					this.check(owner.id, signal, batch);
 				}
 				if (plan.readyUrl) {
 					await assertReadyPortAvailable(plan.readyUrl);
@@ -1472,6 +1565,7 @@ export class Environments {
 				.map(([operation]) => operation),
 		);
 		await this.dependencyCleanup.get(owner);
+		this.dependencyWorkspaces.forgetOwner(owner);
 		const held = (await this.records()).filter(
 			(run) => run.owner === owner && holdsResource(run),
 		);
