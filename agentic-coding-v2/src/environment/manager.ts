@@ -1,8 +1,8 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
-import type { Config } from "../config.ts";
+import { type Config, text } from "../config.ts";
 import { ProviderApis } from "../providers/providers.ts";
-import { decode, type TaskInfo, values } from "../state.ts";
+import { Catalog, decode, type TaskInfo, values } from "../state.ts";
 import { Acquisitions } from "./acquisitions.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
 import { loadProjects, projectView, resolvePlans } from "./catalog.ts";
@@ -40,7 +40,9 @@ import { IdleLifecycle } from "./idle.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import {
 	independentRoot,
+	operatorInfrastructureLifetime,
 	referencedRoot,
+	referenceRoot,
 	sameApprovedPlan,
 	scopedRoot,
 	sharedRoot,
@@ -72,6 +74,7 @@ import {
 	type EnvironmentRun,
 	EnvironmentState,
 	holdsResource,
+	type OperatorUnitStop,
 	type ReuseReceipt,
 	type StopReceipt,
 } from "./state.ts";
@@ -1152,7 +1155,7 @@ export class Environments {
 			for (const plan of plans)
 				if (
 					independentRoot(plan) ||
-					(referencedRoot(plan) && plan.projectKind === "app")
+					(referencedRoot(plan) && referenceRoot(plan))
 				)
 					this.idle.trackRoot(owner.id, `${batch}:${plan.app}`, plan.app);
 			return result;
@@ -1204,10 +1207,10 @@ export class Environments {
 							(sharedRoot(run.plan) || item.batch === run.batch) &&
 							holdsResource(item),
 					),
-					roots = batchRuns.filter((item) => item.plan.projectKind === "app");
+					roots = batchRuns.filter((item) => referenceRoot(item.plan));
 				// A released root keeps no reference; a lost prerequisite invalidates
 				// every root that declared it. Ambiguous graphs fail closed.
-				if (run.plan.projectKind === "app")
+				if (referenceRoot(run.plan))
 					return { batch: run.batch, owner: run.owner, targets: [id] };
 				try {
 					const plans = batchRuns.map((item) => item.plan);
@@ -1308,15 +1311,45 @@ export class Environments {
 		await this.finish(id, process, true);
 		return !process.cleanupFailed;
 	}
-	async stopOnce(id: string, owner: number, apps?: string[]) {
-		const request = JSON.stringify({ owner, apps: apps ?? null }),
+	/** Authenticated developer-only unit control. Exact revision is checked and
+	 * admission latched in the same native transaction; no saved ID is authority. */
+	async stopOperatorUnit(input: Record<string, unknown>) {
+		if (
+			Object.keys(input).some(
+				(key) => !["requestId", "runId", "revision", "reason"].includes(key),
+			)
+		)
+			throw new Error("Unexpected operator unit stop field");
+		const requestId = text(input.requestId, "request ID", 256),
+			runId = text(input.runId, "run ID", 512),
+			reason = text(input.reason, "unit stop reason", 1000);
+		if (!Number.isSafeInteger(input.revision) || Number(input.revision) < 1)
+			throw new Error("A current integer unit revision is required");
+		const operatorUnit = { runId, reason, revision: Number(input.revision) },
+			run = (await this.records()).find((run) => run.id === runId);
+		if (!run) throw new Error("Unknown environment unit");
+		const runs = await this.stopOnce(
+			`operator-unit-stop:${requestId}`,
+			run.owner,
+			[run.plan.app],
+			operatorUnit,
+		);
+		return { requestId, ...operatorUnit, runs, scope: "operator-unit-only-v1" };
+	}
+	async stopOnce(
+		id: string,
+		owner: number,
+		apps?: string[],
+		operatorUnit?: OperatorUnitStop,
+	) {
+		const request = JSON.stringify({ owner, apps: apps ?? null, operatorUnit }),
 			previous = this.stopOperations.get(id);
 		if (previous) {
 			if (previous.request !== request)
 				throw new Error("Stop request identity mismatch");
 			return previous.operation;
 		}
-		const operation = this.performStopOnce(id, owner, apps);
+		const operation = this.performStopOnce(id, owner, apps, operatorUnit);
 		this.stopOperations.set(id, { request, operation });
 		try {
 			return await operation;
@@ -1324,7 +1357,12 @@ export class Environments {
 			this.stopOperations.delete(id);
 		}
 	}
-	private async performStopOnce(id: string, owner: number, apps?: string[]) {
+	private async performStopOnce(
+		id: string,
+		owner: number,
+		apps?: string[],
+		operatorUnit?: OperatorUnitStop,
+	) {
 		const receipt = await this.store.commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState),
 				previous = doc.stops[id];
@@ -1332,10 +1370,43 @@ export class Environments {
 				const saved = decode<StopReceipt>(previous);
 				if (
 					saved.owner !== owner ||
-					JSON.stringify(saved.apps) !== JSON.stringify(apps ?? null)
+					JSON.stringify(saved.apps) !== JSON.stringify(apps ?? null) ||
+					JSON.stringify(saved.operatorUnit) !== JSON.stringify(operatorUnit)
 				)
 					throw new Error("Stop request identity mismatch");
 				return saved;
+			}
+			if (operatorUnit) {
+				const raw = doc.runs[operatorUnit.runId],
+					run = raw ? decode<EnvironmentRun>(raw) : undefined,
+					catalog = await tx.doc(Catalog),
+					ownerRaw = catalog.tasks[String(owner)],
+					task = ownerRaw ? decode<TaskInfo>(ownerRaw) : undefined;
+				if (
+					!run ||
+					run.owner !== owner ||
+					run.revision !== operatorUnit.revision ||
+					run.state !== "running" ||
+					run.ready !== true ||
+					run.plan.lifetime !== operatorInfrastructureLifetime ||
+					run.plan.projectKind !== "infrastructure" ||
+					run.plan.operatorRoot !== true ||
+					run.plan.compose?.networkOnly ||
+					apps?.length !== 1 ||
+					apps[0] !== run.plan.app ||
+					task?.kind !== "operator-environment" ||
+					task.policy !== "workspace-write" ||
+					run.cleanupRetention ||
+					!this.hasLiveAuthority(run) ||
+					!this.live.has(run.id) ||
+					[...this.pending.values()].some(
+						(entry) => entry.batch === run.batch && !entry.runId,
+					)
+				)
+					throw new Error(
+						"Stale or unavailable original operator unit; wait for complete startup, inspect interrupted resources, and never stop a topology, agent or saved identity through unit control",
+					);
+				this.check(owner, undefined, run.batch, run.id);
 			}
 			const active = values<EnvironmentRun>(doc.runs).filter(
 				(run) => run.owner === owner && holdsResource(run),
@@ -1365,7 +1436,7 @@ export class Environments {
 				for (const run of selected)
 					if (
 						referencedRoot(run.plan) &&
-						run.plan.projectKind !== "app" &&
+						!referenceRoot(run.plan) &&
 						schedule.blockedBy(run.id, runs).length
 					)
 						throw new Error(
@@ -1379,6 +1450,7 @@ export class Environments {
 					(!apps || receipt.plans.some((plan) => apps.includes(plan.app))),
 			);
 			const saved: StopReceipt = {
+				...(operatorUnit ? { operatorUnit } : {}),
 				owner,
 				apps: apps ?? null,
 				runs: selected.map((run) => run.id),
@@ -1438,7 +1510,10 @@ export class Environments {
 	private latchStop(runs: EnvironmentRun[], batches: string[]) {
 		for (const batch of batches) this.stopped.add(batch);
 		for (const run of runs)
-			if (scopedRoot(run.plan) && run.plan.projectKind !== "infrastructure")
+			if (
+				scopedRoot(run.plan) &&
+				(run.plan.projectKind !== "infrastructure" || referenceRoot(run.plan))
+			)
 				this.stoppedRoots.add(run.id);
 		this.acquisitions.remove(batches);
 		this.acquisitions.notify();

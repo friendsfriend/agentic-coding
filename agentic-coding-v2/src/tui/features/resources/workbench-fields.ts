@@ -42,6 +42,8 @@ export const mutationFields: Record<EnvironmentMutation, string> = {
 		"requestId, id (tree-cleanup attempt), revision, acknowledge=true; inspect trees first",
 	"acknowledge-attempt":
 		"requestId, id (promotion attempt), acknowledge=true; never redispatches publication",
+	"stop-unit":
+		"requestId, runId, exact positive revision, reason; stops only an original protected operator infrastructure unit, retaining its referenced topology and unrelated units; no agent, topology or saved-ID authority",
 	revoke:
 		"requestId, runId, exact positive revision, reason; stops current live owner handles only, never adopts interrupted IDs",
 	"release-run":

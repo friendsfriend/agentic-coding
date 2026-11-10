@@ -28,6 +28,7 @@ export const environmentMutations = [
 	"acknowledge-tree-cleanup",
 	"acknowledge-attempt",
 	"revoke",
+	"stop-unit",
 	"release-run",
 ] as const;
 export type EnvironmentMutation = (typeof environmentMutations)[number];

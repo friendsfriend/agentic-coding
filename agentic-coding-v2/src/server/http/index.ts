@@ -391,6 +391,8 @@ export function httpRoutes(
 			}
 			if (url.pathname === "/api/environments/drafts")
 				return json(await app.environments.drafts.save(body));
+			if (url.pathname === "/api/environments/units/stop")
+				return json(await app.environments.stopOperatorUnit(body));
 			if (url.pathname === "/api/environments/revoke")
 				return json(await app.environments.operator.revoke(body));
 			if (

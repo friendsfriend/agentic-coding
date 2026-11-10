@@ -2201,3 +2201,7 @@ Same-owner Compose prerequisite topology now has native execution and lifecycle 
 ## Topology ownership checkpoint
 
 Native zero-service topology ownership adds no fake keeper row or application-readiness claim. Existing layout, colors, navigation and native-child hierarchy are untouched. Acceptance uses authenticated/native task boundaries and disposable engine fixtures, not renderer/mount/snapshot/presenter/navigation-matrix tests or a manual TTY. This is not a full environment/global-host parity archival claim.
+
+## Protected unit control checkpoint
+
+Independent infrastructure stop units remain real native infrastructure rows beneath the protected operator. No fake app/keeper is introduced and the existing layout, colors, navigation and native-child hierarchy stay unchanged. Generic authenticated workbench guidance includes the revision-fenced stop-unit action; this is not a new presentation or renderer acceptance claim. Actual global-host lifecycle and full parity are still unarchived.

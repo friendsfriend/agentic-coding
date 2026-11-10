@@ -1,6 +1,11 @@
 import { declaredInfrastructure } from "./dependencies.ts";
 import { samePlanOwnerScope } from "./dependency-workspaces.ts";
-import { referencedRoot, sameApprovedPlan, sharedRoot } from "./lifetime.ts";
+import {
+	referencedRoot,
+	referenceRoot,
+	sameApprovedPlan,
+	sharedRoot,
+} from "./lifetime.ts";
 import type { Plan } from "./model.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import type { EnvironmentRun } from "./state.ts";
@@ -117,12 +122,12 @@ export function requiringRoots(
 	run: EnvironmentRun,
 	members: readonly EnvironmentRun[],
 ): EnvironmentRun[] {
-	if (!referencedRoot(run.plan) || run.plan.projectKind === "app") return [];
+	if (!referencedRoot(run.plan) || referenceRoot(run.plan)) return [];
 	const live = members.filter(
 		(member) =>
 			member.owner === run.owner &&
 			member.state === "running" &&
-			member.plan.projectKind === "app" &&
+			referenceRoot(member.plan) &&
 			referencedRoot(member.plan) &&
 			sharedRoot(member.plan) === sharedRoot(run.plan) &&
 			(member.plan.requires ?? []).includes(run.plan.app),

@@ -148,3 +148,9 @@ A native definition/candidate preflight can validate this graph and captured des
 A native bridge owner may be represented as an infrastructure Compose run target with `network: "shared"`, `networkOnly: true`, and captured public source `services: {}`. A canonical public filename such as `compose.native.yaml` preserves saved-input inspection. It cannot be isolated, a borrower, an application/library, or carry service diagnostics, telemetry, readiness claims or secret references. Additional source effects are refused even when their mappings are empty.
 
 This explicit representation avoids inventing a keeper image or tying network lifetime to Redis/Postgres. It is not permission to import/adopt `devenv-local`, rename an existing network, flatten the six global services, or publish a partial migration. Saved-input candidate acceptance remains observation only; no task, review, workload, bridge or runtime capability is created by preflight.
+
+## Operator infrastructure admission remains separate from migration
+
+The new operator lifetime is an explicit action request, not a configurable target permission or a publication side effect. A native setup may select independently stoppable infrastructure units and their exact network-only parent for one reviewed protected operator. Native migration candidate acceptance still creates no tasks, reviews, workloads, topology, global host service or operator capability. The original preview has not been relabeled runtime-complete and no live configuration is published.
+
+Host-global consumer bindings, incremental service restart/re-add, actual service compatibility and complete Helm effects are not inferred from this same-owner operator primitive. Missing private inputs and exact current publication approval remain required; no source secret value or old global network is copied/adopted.

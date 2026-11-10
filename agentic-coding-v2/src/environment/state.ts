@@ -27,7 +27,14 @@ export type ReuseReceipt = {
 	createdAt: number;
 };
 export type IdleReap = { at: number; lastActivityAt: number; ttlMs: number };
+export type OperatorUnitStop = {
+	runId: string;
+	revision: number;
+	reason: string;
+};
 export type StopReceipt = {
+	/** Revision-fenced developer intention; observation only, never a restored handle. */
+	operatorUnit?: OperatorUnitStop;
 	owner: number;
 	apps: string[] | null;
 	runs: string[];

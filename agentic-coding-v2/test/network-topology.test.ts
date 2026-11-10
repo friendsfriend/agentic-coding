@@ -1,21 +1,22 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
-import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../src/config.ts";
 import type { Runtime } from "../src/runtime.ts";
 import { serve } from "../src/server/index.ts";
-import {
-	readEngineFile,
-	serveContainerFixture,
-} from "./fixtures/container-server.ts";
+import { readEngineFile } from "./fixtures/container-server.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
+import {
+	configureTopologyFixture,
+	topologyDefinitions as definitions,
+	topologyEngineFile as file,
+} from "./fixtures/network-topology.ts";
 import { createFixtures } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
-const engines: ReturnType<typeof serveContainerFixture>[] = [];
+const engines: ReturnType<typeof configureTopologyFixture>[] = [];
 afterEach(async () => {
 	try {
 		await cleanup();
@@ -25,80 +26,8 @@ afterEach(async () => {
 });
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
-const file = (config: Config) => path.join(config.configDir, "engine.json");
-const definitions = (config: Config) =>
-	path.join(config.configDir, "environments.json");
-const services = [
-	"redis",
-	"postgres",
-	"mailpit",
-	"activemq",
-	"azurite",
-	"playwright-server",
-];
 function configure(config: Config, provider: "docker" | "podman" = "docker") {
-	fs.mkdirSync(config.configDir);
-	fs.chmodSync(config.stateDir, 0o700);
-	const bin = path.join(config.configDir, "bin");
-	fs.mkdirSync(bin);
-	for (const runtime of ["docker", "podman"])
-		fs.writeFileSync(
-			path.join(bin, runtime),
-			`#!${process.execPath}\n${fs.readFileSync(path.join(import.meta.dir, "fixtures/container-engine.ts"), "utf8")}`,
-			{ mode: 0o700 },
-		);
-	fs.writeFileSync(
-		file(config),
-		JSON.stringify({ next: 1, containers: {}, history: [] }),
-	);
-	const engine = serveContainerFixture(file(config));
-	engines.push(engine);
-	const edge = (app: string) => ({ app, target: "run" });
-	const target = (id: string) => ({
-		id: "run",
-		action: "run",
-		runtime: "compose",
-		timeoutMs: 10000,
-		environment: {
-			PATH: `${bin}:${process.env.PATH ?? ""}`,
-			FIXTURE_ENGINE_SOCKET: engine.socket,
-		},
-		...(id === "topology" ? {} : { prerequisites: [edge("topology")] }),
-		compose: {
-			file: "compose.native.yaml",
-			provider,
-			socket: engine.socket,
-			network: "shared",
-			...(id === "topology"
-				? { networkOnly: true, source: "services: {}\n" }
-				: {
-						networkFrom: edge("topology"),
-						source: `services:\n  ${id}:\n    image: fixture:latest\n    command: [serve]\n    healthcheck:\n      test: [CMD, 'true']\n`,
-					}),
-		},
-	});
-	const project = (id: string, kind: "infrastructure" | "app") => ({
-		id,
-		kind,
-		repository: config.repositories[0],
-		targets: [target(id)],
-	});
-	const alpha = project("alpha", "app"),
-		beta = project("beta", "app");
-	alpha.targets[0].prerequisites = [edge("topology"), ...services.map(edge)];
-	beta.targets[0].prerequisites = [edge("topology"), edge("postgres")];
-	fs.writeFileSync(
-		definitions(config),
-		JSON.stringify({
-			version: 1,
-			projects: [
-				project("topology", "infrastructure"),
-				...services.map((id) => project(id, "infrastructure")),
-				alpha,
-				beta,
-			],
-		}),
-	);
+	engines.push(configureTopologyFixture(config, provider));
 }
 async function held(app: Runtime, task: number, title?: string) {
 	const deadline = Date.now() + 15000;

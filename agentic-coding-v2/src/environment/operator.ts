@@ -8,6 +8,10 @@ import {
 import { type Config, digest, text } from "../config.ts";
 import { git } from "../git.ts";
 import { Catalog, decode } from "../state.ts";
+import {
+	operatorInfrastructureLifetime,
+	operatorInfrastructurePlans,
+} from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
 import {
 	createOperatorTask,
@@ -45,11 +49,23 @@ export class OperatorEnvironments {
 						"profile",
 						"runtime",
 						"replicas",
+						"lifetime",
 					].includes(key),
 			)
 		)
 			throw new Error("Unknown environment action option");
 		text(request.requestId, "request ID", 256);
+		if (
+			request.lifetime !== undefined &&
+			request.lifetime !== operatorInfrastructureLifetime
+		)
+			throw new Error(
+				"Choose the explicit operator infrastructure lifetime; agent lifetime modes cannot be substituted",
+			);
+		if (request.lifetime !== undefined && request.replicas !== undefined)
+			throw new Error(
+				"Operator infrastructure units cannot infer Kubernetes replicas",
+			);
 		if (
 			request.workspaceMode !== undefined &&
 			request.workspaceMode !== "checkout" &&
@@ -108,11 +124,15 @@ export class OperatorEnvironments {
 			])
 		).trim();
 		// Validate selection before admitting a native task or creating its worktree.
-		await this.manager.resolvePlans(
-			{ policy: "workspace-write", repository, workspace: repository },
+		operatorInfrastructurePlans(
+			await this.manager.resolvePlans(
+				{ policy: "workspace-write", repository, workspace: repository },
+				request.apps,
+				request.action,
+				request,
+			),
 			request.apps,
-			request.action,
-			request,
+			request.lifetime,
 		);
 		const id = await home.commit(async (tx) => {
 			const doc = await tx.doc(Catalog),

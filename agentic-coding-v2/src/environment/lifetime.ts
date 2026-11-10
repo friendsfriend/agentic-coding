@@ -4,6 +4,70 @@ import { isShellRuntime, type Plan } from "./model.ts";
 export const independentLifetime = "independent-roots-v1";
 export const referencedLifetime = "referenced-roots-v1";
 export const sharedLifetime = "shared-prerequisites-v1";
+export const operatorInfrastructureLifetime = "operator-infrastructure-v1";
+/** Preserve real project kinds: operator infrastructure units are not fake apps. */
+export function referenceRoot(plan: Plan) {
+	return (
+		plan.projectKind === "app" ||
+		(plan.lifetime === operatorInfrastructureLifetime &&
+			plan.projectKind === "infrastructure" &&
+			plan.operatorRoot === true)
+	);
+}
+export function operatorInfrastructurePlans(
+	plans: Plan[],
+	roots: string[],
+	lifetime?: typeof operatorInfrastructureLifetime,
+): Plan[] {
+	if (lifetime === undefined) return plans;
+	if (
+		lifetime !== operatorInfrastructureLifetime ||
+		!roots.length ||
+		new Set(roots).size !== roots.length ||
+		roots.some((root) => !plans.some((plan) => plan.app === root))
+	)
+		throw new Error("Choose explicit configured operator infrastructure units");
+	const selected = plans.map((plan) => ({
+		...plan,
+		lifetime,
+		...(roots.includes(plan.app) ? { operatorRoot: true as const } : {}),
+	}));
+	validateOperatorInfrastructure(selected);
+	return selected;
+}
+function validateOperatorInfrastructure(plans: Plan[]) {
+	const topology = plans.filter((plan) => !plan.operatorRoot),
+		owner = topology[0];
+	if (
+		topology.length !== 1 ||
+		!owner?.compose?.networkOnly ||
+		owner.requires?.length ||
+		plans.some(
+			(plan) =>
+				plan.lifetime !== operatorInfrastructureLifetime ||
+				plan.action !== "run" ||
+				plan.runtime !== "compose" ||
+				plan.projectKind !== "infrastructure" ||
+				plan.workspace !== owner.workspace ||
+				plan.dependencyWorkspace,
+		) ||
+		!plans.some((plan) => plan.operatorRoot) ||
+		plans
+			.filter((plan) => plan.operatorRoot)
+			.some(
+				(plan) =>
+					plan.compose?.networkOnly ||
+					plan.requires?.length !== 1 ||
+					plan.requires[0] !== owner.app ||
+					plan.compose?.networkFrom?.app !== owner.app ||
+					plan.compose.networkFrom.target !== owner.id ||
+					plan.prerequisiteTargets?.[owner.app] !== owner.id,
+			)
+	)
+		throw new Error(
+			"Operator infrastructure lifetime requires explicit independent infrastructure Compose units and one exact network-only topology in the same repository; no application, foreign workspace, inferred root or mixed lifetime",
+		);
+}
 export type Lifetime =
 	| typeof independentLifetime
 	| typeof referencedLifetime
@@ -16,7 +80,9 @@ export function independentRoot(plan: Plan) {
  * declared prerequisites are retained by live root references. */
 export function referencedRoot(plan: Plan) {
 	return (
-		plan.lifetime === referencedLifetime || sharedLifetime === plan.lifetime
+		plan.lifetime === referencedLifetime ||
+		sharedLifetime === plan.lifetime ||
+		plan.lifetime === operatorInfrastructureLifetime
 	);
 }
 /** Shared reference mode adds a second, disjoint acquisition that attaches to an
@@ -61,7 +127,27 @@ export function sameApprovedPlan(left: Plan, right: Plan) {
 /** An opt-in request is a new lifetime, never a permission to split an existing
  * coupled graph or a second acquisition. */
 export function validateLifetime(plans: Plan[], owner: TaskInfo) {
+	if (
+		plans.some(
+			(plan) =>
+				plan.operatorRoot !== undefined &&
+				(plan.operatorRoot !== true ||
+					plan.lifetime !== operatorInfrastructureLifetime),
+		)
+	)
+		throw new Error("Operator unit markers cannot alter an ordinary lifetime");
 	if (!plans.some(scopedRoot)) return;
+	if (plans.some((plan) => plan.lifetime === operatorInfrastructureLifetime)) {
+		if (
+			owner.kind !== "operator-environment" ||
+			owner.policy !== "workspace-write"
+		)
+			throw new Error(
+				"Operator infrastructure lifetime requires its original protected native operator, never an agent owner",
+			);
+		validateOperatorInfrastructure(plans);
+		return;
+	}
 	if (
 		plans.some((plan) =>
 			Object.keys(plan.prerequisiteTargets ?? {}).some((app) =>

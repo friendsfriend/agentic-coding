@@ -213,3 +213,7 @@ The environment backend now resolves explicit same-owner prerequisite bridge bin
 ## Network-only native topology records
 
 An original topology bridge is represented by its real native infrastructure run and network status, without a made-up container/PID. `networkOnlyScope` discloses zero services, bridge-only readiness and dependent-first cleanup at exact approval. Generic existing presentation and authenticated controls are unchanged; status IDs and candidate descriptors still cannot mint topology bindings. No renderer, web or generated source changes were required.
+
+## Revision-fenced unit stop through existing authenticated adapters
+
+HTTP exposes `POST /api/environments/units/stop` with exact `requestId`, `runId`, positive current `revision` and bounded `reason`. The typed gateway exposes the same native operation as workbench `stop-unit`, retaining its existing digest preview/exact confirmation/consume-before-dispatch fences. Both delegate to the native manager's transaction and original handles; neither is a second lifecycle engine. The existing generic workbench field guidance gains only this action's input disclosure. No renderer, web or generated source changes are involved.

@@ -209,6 +209,8 @@ export class EnvironmentWorkbench {
 				return drafts.acknowledgeTreeCleanup(body);
 			case "acknowledge-attempt":
 				return drafts.acknowledgeAttempt(body);
+			case "stop-unit":
+				return env.stopOperatorUnit(body);
 			case "revoke":
 				return env.operator.revoke(body);
 			case "release-run":

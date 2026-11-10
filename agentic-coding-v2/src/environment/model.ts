@@ -120,7 +120,10 @@ export type Plan = Target & {
 	lifetime?:
 		| "independent-roots-v1"
 		| "referenced-roots-v1"
-		| "shared-prerequisites-v1";
+		| "shared-prerequisites-v1"
+		| "operator-infrastructure-v1";
+	/** Derived only from the protected operator's exact requested units, never configuration input. */
+	operatorRoot?: true;
 	app: string;
 	projectKind?: Project["kind"];
 	requires?: string[];

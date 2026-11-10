@@ -3,7 +3,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import { type TaskInfo, values } from "../state.ts";
-import { referencedRoot, scopedRoot } from "./lifetime.ts";
+import { referencedRoot, referenceRoot, scopedRoot } from "./lifetime.ts";
 import {
 	type EnvironmentRun,
 	EnvironmentState,
@@ -152,7 +152,7 @@ export class IdleLifecycle {
 		if (scopedRoot(run.plan) && !holdsResource(run))
 			return "not-known-live-running";
 		// A declared prerequisite expires only with its last live root reference.
-		if (referencedRoot(run.plan) && run.plan.projectKind !== "app")
+		if (referencedRoot(run.plan) && !referenceRoot(run.plan))
 			return "referenced-prerequisite";
 		if (activity?.kind === "operator") return "operator-owner";
 		if (activity?.kind !== "agent") return "unknown-owner";
@@ -179,8 +179,7 @@ export class IdleLifecycle {
 		const independent = scopedRoot(run.plan),
 			referenced = referencedRoot(run.plan),
 			// A referenced prerequisite is retained, never a root with its own clock.
-			prerequisite =
-				independent && referenced && run.plan.projectKind !== "app";
+			prerequisite = independent && referenced && !referenceRoot(run.plan);
 		// A generation without its own clock reports no activity at all, not the
 		// owner's: it must never inherit a clock it does not have.
 		const activity = prerequisite
@@ -235,7 +234,7 @@ export class IdleLifecycle {
 		)) {
 			// Prerequisites carry no clock of their own: they are retained by the
 			// live roots that declare them, never reaped independently.
-			if (referencedRoot(run.plan) && run.plan.projectKind !== "app") continue;
+			if (referencedRoot(run.plan) && !referenceRoot(run.plan)) continue;
 			const rootId = scopedRoot(run.plan) ? run.id : undefined;
 			candidates.set(rootId ?? `owner:${run.owner}`, {
 				owner: run.owner,
