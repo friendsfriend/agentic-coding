@@ -209,3 +209,7 @@ Profile display/selection now receives original case-preserved metadata, while b
 ## Native bridge authority stays behind the existing presentation
 
 The environment backend now resolves explicit same-owner prerequisite bridge bindings from original native processes, not UI/status IDs. Reviewed plans disclose `prerequisiteBridgeScope`, qualified exporter readiness, alias claims, changing-membership diagnostic refusal and network-wide uncertainty quarantine. Borrowers possess attachment/member authority only; only the original owner can remove its empty bridge after all members settle. Persisted observations and candidate descriptors remain data, never a restoration path for this capability. No renderer, component, navigation, web client or sidebar hierarchy was changed.
+
+## Network-only native topology records
+
+An original topology bridge is represented by its real native infrastructure run and network status, without a made-up container/PID. `networkOnlyScope` discloses zero services, bridge-only readiness and dependent-first cleanup at exact approval. Generic existing presentation and authenticated controls are unchanged; status IDs and candidate descriptors still cannot mint topology bindings. No renderer, web or generated source changes were required.

@@ -46,6 +46,12 @@ export function environmentApproval(
 								: ""),
 					}
 				: {}),
+			...(plans.some((plan) => plan.compose?.networkOnly)
+				? {
+						networkOnlyScope:
+							"An explicit infrastructure-only networkOnly plan creates only one original receipt-fenced native bridge, not a keeper container or application. Its captured source must contain exactly empty services and no other effects. Ready means original bridge creation and ownership observation only, never application/HTTP/SQL/telemetry readiness. Independent native infrastructure members can attach through exact networkFrom edges without making any one service the network owner. Their declared live probes qualify within each displayed startup deadline; absent probes are not invented. Only this original live topology may remove its empty bridge after every member settles. Names, copied labels and saved IDs grant no authority. Existing native-owner and coupled/referenced/shared fences remain; this is not cross-owner/global-host infrastructure or restart adoption.",
+					}
+				: {}),
 			...(plans.some((plan) => plan.compose?.networkFrom)
 				? {
 						prerequisiteBridgeScope:

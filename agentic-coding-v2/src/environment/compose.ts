@@ -36,6 +36,17 @@ export class ComposeProcess implements EnvironmentProcess {
 		readonly telemetry?: TelemetryCollector,
 		bridge?: ComposeNetwork,
 	) {
+		if (
+			plan.compose?.networkOnly &&
+			(plan.projectKind !== "infrastructure" ||
+				!plan.composePlan ||
+				plan.composePlan.services.length !== 0 ||
+				plan.compose.network !== "shared" ||
+				bridge)
+		)
+			throw new Error(
+				"An original network-only topology needs a reviewed empty infrastructure plan",
+			);
 		if (Boolean(plan.compose?.networkFrom) !== Boolean(bridge))
 			throw new Error(
 				"A prerequisite bridge needs the exact original live binding, never a saved network ID",
@@ -98,9 +109,10 @@ export class ComposeProcess implements EnvironmentProcess {
 					this.frozen,
 				);
 			if (!bridge) this.ownedNetwork = this.bridge;
-			this.network = this.bridge.join(
-				(plan.composePlan?.services ?? []).map((service) => service.id),
-			);
+			if (!plan.compose?.networkOnly)
+				this.network = this.bridge.join(
+					(plan.composePlan?.services ?? []).map((service) => service.id),
+				);
 		}
 		this.done = new Promise((resolve) => {
 			this.complete = resolve;
@@ -128,11 +140,20 @@ export class ComposeProcess implements EnvironmentProcess {
 		const service = this.plan.composePlan?.services.find(
 			(service) => !service.container.completion,
 		);
-		if (!service)
-			throw new Error(
-				"A bridge prerequisite needs an original live non-completion infrastructure service",
+		if (this.plan.compose?.networkOnly) {
+			if (!this.ownedNetwork || this.ownedNetwork !== this.bridge)
+				throw new Error("Missing original topology creation authority");
+			await this.ownedNetwork.attachment(
+				2000,
+				AbortSignal.any([this.controller.signal, ...(signal ? [signal] : [])]),
 			);
-		await this.observeService(service.id, false, signal, true);
+		} else {
+			if (!service)
+				throw new Error(
+					"A bridge prerequisite needs an original live non-completion infrastructure service",
+				);
+			await this.observeService(service.id, false, signal, true);
+		}
 		if (this.closing || this.result || this.cleanupFailed)
 			throw new Error("Original prerequisite bridge closed during observation");
 		return this.bridge;
@@ -148,19 +169,21 @@ export class ComposeProcess implements EnvironmentProcess {
 			this.failedCleanup ||
 			this.volumes?.cleanupFailed === true ||
 			this.network?.cleanupFailed === true ||
+			this.ownedNetwork?.cleanupFailed === true ||
 			this.children.some((child) => child.cleanupFailed)
 		);
 	}
 	get runtimeStatuses() {
+		const network = this.network ?? this.ownedNetwork;
 		return [
-			...(this.network ? [this.network.runtimeStatus] : []),
+			...(network ? [network.runtimeStatus] : []),
 			...this.children.flatMap((child) =>
 				child.runtimeStatus ? [child.runtimeStatus] : [],
 			),
 		];
 	}
 	get serviceLogs() {
-		const count = this.plan.composePlan?.services.length ?? 1,
+		const count = Math.max(1, this.plan.composePlan?.services.length ?? 1),
 			cap = Math.floor(64000 / count);
 		return Object.fromEntries(
 			this.children.map((child, index) => {
@@ -171,9 +194,10 @@ export class ComposeProcess implements EnvironmentProcess {
 		);
 	}
 	get logs() {
+		const network = this.network ?? this.ownedNetwork;
 		return [
 			this.volumes ? `[volumes]\n${this.volumes.logs}` : "",
-			this.network ? `[network]\n${this.network.logs}` : "",
+			network ? `[network]\n${network.logs}` : "",
 			...this.children.map(
 				(child, index) =>
 					`[${this.plan.composePlan?.services[index]?.id ?? "service"}]\n${child.logs}`,
@@ -435,7 +459,7 @@ export class ComposeProcess implements EnvironmentProcess {
 			const exits = this.children.map((child) => child.outcome);
 			const code =
 				this.cleanupFailed ||
-				!exits.length ||
+				(!exits.length && !this.plan.compose?.networkOnly) ||
 				exits.some((exit) => exit?.code === null || !exit)
 					? null
 					: (exits.find((exit) => exit?.code !== 0)?.code ?? 0);

@@ -39,6 +39,8 @@ export type ComposeDefinition = {
 	provider: "docker" | "podman";
 	socket: string;
 	network: "shared" | "isolated";
+	/** Explicit infrastructure-only topology owner; no fabricated keeper service. */
+	networkOnly?: true;
 	/** Exact declared infrastructure prerequisite; never a network name or saved ID. */
 	networkFrom?: { app: string; target: string };
 };

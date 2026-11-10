@@ -2197,3 +2197,7 @@ Profile fidelity follow-up: native metadata retains source names such as `QA-Ivy
 ## Prerequisite bridge checkpoint
 
 Same-owner Compose prerequisite topology now has native execution and lifecycle evidence without changing the existing TUI layout, colors, navigation or OpenCode → Pi → Pi Durable → Orchestrator → native-child hierarchy. No nested text structure, renderer/mount/snapshot/presenter/navigation-matrix test or manual TTY acceptance was introduced. Backend/candidate observations are not a new visual-parity or full-environment archival claim; global infrastructure, full Helm choices, private inputs and publication remain open.
+
+## Topology ownership checkpoint
+
+Native zero-service topology ownership adds no fake keeper row or application-readiness claim. Existing layout, colors, navigation and native-child hierarchy are untouched. Acceptance uses authenticated/native task boundaries and disposable engine fixtures, not renderer/mount/snapshot/presenter/navigation-matrix tests or a manual TTY. This is not a full environment/global-host parity archival claim.

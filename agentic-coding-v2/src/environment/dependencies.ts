@@ -1,18 +1,20 @@
 import type { Plan, Project } from "./model.ts";
-/** Qualification is part of the reviewed plan, not a late runtime mutation.
+/** Exporters and explicitly bridged infrastructure members qualify declared live
+ * probes as part of the reviewed plan, not a late runtime mutation.
  * Use the whole definition so standalone and consumer closures resolve the
  * same exporter generation; reapply after a foreign source rebuild. */
 export function qualifyBridgeExporter(projects: Project[], plan: Plan): Plan {
 	if (
 		plan.projectKind !== "infrastructure" ||
 		!plan.composePlan ||
-		!projects.some((project) =>
-			project.targets.some(
-				(target) =>
-					target.compose?.networkFrom?.app === plan.app &&
-					target.compose.networkFrom.target === plan.id,
-			),
-		)
+		(!plan.compose?.networkFrom &&
+			!projects.some((project) =>
+				project.targets.some(
+					(target) =>
+						target.compose?.networkFrom?.app === plan.app &&
+						target.compose.networkFrom.target === plan.id,
+				),
+			))
 	)
 		return plan;
 	return {
@@ -74,6 +76,10 @@ export function validateDependencies(projects: Project[]) {
 			visit(dependency, next);
 		}
 		for (const target of project.targets) {
+			if (target.compose?.networkOnly && project.kind !== "infrastructure")
+				throw new Error(
+					"A network-only topology must be declared infrastructure, never an application or library",
+				);
 			const from = target.compose?.networkFrom;
 			if (!from) continue;
 			const edges = [

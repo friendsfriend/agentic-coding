@@ -215,6 +215,7 @@ export function readCompose(raw: unknown): ComposeDefinition {
 		"network",
 		"source",
 		"networkFrom",
+		"networkOnly",
 	]);
 	if (
 		data.network !== undefined &&
@@ -247,6 +248,13 @@ export function readCompose(raw: unknown): ComposeDefinition {
 			);
 		networkFrom = { app, target };
 	}
+	if (
+		data.networkOnly !== undefined &&
+		(data.networkOnly !== true || data.network === "isolated" || networkFrom)
+	)
+		throw new Error(
+			"An explicit network-only topology must own shared networking, never borrow or isolate it",
+		);
 	const captured = data.source;
 	if (
 		captured !== undefined &&
@@ -264,6 +272,7 @@ export function readCompose(raw: unknown): ComposeDefinition {
 		socket: readLocalSocket(data.socket),
 		network: data.network ?? "shared",
 		...(networkFrom ? { networkFrom } : {}),
+		...(data.networkOnly === true ? { networkOnly: true } : {}),
 	};
 }
 /** One declared environment file. Values are literal and only read on a live
@@ -418,6 +427,14 @@ export function compileComposeSource(
 		document = object(Bun.YAML.parse(input.source));
 	} catch {
 		throw new Error("Invalid Compose YAML; source values are not logged");
+	}
+	if (definition.networkOnly) {
+		keys(document, ["services"]);
+		if (Object.keys(object(document.services)).length !== 0)
+			throw new Error(
+				"Network-only topology source must declare exactly empty services, with no ignored service, volume, name or network effects",
+			);
+		return { digest: input.contentDigest, services: [] };
 	}
 	keys(document, ["services", "volumes", "name", "networks"]);
 	if (
@@ -671,6 +688,20 @@ export function bindComposeDiagnostics(
 	target: Target,
 	plan: ComposePlan,
 ): ComposePlan {
+	if (
+		target.compose?.networkOnly &&
+		(target.telemetry ||
+			target.queryConnection ||
+			target.queryService ||
+			Object.keys(target.endpoints ?? {}).length ||
+			Object.keys(target.endpointServices ?? {}).length ||
+			Object.keys(target.secretRefs).length ||
+			target.readyText ||
+			target.readyUrl)
+	)
+		throw new Error(
+			"A network-only topology has no service, secret, application readiness or diagnostic authority",
+		);
 	checkComposeTelemetry(target, plan);
 	for (const service of plan.services)
 		if (
