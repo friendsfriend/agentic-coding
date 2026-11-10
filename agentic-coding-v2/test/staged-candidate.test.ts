@@ -202,3 +202,155 @@ test("saved candidate coverage binds all source/base inputs, refuses gaps/orphan
 		host.stop();
 	}
 });
+
+test("authenticated mixed-native candidate binds captured shell/container/pod descriptors without source reads, execution or publication and refuses missing build sources", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.chmodSync(config.stateDir, 0o700);
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+	});
+	const host = serve(app),
+		repository = config.repositories[0] ?? "",
+		marker = "mixed-candidate-private-body-withheld",
+		socket = path.join(config.stateDir, "never-contacted.sock");
+	const api = (route: string, body: unknown) =>
+		fetch(new URL(route, host.url), {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${new URLSearchParams(new URL(host.url).hash.slice(1)).get("token")}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
+		});
+	const targets: Record<string, unknown>[] = [
+		{
+			id: "shell",
+			action: "build",
+			runtime: "shell",
+			command: `echo ${marker}`,
+		},
+		{
+			id: "image",
+			action: "build",
+			runtime: "docker",
+			container: {
+				socket,
+				image: "fixture:latest",
+				dockerfileSource: `FROM fixture:latest\n# ${marker}\n`,
+			},
+		},
+		{
+			id: "service",
+			action: "run",
+			runtime: "docker",
+			container: { socket, image: "fixture:latest" },
+		},
+		{
+			id: "isolated-test",
+			action: "test",
+			runtime: "podman",
+			container: { socket, image: "fixture:latest" },
+		},
+		{
+			id: "pod",
+			action: "run",
+			runtime: "kubernetes",
+			kubernetes: {
+				cluster: "fixture",
+				namespace: "fixture",
+				image: "fixture:latest",
+			},
+		},
+		{
+			id: "stack",
+			action: "run",
+			runtime: "compose",
+			compose: {
+				file: "compose.captured.yaml",
+				source: "services:\n  fixture:\n    image: fixture:latest\n",
+				provider: "docker",
+				socket,
+			},
+		},
+	];
+	const definition = () => ({
+		version: 1,
+		projects: [{ id: "api", kind: "app", repository, targets }],
+	});
+	try {
+		const response = await api("/api/environments/drafts", {
+			requestId: "mixed-create",
+			content: JSON.stringify(definition()),
+		});
+		expect(response.status).toBe(200);
+		const draft = await response.json();
+		const request = {
+				requestId: "mixed-check",
+				id: draft.id,
+				revision: draft.revision,
+				digest: draft.digest,
+				validateStagedCandidate: true,
+			},
+			checked = await (
+				await api("/api/environments/drafts/preflight", request)
+			).json();
+		expect(checked.accepted).toBe(true);
+		expect(checked.definitionCoverage).toBe(
+			"native-descriptors-and-compose-subset-v1",
+		);
+		expect(checked.entries).toHaveLength(6);
+		expect(
+			checked.entries.filter(
+				(entry: { coverageBasis?: string }) =>
+					entry.coverageBasis === "native-descriptor",
+			),
+		).toHaveLength(5);
+		expect(checked.runtimeChecked).toBe(false);
+		expect(checked.dependenciesExpanded).toBe(false);
+		expect(checked.publicationAllowed).toBe(false);
+		expect(checked.sourceContentsChecked).toBe(false);
+		expect(JSON.stringify(checked)).not.toContain(marker);
+		expect(
+			await (await api("/api/environments/drafts/preflight", request)).json(),
+		).toEqual(checked);
+		fs.writeFileSync(path.join(repository, "Dockerfile"), marker);
+		targets[1] = {
+			id: "image",
+			action: "build",
+			runtime: "docker",
+			container: { socket, image: "fixture:latest", dockerfile: "Dockerfile" },
+		};
+		const changed = await (
+			await api("/api/environments/drafts", {
+				requestId: "mixed-uncaptured",
+				id: draft.id,
+				revision: draft.revision,
+				content: JSON.stringify(definition()),
+			})
+		).json();
+		const missing = await (
+			await api("/api/environments/drafts/preflight", {
+				...request,
+				requestId: "mixed-missing",
+				revision: changed.revision,
+				digest: changed.digest,
+			})
+		).json();
+		expect(missing.accepted).toBe(false);
+		expect(missing.entries).toContainEqual(
+			expect.objectContaining({ target: "image", status: "missing-source" }),
+		);
+		expect(JSON.stringify(missing)).not.toContain(marker);
+		expect(fs.readFileSync(path.join(repository, "Dockerfile"), "utf8")).toBe(
+			marker,
+		);
+		expect(
+			fs.existsSync(path.join(config.configDir, "environments.json")),
+		).toBe(false);
+		const snapshot = await app.snapshot();
+		expect(snapshot.tasks).toHaveLength(0);
+		expect(snapshot.reviews).toHaveLength(0);
+		expect(snapshot.environments.runs).toHaveLength(0);
+	} finally {
+		host.stop();
+	}
+});

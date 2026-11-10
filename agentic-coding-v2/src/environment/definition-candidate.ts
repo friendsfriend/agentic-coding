@@ -28,6 +28,8 @@ type Entry = {
 	sourceDigest?: string;
 	compiledDigest?: string;
 	serviceCount?: number;
+	coverageBasis?: "native-descriptor";
+	descriptorDigest?: string;
 };
 function baseIdentity(base: SourceDraft["base"]) {
 	if (base === "unobserved") return null;
@@ -115,8 +117,31 @@ function checkTarget(
 	sources: SourceDraft[],
 ): Entry {
 	const row = { app: project.id, target: target.id };
-	if (target.runtime !== "compose" || !target.compose)
-		return { ...row, status: "unsupported-target" };
+	if (target.runtime !== "compose") {
+		if (!["shell", "docker", "podman", "kubernetes"].includes(target.runtime))
+			return { ...row, status: "unsupported-target" };
+		if (
+			(target.runtime === "docker" || target.runtime === "podman") &&
+			(!target.container ||
+				(target.action === "build" &&
+					target.container.dockerfileSource === undefined))
+		)
+			return { ...row, status: "missing-source" };
+		if (target.runtime === "kubernetes" && !target.kubernetes)
+			return { ...row, status: "refused" };
+		return {
+			...row,
+			status: "parsed",
+			coverageBasis: "native-descriptor",
+			descriptorDigest: digest(JSON.stringify(target)),
+			...(target.runtime === "shell"
+				? { sourceDigest: digest(target.command) }
+				: target.container?.dockerfileSource !== undefined
+					? { sourceDigest: digest(target.container.dockerfileSource) }
+					: {}),
+		};
+	}
+	if (!target.compose) return { ...row, status: "refused" };
 	let file: string;
 	try {
 		file = publicComposePath(target.compose.file);
@@ -185,7 +210,9 @@ function auxiliarySources(draft: Draft, repository: string) {
 /** Exact saved-input binding, not a plan, isolated tree or publication grant. */
 export function inspectStagedCandidate(config: Config, draft: Draft) {
 	const scope = {
+		// Retained wire kind for existing HTTP/web clients; coverage is explicit.
 		kind: "staged-compose-candidate" as const,
+		definitionCoverage: "native-descriptors-and-compose-subset-v1" as const,
 		sourceContentsChecked: false as const,
 		runtimeChecked: false as const,
 		dependenciesExpanded: false as const,
@@ -233,7 +260,7 @@ export function inspectStagedCandidate(config: Config, draft: Draft) {
 				(source) => source.base === "unobserved",
 			).length,
 			message:
-				"Offline saved-input manifest and native Compose-subset coverage only. Unsupported/missing/refused/orphan inputs prevent acceptance. Base observations are bound, NOT refreshed. Parser may inspect containment/bind metadata; no live source bytes or bind contents are read. No isolated tree, runtime validation, review or promotion authority; exact saved-input identity is not readiness.",
+				"Offline saved-input identity, validated native descriptor coverage and Compose-subset parsing only. Shell bytes and captured Dockerfiles are bound, not executed or syntax-checked by their runtime; container image/cluster availability, host tool state, credentials and files referenced by commands are not validated. Non-Compose builds require config-captured Dockerfile bytes, never implicit live file reads. Unsupported/missing/refused/orphan inputs prevent acceptance. Base observations are bound, NOT refreshed. Compose parsing may inspect containment/bind metadata; no live source bytes or bind contents are read. No isolated tree, runtime validation, review or promotion authority; exact saved-input identity is not readiness.",
 		};
 	} catch {
 		return {
