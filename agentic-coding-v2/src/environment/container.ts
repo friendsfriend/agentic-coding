@@ -134,6 +134,11 @@ export class ContainerProcess {
 		// An image build has an exit receipt/artifact tag, not a container's health or lifecycle.
 		return this.plan.action === "build" ? undefined : { ...this.observed };
 	}
+	/** Original live create receipt, only for this process's exact approved bridge.
+	 * Serialized observations and copied labels cannot supply a membership claim. */
+	networkCreationIdentity(network: string) {
+		return this.network?.id === network ? this.createdId : null;
+	}
 	get closing() {
 		return this.controller.signal.aborted;
 	}

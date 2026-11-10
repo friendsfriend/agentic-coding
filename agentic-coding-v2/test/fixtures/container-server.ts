@@ -51,7 +51,7 @@ export type EngineState = {
 	buildDelayMs?: number;
 	inspectDelayMs?: number;
 	startDelayMs?: number;
-	initialHealth?: "missing" | "unhealthy";
+	initialHealth?: "missing" | "unhealthy" | "starting";
 	/** Exit code reported by the synthetic one-shot `wait` receipt. */
 	completionExit?: number;
 	/** Owned-container log lines with the engine's own timestamp per line. */

@@ -1,6 +1,14 @@
 import { pathToFileURL } from "node:url";
 import { digest, object } from "../config.ts";
 import { EnvironmentCommands } from "./command.ts";
+import type { ContainerProcess } from "./container.ts";
+
+type Member = {
+	aliases: string[];
+	children: Set<ContainerProcess>;
+	pending: number;
+};
+
 import type { Plan } from "./model.ts";
 import type { RuntimeStatus } from "./process.ts";
 import type { processEnvironment } from "./shell.ts";
@@ -28,7 +36,9 @@ function parse(raw: string): Observation {
 			typeof id !== "string" ||
 			!/^[a-f0-9]{64}$/.test(id) ||
 			typeof name !== "string" ||
-			Object.values(labels).some((value) => typeof value !== "string")
+			Object.values(labels).some((value) => typeof value !== "string") ||
+			Object.keys(attachments).length > 1024 ||
+			Object.keys(attachments).some((id) => !/^[a-f0-9]{64}$/.test(id))
 		)
 			throw new Error();
 		return {
@@ -55,6 +65,9 @@ function budget(timeoutMs: number) {
 /** Only the ID returned by this live create grants authority. A name or copied
  * labels, including persisted diagnostics, can never authorize removal. */
 export class ComposeNetwork {
+	private members = new Map<symbol, Member>();
+	private observing: Promise<void> = Promise.resolve();
+	private closing = false;
 	private commands: EnvironmentCommands;
 	private provider: "docker" | "podman";
 	private createdId: string | null = null;
@@ -193,6 +206,7 @@ export class ComposeNetwork {
 			);
 	}
 	async start(timeoutMs: number, signal?: AbortSignal) {
+		if (this.closing) throw new Error("Original bridge admission is closed");
 		const remaining = budget(timeoutMs);
 		try {
 			if (await this.observe(remaining(), signal))
@@ -258,16 +272,147 @@ export class ComposeNetwork {
 			throw error;
 		}
 	}
-	async attachment(timeoutMs: number, signal?: AbortSignal) {
-		const observed = await this.observe(timeoutMs, signal);
-		if (!observed) throw new Error("Created Compose network disappeared");
-		this.owned(observed);
-		return { id: observed.id };
+	/** Claims only aliases, never an engine resource. Live membership handles
+	 * never cross the wire or survive restart. Reservations are atomic. */
+	join(aliases: string[]) {
+		if (
+			this.closing ||
+			this.cleanupFailed ||
+			this.members.size >= 64 ||
+			!aliases.length ||
+			aliases.length > 16 ||
+			new Set(aliases).size !== aliases.length ||
+			aliases.some((alias) => !/^[a-z][a-z0-9-]{0,62}$/.test(alias))
+		)
+			throw new Error("Invalid or closing live bridge membership");
+		const occupied = new Set(
+			[...this.members.values()].flatMap((member) => member.aliases),
+		);
+		if (aliases.some((alias) => occupied.has(alias)))
+			throw new Error(
+				"Cross-stack bridge service aliases conflict; no ambiguous DNS alias is attached",
+			);
+		const key = Symbol("native-compose-bridge-member");
+		this.members.set(key, {
+			aliases: [...aliases],
+			children: new Set(),
+			pending: 0,
+		});
+		return new ComposeNetworkMember(this, key);
 	}
-	async stop() {
+	begin(key: symbol, child: ContainerProcess) {
+		const member = this.members.get(key);
+		if (
+			!member ||
+			this.closing ||
+			this.cleanupFailed ||
+			member.children.has(child) ||
+			member.children.size >= member.aliases.length
+		)
+			throw new Error("Original bridge membership is unavailable");
+		member.children.add(child);
+		member.pending++;
+		let settled = false;
+		return () => {
+			if (!settled) {
+				settled = true;
+				member.pending--;
+			}
+		};
+	}
+	release(key: symbol) {
+		const member = this.members.get(key);
+		if (!member) return;
+		if (
+			member.pending ||
+			[...member.children].some(
+				(child) =>
+					!child.outcome ||
+					(child.cleanupFailed && child.runtimeStatus?.state !== "absent"),
+			)
+		) {
+			this.uncertain = true;
+			this.failure =
+				"Bridge member cleanup is uncertain; membership and bridge authority are quarantined pending inspection";
+			throw new Error(
+				"Live or uncertain bridge members cannot release membership",
+			);
+		}
+		this.members.delete(key);
+	}
+	private serialized<T>(
+		timeoutMs: number,
+		signal: AbortSignal | undefined,
+		operation: (remaining: () => number) => Promise<T>,
+	) {
+		const remaining = budget(timeoutMs);
+		const pending = this.observing.then(() => {
+			signal?.throwIfAborted();
+			remaining();
+			return operation(remaining);
+		});
+		this.observing = pending.then(
+			() => {},
+			() => {},
+		);
+		return pending;
+	}
+	attachment(timeoutMs: number, signal?: AbortSignal) {
+		return this.serialized(timeoutMs, signal, async (remaining) => {
+			if (this.closing || this.cleanupFailed)
+				throw new Error("Original bridge is closing or uncertain");
+			if ([...this.members.values()].some((member) => member.pending))
+				throw new Error(
+					"Bridge membership is changing; no diagnostic authority during creation",
+				);
+			const observed = await this.observe(remaining(), signal);
+			if (this.closing || this.cleanupFailed)
+				throw new Error("Original bridge closed during observation");
+			if (!observed) throw new Error("Created Compose network disappeared");
+			this.owned(observed);
+			if ([...this.members.values()].some((member) => member.pending))
+				throw new Error(
+					"Bridge membership changed during observation; no diagnostic authority during creation",
+				);
+			const expected = new Set(
+				[...this.members.values()].flatMap((member) =>
+					[...member.children]
+						.map((child) => child.networkCreationIdentity(observed.id))
+						.filter((id) => id !== null),
+				),
+			);
+			if (observed.attachments.some((id) => !expected.has(id)))
+				throw new Error(
+					"Bridge contains an attachment without an original live creation receipt; no diagnostic or join authority",
+				);
+			return { id: observed.id };
+		});
+	}
+	async memberAttachment(key: symbol, timeoutMs: number, signal?: AbortSignal) {
+		if (!this.members.has(key))
+			throw new Error("Bridge membership was released");
+		const attachment = await this.attachment(timeoutMs, signal);
+		if (!this.members.has(key) || this.closing || this.cleanupFailed)
+			throw new Error("Original bridge membership closed during observation");
+		return attachment;
+	}
+	/** The owning stack closes admission before any asynchronous cleanup. */
+	closeAdmission() {
+		this.closing = true;
+	}
+	stop() {
+		this.closeAdmission();
+		return this.serialized(10000, undefined, (remaining) =>
+			this.stopOriginal(remaining),
+		);
+	}
+	private async stopOriginal(remaining: () => number) {
 		if (!this.mayHaveCreated) return;
-		const remaining = budget(10000);
 		try {
+			if (this.members.size)
+				throw new Error(
+					"Original bridge still has native members; dependent cleanup must settle first",
+				);
 			const existing = await this.observe(remaining());
 			if (!existing) {
 				this.mayHaveCreated = false;
@@ -294,5 +439,31 @@ export class ComposeNetwork {
 					: "Compose network cleanup is uncertain";
 			throw error;
 		}
+	}
+}
+
+/** A live in-memory attachment claim. It cannot remove the underlying bridge. */
+class ComposeNetworkMember {
+	constructor(
+		private root: ComposeNetwork,
+		private key: symbol,
+	) {}
+	get cleanupFailed() {
+		return this.root.cleanupFailed;
+	}
+	get runtimeStatus() {
+		return this.root.runtimeStatus;
+	}
+	get logs() {
+		return this.root.logs;
+	}
+	attachment(timeoutMs: number, signal?: AbortSignal) {
+		return this.root.memberAttachment(this.key, timeoutMs, signal);
+	}
+	begin(child: ContainerProcess) {
+		return this.root.begin(this.key, child);
+	}
+	release() {
+		this.root.release(this.key);
 	}
 }

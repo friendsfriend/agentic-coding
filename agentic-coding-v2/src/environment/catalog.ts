@@ -13,7 +13,11 @@ import {
 } from "./compose-config.ts";
 import { prepareVolumes } from "./compose-volumes.ts";
 import { readContainer } from "./container-config.ts";
-import { expandDependencies, validateDependencies } from "./dependencies.ts";
+import {
+	expandDependencies,
+	qualifyBridgeExporter,
+	validateDependencies,
+} from "./dependencies.ts";
 import type {
 	DependencyWorkspace,
 	DependencyWorkspaces,
@@ -821,7 +825,7 @@ export async function resolvePlans(
 			...(project.prerequisites ?? []),
 			...(chosen.prerequisites ?? []),
 		];
-		return {
+		return qualifyBridgeExporter(projects, {
 			...chosen,
 			app,
 			projectKind: project.kind,
@@ -853,7 +857,7 @@ export async function resolvePlans(
 						},
 					}
 				: {}),
-		};
+		});
 	};
 	const roots = apps.map((app) => resolve(app, selection));
 	const plans =

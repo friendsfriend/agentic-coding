@@ -20,7 +20,9 @@ export class ComposeProcess implements EnvironmentProcess {
 	private controller = new AbortController();
 	private result: Exit | null = null;
 	private failedCleanup = false;
-	private network: ComposeNetwork | null = null;
+	private network: ReturnType<ComposeNetwork["join"]> | null = null;
+	private bridge: ComposeNetwork | null = null;
+	private ownedNetwork: ComposeNetwork | null = null;
 	private volumes: ComposeVolumes | null = null;
 	private frozen: ReturnType<typeof processEnvironment>;
 	private plans: Plan[];
@@ -32,7 +34,12 @@ export class ComposeProcess implements EnvironmentProcess {
 		private stateDir: string,
 		private run: string,
 		readonly telemetry?: TelemetryCollector,
+		bridge?: ComposeNetwork,
 	) {
+		if (Boolean(plan.compose?.networkFrom) !== Boolean(bridge))
+			throw new Error(
+				"A prerequisite bridge needs the exact original live binding, never a saved network ID",
+			);
 		if (Boolean(plan.telemetry) !== Boolean(telemetry))
 			throw new Error(
 				"Compose telemetry requires the exact original live receiver",
@@ -80,17 +87,55 @@ export class ComposeProcess implements EnvironmentProcess {
 		}));
 		if (plan.composePlan?.volumes?.length)
 			this.volumes = new ComposeVolumes(plan, stateDir, configDir, this.frozen);
-		if (plan.compose?.network !== "isolated")
-			this.network = new ComposeNetwork(
-				plan,
-				configDir,
-				stateDir,
-				`${run}:network`,
-				this.frozen,
+		if (plan.compose?.network !== "isolated") {
+			this.bridge =
+				bridge ??
+				new ComposeNetwork(
+					plan,
+					configDir,
+					stateDir,
+					`${run}:network`,
+					this.frozen,
+				);
+			if (!bridge) this.ownedNetwork = this.bridge;
+			this.network = this.bridge.join(
+				(plan.composePlan?.services ?? []).map((service) => service.id),
 			);
+		}
 		this.done = new Promise((resolve) => {
 			this.complete = resolve;
 		});
+	}
+	/** An internal live capability, minted only after original infrastructure
+	 * re-observation. The manager separately proves same-owner graph authority. */
+	async bridgeFor(dependent: Plan, signal?: AbortSignal) {
+		const from = dependent.compose?.networkFrom;
+		if (
+			!from ||
+			this.plan.projectKind !== "infrastructure" ||
+			from.app !== this.plan.app ||
+			from.target !== this.plan.id ||
+			this.plan.compose?.provider !== dependent.compose?.provider ||
+			this.plan.compose?.socket !== dependent.compose?.socket ||
+			!this.bridge ||
+			this.closing ||
+			this.result ||
+			this.cleanupFailed
+		)
+			throw new Error(
+				"Original prerequisite bridge scope is unavailable or changed",
+			);
+		const service = this.plan.composePlan?.services.find(
+			(service) => !service.container.completion,
+		);
+		if (!service)
+			throw new Error(
+				"A bridge prerequisite needs an original live non-completion infrastructure service",
+			);
+		await this.observeService(service.id, false, signal, true);
+		if (this.closing || this.result || this.cleanupFailed)
+			throw new Error("Original prerequisite bridge closed during observation");
+		return this.bridge;
 	}
 	get closing() {
 		return this.controller.signal.aborted;
@@ -162,6 +207,7 @@ export class ComposeProcess implements EnvironmentProcess {
 		id: string,
 		requireSelectedHealth: boolean,
 		signal?: AbortSignal,
+		requireDeclaredHealth = false,
 	) {
 		const bounded = AbortSignal.any([
 			this.controller.signal,
@@ -203,7 +249,8 @@ export class ComposeProcess implements EnvironmentProcess {
 						observed?.owned !== true ||
 						observed.state !== "running" ||
 						(((position === index && requireSelectedHealth) ||
-							service?.container.readiness === "healthy") &&
+							service?.container.readiness === "healthy" ||
+							(requireDeclaredHealth && service?.container.health)) &&
 							observed.health !== "healthy")
 					)
 						throw new Error(
@@ -251,7 +298,10 @@ export class ComposeProcess implements EnvironmentProcess {
 			),
 			deadline = Date.now() + this.plan.timeoutMs;
 		await this.volumes?.start(deadline - Date.now(), this.controller.signal);
-		await this.network?.start(deadline - Date.now(), this.controller.signal);
+		await this.ownedNetwork?.start(
+			deadline - Date.now(),
+			this.controller.signal,
+		);
 		for (const [index, plan] of this.plans.entries()) {
 			this.controller.signal.throwIfAborted();
 			const left = deadline - Date.now();
@@ -310,22 +360,27 @@ export class ComposeProcess implements EnvironmentProcess {
 					: undefined,
 			);
 			this.children.push(child);
-			if (completion.has(alias ?? "")) {
-				// A prerequisite's own exit is a startup decision, not stack shutdown.
-				await child.wait(this.controller.signal);
-				const code = child.outcome?.code;
-				if (code !== 0)
-					throw new Error(
-						"Compose prerequisite did not complete successfully; dependents were not started",
-					);
-				continue;
+			const settledMembership = this.network?.begin(child);
+			try {
+				if (completion.has(alias ?? "")) {
+					// A prerequisite's own exit is a startup decision, not stack shutdown.
+					await child.wait(this.controller.signal);
+					const code = child.outcome?.code;
+					if (code !== 0)
+						throw new Error(
+							"Compose prerequisite did not complete successfully; dependents were not started",
+						);
+					continue;
+				}
+				void child.done
+					.then(() => this.stop())
+					.catch(() => {
+						/* Cleanup uncertainty retains the stack lease. */
+					});
+				await child.ready(this.controller.signal);
+			} finally {
+				settledMembership?.();
 			}
-			void child.done
-				.then(() => this.stop())
-				.catch(() => {
-					/* Cleanup uncertainty retains the stack lease. */
-				});
-			await child.ready(this.controller.signal);
 		}
 	}
 	async ready(signal?: AbortSignal) {
@@ -345,6 +400,7 @@ export class ComposeProcess implements EnvironmentProcess {
 	}
 	stop(): Promise<void> {
 		if (this.stopping) return this.stopping;
+		this.ownedNetwork?.closeAdmission();
 		this.stopping = (async () => {
 			this.controller.abort();
 			try {
@@ -365,7 +421,8 @@ export class ComposeProcess implements EnvironmentProcess {
 				this.failedCleanup = true;
 			}
 			try {
-				await this.network?.stop();
+				this.network?.release();
+				await this.ownedNetwork?.stop();
 			} catch {
 				this.failedCleanup = true;
 			}

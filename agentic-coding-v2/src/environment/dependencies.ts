@@ -1,4 +1,38 @@
 import type { Plan, Project } from "./model.ts";
+/** Qualification is part of the reviewed plan, not a late runtime mutation.
+ * Use the whole definition so standalone and consumer closures resolve the
+ * same exporter generation; reapply after a foreign source rebuild. */
+export function qualifyBridgeExporter(projects: Project[], plan: Plan): Plan {
+	if (
+		plan.projectKind !== "infrastructure" ||
+		!plan.composePlan ||
+		!projects.some((project) =>
+			project.targets.some(
+				(target) =>
+					target.compose?.networkFrom?.app === plan.app &&
+					target.compose.networkFrom.target === plan.id,
+			),
+		)
+	)
+		return plan;
+	return {
+		...plan,
+		composePlan: {
+			...plan.composePlan,
+			services: plan.composePlan.services.map((service) =>
+				!service.container.completion && service.container.health
+					? {
+							...service,
+							container: {
+								...service.container,
+								readiness: "healthy" as const,
+							},
+						}
+					: service,
+			),
+		},
+	};
+}
 /** Closed declared graphs only. Legacy requires edges stay same-repository infrastructure; new app/foreign edges require an explicit target, never discovery/adoption. */
 export function validateDependencies(projects: Project[]) {
 	const visited = new Set<string>();
@@ -38,6 +72,32 @@ export function validateDependencies(projects: Project[]) {
 					"Prerequisites must name an authorized runnable project and an explicit run target",
 				);
 			visit(dependency, next);
+		}
+		for (const target of project.targets) {
+			const from = target.compose?.networkFrom;
+			if (!from) continue;
+			const edges = [
+				...(project.prerequisites ?? []),
+				...(target.prerequisites ?? []),
+			];
+			const provider = projects.find((entry) => entry.id === from.app);
+			const selected = provider?.targets.find(
+				(entry) => entry.id === from.target,
+			);
+			if (
+				provider?.kind !== "infrastructure" ||
+				!edges.some(
+					(edge) => edge.app === from.app && edge.target === from.target,
+				) ||
+				selected?.action !== "run" ||
+				selected.runtime !== "compose" ||
+				selected.compose?.network !== "shared" ||
+				selected.compose.provider !== target.compose?.provider ||
+				selected.compose.socket !== target.compose?.socket
+			)
+				throw new Error(
+					"A prerequisite bridge must pin a declared infrastructure Compose run target with the same provider/socket and shared networking",
+				);
 		}
 		visited.add(project.id);
 	};

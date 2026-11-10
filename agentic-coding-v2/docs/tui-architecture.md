@@ -205,3 +205,7 @@ Checkpoint: the two new authenticated standalone scenarios (fake local OpenCode 
 Native environment catalogs and typed selection now expose the explicit POSIX `systemshell` run runtime. Interpreter selection and immutable approval disclosure stay in the backend; the TUI does not invoke a legacy dispatcher, adopt an external terminal or mint process authority. Existing generic environment presentation remains unchanged. This increment contains no renderer/mount/snapshot tests and makes no new manual TTY acceptance claim.
 
 Profile display/selection now receives original case-preserved metadata, while backend target IDs remain canonical. Selection is exact and ownership/review still belongs to the backend. No renderer or navigation code changed for profile fidelity.
+
+## Native bridge authority stays behind the existing presentation
+
+The environment backend now resolves explicit same-owner prerequisite bridge bindings from original native processes, not UI/status IDs. Reviewed plans disclose `prerequisiteBridgeScope`, qualified exporter readiness, alias claims, changing-membership diagnostic refusal and network-wide uncertainty quarantine. Borrowers possess attachment/member authority only; only the original owner can remove its empty bridge after all members settle. Persisted observations and candidate descriptors remain data, never a restoration path for this capability. No renderer, component, navigation, web client or sidebar hierarchy was changed.

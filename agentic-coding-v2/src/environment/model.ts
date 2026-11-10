@@ -39,6 +39,8 @@ export type ComposeDefinition = {
 	provider: "docker" | "podman";
 	socket: string;
 	network: "shared" | "isolated";
+	/** Exact declared infrastructure prerequisite; never a network name or saved ID. */
+	networkFrom?: { app: string; target: string };
 };
 export type ComposeDependency = {
 	id: string;

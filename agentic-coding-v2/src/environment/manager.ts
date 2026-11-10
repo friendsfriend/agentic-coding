@@ -24,7 +24,10 @@ import {
 } from "./compose-config.ts";
 import { prepareVolumes } from "./compose-volumes.ts";
 import { ContainerProcess } from "./container.ts";
-import { declaredInfrastructure } from "./dependencies.ts";
+import {
+	declaredInfrastructure,
+	qualifyBridgeExporter,
+} from "./dependencies.ts";
 import {
 	belongsToOwner,
 	DependencyWorkspaces,
@@ -979,13 +982,13 @@ export class Environments {
 						await this.dependencyWorkspaces.realize(plan, owner);
 						if (plan.compose) {
 							const rebuilt = prepareVolumes(
-								{
+								qualifyBridgeExporter(this.projects, {
 									...plan,
 									composePlan: bindComposeDiagnostics(
 										plan,
 										compileCompose(plan.workspace, plan.compose),
 									),
-								},
+								}),
 								this.config.stateDir,
 							);
 							if (!sameApprovedPlan(rebuilt, plan))
@@ -1008,6 +1011,43 @@ export class Environments {
 					signal?.throwIfAborted();
 				}
 				const id = `${batch}:${plan.app}`;
+				let bridge:
+					| Awaited<ReturnType<ComposeProcess["bridgeFor"]>>
+					| undefined;
+				const from = plan.compose?.networkFrom;
+				if (from) {
+					const declared = plans.find(
+						(entry) => entry.app === from.app && entry.id === from.target,
+					);
+					const candidates = (await this.records()).filter(
+						(run) =>
+							run.owner === owner.id &&
+							run.plan.app === from.app &&
+							run.plan.id === from.target &&
+							run.plan.projectKind === "infrastructure" &&
+							run.state === "running" &&
+							run.ready === true &&
+							run.cleanupRetention === undefined,
+					);
+					const source = candidates.length === 1 ? candidates[0] : undefined;
+					const original = source ? this.live.get(source.id) : undefined;
+					if (
+						!declared ||
+						!source ||
+						!plan.requires?.includes(from.app) ||
+						plan.prerequisiteTargets?.[from.app] !== from.target ||
+						!sameApprovedPlan(source.plan, declared) ||
+						!(original instanceof ComposeProcess) ||
+						!this.hasLiveAuthority(source)
+					)
+						throw new Error(
+							"A prerequisite bridge needs the exact ready same-owner infrastructure generation in this approved graph; names and saved IDs grant no attachment authority",
+						);
+					this.check(owner.id, signal, source.batch, source.id);
+					bridge = await original.bridgeFor(plan, signal);
+					this.check(owner.id, signal, batch);
+					this.check(owner.id, signal, source.batch, source.id);
+				}
 				const frozen = plan.telemetry
 					? processEnvironment(this.config.configDir, plan)
 					: undefined;
@@ -1038,6 +1078,7 @@ export class Environments {
 									this.config.stateDir,
 									id,
 									collector,
+									bridge,
 								)
 							: plan.runtime === "kubernetes"
 								? new KubernetesProcess(this.config, plan, id)

@@ -2193,3 +2193,7 @@ Settings and Environments no longer stack every record on one scrolling page. Bo
 The frontend's captured default source now has a native `systemshell` alternative with preserved profile, backend prerequisite and readiness. Native selection/approval/process boundaries are tested; the existing renderer/layout/colors/navigation were not changed. This records backend choice availability only, not additional visual acceptance or completion of the full environment parity scope.
 
 Profile fidelity follow-up: native metadata retains source names such as `QA-Ivy` rather than silently displaying/selecting a lowercased substitute. This is native selection-boundary acceptance, not a new manual visual acceptance claim.
+
+## Prerequisite bridge checkpoint
+
+Same-owner Compose prerequisite topology now has native execution and lifecycle evidence without changing the existing TUI layout, colors, navigation or OpenCode → Pi → Pi Durable → Orchestrator → native-child hierarchy. No nested text structure, renderer/mount/snapshot/presenter/navigation-matrix test or manual TTY acceptance was introduced. Backend/candidate observations are not a new visual-parity or full-environment archival claim; global infrastructure, full Helm choices, private inputs and publication remain open.

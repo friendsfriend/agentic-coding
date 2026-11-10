@@ -208,7 +208,14 @@ function orderServices(
 }
 export function readCompose(raw: unknown): ComposeDefinition {
 	const data = object(raw);
-	keys(data, ["file", "provider", "socket", "network", "source"]);
+	keys(data, [
+		"file",
+		"provider",
+		"socket",
+		"network",
+		"source",
+		"networkFrom",
+	]);
 	if (
 		data.network !== undefined &&
 		data.network !== "shared" &&
@@ -224,6 +231,22 @@ export function readCompose(raw: unknown): ComposeDefinition {
 		file.split(/[\\/]/).includes("..")
 	)
 		throw new Error("Compose file must be workspace-relative");
+	let networkFrom: ComposeDefinition["networkFrom"];
+	if (data.networkFrom !== undefined) {
+		const selected = object(data.networkFrom);
+		keys(selected, ["app", "target"]);
+		const app = text(selected.app, "network prerequisite app", 64),
+			target = text(selected.target, "network prerequisite target", 64);
+		if (
+			data.network === "isolated" ||
+			!/^[a-z][a-z0-9-]*$/.test(app) ||
+			!/^[a-z][a-z0-9-]*$/.test(target)
+		)
+			throw new Error(
+				"A prerequisite bridge requires shared networking and exact canonical app/target identifiers",
+			);
+		networkFrom = { app, target };
+	}
 	const captured = data.source;
 	if (
 		captured !== undefined &&
@@ -240,6 +263,7 @@ export function readCompose(raw: unknown): ComposeDefinition {
 		provider: data.provider,
 		socket: readLocalSocket(data.socket),
 		network: data.network ?? "shared",
+		...(networkFrom ? { networkFrom } : {}),
 	};
 }
 /** One declared environment file. Values are literal and only read on a live
