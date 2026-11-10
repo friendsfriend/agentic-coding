@@ -820,7 +820,7 @@ test("reviewed collector source migrates to native live TLS binding without rece
 	).toBe(base);
 }, 15000);
 
-test("v1 Helm chart discovery needs explicit native cluster identity and converts only a frozen-chart fresh release", async () => {
+test("v1 Helm chart discovery converts to frozen-chart fresh releases with v1 identity unless overridden", async () => {
 	const { app, config } = await fixture(true, (config) => {
 		fs.mkdirSync(config.configDir, { mode: 0o700 });
 		fs.chmodSync(config.stateDir, 0o700);
@@ -878,18 +878,20 @@ test("v1 Helm chart discovery needs explicit native cluster identity and convert
 			],
 			{ stdout: "pipe", stderr: "pipe", cwd: repo },
 		);
-	expect(run("partial", ["--helm-cluster", "local"]).exitCode).not.toBe(0);
+	expect(run("partial", ["--helm-cluster"]).exitCode).not.toBe(0);
 	const implicitRun = run("implicit", []);
 	expect(implicitRun.stderr.toString()).toBe("");
 	expect(implicitRun.exitCode).toBe(0);
 	const implicit = JSON.parse(
-		fs.readFileSync(path.join(root, "implicit", "report.json"), "utf8"),
+		fs.readFileSync(path.join(root, "implicit", "environments.json"), "utf8"),
 	);
+	expect(implicit.projects[0].targets[0].kubernetes).toMatchObject({
+		cluster: "devenv",
+		namespace: "default",
+		helm: { chart: "chart", release: "demo" },
+	});
 	const chartRows = (report: { rows: { source: string }[] }) =>
 		report.rows.filter((row) => row.source.endsWith("Chart.yaml"));
-	expect(chartRows(implicit)).toHaveLength(3);
-	for (const row of chartRows(implicit))
-		expect(row).toMatchObject({ status: "blocked" });
 	expect(
 		run("explicit", ["--helm-cluster", "local", "--helm-namespace", "fixtures"])
 			.exitCode,

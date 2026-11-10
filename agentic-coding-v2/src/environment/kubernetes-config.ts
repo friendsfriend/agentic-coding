@@ -47,8 +47,7 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 		if (
 			!/^[a-z][a-z0-9-]*$/.test(cluster) ||
 			!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(namespace) ||
-			namespace.startsWith("kube-") ||
-			namespace === "default"
+			namespace.startsWith("kube-")
 		)
 			throw new Error(
 				"Choose an explicit non-system Kubernetes namespace and cluster identifier",

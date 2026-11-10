@@ -29,7 +29,7 @@ export type RuntimeStatus = {
 		| "tcp-probe"
 		| "pod-ready"
 		| "deployment-available"
-		| "helm-watcher-deployed";
+		| "helm-deployments-available";
 	owned: boolean | null;
 	observedAt: number;
 };

@@ -15,6 +15,79 @@ type Release = {
 	runLabel: string | undefined;
 };
 const RUN_LABEL = "acv2run";
+/** Kinds a namespaced release must never carry: they outlive or escape the
+ * release namespace. Unknown custom kinds stay namespaced release effects. */
+const CLUSTER_SCOPED = new Set([
+	"Namespace",
+	"Node",
+	"PersistentVolume",
+	"StorageClass",
+	"PriorityClass",
+	"RuntimeClass",
+	"IngressClass",
+	"GatewayClass",
+	"ClusterRole",
+	"ClusterRoleBinding",
+	"CustomResourceDefinition",
+	"APIService",
+	"MutatingWebhookConfiguration",
+	"ValidatingWebhookConfiguration",
+	"ValidatingAdmissionPolicy",
+	"ValidatingAdmissionPolicyBinding",
+	"CSIDriver",
+	"CSINode",
+	"VolumeSnapshotClass",
+	"ClusterIssuer",
+	"ClusterSecretStore",
+	"ClusterExternalSecret",
+	"ClusterTriggerAuthentication",
+]);
+/** Rendered release manifest → the Deployments v1 waited for. Every object must
+ * stay in the release namespace (unset or equal) and be namespaced. */
+export function releaseDeployments(manifest: string, namespace: string) {
+	let parsed: unknown;
+	try {
+		parsed = Bun.YAML.parse(manifest);
+	} catch {
+		throw new Error("Rendered Helm manifest is not valid YAML");
+	}
+	const documents = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+		(document) => document !== null && document !== undefined,
+	);
+	if (!documents.length || documents.length > 256)
+		throw new Error("Rendered Helm manifest needs 1 to 256 objects");
+	const deployments = new Set<string>();
+	for (const raw of documents) {
+		const document = object(raw),
+			metadata = object(document.metadata);
+		if (
+			typeof document.kind !== "string" ||
+			typeof document.apiVersion !== "string" ||
+			typeof metadata.name !== "string"
+		)
+			throw new Error("Rendered Helm object lacks kind/apiVersion/name");
+		if (CLUSTER_SCOPED.has(document.kind) || document.kind.endsWith("List"))
+			throw new Error(
+				"Rendered Helm manifest contains a cluster-scoped or list object",
+			);
+		if (
+			metadata.namespace !== undefined &&
+			metadata.namespace !== null &&
+			metadata.namespace !== "" &&
+			metadata.namespace !== namespace
+		)
+			throw new Error(
+				"Rendered Helm object targets another namespace than the release",
+			);
+		if (document.kind === "Deployment" && document.apiVersion === "apps/v1")
+			deployments.add(metadata.name);
+	}
+	if (!deployments.size)
+		throw new Error(
+			"Rendered Helm release has no apps/v1 Deployment to wait for",
+		);
+	return [...deployments].sort();
+}
 
 /** One fresh `helm install` of an approved frozen chart. The original install
  * response (release name, namespace, revision 1 and this run's release label)
@@ -41,6 +114,7 @@ export class KubernetesHelmProcess implements EnvironmentProcess {
 	private uncertain = false;
 	private failure = "";
 	private runLabel: string;
+	private deployments: string[] = [];
 	private status: RuntimeStatus;
 	constructor(
 		private config: Config,
@@ -63,7 +137,7 @@ export class KubernetesHelmProcess implements EnvironmentProcess {
 			id: null,
 			state: "unknown",
 			health: null,
-			readiness: "helm-watcher-deployed",
+			readiness: "helm-deployments-available",
 			owned: null,
 			observedAt: Date.now(),
 		};
@@ -80,6 +154,10 @@ export class KubernetesHelmProcess implements EnvironmentProcess {
 	private get chart(): HelmChartCapture {
 		if (!this.plan.helmChart) throw new Error("Frozen Helm chart missing");
 		return this.plan.helmChart;
+	}
+	private get kubectl() {
+		if (!this.client) throw new Error("Cluster client not initialized");
+		return this.client.commands;
 	}
 	private get helm() {
 		if (!this.client) throw new Error("Helm client not initialized");
@@ -220,21 +298,29 @@ export class KubernetesHelmProcess implements EnvironmentProcess {
 				throw new Error("Helm replicas require an explicit value path");
 			sets.push("--set", `${spec.replicasValuePath}=${spec.replicas}`);
 		}
-		const seconds = Math.max(1, Math.floor(remaining() / 1000) - 2);
+		const inputs = [
+			...this.scope(),
+			...spec.values.flatMap((file) => ["--values", path.join(chart, file)]),
+			...sets,
+		];
+		// Offline render of the exact frozen inputs before any cluster effect:
+		// cross-namespace and cluster-scoped objects refuse here.
+		const rendered = await this.helm.checked(
+			["template", spec.release, chart, ...inputs, "--skip-crds"],
+			{ timeoutMs: remaining(), signal: this.controller.signal, machine: true },
+		);
+		const planned = releaseDeployments(rendered, this.target.namespace);
 		this.attempted = true;
+		// Like v1, Helm itself does not wait; readiness is the release's own
+		// Deployments becoming Available (below).
 		const raw = await this.helm.checked(
 			[
 				"install",
 				spec.release,
 				chart,
-				...this.scope(),
-				...spec.values.flatMap((file) => ["--values", path.join(chart, file)]),
-				...sets,
+				...inputs,
 				"--labels",
 				`${RUN_LABEL}=${this.runLabel}`,
-				"--wait=watcher",
-				"--timeout",
-				`${seconds}s`,
 				"--skip-crds",
 				"--no-hooks",
 				"-o",
@@ -268,15 +354,95 @@ export class KubernetesHelmProcess implements EnvironmentProcess {
 				"Fresh Helm release observation differs from its original install receipt",
 			);
 		}
+		// The installed manifest of the owned release is the wait set; it must
+		// agree with the offline render.
+		const installed = releaseDeployments(
+			await this.helm.checked(
+				["get", "manifest", spec.release, ...this.scope()],
+				{
+					timeoutMs: remaining(),
+					signal: this.controller.signal,
+					machine: true,
+				},
+			),
+			this.target.namespace,
+		);
+		if (JSON.stringify(installed) !== JSON.stringify(planned)) {
+			this.failure =
+				"Installed Helm manifest differs from the reviewed offline render";
+			throw new Error(this.failure);
+		}
+		this.deployments = installed;
 		this.status = {
 			...this.status,
 			id: `${observed.namespace}/${observed.name}@${observed.version}`,
+			state: "unknown",
+			health: "starting",
+			owned: true,
+			observedAt: Date.now(),
+		};
+		while (!(await this.available(remaining()))) {
+			await Bun.sleep(Math.min(1000, remaining()));
+			this.controller.signal.throwIfAborted();
+		}
+		this.status = {
+			...this.status,
 			state: "running",
 			health: "healthy",
 			owned: true,
 			observedAt: Date.now(),
 		};
 		this.monitoring = this.monitor();
+	}
+	/** v1's readiness (`condition=available` for the release's Deployments),
+	 * restricted to the Deployments the owned release manifest names and that
+	 * carry this release's Helm ownership annotations. */
+	private async available(timeoutMs: number) {
+		const result = await this.kubectl.run(
+			[
+				"get",
+				"deployment",
+				...this.deployments,
+				"--namespace",
+				this.target.namespace,
+				"-o",
+				"json",
+			],
+			{
+				timeoutMs: Math.min(timeoutMs, 10000),
+				signal: this.controller.signal,
+				machine: true,
+			},
+		);
+		if (result.exit.code !== 0 || result.exit.signal) return false;
+		const data = object(JSON.parse(result.stdout)),
+			items = Array.isArray(data.items)
+				? data.items.map(object)
+				: [object(data)];
+		if (items.length !== this.deployments.length) return false;
+		return items.every((item) => {
+			const metadata = object(item.metadata),
+				annotations = object(metadata.annotations ?? {}),
+				status = object(item.status ?? {}),
+				conditions = Array.isArray(status.conditions)
+					? status.conditions.map(object)
+					: [];
+			if (
+				!this.deployments.includes(String(metadata.name)) ||
+				metadata.namespace !== this.target.namespace ||
+				annotations["meta.helm.sh/release-name"] !== this.target.helm.release ||
+				annotations["meta.helm.sh/release-namespace"] !== this.target.namespace
+			)
+				throw new Error("Deployment is not owned by this Helm release");
+			return (
+				Number.isSafeInteger(metadata.generation) &&
+				Number(status.observedGeneration) >= Number(metadata.generation) &&
+				conditions.some(
+					(condition) =>
+						condition.type === "Available" && condition.status === "True",
+				)
+			);
+		});
 	}
 	private async monitor() {
 		while (!this.controller.signal.aborted && !this.result) {

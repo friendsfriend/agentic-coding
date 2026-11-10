@@ -7,7 +7,7 @@ import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../src/config.ts";
 import { configureLocalCluster } from "./fixtures/cluster.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
-import { helmClient } from "./fixtures/helm-client.ts";
+import { helmClient, helmDeploymentClient } from "./fixtures/helm-client.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
@@ -69,7 +69,7 @@ function configure(
 			]),
 		),
 	);
-	configureLocalCluster(config, "process.exit(2);", {
+	configureLocalCluster(config, helmDeploymentClient, {
 		FIXTURE_STATE: stateFile(config),
 		FIXTURE_CALLS: callsFile(config),
 	});
@@ -162,7 +162,6 @@ test("explicit Helm release installs one frozen chart revision, observes its own
 			"app.imageTag=v1",
 			"--set",
 			"replicaCount=2",
-			"--wait=watcher",
 			"--skip-crds",
 			"--no-hooks",
 		]),
@@ -185,6 +184,13 @@ test("explicit Helm release installs one frozen chart revision, observes its own
 	expect(chartPath).toContain(path.join(config.stateDir, "helm-chart-"));
 	expect(install.values).toEqual(["stage: dev\n"]);
 	expect(release.labels.acv2run).toMatch(/^[a-f0-9]{32}$/);
+	expect(install.args).not.toContain("--wait=watcher");
+	expect(calls(config).map((call) => call.verb)).toEqual(
+		expect.arrayContaining(["template", "install", "kubectl-get"]),
+	);
+	expect(
+		calls(config).findIndex((call) => call.verb === "template"),
+	).toBeLessThan(calls(config).findIndex((call) => call.verb === "install"));
 	expect(install.helmHome).toContain(
 		path.join(config.stateDir, "cluster-inspection-"),
 	);
@@ -198,7 +204,7 @@ test("explicit Helm release installs one frozen chart revision, observes its own
 	const statuses = (await app.environments.snapshot()).runs[0]?.runtimeStatuses;
 	expect(statuses?.[0]).toMatchObject({
 		kind: "helm-release",
-		readiness: "helm-watcher-deployed",
+		readiness: "helm-deployments-available",
 		health: "healthy",
 		owned: true,
 		id: "fixtures/api-local@1",
@@ -449,4 +455,96 @@ for (const [label, extra] of [
 			Object.assign(target.kubernetes, extra.kubernetes);
 		else Object.assign(target, extra);
 		expect(() => validateProjects(config, document)).toThrow(/Helm/);
+	}, 30000);
+
+const deployment = (namespace: string) =>
+	`apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: ${namespace}\n`;
+for (const [label, manifest] of [
+	["another namespace", deployment("other")],
+	[
+		"a cluster-scoped object",
+		`${deployment("fixtures")}---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: x\n`,
+	],
+	["no Deployment", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"],
+] as const)
+	test(`an offline render with ${label} refuses before any cluster effect`, async () => {
+		const value = await fixture(false, (config) =>
+				configure(config, { state: { manifest } }),
+			),
+			{ app, config } = value;
+		const owner = await held(value);
+		await eventually(
+			() => app.environments.snapshot(),
+			(snapshot) => snapshot.runs[0]?.state === "exited",
+		);
+		expect(calls(config).map((call) => call.verb)).not.toContain("install");
+		expect(read(config).releases).toEqual({});
+		await app.cancel(owner);
+		await app.harness.waitForTask(owner as TaskId, context);
+	}, 30000);
+
+test("the default namespace is accepted like v1 and readiness waits for Available Deployments", async () => {
+	const value = await fixture(false, (config) =>
+			configure(config, { state: { unavailable: true } }),
+		),
+		{ config } = value;
+	const document = JSON.parse(
+		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
+	);
+	document.projects[0].targets[0].kubernetes.namespace = "default";
+	fs.writeFileSync(
+		path.join(config.configDir, "environments.json"),
+		JSON.stringify(document),
+	);
+	const reopened = await value.open();
+	const owner = await held({ ...value, app: reopened });
+	await eventually(
+		() => reopened.environments.snapshot(),
+		(snapshot) =>
+			snapshot.runs[0]?.runtimeStatuses?.[0]?.health === "starting" &&
+			read(config).releases["default/api-local"] !== undefined,
+	);
+	expect(
+		(await reopened.environments.snapshot()).runs[0]?.runtimeStatuses?.[0]
+			?.health,
+	).toBe("starting");
+	const state = read(config);
+	state.unavailable = false;
+	fs.writeFileSync(stateFile(config), JSON.stringify(state));
+	await pendingReview(reopened, owner, "Hold release");
+	expect(
+		(await reopened.environments.snapshot()).runs[0]?.runtimeStatuses?.[0],
+	).toMatchObject({ state: "running", health: "healthy" });
+	await reopened.cancel(owner);
+	await reopened.harness.waitForTask(owner as TaskId, context);
+	expect(read(config).releases).toEqual({});
+}, 30000);
+
+for (const [label, state] of [
+	["a Deployment owned by another release", { foreignDeployment: true }],
+	[
+		"an installed manifest differing from the render",
+		{
+			installedManifest:
+				"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: other\n",
+		},
+	],
+] as const)
+	test(`${label} fails readiness and uninstalls only the original release`, async () => {
+		const value = await fixture(false, (config) =>
+				configure(config, { state }),
+			),
+			{ app, config } = value;
+		const owner = await held(value);
+		await eventually(
+			() => app.environments.snapshot(),
+			(snapshot) => snapshot.runs[0]?.state === "exited",
+		);
+		expect((await app.environments.snapshot()).runs[0]?.ready).not.toBe(true);
+		expect(
+			calls(config).filter((call) => call.verb === "uninstall"),
+		).toHaveLength(1);
+		expect(read(config).releases).toEqual({});
+		await app.cancel(owner);
+		await app.harness.waitForTask(owner as TaskId, context);
 	}, 30000);

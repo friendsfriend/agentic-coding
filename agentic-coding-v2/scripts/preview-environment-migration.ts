@@ -43,9 +43,10 @@ const source = flag("--source-config"),
 	sourceTree = flag("--source-tree", false),
 	npmrc = flag("--npmrc-reference", false),
 	infrastructureRepository = flag("--infrastructure-repository", false);
-/** Explicit native cluster/namespace for v1 chart discovery. The legacy
- * `devenv`/`default` identity is never inferred, and naming them grants no
- * cluster authority: native cluster configuration and review still apply. */
+/** Native cluster/namespace for v1 chart discovery. Defaults are v1's chart
+ * identity (`devenv` cluster, `default` namespace). A cluster ID is only a
+ * reference: it grants nothing until native clusters.json names a reviewed
+ * kubeconfig, and every start still needs exact human approval. */
 function word(name: string) {
 	const args = process.argv.slice(2),
 		at = args.indexOf(name),
@@ -55,12 +56,8 @@ function word(name: string) {
 		throw new Refusal(`Required value: ${name}`);
 	return value;
 }
-const helmCluster = word("--helm-cluster"),
-	helmNamespace = word("--helm-namespace");
-if ((helmCluster === undefined) !== (helmNamespace === undefined))
-	throw new Refusal(
-		"--helm-cluster and --helm-namespace must be given together; neither is inferred",
-	);
+const helmCluster = word("--helm-cluster") ?? "devenv",
+	helmNamespace = word("--helm-namespace") ?? "default";
 if (!source || !current || !output || !socket)
 	throw new Refusal("Explicit source/current/output directories required");
 if (process.argv.includes("--apply"))
@@ -740,16 +737,6 @@ function convertHelmCharts(
 			release = profile === "local" ? id : `${id}-${profile}`,
 			targetId = `run-helm-${profile}`,
 			source = `repository:${id}/${path.join(chart, "Chart.yaml")}`;
-		if (!helmCluster || !helmNamespace) {
-			rows.push({
-				app: id,
-				source,
-				status: "blocked",
-				reason:
-					"Helm chart requires explicit --helm-cluster/--helm-namespace; v1 devenv/default identity is not inferred",
-			});
-			continue;
-		}
 		if (project.targets.some((entry) => entry.id === targetId)) {
 			rows.push({
 				app: id,
@@ -1457,9 +1444,7 @@ const report = {
 		"application-prerequisite migration where the required backend target remains unavailable",
 		"separately authorized real collector-image/network acceptance; native pinned HTTPS/bearer transport and live attribution are implemented",
 		"default reconciliation for existing native overrides and any blocked/ambiguous declarations; generic process-start hints are not service health",
-		helmCluster
-			? "helm-release-v1 candidates require native cluster configuration, live CRD/controller availability and separately authorized real install validation"
-			: "Helm-discovered targets require explicit --helm-cluster/--helm-namespace",
+		"helm-release-v1 candidates require a native clusters.json entry for their cluster ID and a real install run",
 		"literal/default/embedded credentials and missing reference inputs",
 		"exact native developer publication approval",
 	],

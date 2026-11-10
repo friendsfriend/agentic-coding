@@ -298,3 +298,5 @@ The live Deployment root retains its initial create-response generation in memor
 ## Helm release lifetime
 
 A `helm-release-v1` run owns exactly the release its original install receipt created, identified by name, namespace, revision 1 and its per-run label. Monitoring rereads Helm metadata every second; any divergence fails the run and starts cleanup, and completion waits for cleanup. Cleanup re-proves ownership before `uninstall`, then requires affirmed absence within 60 s. A missing or invalid receipt, an interrupted read, a failed uninstall or a retained release quarantines the slot and keeps the frozen-chart scratch and client for inspection. Releases are never restored, re-adopted or reconciled from names or labels after a restart.
+
+Helm readiness amendment: a run is `running` only once every Deployment of its owned, render-matching manifest is Available. A Deployment owned by another release or a manifest differing from the offline render fails the start; cleanup then uninstalls only the original release.
