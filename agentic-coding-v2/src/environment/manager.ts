@@ -40,7 +40,7 @@ import { IdleLifecycle } from "./idle.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import {
 	independentRoot,
-	operatorInfrastructureLifetime,
+	operatorInfrastructure,
 	referencedRoot,
 	referenceRoot,
 	sameApprovedPlan,
@@ -54,6 +54,7 @@ import {
 	type OperatorRevocation,
 	OperatorRevocations,
 } from "./operator-revocation.ts";
+import { OperatorUnitStarts } from "./operator-unit-start.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { DatabaseDiagnostics, type QueryReceipt } from "./query-manager.ts";
 import {
@@ -102,6 +103,7 @@ export class Environments {
 	readonly database: DatabaseDiagnostics;
 	readonly acquisitions: Acquisitions;
 	readonly operator: OperatorRevocations;
+	readonly unitStarts: OperatorUnitStarts;
 	readonly providers: ProviderApis;
 	readonly idle: IdleLifecycle;
 	private engine: Harness | null = null;
@@ -154,6 +156,15 @@ export class Environments {
 					signal,
 					retain,
 					poll,
+				),
+		});
+		this.unitStarts = new OperatorUnitStarts({
+			store: () => this.store,
+			live: (run) => this.hasLiveAuthority(run) && this.live.has(run.id),
+			check: (owner) => this.check(owner),
+			pending: (owner) =>
+				[...this.pending.values()].some(
+					(entry) => entry.owner === owner && !entry.runId,
 				),
 		});
 		this.operator = new OperatorRevocations({
@@ -1388,7 +1399,7 @@ export class Environments {
 					run.revision !== operatorUnit.revision ||
 					run.state !== "running" ||
 					run.ready !== true ||
-					run.plan.lifetime !== operatorInfrastructureLifetime ||
+					!operatorInfrastructure(run.plan) ||
 					run.plan.projectKind !== "infrastructure" ||
 					run.plan.operatorRoot !== true ||
 					run.plan.compose?.networkOnly ||

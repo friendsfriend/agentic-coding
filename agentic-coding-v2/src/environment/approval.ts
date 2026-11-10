@@ -1,6 +1,6 @@
 import {
 	independentRoot,
-	operatorInfrastructureLifetime,
+	operatorInfrastructure as isOperatorInfrastructure,
 	referencedRoot,
 } from "./lifetime.ts";
 import { isShellRuntime, type Plan } from "./model.ts";
@@ -12,9 +12,7 @@ export function environmentApproval(
 	retainQueue = false,
 ) {
 	const action = plans[0]?.action;
-	const operatorInfrastructure = plans.some(
-		(plan) => plan.lifetime === operatorInfrastructureLifetime,
-	);
+	const operatorInfrastructure = plans.some(isOperatorInfrastructure);
 	return JSON.stringify(
 		{
 			plans,
@@ -22,7 +20,7 @@ export function environmentApproval(
 			...(operatorInfrastructure
 				? {
 						operatorInfrastructureScope:
-							"Explicit operator-infrastructure-v1: one protected native operator, no model, owns exactly the selected independent infrastructure Compose units and one exact network-only topology. Project kinds remain infrastructure; only operatorRoot markers derived from the exact selected units define stop units. Unselected services, app roots, foreign workspaces, mixed modes, cross-owner/global-host sharing and saved-ID restoration are refused. Each original unit can stop independently after complete atomic startup, retaining the topology for all remaining units. No second acquisition, incremental re-add or independent restart while an original unit remains held is authorized. Direct stop of a referenced topology is refused. Startup failure rolls back the complete new acquisition, and uncertain member cleanup retains/quarantines its references. The operator has no agent idle expiry; explicit cancellation, process exit and host shutdown retain original-receipt dependent-first cleanup.",
+							"Explicit protected operator infrastructure: one protected native operator, no model, owns exactly the selected independent infrastructure Compose units and one exact network-only topology. Project kinds remain infrastructure; only operatorRoot markers derived from the exact selected units define stop units. Unselected services, app roots, foreign workspaces, mixed modes, cross-owner/global-host sharing and saved-ID restoration are refused. Each original unit can stop independently after complete atomic startup, retaining the topology for all remaining units. V1 authorizes no second acquisition or re-add. V2 alone permits a separately requested native human review to re-add one confirmed released latest unit on its exact still-live topology, never a live restart, automatic replay, replacement topology or new owner. Direct stop of a referenced topology is refused. Startup failure rolls back the complete new acquisition, and uncertain member cleanup retains/quarantines its references. The operator has no agent idle expiry; explicit cancellation, process exit and host shutdown retain original-receipt dependent-first cleanup.",
 					}
 				: {}),
 			...(plans.some((plan) => plan.container?.hostPreparation)

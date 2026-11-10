@@ -1,5 +1,5 @@
 import { samePlanOwnerScope } from "./dependency-workspaces.ts";
-import { sharedLifetime, sharedRoot } from "./lifetime.ts";
+import { sharedRoot } from "./lifetime.ts";
 import { type EnvironmentRun, holdsResource } from "./state.ts";
 
 export class CleanupUncertain extends Error {
@@ -26,8 +26,7 @@ function related(a: EnvironmentRun, b: EnvironmentRun) {
 		samePlanOwnerScope(a.plan, b.plan) &&
 		sharedRoot(a.plan) &&
 		sharedRoot(b.plan) &&
-		a.plan.lifetime === sharedLifetime &&
-		b.plan.lifetime === sharedLifetime
+		a.plan.lifetime === b.plan.lifetime
 	);
 }
 function prerequisiteGenerations(

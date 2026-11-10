@@ -144,7 +144,7 @@ for (const provider of ["docker", "podman"] as const)
 				(await post("/api/environments/units/stop", body, false)).status,
 			).toBe(401);
 			for (const rejected of [
-				{ ...body, revision: root.revision + 1 },
+				{ ...body, revision: root.revision + 1_000_000 },
 				{ ...body, revision: 1.5 },
 				{ ...body, runId: topology.id, revision: topology.revision },
 				{ ...body, adopt: true },
@@ -155,8 +155,15 @@ for (const provider of ["docker", "podman"] as const)
 			expect(Object.keys(readEngineFile(file(config)).containers)).toHaveLength(
 				6,
 			);
+			// Native log/status observations can advance revisions while the
+			// refusal cases execute. Select the current row for the human action.
+			const selected = (await app.snapshot()).environments.runs.find(
+				(run) => run.id === root.id,
+			);
+			if (!selected) throw new Error("Original operator unit disappeared");
+			body.revision = selected.revision;
 			const stopped = await post("/api/environments/units/stop", body);
-			expect(stopped.status).toBe(200);
+			expect(stopped.status, await stopped.clone().text()).toBe(200);
 			const receipt = await stopped.json();
 			expect(
 				await (await post("/api/environments/units/stop", body)).json(),
@@ -190,7 +197,20 @@ for (const provider of ["docker", "podman"] as const)
 				async () => client.status,
 				(status) => status === "connected",
 			);
-			const beforeStale = readEngineFile(file(config)).history.length;
+			// Follow-log/inspect readers can finish concurrently. Refusal must not
+			// dispatch any mutating command, rather than freeze passive telemetry.
+			const mutations = () =>
+				readEngineFile(file(config)).history.filter(
+					(args) =>
+						["create", "start", "stop", "rm", "build", "kill"].includes(
+							args[2] ?? "",
+						) ||
+						(args[2] === "network" &&
+							["create", "rm", "connect", "disconnect"].includes(
+								args[3] ?? "",
+							)),
+				);
+			const beforeStale = mutations();
 			const stale = await client.call("environment.preview", {
 				operation: "stop-unit",
 				body: { ...body, requestId: "stale-reviewed-unit" },
@@ -201,7 +221,7 @@ for (const provider of ["docker", "podman"] as const)
 					approval: `approve:${stale.digest}`,
 				}),
 			).rejects.toThrow();
-			expect(readEngineFile(file(config)).history).toHaveLength(beforeStale);
+			expect(mutations()).toEqual(beforeStale);
 			for (const service of services.slice(1)) {
 				const row = (await app.snapshot()).environments.runs.find(
 					(run) => run.plan.app === service,

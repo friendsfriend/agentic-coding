@@ -6,8 +6,9 @@ import { waitForReview } from "../reviews.ts";
 import { Catalog, decode, type Review, type TaskInfo } from "../state.ts";
 import { environmentApproval } from "./approval.ts";
 import {
-	type operatorInfrastructureLifetime,
+	type OperatorLifetime,
 	operatorInfrastructurePlans,
+	renewableOperatorLifetime,
 	validateLifetime,
 } from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
@@ -17,6 +18,7 @@ import {
 	type EnvironmentRun,
 	EnvironmentState,
 	holdsResource,
+	type OperatorUnitStart,
 } from "./state.ts";
 
 export type OperatorAction = Selection & {
@@ -25,7 +27,7 @@ export type OperatorAction = Selection & {
 	requestId: string;
 	baseRef?: string;
 	workspaceMode?: "checkout" | "worktree";
-	lifetime?: typeof operatorInfrastructureLifetime;
+	lifetime?: OperatorLifetime;
 };
 type Input = {
 	createdAt: number;
@@ -39,11 +41,20 @@ type ActiveCheckpoint<P extends string> = {
 	plans: Plan[];
 	snapshot: string;
 };
+type UnitCheckpoint<P extends "unit-review" | "unit-execute"> =
+	ActiveCheckpoint<P> & {
+		unitId: string;
+		unitPlans: Plan[];
+		unitSnapshot: string;
+	};
 type Checkpoint =
 	| { phase: "prepare" }
 	| ActiveCheckpoint<"review">
 	| ActiveCheckpoint<"execute">
-	| ActiveCheckpoint<"held">;
+	| ActiveCheckpoint<"held">
+	| (ActiveCheckpoint<"unit-prepare"> & { unitId: string })
+	| UnitCheckpoint<"unit-review">
+	| UnitCheckpoint<"unit-execute">;
 
 export function operatorOwner(
 	id: number,
@@ -267,6 +278,172 @@ export function createOperatorTask(config: Config, manager: Environments) {
 					throw error;
 				}
 			},
+			"unit-prepare": async (task, runtime, context) => {
+				const checkpoint = task.state.checkpoint,
+					owner = Number(task.id),
+					reviewId = `review-${task.id}-unit-${checkpoint.unitId.slice(0, 32)}`;
+				try {
+					const scope = await manager.unitStarts.context(
+						checkpoint.unitId,
+						owner,
+					);
+					const unitPlans = operatorInfrastructurePlans(
+						await manager.resolvePlans(
+							checkpoint.owner,
+							[scope.unit.plan.app],
+							"run",
+							{ target: scope.unit.plan.id },
+						),
+						[scope.unit.plan.app],
+						renewableOperatorLifetime,
+					).map((plan) =>
+						plan.operatorRoot
+							? { ...plan, operatorTopology: scope.topology.id }
+							: plan,
+					);
+					await manager.unitStarts.verify(checkpoint.unitId, owner, unitPlans);
+					const unitSnapshot = `${environmentApproval(unitPlans, 30)}\n\nRe-add one confirmed released unit through its original protected native owner. Fresh approval of exactly this generation is required; no restart of a live unit, second topology, owner substitution or automatic replay. ${JSON.stringify(scope.request)}`;
+					await runtime.commit(async (tx) => {
+						const env = await tx.doc(EnvironmentState),
+							doc = await tx.doc(Catalog),
+							raw = env.unitStarts?.[checkpoint.unitId];
+						if (!raw || decode<OperatorUnitStart>(raw).state !== "pending")
+							throw new Error("Unit request changed before review");
+						if (env.unitStarts)
+							env.unitStarts[checkpoint.unitId] = JSON.stringify({
+								...scope.request,
+								state: "review",
+							});
+						if (
+							doc.reviews[reviewId] &&
+							decode<Review>(doc.reviews[reviewId]).snapshot !== unitSnapshot
+						)
+							throw new Error("Unit review changed; no substitution");
+						doc.reviews[reviewId] ??= JSON.stringify({
+							id: reviewId,
+							taskId: owner,
+							topicId: checkpoint.owner.topicId,
+							path: checkpoint.owner.workspace,
+							title: `Environment re-add: ${scope.unit.plan.app}`,
+							snapshot: unitSnapshot,
+							digest: digest(unitSnapshot),
+							state: "pending",
+							comments: "",
+							revision: 1,
+							createdAt: Date.now(),
+						} satisfies Review);
+						return {
+							status: "running",
+							checkpoint: {
+								...checkpoint,
+								phase: "unit-review",
+								unitPlans,
+								unitSnapshot,
+							},
+						};
+					}, context);
+				} catch {
+					await manager.unitStarts.settle(
+						checkpoint.unitId,
+						owner,
+						"interrupted",
+						"Original unit/topology context unavailable; no re-add dispatched",
+					);
+					await runtime.commit(
+						() => ({
+							status: "running",
+							checkpoint: { ...checkpoint, phase: "held" },
+						}),
+						context,
+					);
+				}
+			},
+			"unit-review": async (task, runtime, context) => {
+				const checkpoint = task.state.checkpoint,
+					review = await waitForReview(
+						`review-${task.id}-unit-${checkpoint.unitId.slice(0, 32)}`,
+						runtime,
+						context,
+					);
+				if (
+					review.state !== "approved" ||
+					review.snapshot !== checkpoint.unitSnapshot
+				) {
+					await manager.unitStarts.settle(
+						checkpoint.unitId,
+						Number(task.id),
+						"rejected",
+					);
+					return runtime.commit(
+						() => ({
+							status: "running",
+							checkpoint: { ...checkpoint, phase: "held" },
+						}),
+						context,
+					);
+				}
+				await runtime.commit(
+					() => ({
+						status: "running",
+						checkpoint: { ...checkpoint, phase: "unit-execute" },
+					}),
+					context,
+				);
+			},
+			"unit-execute": async (task, runtime, context) => {
+				const checkpoint = task.state.checkpoint,
+					owner = Number(task.id),
+					memo = `unit-issued:${checkpoint.unitId}`;
+				try {
+					if (await runtime.memo(memo, context))
+						throw new Error("Unit dispatch was interrupted; no replay");
+					const request = await manager.unitStarts.verify(
+						checkpoint.unitId,
+						owner,
+						checkpoint.unitPlans,
+					);
+					if (
+						(
+							await git(checkpoint.owner.workspace, [
+								"rev-parse",
+								"--verify",
+								"HEAD",
+							])
+						).trim() !== task.input.baseCommit
+					)
+						throw new Error("Original operator workspace HEAD changed");
+					validateLifetime(checkpoint.unitPlans, checkpoint.owner);
+					await runtime.memo(memo, true, context);
+					await manager.unitStarts.settle(checkpoint.unitId, owner, "issued");
+					await manager.execute(
+						request.batch,
+						JSON.stringify({ request, approved: checkpoint.unitSnapshot }),
+						checkpoint.owner,
+						checkpoint.unitPlans,
+						30000,
+						context.abortSignal,
+					);
+					await manager.unitStarts.settle(
+						checkpoint.unitId,
+						owner,
+						"completed",
+					);
+				} catch {
+					await manager.unitStarts.settle(
+						checkpoint.unitId,
+						owner,
+						"interrupted",
+						"Unit dispatch failed or was interrupted; inspect native runs; no replay",
+					);
+				}
+				await runtime.commit(
+					() => ({
+						status: "running",
+						checkpoint: { ...checkpoint, phase: "held" },
+					}),
+					context,
+				);
+			},
 			held: async (task, runtime, context) => {
 				const watch = await runtime.watchDoc(EnvironmentState, context);
 				if (!watch) throw new Error("Environment state is missing");
@@ -276,7 +453,18 @@ export function createOperatorTask(config: Config, manager: Environments) {
 						.filter((run) => run.owner === Number(task.id));
 					if (runs.some((run) => run.state === "interrupted"))
 						return "interrupted";
-					if (runs.some(holdsResource)) return null;
+					if (runs.some(holdsResource)) {
+						if (task.input.request.lifetime === renewableOperatorLifetime) {
+							const pending = Object.values(value?.unitStarts ?? {})
+								.map(decode<OperatorUnitStart>)
+								.find(
+									(row) =>
+										row.owner === Number(task.id) && row.state === "pending",
+								);
+							if (pending) return { unitId: pending.id };
+						}
+						return null;
+					}
 					const roots = runs.filter((run) =>
 						task.input.request.apps.includes(run.plan.app),
 					);
@@ -287,7 +475,7 @@ export function createOperatorTask(config: Config, manager: Environments) {
 				let outcome = ended(watch.value);
 				try {
 					if (!outcome)
-						outcome = await new Promise<"exited" | "interrupted" | "failed">(
+						outcome = await new Promise<NonNullable<ReturnType<typeof ended>>>(
 							(resolve, reject) => {
 								watch.start(async (value) => {
 									const result = ended(value);
@@ -301,6 +489,19 @@ export function createOperatorTask(config: Config, manager: Environments) {
 				} finally {
 					await watch.stop();
 				}
+				if (typeof outcome === "object" && outcome)
+					return runtime.commit(
+						() => ({
+							status: "running",
+							checkpoint: {
+								...task.state.checkpoint,
+								phase: "unit-prepare",
+								unitId: outcome.unitId,
+							},
+						}),
+						context,
+					);
+				await manager.unitStarts.closeOwner(Number(task.id));
 				if (outcome !== "exited")
 					return runtime.commit(
 						() => ({
@@ -333,16 +534,29 @@ export function createOperatorTask(config: Config, manager: Environments) {
 		abort: async (task, runtime, context) => {
 			const cleanup = await manager.releaseOwner(Number(task.id));
 			await runtime.commit(async (tx) => {
-				const doc = await tx.doc(Catalog),
-					id = `review-${task.id}`,
-					raw = doc.reviews[id];
-				if (raw) {
+				const env = await tx.doc(EnvironmentState);
+				for (const [id, raw] of Object.entries(env.unitStarts ?? {})) {
+					const row = decode<OperatorUnitStart>(raw);
+					if (
+						row.owner === Number(task.id) &&
+						["pending", "review", "issued"].includes(row.state) &&
+						env.unitStarts
+					)
+						env.unitStarts[id] = JSON.stringify({
+							...row,
+							state: "interrupted",
+							error: "Original operator cancelled; no replay",
+						});
+				}
+				const doc = await tx.doc(Catalog);
+				for (const [id, raw] of Object.entries(doc.reviews)) {
 					const review = decode<Review>(raw);
-					if (review.state === "pending") {
-						review.state = "cancelled";
-						review.revision++;
-						doc.reviews[id] = JSON.stringify(review);
-					}
+					if (review.taskId === Number(task.id) && review.state === "pending")
+						doc.reviews[id] = JSON.stringify({
+							...review,
+							state: "cancelled",
+							revision: review.revision + 1,
+						});
 				}
 				return {
 					status: "terminal",

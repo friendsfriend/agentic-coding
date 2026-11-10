@@ -391,6 +391,8 @@ export function httpRoutes(
 			}
 			if (url.pathname === "/api/environments/drafts")
 				return json(await app.environments.drafts.save(body));
+			if (url.pathname === "/api/environments/units/readd")
+				return json(await app.environments.unitStarts.request(body));
 			if (url.pathname === "/api/environments/units/stop")
 				return json(await app.environments.stopOperatorUnit(body));
 			if (url.pathname === "/api/environments/revoke")
@@ -417,12 +419,14 @@ export function httpRoutes(
 						"Confirm inspection and cleanup before releasing an interrupted environment",
 					);
 				const id = text(body.id, "environment run", 128);
-				if (!/^env-\d+:[a-z][a-z0-9-]*$/.test(id))
+				if (!/^env-\d+(?:-unit-[a-f0-9]{32})?:[a-z][a-z0-9-]*$/.test(id))
 					throw new Error("Invalid environment run ID");
 				await app.environments.acknowledge(id, integer(body.revision));
 				return json({ ok: true });
 			}
-			const review = url.pathname.match(/^\/api\/reviews\/(review-\d+)$/);
+			const review = url.pathname.match(
+				/^\/api\/reviews\/(review-\d+(?:-unit-[a-f0-9]{32})?)$/,
+			);
 			if (review) {
 				const decision = text(body.decision, "decision") as Review["state"];
 				await app.decide(

@@ -5,6 +5,7 @@ import type { LogTiming, RuntimeStatus, ServiceLog } from "./process.ts";
 export const EnvironmentState = defineDoc<{
 	runs: Record<string, string>;
 	operatorRevocations?: Record<string, string>;
+	unitStarts?: Record<string, string>;
 	stops: Record<string, string>;
 	reuses?: Record<string, string>;
 	httpOperations?: Record<string, string>;
@@ -27,6 +28,25 @@ export type ReuseReceipt = {
 	createdAt: number;
 };
 export type IdleReap = { at: number; lastActivityAt: number; ttlMs: number };
+export type OperatorUnitStart = {
+	id: string;
+	requestId: string;
+	owner: number;
+	runId: string;
+	revision: number;
+	reason: string;
+	topology: string;
+	batch: string;
+	createdAt: number;
+	state:
+		| "pending"
+		| "review"
+		| "issued"
+		| "completed"
+		| "rejected"
+		| "interrupted";
+	error?: string;
+};
 export type OperatorUnitStop = {
 	runId: string;
 	revision: number;

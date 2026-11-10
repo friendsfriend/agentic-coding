@@ -11,6 +11,7 @@ import { Catalog, decode } from "../state.ts";
 import {
 	operatorInfrastructureLifetime,
 	operatorInfrastructurePlans,
+	renewableOperatorLifetime,
 } from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
 import {
@@ -57,7 +58,8 @@ export class OperatorEnvironments {
 		text(request.requestId, "request ID", 256);
 		if (
 			request.lifetime !== undefined &&
-			request.lifetime !== operatorInfrastructureLifetime
+			request.lifetime !== operatorInfrastructureLifetime &&
+			request.lifetime !== renewableOperatorLifetime
 		)
 			throw new Error(
 				"Choose the explicit operator infrastructure lifetime; agent lifetime modes cannot be substituted",

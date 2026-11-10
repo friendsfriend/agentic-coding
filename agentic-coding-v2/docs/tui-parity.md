@@ -2205,3 +2205,7 @@ Native zero-service topology ownership adds no fake keeper row or application-re
 ## Protected unit control checkpoint
 
 Independent infrastructure stop units remain real native infrastructure rows beneath the protected operator. No fake app/keeper is introduced and the existing layout, colors, navigation and native-child hierarchy stay unchanged. Generic authenticated workbench guidance includes the revision-fenced stop-unit action; this is not a new presentation or renderer acceptance claim. Actual global-host lifecycle and full parity are still unarchived.
+
+## Fresh native review for re-add
+
+Re-add uses the existing native review surface and protected operator hierarchy, with distinct generation identities and ordinary exact review decisions. The generic workbench gains request/read guidance only. Layout, colors, navigation, web assets and generated source remain unchanged. Acceptance exercises authenticated transport/native phases rather than renderer, mount, snapshot, presenter, navigation-matrix or manual TTY tests. This is not a full visual or global-host parity archival claim.

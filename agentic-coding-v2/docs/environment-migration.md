@@ -154,3 +154,7 @@ This explicit representation avoids inventing a keeper image or tying network li
 The new operator lifetime is an explicit action request, not a configurable target permission or a publication side effect. A native setup may select independently stoppable infrastructure units and their exact network-only parent for one reviewed protected operator. Native migration candidate acceptance still creates no tasks, reviews, workloads, topology, global host service or operator capability. The original preview has not been relabeled runtime-complete and no live configuration is published.
 
 Host-global consumer bindings, incremental service restart/re-add, actual service compatibility and complete Helm effects are not inferred from this same-owner operator primitive. Missing private inputs and exact current publication approval remain required; no source secret value or old global network is copied/adopted.
+
+## Re-add authority is never a migrated target flag
+
+The v2 lifetime is an explicit direct operator action choice. Its `operatorRoot` and `operatorTopology` plan fields are derived native review data, not accepted target configuration or agent tool permissions. Migration/preflight descriptors cannot mint a unit request, native review, live bridge attachment or resource handle. A re-add refers to a confirmed released native generation and requires a separately approved current plan on the original still-live topology. No native installation configuration, legacy service, secret value or old global network is adopted by this capability.

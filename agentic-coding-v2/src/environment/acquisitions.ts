@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { decode, type TaskInfo, values } from "../state.ts";
 import { belongsToOwner } from "./dependency-workspaces.ts";
-import { sameApprovedPlan, sharedLifetime, sharedRoot } from "./lifetime.ts";
+import { referenceRoot, sameApprovedPlan, sharedRoot } from "./lifetime.ts";
 import type { Plan } from "./model.ts";
 import { captureReferenceGraph } from "./reference-journal.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
@@ -85,14 +85,14 @@ export class Acquisitions {
 	 * must be disjoint from the live ones, and every held generation it reuses must
 	 * still be the original live, ready, unretained generation. */
 	private attachable(plans: Plan[], mine: readonly EnvironmentRun[]) {
-		if (mine.some((run) => run.plan.lifetime !== sharedLifetime))
+		if (mine.some((run) => run.plan.lifetime !== plans[0]?.lifetime))
 			throw new Error(
 				"Release the held acquisition before requesting a shared lifetime; lifetimes are not combined across acquisitions",
 			);
-		const roots = plans.filter((plan) => plan.projectKind === "app"),
+		const roots = plans.filter(referenceRoot),
 			collision = mine.find(
 				(run) =>
-					run.plan.projectKind === "app" &&
+					referenceRoot(run.plan) &&
 					roots.some((plan) => plan.app === run.plan.app),
 			);
 		if (collision)
@@ -100,7 +100,7 @@ export class Acquisitions {
 				`A live root generation of ${collision.plan.app} is already held; release it before requesting the same app root again`,
 			);
 		const attached = new Set<string>();
-		for (const plan of plans.filter((plan) => plan.projectKind !== "app")) {
+		for (const plan of plans.filter((plan) => !referenceRoot(plan))) {
 			const live = mine.filter((run) => run.plan.app === plan.app);
 			const only = live[0];
 			if (!only) continue;
@@ -387,6 +387,24 @@ export class Acquisitions {
 						const attachable = plans.some(sharedRoot)
 							? this.attachable(plans, mine)
 							: undefined;
+						for (const plan of plans.filter(
+							(plan) => plan.operatorTopology !== undefined,
+						)) {
+							const original = mine.find(
+								(run) => run.id === plan.operatorTopology,
+							);
+							if (
+								!original?.plan.compose?.networkOnly ||
+								original.state !== "running" ||
+								original.ready !== true ||
+								!attachable?.has(original.plan.app) ||
+								plans.find((candidate) => candidate.app === original.plan.app)
+									?.operatorRoot
+							)
+								throw new Error(
+									"Original reviewed topology is unavailable; no replacement topology or second copy",
+								);
+						}
 						attachedApps = attachable;
 						if (mine.length && !attachable)
 							throw new Error(

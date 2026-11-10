@@ -13,6 +13,7 @@ export const environmentReads = [
 	"telemetry",
 	"http-history",
 	"database-history",
+	"unit-starts",
 ] as const;
 export type EnvironmentRead = (typeof environmentReads)[number];
 export const environmentMutations = [
@@ -29,6 +30,7 @@ export const environmentMutations = [
 	"acknowledge-attempt",
 	"revoke",
 	"stop-unit",
+	"readd-unit",
 	"release-run",
 ] as const;
 export type EnvironmentMutation = (typeof environmentMutations)[number];

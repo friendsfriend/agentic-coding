@@ -5,11 +5,21 @@ export const independentLifetime = "independent-roots-v1";
 export const referencedLifetime = "referenced-roots-v1";
 export const sharedLifetime = "shared-prerequisites-v1";
 export const operatorInfrastructureLifetime = "operator-infrastructure-v1";
+export const renewableOperatorLifetime = "operator-infrastructure-v2";
+export type OperatorLifetime =
+	| typeof operatorInfrastructureLifetime
+	| typeof renewableOperatorLifetime;
+export function operatorInfrastructure(plan: Plan) {
+	return (
+		plan.lifetime === operatorInfrastructureLifetime ||
+		plan.lifetime === renewableOperatorLifetime
+	);
+}
 /** Preserve real project kinds: operator infrastructure units are not fake apps. */
 export function referenceRoot(plan: Plan) {
 	return (
 		plan.projectKind === "app" ||
-		(plan.lifetime === operatorInfrastructureLifetime &&
+		(operatorInfrastructure(plan) &&
 			plan.projectKind === "infrastructure" &&
 			plan.operatorRoot === true)
 	);
@@ -17,11 +27,12 @@ export function referenceRoot(plan: Plan) {
 export function operatorInfrastructurePlans(
 	plans: Plan[],
 	roots: string[],
-	lifetime?: typeof operatorInfrastructureLifetime,
+	lifetime?: OperatorLifetime,
 ): Plan[] {
 	if (lifetime === undefined) return plans;
 	if (
-		lifetime !== operatorInfrastructureLifetime ||
+		(lifetime !== operatorInfrastructureLifetime &&
+			lifetime !== renewableOperatorLifetime) ||
 		!roots.length ||
 		new Set(roots).size !== roots.length ||
 		roots.some((root) => !plans.some((plan) => plan.app === root))
@@ -44,7 +55,8 @@ function validateOperatorInfrastructure(plans: Plan[]) {
 		owner.requires?.length ||
 		plans.some(
 			(plan) =>
-				plan.lifetime !== operatorInfrastructureLifetime ||
+				!operatorInfrastructure(plan) ||
+				plan.lifetime !== owner.lifetime ||
 				plan.action !== "run" ||
 				plan.runtime !== "compose" ||
 				plan.projectKind !== "infrastructure" ||
@@ -82,13 +94,16 @@ export function referencedRoot(plan: Plan) {
 	return (
 		plan.lifetime === referencedLifetime ||
 		sharedLifetime === plan.lifetime ||
-		plan.lifetime === operatorInfrastructureLifetime
+		operatorInfrastructure(plan)
 	);
 }
 /** Shared reference mode adds a second, disjoint acquisition that attaches to an
  * already-live prerequisite generation instead of starting another one. */
 export function sharedRoot(plan: Plan) {
-	return plan.lifetime === sharedLifetime;
+	return (
+		plan.lifetime === sharedLifetime ||
+		plan.lifetime === renewableOperatorLifetime
+	);
 }
 export function scopedRoot(plan: Plan) {
 	return plan.lifetime !== undefined;
@@ -131,13 +146,24 @@ export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 		plans.some(
 			(plan) =>
 				plan.operatorRoot !== undefined &&
-				(plan.operatorRoot !== true ||
-					plan.lifetime !== operatorInfrastructureLifetime),
+				(plan.operatorRoot !== true || !operatorInfrastructure(plan)),
 		)
 	)
 		throw new Error("Operator unit markers cannot alter an ordinary lifetime");
+	if (
+		plans.some(
+			(plan) =>
+				plan.operatorTopology !== undefined &&
+				(plan.lifetime !== renewableOperatorLifetime ||
+					plan.operatorRoot !== true ||
+					typeof plan.operatorTopology !== "string"),
+		)
+	)
+		throw new Error(
+			"Original topology pins require a reviewed v2 operator unit",
+		);
 	if (!plans.some(scopedRoot)) return;
-	if (plans.some((plan) => plan.lifetime === operatorInfrastructureLifetime)) {
+	if (plans.some(operatorInfrastructure)) {
 		if (
 			owner.kind !== "operator-environment" ||
 			owner.policy !== "workspace-write"

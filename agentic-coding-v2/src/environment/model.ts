@@ -121,9 +121,12 @@ export type Plan = Target & {
 		| "independent-roots-v1"
 		| "referenced-roots-v1"
 		| "shared-prerequisites-v1"
-		| "operator-infrastructure-v1";
+		| "operator-infrastructure-v1"
+		| "operator-infrastructure-v2";
 	/** Derived only from the protected operator's exact requested units, never configuration input. */
 	operatorRoot?: true;
+	/** Native re-add review pins the already-live original topology; never config input. */
+	operatorTopology?: string;
 	app: string;
 	projectKind?: Project["kind"];
 	requires?: string[];

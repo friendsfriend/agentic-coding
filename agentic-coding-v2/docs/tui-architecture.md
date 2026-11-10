@@ -217,3 +217,7 @@ An original topology bridge is represented by its real native infrastructure run
 ## Revision-fenced unit stop through existing authenticated adapters
 
 HTTP exposes `POST /api/environments/units/stop` with exact `requestId`, `runId`, positive current `revision` and bounded `reason`. The typed gateway exposes the same native operation as workbench `stop-unit`, retaining its existing digest preview/exact confirmation/consume-before-dispatch fences. Both delegate to the native manager's transaction and original handles; neither is a second lifecycle engine. The existing generic workbench field guidance gains only this action's input disclosure. No renderer, web or generated source changes are involved.
+
+## Native re-add review cycle
+
+Authenticated `POST /api/environments/units/readd` and typed workbench `readd-unit` queue the same bounded native request. Workbench `unit-starts` reads the latest 64 journal observations, not live authority. Existing generic action guidance describes the input and fresh-review requirement. The protected operator advances through native prepare/review/execute phases and returns to its held state; no secondary lifecycle workflow engine or model is introduced. Unit generation and review identities use a 128-bit request-digest suffix. HTTP review routing preserves exact native review/revision decisions for those identities.

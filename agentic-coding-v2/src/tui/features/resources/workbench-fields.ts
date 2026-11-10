@@ -4,6 +4,8 @@ import type {
 } from "../../../protocol/environment-workbench.ts";
 /** Field guides only, never executable payloads, approvals or default request identities. */
 export const readFields: Record<EnvironmentRead, string> = {
+	"unit-starts":
+		"No selectors; latest 64 native operator re-add observations, never live execution authority",
 	discovery: "repository, optional directory (configured repository only)",
 	drafts: "No selection fields",
 	draft: "id",
@@ -42,6 +44,8 @@ export const mutationFields: Record<EnvironmentMutation, string> = {
 		"requestId, id (tree-cleanup attempt), revision, acknowledge=true; inspect trees first",
 	"acknowledge-attempt":
 		"requestId, id (promotion attempt), acknowledge=true; never redispatches publication",
+	"readd-unit":
+		"requestId, runId of latest confirmed released v2 operator unit, exact revision, reason; queues a fresh native human review only, no execution or replacement topology",
 	"stop-unit":
 		"requestId, runId, exact positive revision, reason; stops only an original protected operator infrastructure unit, retaining its referenced topology and unrelated units; no agent, topology or saved-ID authority",
 	revoke:

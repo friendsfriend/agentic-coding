@@ -52,6 +52,9 @@ export class EnvironmentWorkbench {
 						? "."
 						: text(selection.directory, "directory", 4096),
 				);
+			case "unit-starts":
+				fields(selection, []);
+				return env.unitStarts.history();
 			case "draft":
 			case "preflight":
 			case "promotion":
@@ -209,6 +212,8 @@ export class EnvironmentWorkbench {
 				return drafts.acknowledgeTreeCleanup(body);
 			case "acknowledge-attempt":
 				return drafts.acknowledgeAttempt(body);
+			case "readd-unit":
+				return env.unitStarts.request(body);
 			case "stop-unit":
 				return env.stopOperatorUnit(body);
 			case "revoke":
