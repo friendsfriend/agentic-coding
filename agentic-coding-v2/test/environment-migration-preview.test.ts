@@ -483,3 +483,165 @@ test("offline native repository migration preserves language profiles, v1 packag
 		host.stop();
 	}
 }, 15000);
+
+test("reviewed host-image source digest migrates to native Maven/Java preparation, never a shell Docker program; changed sources remain blocked", async () => {
+	const { app, config } = await fixture(true, (config) => {
+		fs.mkdirSync(config.configDir, { mode: 0o700 });
+		fs.chmodSync(config.stateDir, 0o700);
+	});
+	const root = path.dirname(config.configDir),
+		source = path.join(root, "v1-host-image"),
+		repository = config.repositories[0] ?? "",
+		guard = path.join(root, "never-run-host-tools"),
+		marker = path.join(root, "host-tool-was-run");
+	fs.mkdirSync(guard);
+	for (const name of ["mvn", "java", "docker"])
+		fs.writeFileSync(
+			path.join(guard, name),
+			`#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)},'unexpected');process.exit(99);\n`,
+			{ mode: 0o700 },
+		);
+	for (const directory of [
+		"apps/build",
+		"apps/compose",
+		"apps/run",
+		"apps/defaults",
+		"infrastructure/compose",
+	])
+		fs.mkdirSync(path.join(source, directory), { recursive: true });
+	fs.writeFileSync(
+		path.join(repository, "pom.xml"),
+		"<project>inert fixture</project>",
+	);
+	fs.writeFileSync(
+		path.join(config.configDir, "config.json"),
+		JSON.stringify({ profiles: {}, repositories: config.repositories }),
+	);
+	const base = JSON.stringify({
+		version: 1,
+		projects: [
+			{
+				id: "grid-allocation-backend",
+				kind: "app",
+				repository,
+				defaults: { build: "build-shell" },
+				targets: [
+					{
+						id: "build-shell",
+						action: "build",
+						runtime: "shell",
+						command:
+							'sh "$CONFIG_DIR/scripts/grid-allocation-backend-build.sh"',
+						secretRefs: { ARTIFACTORY_PASSWORD: "ARTIFACTORY_PASSWORD" },
+					},
+				],
+			},
+		],
+	});
+	fs.writeFileSync(path.join(config.configDir, "environments.json"), base);
+	fs.writeFileSync(
+		path.join(source, "apps/defaults/grid-allocation-backend.json"),
+		JSON.stringify({ build: "shell" }),
+	);
+	const script = fs.readFileSync(
+		path.join(import.meta.dir, "fixtures/grid-host-build-source.txt"),
+		"utf8",
+	);
+	const input = path.join(
+		source,
+		"apps/build/grid-allocation-backend-build.sh",
+	);
+	fs.writeFileSync(input, script);
+	const preview = (directory: string) =>
+		Bun.spawnSync(
+			[
+				process.execPath,
+				path.join(
+					import.meta.dir,
+					"../scripts/preview-environment-migration.ts",
+				),
+				"--source-config",
+				source,
+				"--current-config",
+				config.configDir,
+				"--output",
+				directory,
+				"--socket",
+				path.join(config.stateDir, "never-contacted.sock"),
+			],
+			{ stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH: guard } },
+		);
+	const output = path.join(root, "host-image-preview");
+	expect(preview(output).exitCode).toBe(0);
+	const content = fs.readFileSync(
+			path.join(output, "environments.json"),
+			"utf8",
+		),
+		converted = JSON.parse(content),
+		report = JSON.parse(
+			fs.readFileSync(path.join(output, "report.json"), "utf8"),
+		),
+		project = converted.projects[0],
+		target = project.targets.find(
+			(target: { id: string }) => target.id === "build-host-image",
+		);
+	expect(project.defaults.build).toBe("build-host-image");
+	expect(target).toMatchObject({
+		runtime: "docker",
+		action: "build",
+		container: {
+			hostPreparation: "spring-boot-layers-v1",
+			image: "devenv-grid-allocation-backend:latest",
+		},
+		secretRefs: { ARTIFACTORY_PASSWORD: "ARTIFACTORY_PASSWORD" },
+	});
+	expect(target.command).toBeUndefined();
+	expect(target.container.dockerfileSource).toContain(
+		"COPY spring-boot-loader/",
+	);
+	expect(content).not.toContain("docker build");
+	expect(content).not.toContain("$CONFIG_DIR/scripts/");
+	expect(report.references).toContain("ARTIFACTORY_PASSWORD");
+	const host = serve(app);
+	try {
+		const post = client(host),
+			staged = await (
+				await post("/api/environments/drafts", {
+					requestId: "native-host-image",
+					content,
+				})
+			).json(),
+			checked = await (
+				await post("/api/environments/drafts/preflight", {
+					requestId: "native-host-image-check",
+					id: staged.id,
+					revision: staged.revision,
+					digest: staged.digest,
+				})
+			).json();
+		expect(checked.schemaAccepted).toBe(true);
+		expect((await app.environments.snapshot()).runs).toHaveLength(0);
+	} finally {
+		host.stop();
+	}
+	fs.writeFileSync(
+		input,
+		`${script}\n# changed source requires explicit reconciliation\n`,
+	);
+	const refused = path.join(root, "host-image-changed");
+	expect(preview(refused).exitCode).toBe(0);
+	const changed = JSON.parse(
+		fs.readFileSync(path.join(refused, "environments.json"), "utf8"),
+	);
+	expect(
+		changed.projects[0].targets.some(
+			(target: { id: string }) =>
+				target.id === "build-host-image" || target.id === "build-shell",
+		),
+	).toBe(false);
+	expect(changed.projects[0].defaults?.build).toBeUndefined();
+	expect(fs.existsSync(marker)).toBe(false);
+	expect(
+		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
+	).toBe(base);
+}, 15000);

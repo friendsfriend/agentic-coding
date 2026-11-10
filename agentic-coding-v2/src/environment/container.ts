@@ -7,6 +7,7 @@ import { contained } from "../git.ts";
 import { freezeBuildSecrets } from "./build-secrets.ts";
 import { EnvironmentCommands } from "./command.ts";
 import { inspectContainer, type Observation } from "./container-observation.ts";
+import { HostBuild } from "./host-build.ts";
 import type { Plan } from "./model.ts";
 import type { LogTiming, RuntimeStatus } from "./process.ts";
 import { type Exit, processEnvironment, ShellProcess } from "./shell.ts";
@@ -46,6 +47,7 @@ export class ContainerProcess {
 	private buildSecretArguments: string[];
 	private observed: RuntimeStatus;
 	private failure = "";
+	private hostBuild: HostBuild | null = null;
 	constructor(
 		private plan: Plan,
 		private configDir: string,
@@ -117,7 +119,7 @@ export class ContainerProcess {
 		});
 	}
 	get logs() {
-		return `${this.commands.logs}${this.follower?.logs ?? ""}${this.failure ? `\n${this.failure}\n` : ""}`.slice(
+		return `${this.hostBuild?.logs ?? ""}${this.commands.logs}${this.follower?.logs ?? ""}${this.failure ? `\n${this.failure}\n` : ""}`.slice(
 			-64000,
 		);
 	}
@@ -139,6 +141,7 @@ export class ContainerProcess {
 	get cleanupFailed() {
 		return (
 			this.uncertain ||
+			this.hostBuild?.cleanupFailed ||
 			this.commands.cleanupFailed ||
 			this.commands.uncertainEffect
 		);
@@ -291,58 +294,72 @@ export class ContainerProcess {
 		this.deadline = Date.now() + this.plan.timeoutMs;
 		// Resolve mount/build paths immediately before their effects, not just at approval.
 		if (this.plan.action === "build") {
-			const context = contained(this.plan.workspace, this.spec.context);
-			if (!fs.statSync(context).isDirectory())
-				throw new Error("Container build context is unavailable");
-			let directory: string | undefined;
-			let dockerfile: string;
 			let exit: Exit | undefined;
-			if (this.spec.dockerfileSource !== undefined) {
-				directory = fs.mkdtempSync(
-					path.join(this.stateDir, "environment-build-source-"),
-				);
-				fs.chmodSync(directory, 0o700);
-				dockerfile = path.join(directory, "Dockerfile");
-			} else dockerfile = contained(this.plan.workspace, this.spec.dockerfile);
 			try {
-				if (this.spec.dockerfileSource !== undefined)
-					fs.writeFileSync(dockerfile, this.spec.dockerfileSource, {
-						flag: "wx",
-						mode: 0o600,
-					});
-				if (!fs.statSync(dockerfile).isFile())
-					throw new Error("Container Dockerfile is unavailable");
-				const result = await this.commands.run(
-					[
-						"build",
-						"--file",
-						dockerfile,
-						"--tag",
-						this.spec.image,
-						...this.spec.buildArgs.flatMap((key) => ["--build-arg", key]),
-						...this.buildSecretArguments,
-						context,
-					],
-					{
-						signal: this.controller.signal,
-						timeoutMs: this.budget(),
-						effect: true,
-					},
-				);
-				exit = result.exit;
-			} finally {
-				if (directory) {
-					try {
-						fs.unlinkSync(dockerfile);
-						fs.rmdirSync(directory);
-					} catch {
-						this.uncertain = true;
-						this.failure =
-							"Captured build-source cleanup uncertain; inspection required";
-					}
+				if (this.spec.hostPreparation)
+					this.hostBuild = new HostBuild(
+						this.plan,
+						this.configDir,
+						this.stateDir,
+						this.frozen,
+					);
+				const context = this.hostBuild
+					? await this.hostBuild.prepare(this.controller.signal, this.deadline)
+					: contained(this.plan.workspace, this.spec.context);
+				if (!fs.statSync(context).isDirectory())
+					throw new Error("Container build context is unavailable");
+				let directory: string | undefined;
+				let dockerfile: string;
+				if (this.spec.dockerfileSource !== undefined) {
+					directory = fs.mkdtempSync(
+						path.join(this.stateDir, "environment-build-source-"),
+					);
+					fs.chmodSync(directory, 0o700);
+					dockerfile = path.join(directory, "Dockerfile");
+				} else
+					dockerfile = contained(this.plan.workspace, this.spec.dockerfile);
+				try {
+					if (this.spec.dockerfileSource !== undefined)
+						fs.writeFileSync(dockerfile, this.spec.dockerfileSource, {
+							flag: "wx",
+							mode: 0o600,
+						});
+					if (!fs.statSync(dockerfile).isFile())
+						throw new Error("Container Dockerfile is unavailable");
+					this.hostBuild?.verify();
+					const result = await this.commands.run(
+						[
+							"build",
+							"--file",
+							dockerfile,
+							"--tag",
+							this.spec.image,
+							...this.spec.buildArgs.flatMap((key) => ["--build-arg", key]),
+							...this.buildSecretArguments,
+							context,
+						],
+						{
+							signal: this.controller.signal,
+							timeoutMs: this.budget(),
+							effect: true,
+						},
+					);
+					exit = result.exit;
+				} finally {
+					if (directory)
+						try {
+							fs.unlinkSync(dockerfile);
+							fs.rmdirSync(directory);
+						} catch {
+							this.uncertain = true;
+							this.failure =
+								"Captured build-source cleanup uncertain; inspection required";
+						}
 				}
+				if (this.uncertain) throw new Error(this.failure);
+			} finally {
+				this.hostBuild?.cleanup();
 			}
-			if (this.uncertain) throw new Error(this.failure);
 			if (exit) this.finish(exit.code, exit.signal);
 			return;
 		}

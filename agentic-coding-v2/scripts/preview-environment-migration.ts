@@ -13,6 +13,10 @@ import {
 	composeEnvironment,
 } from "../src/environment/compose-values.ts";
 import { definitionByteLimit } from "../src/environment/definition-limits.ts";
+import {
+	hostBuildDockerfile,
+	hostBuildSourceDigest,
+} from "../src/environment/host-build-spec.ts";
 import { discoverRepositoryTargets } from "../src/environment/repository-targets.ts";
 
 class Refusal extends Error {}
@@ -685,12 +689,69 @@ for (const directory of ["apps/build", "apps/run", "infrastructure/compose"]) {
 					if (removed.some((entry) => entry.id === target))
 						delete defaults[action];
 				owner.defaults = defaults;
+				if (digest(capturedScript) !== hostBuildSourceDigest)
+					throw new Refusal(
+						"Host Maven/image source differs from the reviewed native protocol; obsolete shell Docker wrapper removed, unknown effects not translated",
+					);
+				const existing = owner.targets.find(
+					(target) => target.id === "build-host-image",
+				);
+				if (removed.length > 1 || (removed.length && existing))
+					throw new Refusal(
+						"Host image source conflicts with existing native target selections",
+					);
+				if (
+					existing &&
+					(existing.runtime !== "docker" ||
+						object(existing.container).hostPreparation !==
+							"spring-boot-layers-v1" ||
+						object(existing.container).image !==
+							"devenv-grid-allocation-backend:latest" ||
+						object(existing.container).dockerfileSource !== hostBuildDockerfile)
+				)
+					throw new Refusal(
+						"Existing native host image pipeline differs; explicit reconciliation required",
+					);
+				const previous = removed[0] ?? existing ?? {},
+					target = {
+						...previous,
+						id: "build-host-image",
+						action: "build",
+						runtime: "docker",
+						profile: "default",
+						label: "Build image (host Maven, native image build)",
+						timeoutMs: 3600000,
+						command: undefined,
+						container: {
+							image: "devenv-grid-allocation-backend:latest",
+							socket,
+							hostPreparation: "spring-boot-layers-v1",
+							dockerfileSource: hostBuildDockerfile,
+						},
+					};
+				validateProjects(config, {
+					version: 1,
+					projects: [
+						{
+							...owner,
+							defaults: undefined,
+							requires: undefined,
+							prerequisites: undefined,
+							targets: [target],
+						},
+					],
+				});
+				owner.targets = owner.targets.filter((entry) => entry !== existing);
+				owner.targets.push(target);
+				for (const ref of Object.values(object(previous.secretRefs ?? {})))
+					if (typeof ref === "string") required.add(ref);
 				rows.push({
 					app: String(owner.id),
 					source: relative,
-					status: "blocked",
+					target: target.id,
+					status: "candidate",
 					reason:
-						"Known Maven/Java/image-packaging source needs a native multi-phase build; obsolete shell Docker wrapper removed from preview rather than enabled as native parity",
+						"Reviewed source digest translated to argv-only host Maven/Java preparation and the owned native image adapter; legacy shell Docker program is not executed",
 				});
 				continue;
 			}
@@ -822,7 +883,11 @@ for (const project of projects) {
 			(target) => target.action === action && target.runtime !== "kubernetes",
 		);
 		const legacyRuntime = (target: Record<string, unknown>) =>
-			target.runtime === "compose" ? "docker" : String(target.runtime);
+			target.container && object(target.container).hostPreparation
+				? "shell"
+				: target.runtime === "compose"
+					? "docker"
+					: String(target.runtime);
 		const runtimeRank = (target: Record<string, unknown>) =>
 			[
 				"docker",
@@ -986,7 +1051,7 @@ const report = {
 	repositoryDiscovery,
 	defaultDecisions,
 	remaining: [
-		"native host-Maven/Java/image-packaging build pipeline (never shell Docker bypass)",
+		"changed host-Maven/image source versions and existing-native override reconciliation require explicit metadata review",
 		"global/shared infrastructure topology and live network lifetime",
 		"application-prerequisite migration where the required backend target remains unavailable",
 		"container telemetry transport and attribution",

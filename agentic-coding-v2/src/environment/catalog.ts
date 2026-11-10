@@ -177,6 +177,10 @@ function readTarget(raw: unknown): Target {
 			: readContainer(data.container);
 	if (!["run", "build", "test"].includes(String(data.action)))
 		throw new Error("Invalid environment target action");
+	if (container?.hostPreparation && data.action !== "build")
+		throw new Error(
+			"Host preparation belongs only to a native container image build",
+		);
 	if (data.action !== "run" && container?.restart && container.restart !== "no")
 		throw new Error(
 			"Restart policies belong only to long-lived run containers",

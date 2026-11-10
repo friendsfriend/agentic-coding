@@ -12,6 +12,12 @@ export function environmentApproval(
 		{
 			plans,
 			waitTimeoutMs: timeoutSec * 1000,
+			...(plans.some((plan) => plan.container?.hostPreparation)
+				? {
+						hostBuildScope:
+							"Explicit spring-boot-layers-v1 image preparation runs argv-only host mvn -B -DskipTests package in the approved task cwd, then requires one bounded regular target/*.jar (excluding sources/javadoc). It freezes that jar into new private native scratch space and runs host java -Djarmode=layertools -jar <captured-jar> extract --destination <private-context>. Maven outputs remain in the task workspace. Only the four expected layer directories and bounded regular unlinked files may enter the native image build; links and unknown entries are refused. The captured approved Dockerfile and prepared private context are passed to the existing owned container build adapter, never a shell Docker/Compose wrapper. Host tools and artifact code execute with the displayed environment/references and conventional HOME/PATH; HOME credentials/tool caches are not copied into configuration. This is not an OS sandbox or automatic dependency installation. Private scratch is removed only through its original live identity after settled local processes; ambiguous cleanup is retained/quarantined, not adopted or resumed after restart. Image artifacts may persist in the local engine.",
+					}
+				: {}),
 			...(plans.some((plan) => plan.dependencyWorkspace)
 				? {
 						prerequisiteWorkspaceScope:

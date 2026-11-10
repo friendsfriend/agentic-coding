@@ -34,6 +34,7 @@ export type ContainerTarget = {
 	completion?: boolean;
 	dockerfile: string;
 	dockerfileSource?: string;
+	hostPreparation?: "spring-boot-layers-v1";
 	buildSecrets?: Record<string, BuildSecret>;
 	context: string;
 	buildArgs: string[];
@@ -129,6 +130,7 @@ export function readContainer(raw: unknown): ContainerTarget {
 		"readiness",
 		"dockerfile",
 		"dockerfileSource",
+		"hostPreparation",
 		"buildSecrets",
 		"context",
 		"buildArgs",
@@ -149,6 +151,16 @@ export function readContainer(raw: unknown): ContainerTarget {
 			"Captured Dockerfile source must be UTF-8 text of at most 64 KiB",
 		);
 	const buildSecrets = readBuildSecrets(data.buildSecrets);
+	if (
+		data.hostPreparation !== undefined &&
+		(data.hostPreparation !== "spring-boot-layers-v1" ||
+			dockerfileSource === undefined ||
+			(data.context !== undefined && data.context !== ".") ||
+			Object.keys(buildSecrets ?? {}).length)
+	)
+		throw new Error(
+			"Host preparation requires the spring-boot-layers-v1 protocol, captured Dockerfile, default context and no BuildKit secret mounts",
+		);
 	const socket = readLocalSocket(data.socket);
 	const image = text(data.image, "container image", 512);
 	if (image.startsWith("-") || /\s/.test(image))
@@ -230,6 +242,9 @@ export function readContainer(raw: unknown): ContainerTarget {
 		...(data.completion === true ? { completion: true } : {}),
 		readiness,
 		dockerfile: relative(data.dockerfile, "Dockerfile", "Dockerfile"),
+		...(data.hostPreparation === undefined
+			? {}
+			: { hostPreparation: "spring-boot-layers-v1" as const }),
 		...(dockerfileSource === undefined
 			? {}
 			: { dockerfileSource: String(dockerfileSource) }),

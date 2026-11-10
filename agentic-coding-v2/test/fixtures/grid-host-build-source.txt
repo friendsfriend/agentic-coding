@@ -1,0 +1,97 @@
+#!/usr/bin/env sh
+# devenv:name=Build image (host maven)
+# devenv:mode=logged
+#
+# Default build target of grid-allocation-backend (action build, profile
+# "default"): package the checkout with maven and wrap the Spring Boot layers in
+# the image the app's run target starts.
+#
+#   mvn package  ->  target/<app>.jar  ->  layertools extract  ->  image
+#   image devenv-grid-allocation-backend:latest
+#         started by apps/compose/grid-allocation-backend-compose.yml
+#         (service `grid-allocation-backend`)
+#
+# Why this is a host script and not the docker build target
+# (apps/build/grid-allocation-backend-build.Dockerfile): a `docker build` runs
+# with none of the developer's environment, so the settings.xml in the build
+# context resolves no Artifactory credentials and maven is answered
+#   status code: 401, reason phrase: Unauthorized (401)
+# by repo.eon-cds.de before it can even read the parent pom - the docker target
+# stops in `dependency:go-offline` with
+#   Non-resolvable parent POM ... spring-boot-starter-parent:pom:4.0.7
+# This target therefore builds with the global maven installation (AGENTS.md:
+# mvnw is not used in this repository), which uses the developer's own
+# ~/.m2/settings.xml credentials and warm local repository, and only packages
+# the resulting boot jar into an image.
+#
+# So the default build of this app is this script. The live
+# `apps/build/grid-allocation-backend-build.Dockerfile` is the same app, action
+# and profile and stays in the configuration until the developer deletes it; it
+# is only usable where Artifactory credentials are available inside
+# `docker build` (CI with a credential helper), not on a developer machine with
+# an environment-configured settings.xml.
+set -eu
+
+# Must stay in sync with the `image:` of apps/compose/grid-allocation-backend-compose.yml.
+IMAGE_NAME="devenv-grid-allocation-backend:latest"
+# Ubuntu based on purpose: the run target's healthcheck uses bash and /dev/tcp.
+BASE_IMAGE="eclipse-temurin:25-jre"
+
+if [ ! -f pom.xml ]; then
+    echo "this target must run from the app checkout (no pom.xml in $PWD)" >&2
+    exit 1
+fi
+for tool in mvn java docker; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "$tool not found on PATH" >&2
+        exit 1
+    fi
+done
+
+# -B keeps the log a single deterministic stream; the tests are not this
+# target's job (the app's test target runs them).
+mvn -B -DskipTests package
+
+# The boot jar, never its `.original` sibling (mvn's pre-repackage backup) and
+# never an artifact/attached-jar variant of it.
+jar=""
+for candidate in target/*.jar; do
+    [ -f "$candidate" ] || continue
+    case "$candidate" in
+        *.original | *-sources.jar | *-javadoc.jar) continue ;;
+        *) jar="$candidate" ;;
+    esac
+done
+if [ -z "$jar" ]; then
+    echo "no boot jar found in target/ after mvn package" >&2
+    exit 1
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+java -Djarmode=layertools -jar "$jar" extract --destination "$work"
+
+# Fail here, with the layout in the message, instead of inside `docker build`,
+# if a future Spring Boot changes the layer set.
+for layer in dependencies spring-boot-loader snapshot-dependencies application; do
+    if [ ! -d "$work/$layer" ]; then
+        echo "the boot jar did not extract the expected layer '$layer' to $work: $(ls -A "$work")" >&2
+        exit 1
+    fi
+done
+
+# Same layering as the app's own build Dockerfile, so the image this target
+# produces is the image that definition would produce.
+cat > "$work/Dockerfile" <<DOCKERFILE
+FROM $BASE_IMAGE
+WORKDIR /app
+COPY dependencies/ ./
+COPY spring-boot-loader/ ./
+COPY snapshot-dependencies/ ./
+COPY application/ ./
+EXPOSE 8080
+ENTRYPOINT ["java","-Dplaywright.cli.dir=/playwright-driver","org.springframework.boot.loader.launch.JarLauncher"]
+DOCKERFILE
+
+docker build -t "$IMAGE_NAME" "$work"
+echo "built $IMAGE_NAME from $jar"
