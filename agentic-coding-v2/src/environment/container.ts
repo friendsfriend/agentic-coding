@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { digest } from "../config.ts";
 import { contained } from "../git.ts";
+import { freezeBuildSecrets } from "./build-secrets.ts";
 import { EnvironmentCommands } from "./command.ts";
 import { inspectContainer, type Observation } from "./container-observation.ts";
 import type { Plan } from "./model.ts";
@@ -41,15 +43,21 @@ export class ContainerProcess {
 	private name: string;
 	private host: string;
 	private prefix: string[];
+	private buildSecretArguments: string[];
 	private observed: RuntimeStatus;
 	private failure = "";
 	constructor(
 		private plan: Plan,
 		private configDir: string,
-		stateDir: string,
+		private stateDir: string,
 		private run: string,
 		private network?: { id: string; aliases: string[] },
 		startupEnvironment?: ReturnType<typeof processEnvironment>,
+		private volumeMounts: {
+			name: string;
+			target: string;
+			readOnly: boolean;
+		}[] = [],
 	) {
 		if (
 			network &&
@@ -57,10 +65,24 @@ export class ContainerProcess {
 				network.aliases.some((alias) => !/^[a-z][a-z0-9-]{0,62}$/.test(alias)))
 		)
 			throw new Error("Invalid live network attachment");
+		if (
+			volumeMounts.some(
+				(mount) =>
+					!/^acv2-volume-[a-f0-9]{32}$/.test(mount.name) ||
+					!mount.target.startsWith("/") ||
+					/[,\0\r\n]/.test(mount.target),
+			)
+		)
+			throw new Error("Invalid live native volume attachment");
 		const spec = plan.container;
 		if (!spec || !(plan.runtime === "docker" || plan.runtime === "podman"))
 			throw new Error("Structured container configuration is required");
-		const frozen = startupEnvironment ?? processEnvironment(configDir, plan);
+		const build = freezeBuildSecrets(
+			plan,
+			startupEnvironment ?? processEnvironment(configDir, plan),
+		);
+		const frozen = build.environment;
+		this.buildSecretArguments = build.arguments;
 		this.frozen = frozen;
 		this.queryCredentials = frozen.queryCredentials;
 		this.authorization = frozen.authorization;
@@ -207,9 +229,11 @@ export class ContainerProcess {
 				...this.observed,
 				id: observation?.id ?? null,
 				state: observation
-					? observation.running
-						? "running"
-						: "stopped"
+					? observation.restarting
+						? "unknown"
+						: observation.running
+							? "running"
+							: "stopped"
 					: "absent",
 				health:
 					health === "healthy" ||
@@ -267,30 +291,59 @@ export class ContainerProcess {
 		this.deadline = Date.now() + this.plan.timeoutMs;
 		// Resolve mount/build paths immediately before their effects, not just at approval.
 		if (this.plan.action === "build") {
-			const context = contained(this.plan.workspace, this.spec.context),
-				dockerfile = contained(this.plan.workspace, this.spec.dockerfile);
-			if (
-				!fs.statSync(context).isDirectory() ||
-				!fs.statSync(dockerfile).isFile()
-			)
-				throw new Error("Container build context/Dockerfile is unavailable");
-			const result = await this.commands.run(
-				[
-					"build",
-					"--file",
-					dockerfile,
-					"--tag",
-					this.spec.image,
-					...this.spec.buildArgs.flatMap((key) => ["--build-arg", key]),
-					context,
-				],
-				{
-					signal: this.controller.signal,
-					timeoutMs: this.budget(),
-					effect: true,
-				},
-			);
-			this.finish(result.exit.code, result.exit.signal);
+			const context = contained(this.plan.workspace, this.spec.context);
+			if (!fs.statSync(context).isDirectory())
+				throw new Error("Container build context is unavailable");
+			let directory: string | undefined;
+			let dockerfile: string;
+			let exit: Exit | undefined;
+			if (this.spec.dockerfileSource !== undefined) {
+				directory = fs.mkdtempSync(
+					path.join(this.stateDir, "environment-build-source-"),
+				);
+				fs.chmodSync(directory, 0o700);
+				dockerfile = path.join(directory, "Dockerfile");
+			} else dockerfile = contained(this.plan.workspace, this.spec.dockerfile);
+			try {
+				if (this.spec.dockerfileSource !== undefined)
+					fs.writeFileSync(dockerfile, this.spec.dockerfileSource, {
+						flag: "wx",
+						mode: 0o600,
+					});
+				if (!fs.statSync(dockerfile).isFile())
+					throw new Error("Container Dockerfile is unavailable");
+				const result = await this.commands.run(
+					[
+						"build",
+						"--file",
+						dockerfile,
+						"--tag",
+						this.spec.image,
+						...this.spec.buildArgs.flatMap((key) => ["--build-arg", key]),
+						...this.buildSecretArguments,
+						context,
+					],
+					{
+						signal: this.controller.signal,
+						timeoutMs: this.budget(),
+						effect: true,
+					},
+				);
+				exit = result.exit;
+			} finally {
+				if (directory) {
+					try {
+						fs.unlinkSync(dockerfile);
+						fs.rmdirSync(directory);
+					} catch {
+						this.uncertain = true;
+						this.failure =
+							"Captured build-source cleanup uncertain; inspection required";
+					}
+				}
+			}
+			if (this.uncertain) throw new Error(this.failure);
+			if (exit) this.finish(exit.code, exit.signal);
 			return;
 		}
 		const mounts = this.spec.mounts.flatMap((mount) => {
@@ -335,6 +388,11 @@ export class ContainerProcess {
 				`${port.address.includes(":") ? `[${port.address}]` : port.address}:${port.host}:${port.container}/${port.protocol}`,
 			]),
 			...mounts,
+			...this.volumeMounts.flatMap((mount) => [
+				"--mount",
+				`type=volume,src=${mount.name},dst=${mount.target}${mount.readOnly ? ",readonly" : ""}`,
+			]),
+			...(this.spec.restart ? ["--restart", this.spec.restart] : []),
 			...(this.spec.shmSize === undefined
 				? []
 				: ["--shm-size", String(this.spec.shmSize)]),
@@ -412,6 +470,10 @@ export class ContainerProcess {
 			const observed = await this.observe();
 			if (!observed) this.fail("Container disappeared during startup");
 			this.owned(observed);
+			if (observed.restarting) {
+				await Bun.sleep(100);
+				continue;
+			}
 			if (
 				observed.running &&
 				(this.spec.readiness === "running" || observed.health === "healthy")
@@ -436,7 +498,7 @@ export class ContainerProcess {
 				const observation = await this.observe();
 				if (!observation) throw new Error("Container observation disappeared");
 				this.owned(observation);
-				if (!observation.running) {
+				if (!observation.running && !observation.restarting) {
 					await this.cleanup();
 					this.finish(observation.exitCode);
 					return;
@@ -493,7 +555,7 @@ export class ContainerProcess {
 			return;
 		}
 		this.owned(existing);
-		if (existing.running)
+		if (existing.running || existing.restarting)
 			await this.commands.checked(["stop", "--time", "2", existing.id], {
 				timeoutMs: 10000,
 				effect: true,
@@ -502,6 +564,8 @@ export class ContainerProcess {
 		const stopped = await this.observe(true);
 		if (stopped) {
 			this.owned(stopped);
+			if (stopped.running || stopped.restarting)
+				throw new Error("Container stop has not settled; refusing removal");
 			if (this.didStart && !stopped.running)
 				this.applicationExit = stopped.exitCode;
 			if (stopped.id !== existing.id)

@@ -671,3 +671,375 @@ test("missing service references refuse the whole stack before network creation"
 	expect(Object.keys(state.networks ?? {})).toHaveLength(0);
 	await app.cancel(task);
 }, 30000);
+
+test("owned restart policy survives a restart observation and cancellation stops the same creation", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) =>
+		writeDefinition(config, engineTarget(config)),
+	);
+	await compose(invocation.repository, {
+		web: { ...service(), restart: "always" },
+	});
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", { path: ".", title: "Hold restart fixture" }),
+	]);
+	const task = await app.startTask(invocation);
+	await approve(app, task);
+	await pendingReview(app, task, "Hold restart fixture");
+	const file = path.join(config.configDir, "engine.json");
+	const state = readEngineFile(file);
+	const original = Object.values(state.containers)[0];
+	if (!original) throw new Error("Missing owned container");
+	expect(state.history.find((args) => args[2] === "create")).toContain(
+		"--restart",
+	);
+	expect(state.history.find((args) => args[2] === "create")).toContain(
+		"always",
+	);
+	original.State.Restarting = true;
+	original.State.Running = false;
+	fs.writeFileSync(file, JSON.stringify(state));
+	const before = state.history.length;
+	await eventually(
+		async () =>
+			readEngineFile(file)
+				.history.slice(before)
+				.some((args) => args[2] === "inspect"),
+		(seen) => seen,
+	);
+	expect((await app.environments.snapshot()).runs[0]?.state).toBe("running");
+	expect(readEngineFile(file).history.some((args) => args[2] === "rm")).toBe(
+		false,
+	);
+	await app.cancel(task);
+	const stopped = readEngineFile(file);
+	expect(Object.keys(stopped.containers)).toHaveLength(0);
+	expect(stopped.history.find((args) => args[2] === "stop")?.at(-1)).toBe(
+		original.Id,
+	);
+}, 30000);
+
+test("persistent native volumes retain exact creation receipts across independently approved runs, ephemeral volumes do not", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) =>
+		writeDefinition(config, engineTarget(config)),
+	);
+	const yaml = Bun.YAML.stringify({
+		volumes: { data: {}, scratch: { "x-lifetime": "ephemeral" } },
+		services: {
+			web: {
+				...service(),
+				volumes: [
+					{ type: "volume", source: "data", target: "/data" },
+					{ type: "volume", source: "scratch", target: "/scratch" },
+				],
+			},
+		},
+	});
+	fs.writeFileSync(path.join(invocation.repository, "compose.yaml"), yaml);
+	await git(invocation.repository, ["add", "compose.yaml"]);
+	await git(invocation.repository, [
+		"commit",
+		"-m",
+		"Disposable volume fixture",
+	]);
+	const file = path.join(config.configDir, "engine.json");
+	let retained: string | undefined;
+	for (const generation of [1, 2]) {
+		fake.setResponses([
+			call("env_start", { apps: ["api"] }),
+			call("request_review", {
+				path: ".",
+				title: `Hold volume generation ${generation}`,
+			}),
+		]);
+		const task = await app.startTask({
+			...invocation,
+			requestId: `volume-generation-${generation}`,
+		});
+		const review = await pendingReview(app, task);
+		expect(review.snapshot).toContain('"lifetime": "persistent"');
+		if (retained) expect(review.snapshot).toContain(retained);
+		await approve(app, task);
+		await pendingReview(app, task, `Hold volume generation ${generation}`);
+		const running = readEngineFile(file);
+		const names = Object.keys(running.volumes ?? {});
+		expect(names).toHaveLength(2);
+		if (retained) expect(names).toContain(retained);
+		expect(Object.values(running.containers)[0]?.VolumeNames?.sort()).toEqual(
+			names.sort(),
+		);
+		await app.cancel(task);
+		const stopped = readEngineFile(file);
+		expect(Object.keys(stopped.containers)).toHaveLength(0);
+		expect(Object.keys(stopped.volumes ?? {})).toHaveLength(1);
+		retained = Object.keys(stopped.volumes ?? {})[0];
+	}
+	const stopped = readEngineFile(file);
+	expect(
+		stopped.history.filter(
+			(args) => args[2] === "volume" && args[3] === "create",
+		),
+	).toHaveLength(3);
+	expect(
+		stopped.history.filter((args) => args[2] === "volume" && args[3] === "rm"),
+	).toHaveLength(2);
+}, 30000);
+
+test("lost volume creation receipts retain data and quarantine locks without creating containers", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		writeDefinition(config, engineTarget(config));
+		const file = path.join(config.configDir, "engine.json"),
+			state = readEngineFile(file);
+		state.invalidVolumeReceipt = true;
+		fs.writeFileSync(file, JSON.stringify(state));
+	});
+	fs.writeFileSync(
+		path.join(invocation.repository, "compose.yaml"),
+		Bun.YAML.stringify({
+			volumes: { data: {} },
+			services: {
+				web: {
+					...service(),
+					volumes: [{ type: "volume", source: "data", target: "/data" }],
+				},
+			},
+		}),
+	);
+	await git(invocation.repository, ["add", "compose.yaml"]);
+	await git(invocation.repository, [
+		"commit",
+		"-m",
+		"Uncertain volume fixture",
+	]);
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", { path: ".", title: "Volume receipt refused" }),
+	]);
+	const task = await app.startTask(invocation);
+	await approve(app, task);
+	await pendingReview(app, task, "Volume receipt refused");
+	const state = readEngineFile(path.join(config.configDir, "engine.json"));
+	expect(Object.keys(state.volumes ?? {})).toHaveLength(1);
+	expect(Object.keys(state.containers)).toHaveLength(0);
+	expect(
+		state.history.some((args) => args[2] === "volume" && args[3] === "rm"),
+	).toBe(false);
+	expect(
+		fs
+			.readdirSync(path.join(config.stateDir, "environment-volumes"))
+			.some((file) => file.endsWith(".lock")),
+	).toBe(true);
+	await app.cancel(task);
+}, 30000);
+
+test("copied-label replacement volumes are not reused or removed under a fresh approval", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) =>
+		writeDefinition(config, engineTarget(config)),
+	);
+	fs.writeFileSync(
+		path.join(invocation.repository, "compose.yaml"),
+		Bun.YAML.stringify({
+			volumes: { data: {} },
+			services: {
+				web: {
+					...service(),
+					volumes: [{ type: "volume", source: "data", target: "/data" }],
+				},
+			},
+		}),
+	);
+	await git(invocation.repository, ["add", "compose.yaml"]);
+	await git(invocation.repository, [
+		"commit",
+		"-m",
+		"Volume replacement fixture",
+	]);
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", { path: ".", title: "Hold original volume" }),
+	]);
+	const first = await app.startTask({
+		...invocation,
+		requestId: "volume-original",
+	});
+	await approve(app, first);
+	await pendingReview(app, first, "Hold original volume");
+	await app.cancel(first);
+	const file = path.join(config.configDir, "engine.json"),
+		state = readEngineFile(file);
+	const original = Object.values(state.volumes ?? {})[0];
+	if (!original) throw new Error("Missing persistent volume");
+	original.CreatedAt = "2000-01-01T00:00:00.000Z";
+	fs.writeFileSync(file, JSON.stringify(state));
+	const before = state.history.length;
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", { path: ".", title: "Replacement refused" }),
+	]);
+	const second = await app.startTask({
+		...invocation,
+		requestId: "volume-replacement",
+	});
+	await approve(app, second);
+	await pendingReview(app, second, "Replacement refused");
+	const after = readEngineFile(file);
+	expect(Object.keys(after.volumes ?? {})).toHaveLength(1);
+	expect(Object.keys(after.containers)).toHaveLength(0);
+	expect(
+		after.history
+			.slice(before)
+			.some(
+				(args) =>
+					["create", "rm", "start", "stop"].includes(args[2] ?? "") ||
+					(args[2] === "volume" && ["create", "rm"].includes(args[3] ?? "")),
+			),
+	).toBe(false);
+	await app.cancel(second);
+}, 30000);
+
+test("config-captured Compose runs native shorthand without creating or reading a repository Compose file", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		const target = engineTarget(config);
+		target.compose = {
+			...target.compose,
+			...{
+				source: Bun.YAML.stringify({
+					name: "fixture-project",
+					networks: { local: { driver: "bridge" } },
+					volumes: { data: { "x-lifetime": "ephemeral" } },
+					services: {
+						web: {
+							image: "fixture:latest",
+							container_name: "fixture-captured-web",
+							networks: ["local"],
+							command:
+								"serve --name 'quoted value' --literal '$(not-executed)'",
+							environment: ["PUBLIC-SETTING=value=with=equals"],
+							volumes: ["data:/data:rw"],
+							ports: ["43210:8080/tcp"],
+						},
+					},
+				}),
+			},
+		};
+		writeDefinition(config, target);
+	});
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", { path: ".", title: "Hold captured source" }),
+	]);
+	const task = await app.startTask(invocation);
+	const review = await pendingReview(app, task);
+	expect(review.snapshot).toContain("fixture-captured-web");
+	await approve(app, task);
+	await pendingReview(app, task, "Hold captured source");
+	const state = readEngineFile(path.join(config.configDir, "engine.json"));
+	const creation = state.history.find((args) => args[2] === "create");
+	expect(creation).toContain("PUBLIC-SETTING");
+	expect(creation).toContain("127.0.0.1:43210:8080/tcp");
+	expect(creation?.slice(-5)).toEqual([
+		"serve",
+		"--name",
+		"quoted value",
+		"--literal",
+		"$(not-executed)",
+	]);
+	expect(fs.existsSync(path.join(invocation.repository, "compose.yaml"))).toBe(
+		false,
+	);
+	await app.cancel(task);
+	expect(
+		Object.keys(
+			readEngineFile(path.join(config.configDir, "engine.json")).volumes ?? {},
+		),
+	).toHaveLength(0);
+}, 30000);
+
+test("captured native builds transport encoded templates and file credentials only through BuildKit secret environments", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		const base = engineTarget(config);
+		const secretFile = path.join(config.configDir, "fixture.npmrc");
+		fs.writeFileSync(
+			secretFile,
+			"//fixture.invalid/:_authToken=disposable-build-token\n",
+			{ mode: 0o600 },
+		);
+		fs.writeFileSync(
+			path.join(config.configDir, ".env"),
+			"FIXTURE_BUILD_USER=fixture-user\nFIXTURE_BUILD_PASSWORD=fixture&password\n",
+			{ mode: 0o600 },
+		);
+		writeDefinition(config, {
+			id: "build",
+			action: "build",
+			runtime: "docker",
+			timeoutMs: 10000,
+			environment: {
+				...base.environment,
+				FIXTURE_BUILD_SECRETS_RECEIPT: path.join(
+					config.configDir,
+					"secret-digests.json",
+				),
+			},
+			secretRefs: {
+				BUILD_USER: "FIXTURE_BUILD_USER",
+				BUILD_PASSWORD: "FIXTURE_BUILD_PASSWORD",
+			},
+			container: {
+				socket: base.compose.socket,
+				image: "fixture:built",
+				dockerfileSource:
+					"FROM fixture:latest\nRUN --mount=type=secret,id=settings,target=/run/secrets/settings.xml probe\n",
+				buildSecrets: {
+					settings: {
+						template: `<settings><user>\${USERNAME}</user><password>\${PASSWORD}</password></settings>`,
+						encoding: "xml",
+						refs: { USERNAME: "BUILD_USER", PASSWORD: "BUILD_PASSWORD" },
+					},
+					npmrc: { file: secretFile },
+				},
+			},
+		});
+	});
+	fake.setResponses([
+		call("env_build", { app: "api" }),
+		call("request_review", { path: ".", title: "Build secret receipt" }),
+	]);
+	const task = await app.startTask(invocation);
+	const review = await pendingReview(app, task);
+	expect(review.snapshot).toContain("FIXTURE_BUILD_PASSWORD");
+	expect(review.snapshot).not.toContain("fixture&password");
+	await approve(app, task);
+	await pendingReview(app, task, "Build secret receipt");
+	const state = readEngineFile(path.join(config.configDir, "engine.json"));
+	const build = state.history.find((args) => args[2] === "build");
+	expect(build).toContain("id=settings,env=ACV2_BUILD_SECRET_0");
+	expect(build).toContain("id=npmrc,env=ACV2_BUILD_SECRET_1");
+	const sourceFile = build?.[(build?.indexOf("--file") ?? -2) + 1];
+	expect(sourceFile).toBeDefined();
+	if (sourceFile) expect(fs.existsSync(sourceFile)).toBe(false);
+	expect(fs.existsSync(path.join(invocation.repository, "settings.xml"))).toBe(
+		false,
+	);
+	expect(fs.existsSync(path.join(invocation.repository, ".npmrc"))).toBe(false);
+	const hashes = JSON.parse(
+		fs.readFileSync(path.join(config.configDir, "secret-digests.json"), "utf8"),
+	);
+	expect(hashes.ACV2_BUILD_SECRET_0).toBe(
+		new Bun.CryptoHasher("sha256")
+			.update(
+				"<settings><user>fixture-user</user><password>fixture&amp;password</password></settings>",
+			)
+			.digest("hex"),
+	);
+	expect(hashes.ACV2_BUILD_SECRET_1).toBe(
+		new Bun.CryptoHasher("sha256")
+			.update("//fixture.invalid/:_authToken=disposable-build-token\n")
+			.digest("hex"),
+	);
+	const snapshot = JSON.stringify(await app.environments.snapshot());
+	expect(snapshot).not.toContain("fixture&password");
+	expect(snapshot).not.toContain("fixture&amp;password");
+	expect(snapshot).not.toContain("disposable-build-token");
+	await app.cancel(task);
+}, 15000);

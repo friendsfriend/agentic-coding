@@ -6,6 +6,7 @@ import { contained } from "../git.ts";
 import { authentication } from "./http-options.ts";
 import type { Plan } from "./model.ts";
 import type { Exit, LogTiming } from "./process.ts";
+import { shellReady } from "./shell-readiness.ts";
 
 /** One leading Docker/Podman log timestamp; anything else is not guessed. */
 function runtimeTimestamp(line: string) {
@@ -343,13 +344,15 @@ export class ShellProcess {
 		if (!(await this.spawned))
 			throw new Error("Environment process could not start");
 		const deadline = Date.now() + this.plan.timeoutMs;
-		while (this.plan.readyText && !this.readyObserved) {
+		while ((this.plan.readyText && !this.readyObserved) || this.plan.readyUrl) {
 			signal?.throwIfAborted();
 			if (this.mainExited || this.ended)
 				throw new Error("Environment process exited during startup");
 			if (Date.now() >= deadline)
 				throw new Error("Environment startup timed out");
-			await Bun.sleep(10);
+			if (this.plan.readyUrl && (await shellReady(this.plan.readyUrl, signal)))
+				break;
+			await Bun.sleep(this.plan.readyUrl ? 50 : 10);
 		}
 		signal?.throwIfAborted();
 		if (this.mainExited || this.ended)

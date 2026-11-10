@@ -4,6 +4,7 @@ export type Observation = {
 	name: string;
 	labels: Record<string, unknown>;
 	running: boolean;
+	restarting: boolean;
 	exitCode: number;
 	health: string | null;
 };
@@ -50,6 +51,8 @@ export async function inspectContainer(
 			config = object(item.Config);
 		if (
 			typeof state.Running !== "boolean" ||
+			(state.Restarting !== undefined &&
+				typeof state.Restarting !== "boolean") ||
 			!Number.isInteger(state.ExitCode) ||
 			Number(state.ExitCode) < 0 ||
 			Number(state.ExitCode) > 255 ||
@@ -62,6 +65,7 @@ export async function inspectContainer(
 			name: observedName,
 			labels: config.Labels === null ? {} : object(config.Labels),
 			running: state.Running,
+			restarting: state.Restarting === true,
 			exitCode: Number(state.ExitCode),
 			health:
 				health && typeof health === "object"

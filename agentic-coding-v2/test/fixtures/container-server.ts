@@ -10,8 +10,10 @@ export type EngineState = {
 			Config: { Labels: Record<string, string>; Env: string[] };
 			NetworkId?: string;
 			Aliases?: string[];
+			VolumeNames?: string[];
 			State: {
 				Running: boolean;
+				Restarting?: boolean;
 				ExitCode: number;
 				Health?: { Status: string };
 			};
@@ -26,6 +28,18 @@ export type EngineState = {
 			Containers: Record<string, { Name: string }>;
 		}
 	>;
+	volumes?: Record<
+		string,
+		{
+			Name: string;
+			CreatedAt: string;
+			Driver: string;
+			Scope: string;
+			Labels: Record<string, string>;
+			Options: Record<string, string>;
+		}
+	>;
+	invalidVolumeReceipt?: boolean;
 	invalidNetworkReceipt?: boolean;
 	workloadPrerequisite?: "healthy" | "running";
 	history: string[][];
@@ -108,6 +122,58 @@ export function serveContainerFixture(file: string) {
 						exit = 1;
 					} else
 						switch (args[0]) {
+							case "volume": {
+								state.volumes ??= {};
+								if (args[1] === "ls") {
+									const filter = value("--filter")?.replace(/^name=/, "") ?? "";
+									for (const volume of Object.values(state.volumes))
+										if (volume.Name.includes(filter)) print(volume.Name);
+								} else if (args[1] === "inspect") {
+									const volume = state.volumes[args[2] ?? ""];
+									if (!volume) {
+										exit = 1;
+										break;
+									}
+									print(JSON.stringify([volume]));
+								} else if (args[1] === "create") {
+									const name = args.at(-1);
+									if (!name || state.volumes[name]) {
+										exit = 1;
+										break;
+									}
+									const labels: Record<string, string> = {};
+									for (let i = 0; i < args.length; i++)
+										if (args[i] === "--label") {
+											const label = args[i + 1] ?? "",
+												split = label.indexOf("=");
+											labels[label.slice(0, split)] = label.slice(split + 1);
+										}
+									state.volumes[name] = {
+										Name: name,
+										CreatedAt: new Date().toISOString(),
+										Driver: "local",
+										Scope: "local",
+										Labels: labels,
+										Options: {},
+									};
+									print(
+										state.invalidVolumeReceipt ? "lost-volume-receipt" : name,
+									);
+								} else if (args[1] === "rm") {
+									const name = args[2] ?? "";
+									if (
+										!state.volumes[name] ||
+										Object.values(state.containers).some((container) =>
+											container.VolumeNames?.includes(name),
+										)
+									) {
+										exit = 1;
+										break;
+									}
+									delete state.volumes[name];
+								} else throw new Error("Unexpected volume command");
+								break;
+							}
 							case "network": {
 								state.networks ??= {};
 								const findNetwork = (id: string | undefined) =>
@@ -208,8 +274,24 @@ export function serveContainerFixture(file: string) {
 											position + 1,
 										);
 									}
+								const volumeNames = args.flatMap((arg, index) =>
+									arg === "--mount" &&
+									args[index + 1]?.startsWith("type=volume,")
+										? [
+												args[index + 1]
+													?.split(",")
+													.find((part) => part.startsWith("src="))
+													?.slice(4) ?? "",
+											]
+										: [],
+								);
+								if (volumeNames.some((name) => !state.volumes?.[name])) {
+									exit = 1;
+									break;
+								}
 								const id = (state.next++).toString(16).padStart(64, "0");
 								state.containers[id] = {
+									VolumeNames: volumeNames,
 									Id: id,
 									Name: `/${name}`,
 									...(networkId
@@ -299,6 +381,7 @@ export function serveContainerFixture(file: string) {
 									break;
 								}
 								found.State.Running = false;
+								found.State.Restarting = false;
 								if (state.replaceAfterStop)
 									found.Config.Labels = { foreign: "replacement" };
 								if (state.replaceWithCopiedLabels) {

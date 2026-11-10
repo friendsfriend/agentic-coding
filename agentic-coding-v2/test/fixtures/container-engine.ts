@@ -1,5 +1,7 @@
 // Executable fixture, never a real container engine. Requests go to one isolated
 // in-test engine so killing a CLI cannot strand a synthetic filesystem lock.
+
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,7 +67,32 @@ if (result.follow) {
 		}
 	}, 100);
 } else {
-	if (result.stdout.startsWith("build"))
+	if (result.stdout.startsWith("build")) {
 		console.log(process.env.SERVICE_TOKEN ?? "");
+		if (process.env.FIXTURE_BUILD_SECRETS_RECEIPT) {
+			const secrets = Object.entries(process.env).filter(([key]) =>
+				key.startsWith("ACV2_BUILD_SECRET_"),
+			);
+			fs.writeFileSync(
+				process.env.FIXTURE_BUILD_SECRETS_RECEIPT,
+				JSON.stringify(
+					Object.fromEntries(
+						secrets.map(([key, value]) => [
+							key,
+							createHash("sha256")
+								.update(value ?? "")
+								.digest("hex"),
+						]),
+					),
+				),
+			);
+			for (const [, value] of secrets) {
+				console.log(value);
+				for (const line of (value ?? "").split("\n"))
+					if (line.includes("="))
+						console.log(line.slice(line.indexOf("=") + 1));
+			}
+		}
+	}
 	process.exit(result.exit);
 }

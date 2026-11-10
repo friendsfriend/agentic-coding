@@ -85,6 +85,7 @@ export function createEnvironmentTools(
 			apps,
 			action,
 			selection,
+			manager.stateDir,
 		).map((plan) =>
 			plan.kubernetes
 				? {

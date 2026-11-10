@@ -54,6 +54,7 @@ import {
 } from "./reference-scope.ts";
 import { runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
+import { assertReadyPortAvailable } from "./shell-readiness.ts";
 import {
 	type EnvironmentRun,
 	EnvironmentState,
@@ -102,6 +103,9 @@ export class Environments {
 	>();
 	private stoppedRoots = new Set<string>();
 	private dependencyCleanup = new Map<number, Promise<void>>();
+	get stateDir() {
+		return this.config.stateDir;
+	}
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
 		this.drafts = new DefinitionDrafts(config, () => this.store);
@@ -904,6 +908,10 @@ export class Environments {
 					}, background);
 					continue;
 				}
+				if (plan.readyUrl) {
+					await assertReadyPortAvailable(plan.readyUrl);
+					signal?.throwIfAborted();
+				}
 				const id = `${batch}:${plan.app}`;
 				const frozen = plan.telemetry
 					? processEnvironment(this.config.configDir, plan)
@@ -976,7 +984,10 @@ export class Environments {
 							...run,
 							state: "running",
 							revision: run.revision + 1,
-							ready: plan.runtime !== "shell" || plan.readyText ? true : null,
+							ready:
+								plan.runtime !== "shell" || plan.readyText || plan.readyUrl
+									? true
+									: null,
 							output: process.logs,
 							...(process.logTiming ? { logTiming: process.logTiming } : {}),
 							...(process.serviceLogs

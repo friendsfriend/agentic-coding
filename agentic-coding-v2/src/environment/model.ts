@@ -34,6 +34,8 @@ export type Availability = {
 
 export type ComposeDefinition = {
 	file: string;
+	/** Config-owned captured bytes; file is a virtual workspace-relative bind base. */
+	source?: string;
 	provider: "docker" | "podman";
 	socket: string;
 	network: "shared" | "isolated";
@@ -47,11 +49,13 @@ export type ComposeDependency = {
 };
 export type ComposePlan = {
 	digest: string;
+	volumes?: import("./compose-volumes.ts").PlannedVolume[];
 	services: {
 		id: string;
 		container: ContainerTarget;
 		environment: Record<string, string>;
 		secretRefs?: Record<string, string>;
+		volumeMounts?: { id: string; target: string; readOnly: boolean }[];
 		envFile?: string;
 		envFileDigest?: string;
 		dependsOn: ComposeDependency[];
@@ -72,6 +76,7 @@ export type Target = {
 	cwd: string;
 	timeoutMs: number;
 	readyText: string | null;
+	readyUrl?: string;
 	environment: Record<string, string>;
 	secretRefs: Record<string, string>;
 	endpoints?: Record<string, string>;

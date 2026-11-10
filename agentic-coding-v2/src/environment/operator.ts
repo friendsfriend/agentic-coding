@@ -115,6 +115,7 @@ export class OperatorEnvironments {
 			request.apps,
 			request.action,
 			request,
+			this.config.stateDir,
 		);
 		const id = await home.commit(async (tx) => {
 			const doc = await tx.doc(Catalog),

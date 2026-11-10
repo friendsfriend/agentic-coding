@@ -14,7 +14,7 @@ afterEach(cleanup);
 const refusedSources: Array<[string, string]> = [
 	[
 		"unknown top-level field",
-		`services:\n  api:\n    image: fixture:latest\nnetworks: {}\n`,
+		`services:\n  api:\n    image: fixture:latest\nsecrets: {}\n`,
 	],
 	[
 		"unknown service field",
@@ -64,16 +64,32 @@ const refusedSources: Array<[string, string]> = [
 		`services:\n  api:\n    image: fixture:latest\n    extra_hosts: ['--privileged:host-gateway']\n`,
 	],
 	[
-		"named volume",
+		"undeclared named volume",
 		`services:\n  api:\n    image: fixture:latest\n    volumes:\n      - type: volume\n        source: data\n        target: /data\n`,
+	],
+	[
+		"external volume adoption",
+		`volumes:\n  data:\n    external: true\nservices:\n  api:\n    image: fixture:latest\n    volumes: [data:/data]\n`,
+	],
+	[
+		"external network adoption",
+		`networks:\n  existing:\n    external: true\nservices:\n  api:\n    image: fixture:latest\n    networks: [existing]\n`,
+	],
+	[
+		"implicit environment inheritance",
+		`services:\n  api:\n    image: fixture:latest\n    environment: [TOKEN]\n`,
+	],
+	[
+		"unclosed command quote",
+		`services:\n  api:\n    image: fixture:latest\n    command: "probe 'unclosed"\n`,
 	],
 	[
 		"absolute bind source",
 		`services:\n  api:\n    image: fixture:latest\n    volumes:\n      - type: bind\n        source: /data\n        target: /data\n`,
 	],
 	[
-		"restart policy",
-		`services:\n  api:\n    image: fixture:latest\n    restart: always\n`,
+		"invalid restart policy",
+		`services:\n  api:\n    image: fixture:latest\n    restart: on-failure:101\n`,
 	],
 	[
 		"multiple env files",

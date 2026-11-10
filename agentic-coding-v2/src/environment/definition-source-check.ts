@@ -142,6 +142,10 @@ export function inspectComposeSource(
 		if (!project || !target || !definition)
 			throw new Error("No exact Compose target");
 		publicComposePath(definition.file);
+		if (definition.source !== undefined && staged)
+			throw new Error(
+				"Inline sources are edited in the definition, not through a repository source overlay",
+			);
 		if (staged && digest(staged.content) !== staged.digest)
 			throw new Error("Staged source digest mismatch");
 		const captured = staged
@@ -150,7 +154,15 @@ export function inspectComposeSource(
 					contentDigest: digest(Buffer.from(staged.content).toString("base64")),
 					bytes: Buffer.byteLength(staged.content),
 				}
-			: capture(project.repository, definition.file);
+			: definition.source !== undefined
+				? {
+						source: definition.source,
+						contentDigest: digest(
+							Buffer.from(definition.source).toString("base64"),
+						),
+						bytes: Buffer.byteLength(definition.source),
+					}
+				: capture(project.repository, definition.file);
 		checkedSource = {
 			contentDigest: captured.contentDigest,
 			bytes: captured.bytes,
@@ -171,7 +183,11 @@ export function inspectComposeSource(
 			checkedSource,
 			compiledDigest: digest(JSON.stringify(plan)),
 			serviceCount: plan.services.length,
-			origin: staged ? "private-staged-text" : "repository-file",
+			origin: staged
+				? "private-staged-text"
+				: definition.source !== undefined
+					? "config-captured-text"
+					: "repository-file",
 			stagedDigest: staged?.digest,
 			base: staged
 				? "not validated by parser; promotion unsupported"

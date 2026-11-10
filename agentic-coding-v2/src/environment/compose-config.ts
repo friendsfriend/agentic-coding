@@ -3,6 +3,12 @@ import path from "node:path";
 import { digest, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import {
+	composeArgv,
+	composeEnvironment,
+	composeMount,
+	composePort,
+} from "./compose-values.ts";
+import {
 	readContainer,
 	readHealth,
 	readLocalSocket,
@@ -82,7 +88,7 @@ function serviceSecrets(raw: unknown) {
 	return Object.fromEntries(
 		Object.entries(refs).map(([key, ref]) => {
 			if (
-				!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ||
+				!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key) ||
 				["WORKSPACE", "CONFIG_DIR", "PATH", "HOME"].includes(key) ||
 				typeof ref !== "string" ||
 				!/^[A-Za-z_][A-Za-z0-9_]*$/.test(ref)
@@ -184,6 +190,11 @@ function orderServices(
 			// dependent starts; it has no long-lived readiness of its own.
 			if (dependency.condition === "service_completed_successfully") {
 				if (!prerequisite) throw new Error("Missing Compose prerequisite");
+				if (
+					prerequisite.container.restart &&
+					prerequisite.container.restart !== "no"
+				)
+					throw new Error("Completion prerequisites cannot restart");
 				prerequisite.container.completion = true;
 			}
 		}
@@ -196,7 +207,7 @@ function orderServices(
 }
 export function readCompose(raw: unknown): ComposeDefinition {
 	const data = object(raw);
-	keys(data, ["file", "provider", "socket", "network"]);
+	keys(data, ["file", "provider", "socket", "network", "source"]);
 	if (
 		data.network !== undefined &&
 		data.network !== "shared" &&
@@ -212,8 +223,19 @@ export function readCompose(raw: unknown): ComposeDefinition {
 		file.split(/[\\/]/).includes("..")
 	)
 		throw new Error("Compose file must be workspace-relative");
+	const captured = data.source;
+	if (
+		captured !== undefined &&
+		(typeof captured !== "string" ||
+			captured.includes("\0") ||
+			Buffer.byteLength(captured) > 65536)
+	)
+		throw new Error(
+			"Captured Compose source must be UTF-8 text of at most 64 KiB",
+		);
 	return {
 		file,
+		...(captured === undefined ? {} : { source: String(captured) }),
 		provider: data.provider,
 		socket: readLocalSocket(data.socket),
 		network: data.network ?? "shared",
@@ -312,6 +334,12 @@ function parseEnvFile(bytes: Buffer, name: string) {
 }
 function source(workspace: string, definition: ComposeDefinition) {
 	const file = contained(workspace, definition.file);
+	if (definition.source !== undefined)
+		return {
+			file,
+			source: definition.source,
+			contentDigest: digest(Buffer.from(definition.source).toString("base64")),
+		};
 	const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
 	try {
 		const stat = fs.fstatSync(fd);
@@ -366,7 +394,46 @@ export function compileComposeSource(
 	} catch {
 		throw new Error("Invalid Compose YAML; source values are not logged");
 	}
-	keys(document, ["services"]);
+	keys(document, ["services", "volumes", "name", "networks"]);
+	if (
+		document.name !== undefined &&
+		(typeof document.name !== "string" ||
+			!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(document.name))
+	)
+		throw new Error("Invalid Compose project name");
+	const networks = object(document.networks ?? {});
+	if (Object.keys(networks).length > 1)
+		throw new Error("Only one native owned Compose bridge is supported");
+	for (const [id, raw] of Object.entries(networks)) {
+		if (!/^[a-z][a-z0-9_-]{0,62}$/.test(id))
+			throw new Error("Invalid Compose network identifier");
+		const settings = object(raw ?? {});
+		keys(settings, ["driver"]);
+		if (settings.driver !== undefined && settings.driver !== "bridge")
+			throw new Error("Only native local bridge networks are supported");
+	}
+	const declaredVolumes = Object.entries(object(document.volumes ?? {})).map(
+		([id, raw]) => {
+			if (!/^[a-z][a-z0-9_-]{0,62}$/.test(id))
+				throw new Error("Invalid Compose volume identifier");
+			const settings = object(raw ?? {});
+			keys(settings, ["x-lifetime", "x-scope"]);
+			const lifetime = settings["x-lifetime"] ?? "persistent";
+			const scope = settings["x-scope"] ?? `@app/${id}`;
+			if (
+				(lifetime !== "persistent" && lifetime !== "ephemeral") ||
+				typeof scope !== "string" ||
+				!/^(?:@app\/)?[a-z][a-z0-9_:/.-]{0,199}$/.test(scope)
+			)
+				throw new Error("Invalid native volume lifetime or scope");
+			return {
+				id,
+				scope,
+				lifetime,
+			} as import("./compose-volumes.ts").PlannedVolume;
+		},
+	);
+	if (declaredVolumes.length > 32) throw new Error("Too many Compose volumes");
 	const services = Object.entries(object(document.services));
 	if (!services.length || services.length > 16)
 		throw new Error("Compose requires 1–16 services");
@@ -382,8 +449,9 @@ export function compileComposeSource(
 			),
 		);
 	};
-	return {
+	const result: ComposePlan = {
 		digest: input.contentDigest,
+		...(declaredVolumes.length ? { volumes: declaredVolumes } : {}),
 		services: orderServices(
 			services.map(([id, raw]) => {
 				if (!/^[a-z][a-z0-9-]{0,62}$/.test(id))
@@ -403,7 +471,20 @@ export function compileComposeSource(
 					"x-secret-refs",
 					"shm_size",
 					"extra_hosts",
+					"container_name",
+					"networks",
 				]);
+				if (
+					service.networks !== undefined &&
+					(!Array.isArray(service.networks) ||
+						service.networks.length !== 1 ||
+						typeof service.networks[0] !== "string" ||
+						!Object.hasOwn(networks, service.networks[0]) ||
+						definition.network !== "shared")
+				)
+					throw new Error(
+						"Unsupported Compose network attachment; only the declared native owned bridge is allowed",
+					);
 				const envFile =
 					service.env_file === undefined
 						? undefined
@@ -413,10 +494,10 @@ export function compileComposeSource(
 				const environment = Object.fromEntries(
 					Object.entries({
 						...(envFile?.values ?? {}),
-						...object(service.environment ?? {}),
+						...composeEnvironment(service.environment),
 					}).map(([key, value]) => {
 						if (
-							!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ||
+							!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key) ||
 							["WORKSPACE", "CONFIG_DIR"].includes(key) ||
 							typeof value !== "string" ||
 							value.includes("\0") ||
@@ -436,25 +517,61 @@ export function compileComposeSource(
 				const volumes = service.volumes ?? [];
 				if (!Array.isArray(volumes) || volumes.length > 64)
 					throw new Error("Invalid Compose bind mounts");
+				const volumeMounts: {
+					id: string;
+					target: string;
+					readOnly: boolean;
+				}[] = [];
+				const bindMounts: unknown[] = [];
+				const destinations = new Set<string>();
+				for (const raw of volumes) {
+					const mount = object(composeMount(raw));
+					keys(mount, ["type", "source", "target", "read_only"]);
+					const target = text(mount.target, "Compose mount target", 4096);
+					if (
+						!target.startsWith("/") ||
+						/[,\0\r\n]/.test(target) ||
+						destinations.has(target) ||
+						(mount.read_only !== undefined &&
+							typeof mount.read_only !== "boolean")
+					)
+						throw new Error("Invalid or duplicate Compose mount destination");
+					destinations.add(target);
+					if (mount.type === "volume") {
+						if (
+							typeof mount.source !== "string" ||
+							!declaredVolumes.some((volume) => volume.id === mount.source)
+						)
+							throw new Error(
+								"Compose volume must be explicitly declared; external/anonymous volumes are refused",
+							);
+						volumeMounts.push({
+							id: mount.source,
+							target,
+							readOnly: mount.read_only === true,
+						});
+					} else if (mount.type === "bind") bindMounts.push(mount);
+					else
+						throw new Error(
+							"Compose mount must be an explicit bind or declared native volume",
+						);
+				}
 				const ports = service.ports ?? [];
 				if (!Array.isArray(ports) || ports.length > 64)
 					throw new Error("Invalid Compose ports");
-				// Only the default no-restart policy is equivalent to this adapter's
-				// one-creation lifetime; anything else would invent a restart owner.
-				if (service.restart !== undefined && service.restart !== "no")
-					throw new Error(
-						"Unsupported Compose restart policy; declare restart: no or omit it",
-					);
+
 				const serviceHealth = healthcheck(service.healthcheck);
 				const container = readContainer({
 					socket: definition.socket,
+					restart: service.restart,
 					shmSize: sharedMemory(service.shm_size),
 					extraHosts: hosts(service.extra_hosts),
 					image: service.image,
-					command: service.command,
+					name: service.container_name,
+					command: composeArgv(service.command),
 					entrypoint: service.entrypoint,
 					ports: ports.map((raw) => {
-						const port = object(raw);
+						const port = object(composePort(raw));
 						keys(port, ["target", "published", "host_ip", "protocol"]);
 						return {
 							container: port.target,
@@ -463,7 +580,7 @@ export function compileComposeSource(
 							protocol: port.protocol ?? "tcp",
 						};
 					}),
-					mounts: volumes.map((raw) => {
+					mounts: bindMounts.map((raw) => {
 						const mount = object(raw);
 						keys(mount, ["type", "source", "target", "read_only"]);
 						if (mount.type !== "bind")
@@ -483,6 +600,7 @@ export function compileComposeSource(
 					id,
 					container,
 					environment,
+					...(volumeMounts.length ? { volumeMounts } : {}),
 					...(Object.keys(secretRefs).length ? { secretRefs } : {}),
 					...(envFile
 						? { envFile: envFile.file, envFileDigest: envFile.digest }
@@ -492,6 +610,13 @@ export function compileComposeSource(
 			}),
 		),
 	};
+	if (result.volumes)
+		result.volumes = result.volumes.filter((volume) =>
+			result.services.some((service) =>
+				service.volumeMounts?.some((mount) => mount.id === volume.id),
+			),
+		);
+	return result;
 }
 export function verifyCompose(plan: Plan) {
 	if (

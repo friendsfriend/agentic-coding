@@ -85,6 +85,7 @@ export function createOperatorTask(config: Config, manager: Environments) {
 					task.input.request.apps,
 					task.input.request.action,
 					task.input.request,
+					config.stateDir,
 				).map((plan) =>
 					plan.kubernetes
 						? {

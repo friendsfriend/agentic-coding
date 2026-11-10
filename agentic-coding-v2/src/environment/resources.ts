@@ -26,6 +26,18 @@ function ports(plan: Plan) {
 					address: url.hostname.replace(/^\[|\]$/g, ""),
 				};
 			})),
+		...(service.readyUrl
+			? [
+					{
+						host: Number(
+							new URL(service.readyUrl).port ||
+								(new URL(service.readyUrl).protocol === "https:" ? 443 : 80),
+						),
+						protocol: "tcp",
+						address: new URL(service.readyUrl).hostname.replace(/^\[|\]$/g, ""),
+					},
+				]
+			: []),
 		...(service.kubernetes?.portForwards ?? []).map((forward) => ({
 			host: forward.local,
 			protocol: "tcp",
@@ -44,6 +56,15 @@ function ports(plan: Plan) {
 }
 export function runsConflict(left: Plan, right: Plan, stateDir: string) {
 	if (left.app === right.app) return true;
+	if (
+		left.compose &&
+		right.compose &&
+		localSocket(left.compose.socket) === localSocket(right.compose.socket) &&
+		left.composePlan?.volumes?.some((a) =>
+			right.composePlan?.volumes?.some((b) => a.scope === b.scope),
+		)
+	)
+		return true;
 	if (
 		ports(left).some((a) =>
 			ports(right).some(

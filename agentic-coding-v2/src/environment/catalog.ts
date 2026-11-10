@@ -4,11 +4,13 @@ import { type Config, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
 import { targetAvailability } from "./availability.ts";
+import { buildReferenceKeys } from "./build-secrets.ts";
 import {
 	bindComposeDiagnostics,
 	compileCompose,
 	readCompose,
 } from "./compose-config.ts";
+import { prepareVolumes } from "./compose-volumes.ts";
 import { readContainer } from "./container-config.ts";
 import { expandDependencies, validateDependencies } from "./dependencies.ts";
 import { readEndpoints } from "./endpoint.ts";
@@ -23,6 +25,7 @@ import {
 	type Selection,
 	selectTarget,
 } from "./selection.ts";
+import { readReadyUrl } from "./shell-readiness.ts";
 
 const identifier = (value: unknown) => {
 	const id = text(value, "environment identifier", 64);
@@ -66,6 +69,7 @@ function readTarget(raw: unknown): Target {
 		"cwd",
 		"timeoutMs",
 		"readyText",
+		"readyUrl",
 		"environment",
 		"secretRefs",
 		"container",
@@ -108,7 +112,9 @@ function readTarget(raw: unknown): Target {
 	if (
 		data.runtime === "shell"
 			? data.container !== undefined
-			: data.command !== undefined || data.readyText !== undefined
+			: data.command !== undefined ||
+				data.readyText !== undefined ||
+				data.readyUrl !== undefined
 	)
 		throw new Error(
 			"Shell commands/readiness and structured container configuration cannot be mixed",
@@ -133,7 +139,7 @@ function readTarget(raw: unknown): Target {
 		data.queryConnection !== undefined &&
 		(data.action !== "run" ||
 			!(data.runtime === "shell"
-				? Boolean(data.readyText)
+				? Boolean(data.readyText || data.readyUrl)
 				: ["docker", "podman", "compose", "kubernetes"].includes(
 						String(data.runtime),
 					)))
@@ -149,6 +155,10 @@ function readTarget(raw: unknown): Target {
 			: readContainer(data.container);
 	if (!["run", "build", "test"].includes(String(data.action)))
 		throw new Error("Invalid environment target action");
+	if (data.action !== "run" && container?.restart && container.restart !== "no")
+		throw new Error(
+			"Restart policies belong only to long-lived run containers",
+		);
 	const timeoutMs = data.timeoutMs ?? (data.action === "run" ? 30000 : 600000);
 	if (
 		!Number.isSafeInteger(timeoutMs) ||
@@ -165,7 +175,7 @@ function readTarget(raw: unknown): Target {
 			capture.listen !== "127.0.0.1:0" ||
 			data.runtime !== "shell" ||
 			data.action !== "run" ||
-			!data.readyText
+			!(data.readyText || data.readyUrl)
 		)
 			throw new Error(
 				"Native telemetry requires an explicit otlp-http-json loopback-ephemeral shell run target with readiness text",
@@ -202,6 +212,37 @@ function readTarget(raw: unknown): Target {
 		throw new Error(
 			"Container build arguments require declared variables or secret references",
 		);
+	if (
+		data.readyUrl !== undefined &&
+		(data.runtime !== "shell" ||
+			data.action !== "run" ||
+			data.readyText !== undefined)
+	)
+		throw new Error(
+			"Shell run readiness chooses either text or a loopback URL, never both",
+		);
+	const readyUrl = readReadyUrl(data.readyUrl);
+	if (
+		container &&
+		(container.dockerfileSource !== undefined || container.buildSecrets) &&
+		data.action !== "build"
+	)
+		throw new Error(
+			"Captured Dockerfiles and build secrets belong only to build actions",
+		);
+	for (const secret of Object.values(container?.buildSecrets ?? {}))
+		if (
+			buildReferenceKeys(secret).some((key) => !Object.hasOwn(secretRefs, key))
+		)
+			throw new Error(
+				"Build secret environment/template references must name declared target secretRefs, not literals",
+			);
+	if (
+		[...Object.keys(environment), ...Object.keys(secretRefs)].some((key) =>
+			key.startsWith("ACV2_BUILD_SECRET_"),
+		)
+	)
+		throw new Error("Native build-secret transport variables are reserved");
 	const cwd = text(data.cwd ?? ".", "environment cwd", 4096);
 	if (path.isAbsolute(cwd))
 		throw new Error("Environment cwd must be relative to the task workspace");
@@ -343,6 +384,7 @@ function readTarget(raw: unknown): Target {
 				: text(data.readyText, "readiness text", 512),
 		environment,
 		secretRefs,
+		...(readyUrl ? { readyUrl } : {}),
 		...(queryConnection ? { queryConnection } : {}),
 	};
 }
@@ -497,6 +539,12 @@ function refuseBatchCollisions(plans: Plan[]) {
 			);
 	};
 	for (const plan of plans) {
+		if (plan.readyUrl) {
+			const url = new URL(plan.readyUrl),
+				host = url.hostname.replace(/^\[|\]$/g, ""),
+				port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+			claim(`tcp/${host}:${port}`, plan.app, `shell readiness ${host}:${port}`);
+		}
 		for (const port of plan.container?.ports ?? [])
 			claim(
 				`${port.protocol}/${String(port.address).toLowerCase()}:${port.host}`,
@@ -537,6 +585,7 @@ export function resolvePlans(
 	apps: string[],
 	action: Action,
 	target?: string | Selection,
+	stateDir?: string,
 ): Plan[] {
 	if (owner.policy !== "workspace-write")
 		throw new Error(
@@ -607,6 +656,29 @@ export function resolvePlans(
 		action === "run"
 			? expandDependencies(roots, (id) => resolve(id, {}))
 			: roots;
-	refuseBatchCollisions(plans);
-	return plans;
+	if (plans.some((plan) => plan.composePlan?.volumes?.length) && !stateDir)
+		throw new Error(
+			"Native volume preparation requires an explicit host state scope",
+		);
+	const prepared = stateDir
+		? plans.map((plan) => prepareVolumes(plan, stateDir))
+		: plans;
+	refuseBatchCollisions(prepared);
+	const scopes = new Set<string>();
+	for (const plan of prepared)
+		for (const volume of plan.composePlan?.volumes ?? []) {
+			let socket = plan.compose?.socket ?? "";
+			try {
+				socket = fs.realpathSync(socket);
+			} catch {
+				socket = path.resolve(socket);
+			}
+			const key = JSON.stringify([socket, volume.scope]);
+			if (scopes.has(key))
+				throw new Error(
+					"Environment batch attaches the same native volume scope twice; use one owned prerequisite",
+				);
+			scopes.add(key);
+		}
+	return prepared;
 }

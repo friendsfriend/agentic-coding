@@ -408,7 +408,6 @@ test("Compose unsupported effects are refused, and daemon loss quarantines the c
 	for (const field of [
 		"networks: [external]",
 		"privileged: true",
-		"restart: always",
 		"build: .",
 	]) {
 		const { app, config, fake, invocation } = await fixture(
@@ -432,7 +431,6 @@ test("Compose unsupported effects are refused, and daemon loss quarantines the c
 		]);
 		const task = await app.startTask(invocation);
 		await app.harness.waitForTask(task as TaskId, context);
-		// The restart policy has its own refusal; both name the unsupported field.
 		expect(transcript).toContain("Unsupported Compose");
 		expect(readEngine(config).history).toHaveLength(0);
 	}

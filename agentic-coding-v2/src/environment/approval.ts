@@ -31,6 +31,25 @@ export function environmentApproval(
 							"Bare pods only in the displayed existing non-system namespace and explicit local cluster. No cluster/namespace creation, Helm, controllers or host mounts; automatic service-account token mounting and privilege escalation are disabled in the requested pod spec. No existing pod adoption, even with matching labels. Only live creation UIDs and host/run labels authorize cleanup; DELETE uses live UID and observed resource-version preconditions, a five-second grace period and orphan propagation, never cascading namespace deletion. Declared environment values and resolved secret references are sent to the Kubernetes API as Pod env values, where authorized cluster readers can see them and the API can persist them. The local client receives them only on private stdin, not argv or manifest files; this is not Kubernetes Secret-object integration. All replicas are created before readiness waits. Only HTTP/TCP pod-local kubelet readiness probes are supported, with bounded timing and no exec/host/header overrides. HTTPS probes use kubelet semantics without certificate verification; TCP probes only test socket acceptance. Pod Ready without a probe is not application health. API-observed readiness loss after startup is reported unhealthy, not an automatic stop. Declared ClusterIP services select only this run's pods by owner labels for in-cluster TCP DNS (`name.namespace.svc.cluster.local`); no NodePort, LoadBalancer, ExternalName, headless, external-IP or selector overrides are declarable, an occupied service name fails without adoption, and service cleanup carries the live creation UID with orphan propagation. Pod logs are limited to one owned replica and host access stays on declared loopback port forwards. API/identity loss or uncertain writes quarantine the app slot. The configured image and commands can execute code and make network requests; this is not an OS sandbox.",
 					}
 				: {}),
+			...(plans.some((plan) => plan.composePlan?.volumes?.length)
+				? {
+						volumeScope:
+							"Declared local-driver volumes are exclusive native resources. Persistent data is retained on stop, cancellation, failure and task completion; no migration/deletion of legacy data occurs. Reuse requires the exact stored host/scope/nonce/creation-time receipt displayed in this plan and a new explicit approval, never discovered labels or a name alone. Random creation names and per-scope native locks fence concurrent runs. Missing/replaced volumes and crash-orphaned locks require inspection, never adoption, recreation or age/PID-based takeover. Engines expose no immutable volume ID or conditional mutation; hostile metadata-perfect replacement cannot be excluded. No automatic replay after ambiguous creation or uncertain cleanup. Ephemeral volumes are removed only after confirmed owned-container cleanup.",
+					}
+				: {}),
+			...(plans.some(
+				(plan) =>
+					plan.composePlan?.services.some(
+						(service) =>
+							service.container.restart && service.container.restart !== "no",
+					) ||
+					(plan.container?.restart && plan.container.restart !== "no"),
+			)
+				? {
+						restartScope:
+							"The declared engine policy may restart the original owned container during this live run, not create or adopt a replacement. Restarting observations deny diagnostic readiness but retain the lease; startup remains bounded by timeoutMs. Stop explicitly stops the original creation before removal, including restart backoff. Host restart never restores container control from persisted observations.",
+					}
+				: {}),
 			...(plans.some((plan) => plan.compose)
 				? {
 						composeScope:

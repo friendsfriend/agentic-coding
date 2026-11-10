@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import path from "node:path";
 import { text as configurationText, object } from "../config.ts";
+import { type BuildSecret, readBuildSecrets } from "./build-secrets.ts";
 
 function text(value: unknown, label: string, max: number) {
 	const result = configurationText(value, label, max);
@@ -13,6 +14,12 @@ export type ContainerTarget = {
 	name?: string;
 	command: string[];
 	entrypoint?: string;
+	restart?:
+		| "no"
+		| "always"
+		| "unless-stopped"
+		| "on-failure"
+		| `on-failure:${number}`;
 	shmSize?: number;
 	extraHosts?: Record<string, string>;
 	ports: {
@@ -26,6 +33,8 @@ export type ContainerTarget = {
 	/** A run target expected to terminate on its own; readiness becomes its exit. */
 	completion?: boolean;
 	dockerfile: string;
+	dockerfileSource?: string;
+	buildSecrets?: Record<string, BuildSecret>;
 	context: string;
 	buildArgs: string[];
 	/** Declared container health command. This configures the engine's own check;
@@ -119,13 +128,27 @@ export function readContainer(raw: unknown): ContainerTarget {
 		"mounts",
 		"readiness",
 		"dockerfile",
+		"dockerfileSource",
+		"buildSecrets",
 		"context",
 		"buildArgs",
 		"health",
 		"completion",
 		"shmSize",
 		"extraHosts",
+		"restart",
 	]);
+	const dockerfileSource = data.dockerfileSource;
+	if (
+		dockerfileSource !== undefined &&
+		(typeof dockerfileSource !== "string" ||
+			dockerfileSource.includes("\0") ||
+			Buffer.byteLength(dockerfileSource) > 65536)
+	)
+		throw new Error(
+			"Captured Dockerfile source must be UTF-8 text of at most 64 KiB",
+		);
+	const buildSecrets = readBuildSecrets(data.buildSecrets);
 	const socket = readLocalSocket(data.socket);
 	const image = text(data.image, "container image", 512);
 	if (image.startsWith("-") || /\s/.test(image))
@@ -150,6 +173,19 @@ export function readContainer(raw: unknown): ContainerTarget {
 		mounts.length > 64
 	)
 		throw new Error("Invalid container ports/mounts");
+	const restart = data.restart;
+	if (
+		restart !== undefined &&
+		(typeof restart !== "string" ||
+			!/^(?:no|always|unless-stopped|on-failure(?::(?:[1-9]|[1-9][0-9]|100))?)$/.test(
+				restart,
+			))
+	)
+		throw new Error(
+			"Invalid container restart policy; retry counts must be 1–100",
+		);
+	if (data.completion === true && restart !== undefined && restart !== "no")
+		throw new Error("Completion containers cannot have a restart policy");
 	const health = readHealth(data.health);
 	const shmSize = data.shmSize;
 	if (
@@ -183,6 +219,9 @@ export function readContainer(raw: unknown): ContainerTarget {
 			? {}
 			: { entrypoint: text(data.entrypoint, "container entrypoint", 4096) }),
 		buildArgs,
+		...(restart === undefined
+			? {}
+			: { restart: restart as ContainerTarget["restart"] }),
 		...(shmSize === undefined ? {} : { shmSize: Number(shmSize) }),
 		...(Object.keys(extraHosts).length
 			? { extraHosts: extraHosts as Record<string, string> }
@@ -191,6 +230,10 @@ export function readContainer(raw: unknown): ContainerTarget {
 		...(data.completion === true ? { completion: true } : {}),
 		readiness,
 		dockerfile: relative(data.dockerfile, "Dockerfile", "Dockerfile"),
+		...(dockerfileSource === undefined
+			? {}
+			: { dockerfileSource: String(dockerfileSource) }),
+		...(Object.keys(buildSecrets).length ? { buildSecrets } : {}),
 		context: relative(data.context, "build context", "."),
 		ports: ports.map((raw) => {
 			const p = object(raw);

@@ -1,5 +1,6 @@
 import { containerPlans, verifyCompose } from "./compose-config.ts";
 import { ComposeNetwork } from "./compose-network.ts";
+import { ComposeVolumes } from "./compose-volumes.ts";
 import { ContainerProcess } from "./container.ts";
 import { clampedCapture } from "./log-timing.ts";
 import type { Plan } from "./model.ts";
@@ -19,6 +20,7 @@ export class ComposeProcess implements EnvironmentProcess {
 	private result: Exit | null = null;
 	private failedCleanup = false;
 	private network: ComposeNetwork | null = null;
+	private volumes: ComposeVolumes | null = null;
 	private frozen: ReturnType<typeof processEnvironment>;
 	private plans: Plan[];
 	private serviceEnvironments: ReturnType<typeof processEnvironment>[];
@@ -67,6 +69,8 @@ export class ComposeProcess implements EnvironmentProcess {
 			...environment,
 			redact,
 		}));
+		if (plan.composePlan?.volumes?.length)
+			this.volumes = new ComposeVolumes(plan, stateDir, configDir, this.frozen);
 		if (plan.compose?.network !== "isolated")
 			this.network = new ComposeNetwork(
 				plan,
@@ -88,6 +92,7 @@ export class ComposeProcess implements EnvironmentProcess {
 	get cleanupFailed() {
 		return (
 			this.failedCleanup ||
+			this.volumes?.cleanupFailed === true ||
 			this.network?.cleanupFailed === true ||
 			this.children.some((child) => child.cleanupFailed)
 		);
@@ -113,6 +118,7 @@ export class ComposeProcess implements EnvironmentProcess {
 	}
 	get logs() {
 		return [
+			this.volumes ? `[volumes]\n${this.volumes.logs}` : "",
 			this.network ? `[network]\n${this.network.logs}` : "",
 			...this.children.map(
 				(child, index) =>
@@ -148,6 +154,7 @@ export class ComposeProcess implements EnvironmentProcess {
 					"Compose diagnostics require the exact original live non-completion service",
 				);
 			await this.network?.attachment(2000, bounded);
+			await this.volumes?.verify(2000, bounded);
 			const observations = await Promise.allSettled(
 				this.children.map(async (child, position) => {
 					const service = services[position];
@@ -213,6 +220,7 @@ export class ComposeProcess implements EnvironmentProcess {
 				),
 			),
 			deadline = Date.now() + this.plan.timeoutMs;
+		await this.volumes?.start(deadline - Date.now(), this.controller.signal);
 		await this.network?.start(deadline - Date.now(), this.controller.signal);
 		for (const [index, plan] of this.plans.entries()) {
 			this.controller.signal.throwIfAborted();
@@ -227,6 +235,25 @@ export class ComposeProcess implements EnvironmentProcess {
 				throw new Error("Compose service alias is missing");
 			const environment = this.serviceEnvironments[index];
 			if (!environment) throw new Error("Missing frozen service environment");
+			const volumeAttachments: {
+				name: string;
+				target: string;
+				readOnly: boolean;
+			}[] = [];
+			for (const mount of this.plan.composePlan?.services[index]
+				?.volumeMounts ?? []) {
+				if (!this.volumes)
+					throw new Error("Missing live volume ownership scope");
+				volumeAttachments.push({
+					name: await this.volumes.attachment(
+						mount.id,
+						deadline - Date.now(),
+						this.controller.signal,
+					),
+					target: mount.target,
+					readOnly: mount.readOnly,
+				});
+			}
 			const child = new ContainerProcess(
 				{ ...plan, timeoutMs: deadline - Date.now() },
 				this.configDir,
@@ -245,6 +272,7 @@ export class ComposeProcess implements EnvironmentProcess {
 							? this.frozen.authorization(endpoint)
 							: undefined,
 				},
+				volumeAttachments,
 			);
 			this.children.push(child);
 			if (completion.has(alias ?? "")) {
@@ -301,6 +329,12 @@ export class ComposeProcess implements EnvironmentProcess {
 			} catch {
 				this.failedCleanup = true;
 			}
+			if (!this.cleanupFailed)
+				try {
+					await this.volumes?.stop();
+				} catch {
+					this.failedCleanup = true;
+				}
 			const exits = this.children.map((child) => child.outcome);
 			const code =
 				this.cleanupFailed ||
