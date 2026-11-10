@@ -44,7 +44,7 @@ import {
 	validateLifetime,
 } from "./lifetime.ts";
 import { type LogOptions, logView } from "./logs.ts";
-import type { Plan, TelemetryOptions } from "./model.ts";
+import { isShellRuntime, type Plan, type TelemetryOptions } from "./model.ts";
 import {
 	type OperatorRevocation,
 	OperatorRevocations,
@@ -466,7 +466,7 @@ export class Environments {
 			!!process &&
 			!process.outcome &&
 			!process.cleanupFailed &&
-			(run.plan.runtime === "shell" || statuses.length > 0) &&
+			(isShellRuntime(run.plan.runtime) || statuses.length > 0) &&
 			statuses.every(
 				(status) => status.owned === true && status.state === "running",
 			)
@@ -1022,32 +1022,31 @@ export class Environments {
 					: undefined;
 				let process: EnvironmentProcess;
 				try {
-					process =
-						plan.runtime === "shell"
-							? new ShellProcess(
+					process = isShellRuntime(plan.runtime)
+						? new ShellProcess(
+								plan,
+								this.config.configDir,
+								undefined,
+								collector && frozen
+									? { collector, environment: frozen }
+									: undefined,
+							)
+						: plan.runtime === "compose"
+							? new ComposeProcess(
 									plan,
 									this.config.configDir,
-									undefined,
-									collector && frozen
-										? { collector, environment: frozen }
-										: undefined,
+									this.config.stateDir,
+									id,
+									collector,
 								)
-							: plan.runtime === "compose"
-								? new ComposeProcess(
+							: plan.runtime === "kubernetes"
+								? new KubernetesProcess(this.config, plan, id)
+								: new ContainerProcess(
 										plan,
 										this.config.configDir,
 										this.config.stateDir,
 										id,
-										collector,
-									)
-								: plan.runtime === "kubernetes"
-									? new KubernetesProcess(this.config, plan, id)
-									: new ContainerProcess(
-											plan,
-											this.config.configDir,
-											this.config.stateDir,
-											id,
-										);
+									);
 				} catch (error) {
 					try {
 						await collector?.close();
@@ -1084,7 +1083,7 @@ export class Environments {
 							state: "running",
 							revision: run.revision + 1,
 							ready:
-								plan.runtime !== "shell" || plan.readyText || plan.readyUrl
+								!isShellRuntime(plan.runtime) || plan.readyText || plan.readyUrl
 									? true
 									: null,
 							output: process.logs,

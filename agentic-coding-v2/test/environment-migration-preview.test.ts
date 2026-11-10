@@ -109,7 +109,7 @@ test("offline migration captures an include closure and converts every Maven RUN
 	);
 	expect(
 		report.rows.filter((row: { status: string }) => row.status === "candidate"),
-	).toHaveLength(4);
+	).toHaveLength(5);
 	expect(report.sources).toHaveLength(7);
 	expect(report.baseDigest).toBe(digest(base));
 	expect(report.liveConfigurationChanged).toBe(false);
@@ -141,6 +141,13 @@ test("offline migration captures an include closure and converts every Maven RUN
 	]);
 	expect(frontend.targets[0].readyUrl).toBe("http://127.0.0.1:55321/");
 	expect(frontend.targets[0].command).toContain("touch must-never-execute");
+	const system = frontend.targets.find(
+		(target: { runtime: string }) => target.runtime === "systemshell",
+	);
+	expect(system.command).toBe(frontend.targets[0].command);
+	expect(system.prerequisites).toEqual(frontend.targets[0].prerequisites);
+	expect(system.readyUrl).toBe(frontend.targets[0].readyUrl);
+	expect(system.profile).toBe("default");
 	expect(
 		fs.existsSync(
 			path.join(config.repositories[0] ?? "", "must-never-execute"),

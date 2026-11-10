@@ -22,7 +22,12 @@ import { readEndpoints } from "./endpoint.ts";
 import { readEndpointCaRefs } from "./endpoint-ca.ts";
 import { readEndpointAuth } from "./http-options.ts";
 import { readKubernetes } from "./kubernetes-config.ts";
-import type { Plan, Project, Target } from "./model.ts";
+import {
+	isShellRuntime,
+	type Plan,
+	type Project,
+	type Target,
+} from "./model.ts";
 import { readQueryConnection } from "./query-config.ts";
 import {
 	type Action,
@@ -107,12 +112,15 @@ function readTarget(raw: unknown): Target {
 		throw new Error("Target prerequisites belong only to run actions");
 	if (
 		data.runtime !== "shell" &&
+		data.runtime !== "systemshell" &&
 		data.runtime !== "docker" &&
 		data.runtime !== "podman" &&
 		data.runtime !== "compose" &&
 		data.runtime !== "kubernetes"
 	)
 		throw new Error("Unsupported environment runtime");
+	if (data.runtime === "systemshell" && data.action !== "run")
+		throw new Error("System POSIX interpreter targets are run-only");
 	if (data.runtime !== "kubernetes" && data.kubernetes !== undefined)
 		throw new Error("Kubernetes configuration requires the Kubernetes runtime");
 	if (
@@ -132,7 +140,7 @@ function readTarget(raw: unknown): Target {
 			"Compose currently supports run targets only, without container overrides",
 		);
 	if (
-		data.runtime === "shell"
+		isShellRuntime(data.runtime)
 			? data.container !== undefined
 			: data.command !== undefined ||
 				data.readyText !== undefined ||
@@ -147,7 +155,7 @@ function readTarget(raw: unknown): Target {
 			data.endpointAuthRefs !== undefined) &&
 		(data.action !== "run" ||
 			!(
-				data.runtime === "shell" ||
+				isShellRuntime(data.runtime) ||
 				data.runtime === "docker" ||
 				data.runtime === "podman" ||
 				data.runtime === "compose" ||
@@ -160,7 +168,7 @@ function readTarget(raw: unknown): Target {
 	if (
 		data.queryConnection !== undefined &&
 		(data.action !== "run" ||
-			!(data.runtime === "shell"
+			!(isShellRuntime(data.runtime)
 				? Boolean(data.readyText || data.readyUrl)
 				: ["docker", "podman", "compose", "kubernetes"].includes(
 						String(data.runtime),
@@ -170,7 +178,7 @@ function readTarget(raw: unknown): Target {
 			"Query connections require a shell run with explicit readiness, a health-ready container run or a pod run",
 		);
 	const container =
-		data.runtime === "shell" ||
+		isShellRuntime(data.runtime) ||
 		data.runtime === "compose" ||
 		data.runtime === "kubernetes"
 			? undefined
@@ -224,7 +232,7 @@ function readTarget(raw: unknown): Target {
 			if (
 				capture.protocol !== "otlp-http-json" ||
 				capture.listen !== "127.0.0.1:0" ||
-				data.runtime !== "shell" ||
+				!isShellRuntime(data.runtime) ||
 				data.action !== "run" ||
 				!(data.readyText || data.readyUrl)
 			)
@@ -267,7 +275,7 @@ function readTarget(raw: unknown): Target {
 		);
 	if (
 		data.readyUrl !== undefined &&
-		(data.runtime !== "shell" ||
+		(!isShellRuntime(data.runtime) ||
 			data.action !== "run" ||
 			data.readyText !== undefined)
 	)
@@ -420,10 +428,9 @@ function readTarget(raw: unknown): Target {
 		...(data.runtime === "compose"
 			? { compose: readCompose(data.compose) }
 			: {}),
-		command:
-			data.runtime === "shell"
-				? text(data.command, "environment command", 16000)
-				: "",
+		command: isShellRuntime(data.runtime)
+			? text(data.command, "environment command", 16000)
+			: "",
 		...(data.profile === undefined
 			? {}
 			: { profile: identifier(data.profile) }),

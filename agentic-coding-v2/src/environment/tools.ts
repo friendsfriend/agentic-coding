@@ -130,6 +130,7 @@ export function createEnvironmentTools(
 		runtime: Type.Optional(
 			Type.Union([
 				Type.Literal("shell"),
+				Type.Literal("systemshell"),
 				Type.Literal("docker"),
 				Type.Literal("podman"),
 				Type.Literal("compose"),

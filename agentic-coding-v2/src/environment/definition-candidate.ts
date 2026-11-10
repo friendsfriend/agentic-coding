@@ -16,6 +16,7 @@ import {
 	inspectComposeSource,
 	publicComposePath,
 } from "./definition-source-check.ts";
+import { isShellRuntime } from "./model.ts";
 
 const sourceByteLimit = 64 * 1024,
 	totalByteLimit = 128 * 1024;
@@ -118,7 +119,11 @@ function checkTarget(
 ): Entry {
 	const row = { app: project.id, target: target.id };
 	if (target.runtime !== "compose") {
-		if (!["shell", "docker", "podman", "kubernetes"].includes(target.runtime))
+		if (
+			!["shell", "systemshell", "docker", "podman", "kubernetes"].includes(
+				target.runtime,
+			)
+		)
 			return { ...row, status: "unsupported-target" };
 		if (
 			(target.runtime === "docker" || target.runtime === "podman") &&
@@ -134,7 +139,7 @@ function checkTarget(
 			status: "parsed",
 			coverageBasis: "native-descriptor",
 			descriptorDigest: digest(JSON.stringify(target)),
-			...(target.runtime === "shell"
+			...(isShellRuntime(target.runtime)
 				? { sourceDigest: digest(target.command) }
 				: target.container?.dockerfileSource !== undefined
 					? { sourceDigest: digest(target.container.dockerfileSource) }

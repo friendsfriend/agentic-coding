@@ -17,7 +17,8 @@ const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
-test("approved shell telemetry authenticates ingestion, bounds observations, redacts before queries and never crosses native owners or later starts", async () => {
+const it = test.each(["shell", "systemshell"] as const);
+it("approved %s telemetry authenticates ingestion, bounds observations, redacts before queries and never crosses native owners or later starts", async (runtime) => {
 	const secret = "disposable-telemetry-secret",
 		traceId = "11111111111111111111111111111111";
 	const { app, fake, invocation } = await fixture(false, (config) => {
@@ -58,7 +59,7 @@ console.log('TELEMETRY READY');setInterval(()=>{},1000);
 							{
 								id: "serve",
 								action: "run",
-								runtime: "shell",
+								runtime,
 								readyText: "TELEMETRY READY",
 								telemetry: {
 									protocol: "otlp-http-json",
@@ -99,7 +100,10 @@ console.log('TELEMETRY READY');setInterval(()=>{},1000);
 	};
 	fake.setResponses([
 		call("env_start", { apps: ["api"] }),
-		call("request_review", { path: ".", title: "Inspect telemetry ownership" }),
+		call("request_review", {
+			path: ".",
+			title: "Inspect telemetry ownership",
+		}),
 	]);
 	const first = await app.startTask(invocation);
 	const disclosure = JSON.parse(

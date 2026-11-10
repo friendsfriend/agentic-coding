@@ -4,7 +4,7 @@ import path from "node:path";
 import { parseEnv } from "node:util";
 import { contained } from "../git.ts";
 import { authentication } from "./http-options.ts";
-import type { Plan } from "./model.ts";
+import { isShellRuntime, type Plan } from "./model.ts";
 import type { Exit, LogTiming } from "./process.ts";
 import { shellReady } from "./shell-readiness.ts";
 
@@ -140,7 +140,7 @@ export class ShellProcess {
 			throw new Error("Shell environment runtime currently requires POSIX");
 		if (
 			Boolean(plan.telemetry) !== Boolean(capture) &&
-			(!invocation || plan.runtime === "shell")
+			(!invocation || isShellRuntime(plan.runtime))
 		)
 			throw new Error(
 				"Native telemetry requires the exact live approved startup scope",
@@ -165,7 +165,8 @@ export class ShellProcess {
 			throw new Error("Environment cwd is no longer a workspace directory");
 		try {
 			this.child = spawn(
-				invocation?.executable ?? "/bin/sh",
+				invocation?.executable ??
+					(plan.runtime === "systemshell" ? "sh" : "/bin/sh"),
 				invocation?.args ?? ["-c", plan.command],
 				{
 					cwd,

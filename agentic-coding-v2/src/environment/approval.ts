@@ -1,5 +1,5 @@
 import { independentRoot, referencedRoot } from "./lifetime.ts";
-import type { Plan } from "./model.ts";
+import { isShellRuntime, type Plan } from "./model.ts";
 
 /** Shared immutable disclosure for agent and direct operator execution. */
 export function environmentApproval(
@@ -34,7 +34,9 @@ export function environmentApproval(
 			...(plans.some((plan) => plan.telemetry)
 				? {
 						telemetryScope:
-							(plans.some((plan) => plan.runtime === "shell" && plan.telemetry)
+							(plans.some(
+								(plan) => isShellRuntime(plan.runtime) && plan.telemetry,
+							)
 								? "Each explicitly configured shell telemetry target also starts one authenticated OTLP/HTTP JSON receiver on an OS-selected ephemeral 127.0.0.1 port, never a public/external receiver. The approved command and descendants receive AC_OTEL_APP, AC_OTEL_OWNER, AC_OTEL_RUN, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL=http/json, OTEL_EXPORTER_OTLP_HEADERS with a new private bearer credential, OTEL_RESOURCE_ATTRIBUTES and OTEL_METRICS_EXPORTER=none. These values cannot be overridden by target literals/references; this is not automatic instrumentation or an OS credential sandbox. Native scope is immutable regardless of resource claims; app telemetry is diagnostic data, not execution/review authority. Ingress is limited to four pending 64 KiB JSON requests with five-second body deadlines. Only bounded redacted in-memory traces/logs are retained and queried while the live ready run is held; no metrics, external backend, persisted token/buffer adoption or complete history. Returned redacted observations can remain in native task/chat history as diagnostic tool results, never restored receiver/buffer authority. Stop, startup cancellation, process exit and owner cleanup close admission, discard buffers and join listener closure before release; uncertain cleanup quarantines the app slot."
 								: "") +
 							(plans.some(
@@ -42,6 +44,12 @@ export function environmentApproval(
 							)
 								? "\nEach explicitly configured Compose telemetry run additionally opens an ephemeral 0.0.0.0 HTTPS listener reachable by its declared host-gateway collector. TLS uses a fresh self-signed per-run certificate, an in-memory signing key and a new private bearer; HTTP and unauthenticated exports are refused. Only the exact declared unexposed collector-v1 service gets the fixed bounded JSON exporter configuration and a read-only mount of the public certificate, never the signing key. Collector image/command, explicit host gateway and reserved environment/mount restrictions are checked before review. Internal app-to-collector OTLP transport remains the declared private bridge protocol; this is not automatic app instrumentation, a sandbox or an external backend. The collector configuration/bearer is visible to authorized engine readers and approved container code, redacted from native outputs, never a saved grant. Native app/owner/run scope is immutable; resource claims cannot select another holder. TLS is a per-live-generation certificate pin (RFC 5280 no-expiration date), not a system/external CA trust installation. Only the original live receiver/key and bearer authenticate this generation; stop/restart never restores them from the public certificate. Four pending 64 KiB JSON requests, five-second body deadlines, bounded redacted in-memory windows and no metrics/persisted token/buffer adoption apply. Queries refresh original network/container ownership, running state and declared health. Cleanup stops original children before closing/joining the receiver and removing only the original public CA file/directory. Replaced identities, uncertain listeners or files quarantine the app slot; restart never adopts them."
 								: ""),
+					}
+				: {}),
+			...(plans.some((plan) => plan.runtime === "systemshell")
+				? {
+						systemShellScope:
+							"POSIX systemshell run targets resolve sh from the displayed/frozen PATH and execute the exact captured command with -c in the approved task cwd, unlike shell targets which pin /bin/sh. PATH may select executable code and is not an executable-content pin or OS sandbox. Native original process-group ownership, readiness, cancellation, idle and cleanup fences are unchanged. This is not a tmux/legacy runtime delegate, external terminal adoption or Windows/PowerShell implementation.",
 					}
 				: {}),
 			...(plans.some((plan) => plan.kubernetes)

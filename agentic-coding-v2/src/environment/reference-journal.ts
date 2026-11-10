@@ -2,7 +2,12 @@ import { digest } from "../config.ts";
 import { decode, values } from "../state.ts";
 import { declaredInfrastructure } from "./dependencies.ts";
 import { samePlanOwnerScope } from "./dependency-workspaces.ts";
-import type { Plan, ReferenceGraph, ReferenceObservation } from "./model.ts";
+import {
+	isShellRuntime,
+	type Plan,
+	type ReferenceGraph,
+	type ReferenceObservation,
+} from "./model.ts";
 import type { EnvironmentRun } from "./state.ts";
 
 type Journal = {
@@ -26,7 +31,7 @@ export function captureReferenceGraph(
 		plans.some(
 			(plan) =>
 				plan.action !== "run" ||
-				plan.runtime !== "shell" ||
+				!isShellRuntime(plan.runtime) ||
 				!plan.dependencyBatch ||
 				plan.lifetime !== undefined ||
 				!["app", "infrastructure"].includes(plan.projectKind ?? ""),

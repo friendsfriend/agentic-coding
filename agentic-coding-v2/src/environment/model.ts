@@ -65,7 +65,13 @@ export type ComposePlan = {
 export type Target = {
 	id: string;
 	action: Action;
-	runtime: "shell" | "docker" | "podman" | "compose" | "kubernetes";
+	runtime:
+		| "shell"
+		| "systemshell"
+		| "docker"
+		| "podman"
+		| "compose"
+		| "kubernetes";
 	kubernetes?: KubernetesTarget;
 	container?: ContainerTarget;
 	compose?: ComposeDefinition;
@@ -153,3 +159,11 @@ export type ReferenceGraph = {
 		requires: string[];
 	}[];
 };
+
+/** POSIX process adapters share native ownership/readiness, not interpreter
+ * selection: shell pins /bin/sh; systemshell resolves sh in approved PATH. */
+export function isShellRuntime(
+	runtime: unknown,
+): runtime is "shell" | "systemshell" {
+	return runtime === "shell" || runtime === "systemshell";
+}

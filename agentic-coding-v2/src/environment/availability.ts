@@ -38,18 +38,24 @@ export function targetAvailability(target: Target): Availability {
 			null,
 			"Kubernetes requires explicit context approval; client/API readiness is not probed",
 		);
-	const runtime = target.compose?.provider ?? target.runtime;
+	const runtime =
+		target.runtime === "systemshell"
+			? "sh"
+			: (target.compose?.provider ?? target.runtime);
 	const socket = target.compose?.socket ?? target.container?.socket;
-	if (!socket) return result(false, "An explicit local API socket is required");
-	try {
-		if (!fs.statSync(socket).isSocket())
-			return result(false, "Configured API path is not a Unix socket");
-		fs.accessSync(socket, fs.constants.R_OK | fs.constants.W_OK);
-	} catch {
-		return result(
-			false,
-			"Configured local API socket is absent or inaccessible",
-		);
+	if (target.runtime !== "systemshell") {
+		if (!socket)
+			return result(false, "An explicit local API socket is required");
+		try {
+			if (!fs.statSync(socket).isSocket())
+				return result(false, "Configured API path is not a Unix socket");
+			fs.accessSync(socket, fs.constants.R_OK | fs.constants.W_OK);
+		} catch {
+			return result(
+				false,
+				"Configured local API socket is absent or inaccessible",
+			);
+		}
 	}
 	if ("PATH" in target.secretRefs)
 		return result(
@@ -70,7 +76,9 @@ export function targetAvailability(target: Target): Availability {
 	return program
 		? result(
 				true,
-				"Client and socket metadata are eligible; daemon connectivity, health and permissions are not probed",
+				target.runtime === "systemshell"
+					? "System POSIX sh is executable in the declared PATH; no process or readiness probe was run"
+					: "Client and socket metadata are eligible; daemon connectivity, health and permissions are not probed",
 				program,
 			)
 		: result(false, `Configured ${runtime} client is not executable on PATH`);

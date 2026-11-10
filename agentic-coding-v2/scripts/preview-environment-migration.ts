@@ -668,11 +668,21 @@ if (frontend && fs.existsSync(path.join(source, frontendSource))) {
 			throw new Refusal(
 				"Existing project-level prerequisite selections require explicit reconciliation before target-scoped migration",
 			);
+		const systemId = "run-systemshell-default",
+			existingSystem = frontend.targets.find((entry) => entry.id === systemId);
+		const systemTarget = existingSystem ?? {
+			...target,
+			id: systemId,
+			runtime: "systemshell",
+		};
 		const next = {
 			...frontend,
 			targets: [
-				...frontend.targets.filter((entry) => entry.id !== target.id),
+				...frontend.targets.filter(
+					(entry) => entry.id !== target.id && entry.id !== systemId,
+				),
 				target,
+				systemTarget,
 			],
 		};
 		validateProjects(config, {
@@ -687,6 +697,15 @@ if (frontend && fs.existsSync(path.join(source, frontendSource))) {
 			source: frontendSource,
 			status: "candidate",
 			target: target.id,
+		});
+		rows.push({
+			app: String(frontend.id),
+			source: frontendSource,
+			status: existingSystem ? "already-present" : "candidate",
+			target: systemId,
+			reason: existingSystem
+				? "Existing native target ID retained without claiming source interpreter, command or prerequisite equivalence; reconcile differing overrides explicitly"
+				: "v1 POSIX system-shell alternative uses sh from the approved PATH with the same captured bytes, target-pinned prerequisites and readiness; no tmux or legacy runtime delegation",
 		});
 	} catch (error) {
 		rows.push({
@@ -1103,7 +1122,7 @@ const report = {
 		"changed host-Maven/image source versions and existing-native override reconciliation require explicit metadata review",
 		"global/shared infrastructure topology and live network lifetime",
 		"application-prerequisite migration where the required backend target remains unavailable",
-		"container telemetry transport and attribution",
+		"separately authorized real collector-image/network acceptance; native pinned HTTPS/bearer transport and live attribution are implemented",
 		"default reconciliation for existing native overrides and any blocked/ambiguous declarations; generic process-start hints are not service health",
 		"Helm-discovered targets",
 		"literal/default/embedded credentials and missing reference inputs",

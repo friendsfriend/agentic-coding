@@ -1,5 +1,5 @@
 import type { TaskInfo } from "../state.ts";
-import type { Plan } from "./model.ts";
+import { isShellRuntime, type Plan } from "./model.ts";
 
 export const independentLifetime = "independent-roots-v1";
 export const referencedLifetime = "referenced-roots-v1";
@@ -32,7 +32,7 @@ export function scopedRoot(plan: Plan) {
  * Kubernetes and foreign/shared external resources stay out of scope. */
 function scopedRuntime(plan: Plan) {
 	return (
-		plan.runtime === "shell" ||
+		isShellRuntime(plan.runtime) ||
 		plan.runtime === "docker" ||
 		plan.runtime === "podman" ||
 		plan.runtime === "compose"

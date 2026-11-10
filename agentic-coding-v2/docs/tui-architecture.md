@@ -199,3 +199,7 @@ Checkpoint: the two new authenticated standalone scenarios (fake local OpenCode 
 ### Menu pages own a local level, the shell owns key admission
 
 `SettingsPanel` and `EnvironmentsMenu` each keep a local `level` signal (menu, list, form/detail, plus the secondary destinations) and their cursors. This is UI state only: it never becomes a native identity and is not persisted in viewpoints. `useMenuKeys` (`src/tui/ui/menuKeys.ts`) registers one keymap layer at priority 30. The shell grants it through `menuKeysActive()`, which requires focused content, an empty prompt and no open editor, dialog, palette, local choice or suggestion list. Because keymap layers run before the focused textarea, gating on the empty prompt is what keeps `j`/`k` typeable. A handler answering `false` hands the key on, which is how Escape on a top menu still reaches `shell.content`. List rows render through `CardList` (a windowed list of original `Card`s) and forms through the ported `Form`. Sibling `<text>` elements sit in row boxes, never nested.
+
+## System-shell environment metadata
+
+Native environment catalogs and typed selection now expose the explicit POSIX `systemshell` run runtime. Interpreter selection and immutable approval disclosure stay in the backend; the TUI does not invoke a legacy dispatcher, adopt an external terminal or mint process authority. Existing generic environment presentation remains unchanged. This increment contains no renderer/mount/snapshot tests and makes no new manual TTY acceptance claim.

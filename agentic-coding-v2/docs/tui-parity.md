@@ -2187,3 +2187,7 @@ Settings and Environments no longer stack every record on one scrolling page. Bo
 - Keys: `j`/`k` or arrows move, Enter opens, `l`/`h` move between form panes, and Escape goes back one level. Escape on the top menu falls through to the shell. These keys are live only while content is focused, the prompt is empty, and no editor, dialog, palette or suggestion list is open, so typing a command is never eaten. The footer and help list them under "Menus".
 
 `Card` is a verbatim local copy of the original component. `Form` is a local port that keeps the original layout (34 %/64 % panes, `Fields` heading, ●/○ options, `bgSurface2` focus fill). Neither imports the legacy package. Verified by PTY renders of every level (renderer diagnostics 0), Biome, full type-check, build, compiled help and the 15-file boundary suite. Manual visual acceptance remains unverified.
+
+## POSIX system-shell choice availability
+
+The frontend's captured default source now has a native `systemshell` alternative with preserved profile, backend prerequisite and readiness. Native selection/approval/process boundaries are tested; the existing renderer/layout/colors/navigation were not changed. This records backend choice availability only, not additional visual acceptance or completion of the full environment parity scope.
