@@ -660,9 +660,10 @@ export class Environments {
 				"Partial observation-only shell coupled-batch journal: all unsettled plus newest 200 settled observations; no backfill or live/reference-control authority",
 			referenceGraphHistoryLimit: 200,
 			referenceGraphs: referenceGraphHistory(state?.referenceGraphs, app),
-			clusters: this.clusters.map(({ id, repository, context }) => ({
+			clusters: this.clusters.map(({ id, repositories, context }) => ({
 				id,
-				repository,
+				repository: repositories[0],
+				repositories,
 				context,
 				probe: "not-performed",
 			})),

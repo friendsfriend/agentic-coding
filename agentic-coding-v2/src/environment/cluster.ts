@@ -34,11 +34,39 @@ export function loadClusters(config: Config): Cluster[] {
 			);
 		const clusters = data.clusters.map((raw) => {
 			const entry = object(raw);
-			keys(entry, ["id", "repository", "kubeconfig", "context", "environment"]);
-			const repository = fs.realpathSync(
-				text(entry.repository, "cluster repository", 4096),
-			);
-			if (!config.repositories.includes(repository))
+			keys(entry, [
+				"id",
+				"repository",
+				"repositories",
+				"kubeconfig",
+				"context",
+				"environment",
+			]);
+			// One repository (legacy form) or an explicit list; never both and
+			// never implicit. Every entry must be an authorized repository.
+			if (
+				(entry.repository === undefined) ===
+				(entry.repositories === undefined)
+			)
+				throw new Error("Cluster needs repository or repositories");
+			const declared =
+				entry.repositories === undefined
+					? [entry.repository]
+					: entry.repositories;
+			if (!Array.isArray(declared) || !declared.length || declared.length > 64)
+				throw new Error("Cluster repositories must list 1 to 64 entries");
+			const repositories = [
+				...new Set(
+					declared.map((raw) =>
+						fs.realpathSync(text(raw, "cluster repository", 4096)),
+					),
+				),
+			];
+			if (
+				repositories.some(
+					(repository) => !config.repositories.includes(repository),
+				)
+			)
 				throw new Error("Cluster repository is not authorized");
 			const environment = Object.fromEntries(
 				Object.entries(object(entry.environment ?? {})).map(([key, value]) => {
@@ -64,7 +92,7 @@ export function loadClusters(config: Config): Cluster[] {
 			);
 			return {
 				id: identifier(entry.id),
-				repository,
+				repositories,
 				kubeconfig: contained(
 					fs.realpathSync(config.configDir),
 					text(entry.kubeconfig, "explicit kubeconfig", 4096),
@@ -127,7 +155,7 @@ export function prepareCluster(
 ): ClusterInspection {
 	if (
 		owner.policy !== "workspace-write" ||
-		owner.repository !== cluster.repository
+		!cluster.repositories.includes(owner.repository)
 	)
 		throw new Error(
 			"Cluster inspection requires this repository's workspace-write task and separate human approval",

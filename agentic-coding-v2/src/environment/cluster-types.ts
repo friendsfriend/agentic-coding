@@ -1,6 +1,8 @@
 export type Cluster = {
 	id: string;
-	repository: string;
+	/** Repositories whose tasks may use this cluster (v1's shared kind cluster
+	 * served every app). Each must be an authorized repository. */
+	repositories: string[];
 	kubeconfig: string;
 	context: string;
 	environment: Record<string, string>;
