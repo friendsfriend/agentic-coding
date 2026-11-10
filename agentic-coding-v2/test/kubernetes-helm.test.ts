@@ -548,3 +548,109 @@ for (const [label, state] of [
 		await app.cancel(owner);
 		await app.harness.waitForTask(owner as TaskId, context);
 	}, 30000);
+
+const kindClient = `import fs from "node:fs";
+const file=process.env.FIXTURE_KIND,calls=process.env.FIXTURE_CALLS;
+const s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{clusters:[]};
+const args=process.argv.slice(2);
+fs.appendFileSync(calls,JSON.stringify({verb:"kind-"+args.slice(0,2).join("-"),args,kubeconfig:process.env.KUBECONFIG})+"\\n");
+const b=(v)=>Buffer.from(v).toString("base64");
+if(args[0]==="get"&&args[1]==="clusters"){console.log(s.clusters.join("\\n"));}
+else if(args[0]==="create"&&args[1]==="cluster"){s.clusters.push(args[3]);fs.writeFileSync(file,JSON.stringify(s));console.error("Creating cluster");}
+else if(args[0]==="get"&&args[1]==="kubeconfig"){
+ if(!s.clusters.includes(args[3]))process.exit(1);
+ console.log(["apiVersion: v1","kind: Config","clusters:","- name: kind-"+args[3],"  cluster:","    server: https://127.0.0.1:6443","    certificate-authority-data: "+b("private-ca"),"contexts:","- name: kind-"+args[3],"  context: {cluster: kind-"+args[3]+", user: kind-"+args[3]+"}","users:","- name: kind-"+args[3],"  user:","    client-certificate-data: "+b("private-cert"),"    client-key-data: "+b("private-key")].join("\\n"));
+}else process.exit(2);
+`;
+test("a Helm run on v1's kind cluster creates it when missing, reuses it after and never deletes it", async () => {
+	const value = await fixture(false, (config) => {
+			configure(config);
+			const bin = path.join(config.configDir, "bin");
+			fs.writeFileSync(
+				path.join(bin, "kind"),
+				`#!${process.execPath}\n${kindClient}`,
+				{ mode: 0o700 },
+			);
+			fs.writeFileSync(path.join(bin, "docker"), "#!/bin/sh\nexit 0\n", {
+				mode: 0o700,
+			});
+			fs.writeFileSync(
+				path.join(config.configDir, "clusters.json"),
+				JSON.stringify({
+					version: 1,
+					clusters: [
+						{
+							id: "devenv",
+							repositories: config.repositories,
+							provision: { tool: "kind", name: "devenv" },
+							environment: {
+								PATH: `${bin}:${process.env.PATH ?? ""}`,
+								FIXTURE_STATE: stateFile(config),
+								FIXTURE_CALLS: callsFile(config),
+								FIXTURE_KIND: path.join(config.configDir, "kind.json"),
+							},
+						},
+					],
+				}),
+			);
+			const file = path.join(config.configDir, "environments.json"),
+				document = JSON.parse(fs.readFileSync(file, "utf8"));
+			document.projects[0].targets[0].kubernetes.cluster = "devenv";
+			fs.writeFileSync(file, JSON.stringify(document));
+		}),
+		{ app, config } = value;
+	expect((await app.environments.snapshot()).clusters).toEqual([
+		expect.objectContaining({
+			id: "devenv",
+			context: "kind-devenv",
+			provision: { tool: "kind", name: "devenv", provider: "docker" },
+		}),
+	]);
+	for (const round of [0, 1]) {
+		const owner = await held({
+			...value,
+			invocation: { ...value.invocation, requestId: `kind-${round}` },
+		});
+		if (round === 0)
+			expect(
+				(await app.snapshot()).reviews.some(
+					(review) =>
+						review.taskId === owner &&
+						review.snapshot.includes("clusterProvisionScope"),
+				),
+			).toBe(true);
+		await pendingReview(app, owner, "Hold release");
+		expect(read(config).releases["fixtures/api-local"]).toMatchObject({
+			status: "deployed",
+		});
+		await app.cancel(owner);
+		await app.harness.waitForTask(owner as TaskId, context);
+		expect(read(config).releases).toEqual({});
+		fs.writeFileSync(callsFile(config), "");
+		if (round === 0) {
+			const kubeconfig = path.join(
+				config.configDir,
+				"clusters",
+				"devenv",
+				"kubeconfig.json",
+			);
+			for (const secret of ["private-ca", "private-cert", "private-key"])
+				expect(fs.readFileSync(kubeconfig, "utf8")).not.toContain(secret);
+			const key = path.join(
+				config.configDir,
+				"clusters",
+				"devenv",
+				"client.key",
+			);
+			expect(fs.readFileSync(key, "utf8")).toBe("private-key");
+			expect(fs.statSync(key).mode & 0o777).toBe(0o600);
+		}
+	}
+	const kind = JSON.parse(
+		fs.readFileSync(path.join(config.configDir, "kind.json"), "utf8"),
+	);
+	expect(kind.clusters).toEqual(["devenv"]);
+	expect(JSON.stringify(await app.environments.snapshot())).not.toContain(
+		"private-key",
+	);
+}, 60000);

@@ -1,5 +1,5 @@
 import { type Config, digest, object } from "../config.ts";
-import { openClusterClient } from "./cluster.ts";
+import { connectCluster, openClusterClient } from "./cluster.ts";
 import type { Plan } from "./model.ts";
 import type { EnvironmentProcess, Exit, RuntimeStatus } from "./process.ts";
 import { processEnvironment, type ShellProcess } from "./shell.ts";
@@ -500,7 +500,15 @@ export class KubernetesProcess implements EnvironmentProcess {
 			throw new Error("Explicit Kubernetes connection missing");
 		const remaining = budget(this.plan.timeoutMs);
 		this.controller.signal.throwIfAborted();
-		this.client = openClusterClient(this.config, this.plan.clusterConnection);
+		this.client = openClusterClient(
+			this.config,
+			await connectCluster(
+				this.config,
+				this.plan.clusterConnection,
+				true,
+				this.controller.signal,
+			),
+		);
 		// Services select by owner labels before any pod exists, so peer-dependent
 		// readiness can resolve through in-cluster DNS. An occupied name refuses
 		// without adoption even when creation later confirms it.

@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 import { type Config, digest, object } from "../config.ts";
-import { openClusterClient } from "./cluster.ts";
+import { connectCluster, openClusterClient } from "./cluster.ts";
 import {
 	type CreatedResource,
 	KubernetesResource,
@@ -276,7 +276,15 @@ export class KubernetesDeploymentProcess implements EnvironmentProcess {
 		const connection = this.plan.clusterConnection;
 		if (!connection) throw new Error("Explicit cluster connection missing");
 		this.controller.signal.throwIfAborted();
-		this.client = openClusterClient(this.config, connection);
+		this.client = openClusterClient(
+			this.config,
+			await connectCluster(
+				this.config,
+				connection,
+				true,
+				this.controller.signal,
+			),
+		);
 		const deadline = Date.now() + this.plan.timeoutMs,
 			remaining = () => {
 				const left = deadline - Date.now();

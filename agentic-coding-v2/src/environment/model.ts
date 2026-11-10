@@ -1,5 +1,5 @@
 // Shared environment shapes are independent of catalog construction and adapter execution.
-import type { ClusterInspection } from "./cluster-types.ts";
+import type { ClusterRequest } from "./cluster-types.ts";
 import type { ContainerTarget } from "./container-config.ts";
 import type { EndpointAuth } from "./http-options.ts";
 import type { KubernetesTarget } from "./kubernetes-config.ts";
@@ -142,7 +142,7 @@ export type Plan = Target & {
 	composePlan?: ComposePlan;
 	/** Approval-time chart identity; derived only, never configuration input. */
 	helmChart?: import("./helm-chart.ts").HelmChartCapture;
-	clusterConnection?: ClusterInspection;
+	clusterConnection?: ClusterRequest;
 };
 
 /** Generation-bound observations, deliberately not a managed-reference lease. */

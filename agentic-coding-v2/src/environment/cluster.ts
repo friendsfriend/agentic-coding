@@ -3,7 +3,12 @@ import path from "node:path";
 import { type Config, digest, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
-import type { Cluster, ClusterInspection } from "./cluster-types.ts";
+import type {
+	Cluster,
+	ClusterInspection,
+	ClusterRequest,
+	ProvisionedCluster,
+} from "./cluster-types.ts";
 import { EnvironmentCommands } from "./command.ts";
 import type { Plan } from "./model.ts";
 import { ShellProcess } from "./shell.ts";
@@ -18,9 +23,54 @@ function identifier(raw: unknown) {
 		throw new Error("Invalid cluster identifier");
 	return value;
 }
+const kindName = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+function provisioned(
+	config: Config,
+	id: string,
+	repositories: string[],
+	environment: Record<string, string>,
+	provision: NonNullable<Cluster["provision"]>,
+): Cluster {
+	return {
+		id,
+		repositories,
+		// Resolved against the real configuration root when the connection is
+		// materialized; the directory may not exist before the first run.
+		kubeconfig: path.join(
+			path.resolve(config.configDir),
+			"clusters",
+			id,
+			"kubeconfig.json",
+		),
+		context: `kind-${provision.name}`,
+		environment,
+		provision,
+	};
+}
+/** v1's single shared kind cluster (`devenv`, context `kind-devenv`) served
+ * every configured app and was created on first use. Unless clusters.json
+ * declares its own `devenv`, the same implicit cluster is available to every
+ * authorized repository; each run still needs its own exact human approval. */
+function withDefaultCluster(config: Config, clusters: Cluster[]) {
+	if (
+		clusters.some((cluster) => cluster.id === "devenv") ||
+		!config.repositories.length
+	)
+		return clusters;
+	return [
+		...clusters,
+		provisioned(
+			config,
+			"devenv",
+			[...config.repositories],
+			process.env.PATH ? { PATH: process.env.PATH } : {},
+			{ tool: "kind", name: "devenv", provider: "docker" },
+		),
+	];
+}
 export function loadClusters(config: Config): Cluster[] {
 	const file = path.join(config.configDir, "clusters.json");
-	if (!fs.existsSync(file)) return [];
+	if (!fs.existsSync(file)) return withDefaultCluster(config, []);
 	try {
 		const data = object(JSON.parse(fs.readFileSync(file, "utf8")));
 		keys(data, ["version", "clusters"]);
@@ -41,6 +91,7 @@ export function loadClusters(config: Config): Cluster[] {
 				"kubeconfig",
 				"context",
 				"environment",
+				"provision",
 			]);
 			// One repository (legacy form) or an explicit list; never both and
 			// never implicit. Every entry must be an authorized repository.
@@ -90,8 +141,31 @@ export function loadClusters(config: Config): Cluster[] {
 					return [key, value];
 				}),
 			);
+			const id = identifier(entry.id);
+			if (entry.provision !== undefined) {
+				// A provisioned kind cluster owns its private kubeconfig location;
+				// an explicit kubeconfig/context would be a second authority.
+				if (entry.kubeconfig !== undefined || entry.context !== undefined)
+					throw new Error("Provisioned clusters derive their kubeconfig");
+				const provision = object(entry.provision);
+				keys(provision, ["tool", "name", "provider"]);
+				const name = text(provision.name ?? id, "kind cluster name", 63);
+				if (
+					provision.tool !== "kind" ||
+					!kindName.test(name) ||
+					![undefined, "docker", "podman"].includes(
+						provision.provider as string | undefined,
+					)
+				)
+					throw new Error("Unsupported cluster provisioning");
+				return provisioned(config, id, repositories, environment, {
+					tool: "kind",
+					name,
+					provider: provision.provider === "podman" ? "podman" : "docker",
+				});
+			}
 			return {
-				id: identifier(entry.id),
+				id,
 				repositories,
 				kubeconfig: contained(
 					fs.realpathSync(config.configDir),
@@ -103,7 +177,7 @@ export function loadClusters(config: Config): Cluster[] {
 		});
 		if (new Set(clusters.map((cluster) => cluster.id)).size !== clusters.length)
 			throw new Error("Duplicate cluster identifier");
-		return clusters;
+		return withDefaultCluster(config, clusters);
 	} catch {
 		throw new Error(
 			"Invalid explicit cluster configuration; source values are private",
@@ -152,7 +226,7 @@ export function prepareCluster(
 	config: Config,
 	owner: TaskInfo,
 	cluster: Cluster,
-): ClusterInspection {
+): ClusterRequest {
 	if (
 		owner.policy !== "workspace-write" ||
 		!cluster.repositories.includes(owner.repository)
@@ -160,6 +234,20 @@ export function prepareCluster(
 		throw new Error(
 			"Cluster inspection requires this repository's workspace-write task and separate human approval",
 		);
+	const provision = cluster.provision;
+	if (provision)
+		return {
+			cluster: { ...cluster, provision },
+			workspace: owner.workspace,
+			provision,
+		};
+	return inspectKubeconfig(config, cluster, owner.workspace);
+}
+function inspectKubeconfig(
+	config: Config,
+	cluster: Cluster,
+	workspace: string,
+): ClusterInspection {
 	try {
 		const input = source(cluster.kubeconfig),
 			data = input.data;
@@ -230,7 +318,7 @@ export function prepareCluster(
 		};
 		return {
 			cluster,
-			workspace: owner.workspace,
+			workspace,
 			sourceDigest: input.digest,
 			server: server.origin,
 			connection: {
@@ -252,6 +340,180 @@ export function prepareCluster(
 			"Unsupported or unavailable explicit local kubeconfig. Require HTTPS on a numeric loopback address and config-contained credential file references; inline credentials, exec/auth plugins, proxies and insecure TLS are not supported. Source values are private.",
 		);
 	}
+}
+const provisioning = new Map<string, Promise<void>>();
+/** Resolves an approved cluster reference to a live connection. A provisioned
+ * kind cluster is listed first; when it is missing and `create` is allowed,
+ * `kind create cluster --name <name>` creates it exactly like v1 (one creation
+ * per cluster at a time, never delete/recreate). Its kubeconfig is read with
+ * `kind get kubeconfig` and its inline credentials are written only to private
+ * 0600 files under CONFIG_DIR/clusters/<id>/, never logged or approved. */
+export async function connectCluster(
+	config: Config,
+	request: ClusterRequest,
+	create: boolean,
+	signal?: AbortSignal,
+): Promise<ClusterInspection> {
+	if (!("provision" in request)) return request;
+	const { cluster, provision } = request,
+		root = fs.realpathSync(config.configDir),
+		directory = contained(root, path.join("clusters", cluster.id));
+	// One kind lifecycle call per cluster at a time: concurrent first starts
+	// must not both issue `kind create cluster`.
+	const previous = provisioning.get(cluster.id) ?? Promise.resolve();
+	let release = () => {};
+	const chain = previous.then(
+		() =>
+			new Promise<void>((resolve) => {
+				release = resolve;
+			}),
+	);
+	provisioning.set(cluster.id, chain);
+	await previous;
+	try {
+		signal?.throwIfAborted();
+		const search = request.cluster.environment.PATH ?? process.env.PATH ?? "";
+		for (const tool of ["kind", provision.provider])
+			if (!Bun.which(tool, { PATH: search }))
+				throw new Error(
+					`Missing required Kubernetes tool ${JSON.stringify(tool)}; install it to let runs create the ${provision.name} cluster`,
+				);
+		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+		fs.chmodSync(directory, 0o700);
+		const kind = kindCommands(config, request, directory),
+			listed = await kind.checked(["get", "clusters"], {
+				signal,
+				timeoutMs: 30000,
+				machine: true,
+			});
+		if (!listed.split(/\r?\n/).some((line) => line.trim() === provision.name)) {
+			if (!create)
+				throw new Error(
+					`The ${provision.name} cluster does not exist yet; an approved Kubernetes run creates it`,
+				);
+			await kind.checked(["create", "cluster", "--name", provision.name], {
+				signal,
+				timeoutMs: 600000,
+				effect: true,
+			});
+			// kind also exported credentials to its private KUBECONFIG; the
+			// native client reads only the reference-only file below.
+			fs.rmSync(path.join(directory, "kind-export.yaml"), { force: true });
+		}
+		const raw = await kind.checked(
+			["get", "kubeconfig", "--name", provision.name],
+			{ signal, timeoutMs: 30000, machine: true },
+		);
+		const kubeconfig = path.join(directory, "kubeconfig.json");
+		writeKindKubeconfig(directory, kubeconfig, cluster.context, raw);
+		return inspectKubeconfig(
+			config,
+			{ ...cluster, kubeconfig },
+			request.workspace,
+		);
+	} finally {
+		release();
+		if (provisioning.get(cluster.id) === undefined)
+			provisioning.delete(cluster.id);
+	}
+}
+function kindCommands(
+	config: Config,
+	request: ProvisionedCluster,
+	directory: string,
+) {
+	const plan: Plan = {
+		id: request.cluster.id,
+		app: request.cluster.id,
+		action: "run",
+		runtime: "shell",
+		command: "",
+		workspace: request.workspace,
+		cwd: request.workspace,
+		timeoutMs: 600000,
+		readyText: null,
+		environment: {
+			...request.cluster.environment,
+			// kind writes its own kubeconfig here instead of the developer's
+			// ~/.kube/config; the native client never reads this file.
+			KUBECONFIG: path.join(directory, "kind-export.yaml"),
+			...(request.provision.provider === "podman"
+				? { KIND_EXPERIMENTAL_PROVIDER: "podman" }
+				: {}),
+		},
+		secretRefs: {},
+	};
+	return new EnvironmentCommands(plan, config.configDir, "kind", []);
+}
+function writeKindKubeconfig(
+	directory: string,
+	file: string,
+	context: string,
+	raw: string,
+) {
+	let data: Record<string, unknown>;
+	try {
+		data = object(Bun.YAML.parse(raw));
+	} catch {
+		throw new Error("kind kubeconfig is invalid; values are private");
+	}
+	const pick = (list: unknown, key: string) =>
+		named(list, context, key) as Record<string, unknown>;
+	let cluster: Record<string, unknown>, user: Record<string, unknown>;
+	try {
+		cluster = pick(data.clusters, "cluster");
+		user = pick(data.users, "user");
+	} catch {
+		throw new Error("kind kubeconfig lacks its kind- context");
+	}
+	const write = (name: string, value: unknown) => {
+		const target = path.join(directory, name),
+			temporary = `${target}.${process.pid}.tmp`;
+		fs.rmSync(temporary, { force: true });
+		fs.writeFileSync(
+			temporary,
+			Buffer.from(text(value, "kind credential", 65536), "base64"),
+			{ mode: 0o600, flag: "wx" },
+		);
+		fs.renameSync(temporary, target);
+		return name;
+	};
+	const document = {
+		apiVersion: "v1",
+		kind: "Config",
+		clusters: [
+			{
+				name: context,
+				cluster: {
+					server: text(cluster.server, "kind server", 4096),
+					"certificate-authority": write(
+						"ca.crt",
+						cluster["certificate-authority-data"],
+					),
+				},
+			},
+		],
+		contexts: [{ name: context, context: { cluster: context, user: context } }],
+		users: [
+			{
+				name: context,
+				user: {
+					"client-certificate": write(
+						"client.crt",
+						user["client-certificate-data"],
+					),
+					"client-key": write("client.key", user["client-key-data"]),
+				},
+			},
+		],
+	};
+	const temporary = `${file}.${process.pid}.tmp`;
+	fs.rmSync(temporary, { force: true });
+	fs.writeFileSync(temporary, JSON.stringify(document, null, 2), {
+		mode: 0o600,
+		flag: "wx",
+	});
+	fs.renameSync(temporary, file);
 }
 export function openClusterClient(
 	config: Config,
@@ -407,11 +669,12 @@ export function openClusterClient(
 }
 export async function inspectCluster(
 	config: Config,
-	inspection: ClusterInspection,
+	request: ClusterRequest,
 	signal?: AbortSignal,
 ) {
 	signal?.throwIfAborted();
-	const client = openClusterClient(config, inspection);
+	const inspection = await connectCluster(config, request, false, signal),
+		client = openClusterClient(config, inspection);
 	try {
 		const raw = await client.commands.checked(
 			["get", "namespace", "kube-system", "-o", "json"],
@@ -470,12 +733,13 @@ export function namespaceName(raw: unknown) {
  * never invents the namespace: an existing name fails at the API. */
 export async function createClusterNamespace(
 	config: Config,
-	inspection: ClusterInspection,
+	request: ClusterRequest,
 	namespace: string,
 	signal?: AbortSignal,
 ) {
 	signal?.throwIfAborted();
-	const client = openClusterClient(config, inspection);
+	const inspection = await connectCluster(config, request, false, signal),
+		client = openClusterClient(config, inspection);
 	try {
 		const raw = await client.commands.checked(
 			["create", "namespace", namespace, "-o", "json"],
@@ -524,12 +788,13 @@ export async function createClusterNamespace(
  * namespace fails at the API; reserved system namespaces never reach it. */
 export async function deleteClusterNamespace(
 	config: Config,
-	inspection: ClusterInspection,
+	request: ClusterRequest,
 	namespace: string,
 	signal?: AbortSignal,
 ) {
 	signal?.throwIfAborted();
-	const client = openClusterClient(config, inspection);
+	const inspection = await connectCluster(config, request, false, signal),
+		client = openClusterClient(config, inspection);
 	try {
 		const raw = await client.commands.checked(
 			["delete", "namespace", namespace, "-o", "json"],

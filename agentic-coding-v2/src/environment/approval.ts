@@ -82,6 +82,15 @@ export function environmentApproval(
 							"POSIX systemshell run targets resolve sh from the displayed/frozen PATH and execute the exact captured command with -c in the approved task cwd, unlike shell targets which pin /bin/sh. PATH may select executable code and is not an executable-content pin or OS sandbox. Native original process-group ownership, readiness, cancellation, idle and cleanup fences are unchanged. This is not a tmux/legacy runtime delegate, external terminal adoption or Windows/PowerShell implementation.",
 					}
 				: {}),
+			...(plans.some(
+				(plan) =>
+					plan.clusterConnection && "provision" in plan.clusterConnection,
+			)
+				? {
+						clusterProvisionScope:
+							"The displayed kind cluster is v1's shared local cluster. If `kind get clusters` does not list it when the run starts, `kind create cluster --name <name>` creates it with the displayed container provider (one creation at a time, up to 10 minutes); an existing cluster is reused. Runs never delete or recreate it, and it outlives the run like v1's. kind's kubeconfig is read with `kind get kubeconfig`; its inline client credentials are written only to private 0600 files under the configuration's clusters/<id>/ directory and never enter logs, approvals or the developer's ~/.kube/config. The connection must still be HTTPS on a numeric loopback address.",
+					}
+				: {}),
 			...(plans.some((plan) => plan.kubernetes?.workload === "deployment-v1")
 				? {
 						kubernetesDeploymentScope:

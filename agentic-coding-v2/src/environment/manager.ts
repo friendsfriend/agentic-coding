@@ -15,7 +15,7 @@ import {
 	namespaceName,
 	prepareCluster,
 } from "./cluster.ts";
-import type { ClusterInspection } from "./cluster-types.ts";
+import type { ClusterRequest } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
 import {
 	bindComposeDiagnostics,
@@ -241,7 +241,7 @@ export class Environments {
 	}
 	async inspectCluster(
 		owner: TaskInfo,
-		inspection: ClusterInspection,
+		inspection: ClusterRequest,
 		signal?: AbortSignal,
 	) {
 		const batch = "cluster-status";
@@ -287,7 +287,7 @@ export class Environments {
 	}
 	async createClusterNamespace(
 		owner: TaskInfo,
-		inspection: ClusterInspection,
+		inspection: ClusterRequest,
 		raw: unknown,
 		signal?: AbortSignal,
 	) {
@@ -302,7 +302,7 @@ export class Environments {
 	}
 	async deleteClusterNamespace(
 		owner: TaskInfo,
-		inspection: ClusterInspection,
+		inspection: ClusterRequest,
 		raw: unknown,
 		signal?: AbortSignal,
 	) {
@@ -660,13 +660,16 @@ export class Environments {
 				"Partial observation-only shell coupled-batch journal: all unsettled plus newest 200 settled observations; no backfill or live/reference-control authority",
 			referenceGraphHistoryLimit: 200,
 			referenceGraphs: referenceGraphHistory(state?.referenceGraphs, app),
-			clusters: this.clusters.map(({ id, repositories, context }) => ({
-				id,
-				repository: repositories[0],
-				repositories,
-				context,
-				probe: "not-performed",
-			})),
+			clusters: this.clusters.map(
+				({ id, repositories, context, provision }) => ({
+					id,
+					repository: repositories[0],
+					repositories,
+					context,
+					...(provision ? { provision } : {}),
+					probe: "not-performed",
+				}),
+			),
 			projects: this.projects
 				.filter((project) => !app || project.id === app)
 				.map(projectView),

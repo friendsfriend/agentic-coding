@@ -1,5 +1,6 @@
-// Registers an existing kind cluster as a native v2 cluster, like v1's implicit
-// `kind-<name>` context. Developer-invoked only: it reads `kind get kubeconfig`
+// Optional: v2 already provides v1's implicit `devenv` kind cluster and creates
+// it on the first approved Kubernetes run. This script only pins an existing
+// kind cluster to explicit files. Developer-invoked: it reads `kind get kubeconfig`
 // (never creates a cluster), writes the inline credentials to private 0600
 // files under CONFIG_DIR/clusters/<id>/, and adds or replaces one clusters.json
 // entry listing the explicit repositories. No credential value is printed.

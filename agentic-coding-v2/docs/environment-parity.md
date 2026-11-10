@@ -1041,3 +1041,12 @@ The explicit create-only Deployment protocol now pins metadata.generation from i
 - [x] `scripts/import-kind-cluster.ts --name devenv --repository <repo>...` registers an **existing** kind cluster: it reads `kind get kubeconfig` (never creates a cluster), writes the inline CA/client credentials to private `0600` files under `CONFIG_DIR/clusters/<id>/`, and writes a reference-only kubeconfig plus the clusters.json entry. No credential value is printed.
 - [x] Developer approvals given: infrastructure repository and publication. `/Users/fabiankellner/devenv-config/devenv` was added to live `config.json` through the native settings fence (`approve:<digest>`, revision `36556be7…`), and the migrated definitions were published through the authenticated draft preflight and promotion (`promotion-c10820bb…`, digest `f9d46ee2…`, 41 projects, 117 targets including both `run-helm-local` targets on `devenv`/`default`). No task, run or provider call was started. Backups: `/tmp/v2-live-{config,environments}-before-publish.json`.
 - [ ] No kind cluster exists on this machine yet (`kind` is not installed, no kube contexts), so `clusters.json` has not been written. Real runs remain the developer's next step.
+
+### Cluster created by the app, as in v1
+
+- [x] Without any `clusters.json`, every authorized repository sees v1's implicit shared kind cluster `devenv` (context `kind-devenv`, docker provider). `clusters.json` may also declare `{id, repositories, provision:{tool:"kind", name, provider}}` instead of a kubeconfig.
+- [x] An approved Kubernetes run (bare pod, deployment-v1 or helm-release-v1) lists `kind get clusters`; when the cluster is missing it runs `kind create cluster --name <name>` (serialized per cluster, 10-minute bound) exactly like v1, then reuses it. Runs never delete or recreate it. The review shows `clusterProvisionScope`.
+- [x] kind's kubeconfig is read with `kind get kubeconfig`; inline credentials go only to private 0600 files under `CONFIG_DIR/clusters/<id>/`, kind's own export goes to a private KUBECONFIG there (never `~/.kube/config`), and the connection still has to be HTTPS on numeric loopback.
+- [x] Read-only status and namespace deletion never create the cluster; they report that the first approved run creates it.
+- [x] `scripts/import-kind-cluster.ts` is now optional.
+- [ ] Real acceptance needs `kind` installed (`brew install kind`); Docker 29.8 is present. Missing tools fail the run before any effect with a named error.

@@ -123,6 +123,52 @@ test("a shared cluster lists every authorized repository explicitly and refuses 
 	}
 }, 30000);
 
+const originalPath = process.env.PATH;
+test("without clusters.json every authorized repository sees v1's implicit devenv kind cluster, and status never creates it", async () => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
+		const bin = path.join(config.configDir, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		fs.writeFileSync(
+			path.join(bin, "kind"),
+			`#!/bin/sh\necho "$*" >> "${path.join(config.configDir, "kind-calls.txt")}"\n[ "$1 $2" = "get clusters" ] && exit 0\nexit 1\n`,
+			{ mode: 0o700 },
+		);
+		fs.writeFileSync(path.join(bin, "docker"), "#!/bin/sh\nexit 0\n", {
+			mode: 0o700,
+		});
+		process.env.PATH = `${bin}:${originalPath ?? ""}`;
+	});
+	process.env.PATH = originalPath;
+	expect((await app.environments.snapshot()).clusters).toEqual([
+		expect.objectContaining({
+			id: "devenv",
+			context: "kind-devenv",
+			repositories: config.repositories,
+			provision: { tool: "kind", name: "devenv", provider: "docker" },
+		}),
+	]);
+	let transcript = "";
+	fake.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("env_cluster_status", { cluster: "devenv" }),
+			{ stopReason: "toolUse" },
+		),
+		(messages) => {
+			transcript = JSON.stringify(messages.messages);
+			return fauxAssistantMessage("done");
+		},
+	]);
+	const task = await app.startTask(invocation);
+	await pendingReview(app, task, "Cluster status: devenv");
+	await approve(app, task, "Cluster status: devenv");
+	await app.harness.waitForTask(task as TaskId, context);
+	expect(transcript).toContain("does not exist yet");
+	expect(transcript).not.toContain("api-reachable");
+	expect(
+		fs.readFileSync(path.join(config.configDir, "kind-calls.txt"), "utf8"),
+	).toBe("get clusters\n");
+}, 30000);
+
 test("an existing kind cluster imports as private file references and is usable by every listed repository", async () => {
 	const { app, fake, invocation } = await fixture(false, (config) => {
 		configureLocalCluster(

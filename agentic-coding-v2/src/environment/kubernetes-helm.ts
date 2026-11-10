@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { type Config, digest, object } from "../config.ts";
-import { openClusterClient } from "./cluster.ts";
+import { connectCluster, openClusterClient } from "./cluster.ts";
 import { freezeHelmChart, type HelmChartCapture } from "./helm-chart.ts";
 import type { HelmTarget } from "./kubernetes-config.ts";
 import type { Plan } from "./model.ts";
@@ -277,7 +277,15 @@ export class KubernetesHelmProcess implements EnvironmentProcess {
 				if (left <= 0) throw new Error("Native Helm startup timed out");
 				return left;
 			};
-		this.client = openClusterClient(this.config, connection);
+		this.client = openClusterClient(
+			this.config,
+			await connectCluster(
+				this.config,
+				connection,
+				true,
+				this.controller.signal,
+			),
+		);
 		fs.mkdirSync(this.config.stateDir, { recursive: true });
 		this.scratch = fs.mkdtempSync(
 			path.join(this.config.stateDir, "helm-chart-"),
