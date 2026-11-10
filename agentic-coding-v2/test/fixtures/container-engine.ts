@@ -18,6 +18,22 @@ if (
 		: fileURLToPath(uri.replace(/^unix:/, "file:"))) !== endpoint
 )
 	throw new Error("Missing isolated fixture engine");
+if (
+	args[2] === "create" &&
+	process.env.OTEL_COLLECTOR_CONFIG &&
+	process.env.FIXTURE_TELEMETRY_RECEIPT
+) {
+	fs.writeFileSync(
+		process.env.FIXTURE_TELEMETRY_RECEIPT,
+		JSON.stringify({
+			configuration: JSON.parse(process.env.OTEL_COLLECTOR_CONFIG),
+			mounts: args.flatMap((arg, index) =>
+				arg === "--mount" ? [args[index + 1]] : [],
+			),
+		}),
+		{ mode: 0o600 },
+	);
+}
 const response = await fetch("http://fixture/", {
 	unix: endpoint,
 	method: "POST",
@@ -42,6 +58,11 @@ if (result.follow) {
 				: line,
 		);
 	if (process.env.LOG_LINE) stream(process.env.LOG_LINE);
+	if (
+		process.env.OTEL_COLLECTOR_CONFIG &&
+		process.env.FIXTURE_TELEMETRY_RECEIPT
+	)
+		stream(`collector configuration ${process.env.OTEL_COLLECTOR_CONFIG}`);
 	stream(`service log ${process.env.SERVICE_TOKEN ?? ""}`);
 	// Bound orphaned fixture clients to this disposable engine, even after a host SIGKILL.
 	setInterval(async () => {

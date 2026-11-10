@@ -1,0 +1,35 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  batch: {}
+exporters:
+  otlp_http:
+    endpoint: ${AC_OTEL_ENDPOINT:-http://host.docker.internal:4318}
+    encoding: json
+    # The receiver cannot read a gzip-encoded body: with the exporter's
+    # default compression it answers `400 SyntaxError: JSON Parse error`.
+    compression: none
+    tls:
+      insecure: true
+  # Prints one line per exported batch, so `docker logs
+  # grid-allocation-backend-otel-collector` shows what the app exported.
+  debug:
+    verbosity: basic
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http, debug]

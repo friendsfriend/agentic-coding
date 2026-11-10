@@ -86,7 +86,14 @@ export type Target = {
 	endpointCaRefs?: Record<string, string>;
 	endpointAuthRefs?: Record<string, EndpointAuth>;
 	queryConnection?: QueryConnection;
-	telemetry?: { protocol: "otlp-http-json"; listen: "127.0.0.1:0" };
+	telemetry?:
+		| { protocol: "otlp-http-json"; listen: "127.0.0.1:0" }
+		| {
+				protocol: "otlp-http-json";
+				listen: "0.0.0.0:0";
+				collectorService: string;
+				transport: "tls-host-gateway-v1";
+		  };
 	prerequisites?: { app: string; target: string }[];
 };
 export type Project = {

@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { digest } from "../config.ts";
 import { logSince } from "./log-timing.ts";
 import type { TelemetryOptions } from "./model.ts";
+import { TelemetryCertificate } from "./telemetry-certificate.ts";
 import {
 	decodeLogs,
 	decodeSpans,
@@ -49,45 +50,74 @@ export class TelemetryCollector {
 		string,
 		{ boundary: number; highWater: number; query: string; expires: number }
 	>();
+	private readonly certificate?: TelemetryCertificate;
+	private readonly hidden: string[];
+	private containerEndpoint = "";
+	private authorization = "";
 	private closed = false;
 	private stopping: Promise<void> | null = null;
 	constructor(
 		scope: { app: string; owner: number; run: string },
 		baseRedact: (value: string) => string,
+		container?: { stateDir: string },
 	) {
 		this.scope = Object.freeze({ ...scope });
 		const token = randomBytes(32).toString("hex"),
 			authorization = `Bearer ${token}`;
-		const hidden = [
+		this.hidden = [
 			Buffer.from(authorization).toString("base64"),
 			Buffer.from(token).toString("base64"),
 			token,
 		];
 		this.redact = (value) =>
 			baseRedact(
-				hidden.reduce(
+				this.hidden.reduce(
 					(result, secret) => result.replaceAll(secret, "[REDACTED]"),
 					value,
 				),
 			);
-		this.server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			maxRequestBodySize: 65536,
-			idleTimeout: 5,
-			fetch: (request) => {
-				if (this.pending.size >= 4)
-					return new Response("Telemetry receiver is busy", { status: 429 });
-				const operation = this.receive(request, authorization);
-				this.pending.add(operation);
-				void operation.then(
-					() => this.pending.delete(operation),
-					() => this.pending.delete(operation),
+		this.certificate = container
+			? new TelemetryCertificate(container.stateDir)
+			: undefined;
+		this.authorization = authorization;
+		this.server = (() => {
+			try {
+				return Bun.serve({
+					hostname: container ? "0.0.0.0" : "127.0.0.1",
+					...(this.certificate
+						? {
+								tls: {
+									cert: this.certificate.certificate,
+									key: this.certificate.key,
+								},
+							}
+						: {}),
+					port: 0,
+					maxRequestBodySize: 65536,
+					idleTimeout: 5,
+					fetch: (request) => {
+						if (this.pending.size >= 4)
+							return new Response("Telemetry receiver is busy", {
+								status: 429,
+							});
+						const operation = this.receive(request, authorization);
+						this.pending.add(operation);
+						void operation.then(
+							() => this.pending.delete(operation),
+							() => this.pending.delete(operation),
+						);
+						return operation;
+					},
+				});
+			} catch {
+				this.certificate?.close();
+				throw new Error(
+					"Native telemetry listener could not start; no receiver authority retained",
 				);
-				return operation;
-			},
-		});
-		const endpoint = `http://127.0.0.1:${this.server.port}`;
+			}
+		})();
+		const endpoint = `${container ? "https" : "http"}://127.0.0.1:${this.server.port}`;
+		this.containerEndpoint = `https://host.docker.internal:${this.server.port}`;
 		this.environment = Object.freeze({
 			AC_OTEL_APP: scope.app,
 			AC_OTEL_OWNER: String(scope.owner),
@@ -98,6 +128,65 @@ export class TelemetryCollector {
 			OTEL_RESOURCE_ATTRIBUTES: `ac.app=${scope.app},ac.owner=${scope.owner},ac.run=${scope.run}`,
 			OTEL_METRICS_EXPORTER: "none",
 		});
+	}
+	includeRedactions(values: readonly string[]) {
+		this.hidden.push(
+			...values.filter((value) => value && !this.hidden.includes(value)),
+		);
+		this.hidden.sort((a, b) => b.length - a.length);
+	}
+	certificateMount() {
+		if (this.closed || !this.certificate)
+			throw new Error("No original live native TLS telemetry certificate");
+		return this.certificate.mount();
+	}
+	containerEnvironment() {
+		this.certificateMount();
+		return {
+			OTEL_COLLECTOR_CONFIG: JSON.stringify({
+				receivers: {
+					otlp: {
+						protocols: {
+							grpc: { endpoint: "0.0.0.0:4317" },
+							http: { endpoint: "0.0.0.0:4318" },
+						},
+					},
+				},
+				processors: {
+					batch: {
+						send_batch_size: 16,
+						send_batch_max_size: 16,
+						timeout: "1s",
+					},
+				},
+				exporters: {
+					otlp_http: {
+						endpoint: this.containerEndpoint,
+						encoding: "json",
+						compression: "none",
+						headers: { Authorization: this.authorization },
+						tls: { ca_file: "/acv2-otel-ca.pem" },
+						sending_queue: { enabled: false },
+						retry_on_failure: { enabled: false },
+						timeout: "5s",
+					},
+					debug: { verbosity: "basic" },
+				},
+				service: {
+					telemetry: { logs: { level: "info" } },
+					pipelines: Object.fromEntries(
+						["traces", "logs"].map((mode) => [
+							mode,
+							{
+								receivers: ["otlp"],
+								processors: ["batch"],
+								exporters: ["otlp_http", "debug"],
+							},
+						]),
+					),
+				},
+			}),
+		};
 	}
 	private async body(request: Request): Promise<unknown> {
 		if (!request.body) throw new Error("Missing telemetry body");
@@ -134,7 +223,14 @@ export class TelemetryCollector {
 		try {
 			const url = new URL(request.url);
 			if (this.closed) return new Response(null, { status: 410 });
-			if (url.hostname !== "127.0.0.1" || url.port !== String(this.server.port))
+			if (
+				!(
+					url.hostname === "127.0.0.1" ||
+					(this.certificate && url.hostname === "host.docker.internal")
+				) ||
+				url.port !== String(this.server.port) ||
+				url.protocol !== (this.certificate ? "https:" : "http:")
+			)
 				return new Response(null, { status: 403 });
 			const supplied = request.headers.get("authorization") ?? "";
 			if (
@@ -618,6 +714,7 @@ export class TelemetryCollector {
 						timer.unref();
 					}),
 				]);
+				this.certificate?.close();
 			} finally {
 				if (timer) clearTimeout(timer);
 			}

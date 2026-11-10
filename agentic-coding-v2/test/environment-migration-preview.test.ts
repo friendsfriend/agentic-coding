@@ -645,3 +645,170 @@ test("reviewed host-image source digest migrates to native Maven/Java preparatio
 		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
 	).toBe(base);
 }, 15000);
+
+test("reviewed collector source migrates to native live TLS binding without receiver literals/references or legacy dispatch; changed pipelines remain blocked", async () => {
+	const { app, config } = await fixture(false, (config) => {
+		fs.mkdirSync(config.configDir);
+		fs.chmodSync(config.stateDir, 0o700);
+	});
+	const root = path.dirname(config.configDir),
+		source = path.join(root, "v1-telemetry"),
+		guard = path.join(root, "tool-guards"),
+		marker = path.join(root, "unexpected-workload");
+	for (const directory of [
+		"apps/build",
+		"apps/compose",
+		"apps/run",
+		"apps/defaults",
+		"infrastructure/compose",
+	])
+		fs.mkdirSync(path.join(source, directory), { recursive: true });
+	fs.mkdirSync(guard);
+	for (const name of ["docker", "podman", "mvn", "java", "helm", "kubectl"])
+		fs.writeFileSync(
+			path.join(guard, name),
+			`#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)},'unexpected');process.exit(99);\n`,
+			{ mode: 0o700 },
+		);
+	fs.writeFileSync(
+		path.join(config.configDir, "config.json"),
+		JSON.stringify({ profiles: {}, repositories: config.repositories }),
+	);
+	const base = JSON.stringify({
+		version: 1,
+		projects: [
+			{
+				id: "grid-allocation-backend",
+				kind: "app",
+				repository: config.repositories[0],
+				targets: [
+					{
+						id: "placeholder",
+						action: "build",
+						runtime: "shell",
+						command: "echo placeholder",
+					},
+				],
+			},
+		],
+	});
+	fs.writeFileSync(path.join(config.configDir, "environments.json"), base);
+	fs.writeFileSync(
+		path.join(source, "apps/defaults/grid-allocation-backend.json"),
+		JSON.stringify({ run: "docker" }),
+	);
+	const collectorConfig = fs.readFileSync(
+		path.join(import.meta.dir, "fixtures/grid-otel-collector-config.txt"),
+		"utf8",
+	);
+	const document = {
+		services: {
+			"grid-allocation-backend": {
+				image: "fixture:latest",
+				environment: {
+					OTEL_SERVICE_NAME: `\${AC_OTEL_SERVICE_NAME:-grid-allocation-backend}`,
+					OTEL_RESOURCE_ATTRIBUTES: `\${AC_OTEL_RESOURCE_ATTRIBUTES:-ac.app=grid-allocation-backend}`,
+					OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+					OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
+				},
+			},
+			"otel-collector": {
+				image: "otel/opentelemetry-collector-contrib:0.162.0",
+				command: ["--config=env:OTEL_COLLECTOR_CONFIG"],
+				extra_hosts: ["host.docker.internal:host-gateway"],
+				environment: {
+					AC_OTEL_ENDPOINT: `\${AC_OTEL_ENDPOINT:-http://host.docker.internal:4318}`,
+					OTEL_COLLECTOR_CONFIG: collectorConfig,
+				},
+			},
+		},
+	};
+	const input = path.join(
+		source,
+		"apps/compose/grid-allocation-backend-compose.yml",
+	);
+	fs.writeFileSync(input, Bun.YAML.stringify(document));
+	const preview = (directory: string) =>
+		Bun.spawnSync(
+			[
+				process.execPath,
+				path.join(
+					import.meta.dir,
+					"../scripts/preview-environment-migration.ts",
+				),
+				"--source-config",
+				source,
+				"--current-config",
+				config.configDir,
+				"--output",
+				directory,
+				"--socket",
+				path.join(config.stateDir, "never-contacted.sock"),
+			],
+			{ stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH: guard } },
+		);
+	const output = path.join(root, "telemetry-preview");
+	expect(preview(output).exitCode).toBe(0);
+	const content = fs.readFileSync(
+			path.join(output, "environments.json"),
+			"utf8",
+		),
+		converted = JSON.parse(content),
+		project = converted.projects[0],
+		target = project.targets.find(
+			(target: { id: string }) => target.id === "run-compose-default",
+		);
+	expect(target.telemetry).toEqual({
+		protocol: "otlp-http-json",
+		listen: "0.0.0.0:0",
+		collectorService: "otel-collector",
+		transport: "tls-host-gateway-v1",
+	});
+	expect(project.defaults.run).toBe("run-compose-default");
+	expect(content).not.toContain("AC_OTEL_ENDPOINT");
+	expect(content).not.toContain("OTEL_COLLECTOR_CONFIG:");
+	expect(content).not.toContain("http://host.docker.internal:4318");
+	expect(content).not.toContain("AC_OTEL_RESOURCE_ATTRIBUTES");
+	const host = serve(app);
+	try {
+		const post = client(host),
+			staged = await (
+				await post("/api/environments/drafts", {
+					requestId: "native-telemetry",
+					content,
+				})
+			).json();
+		const checked = await (
+			await post("/api/environments/drafts/preflight", {
+				requestId: "native-telemetry-check",
+				id: staged.id,
+				revision: staged.revision,
+				digest: staged.digest,
+				validateStagedCandidate: true,
+			})
+		).json();
+		expect(checked.accepted).toBe(true);
+		expect(checked.publicationAllowed).toBe(false);
+		expect((await app.environments.snapshot()).runs).toHaveLength(0);
+	} finally {
+		host.stop();
+	}
+	document.services["otel-collector"].environment.OTEL_COLLECTOR_CONFIG +=
+		"\n# changed pipeline must not be interpreted by filename alone\n";
+	fs.writeFileSync(input, Bun.YAML.stringify(document));
+	const refused = path.join(root, "telemetry-changed");
+	expect(preview(refused).exitCode).toBe(0);
+	const changed = JSON.parse(
+		fs.readFileSync(path.join(refused, "environments.json"), "utf8"),
+	);
+	expect(
+		changed.projects[0].targets.some(
+			(target: { id: string }) => target.id === "run-compose-default",
+		),
+	).toBe(false);
+	expect(changed.projects[0].defaults?.run).toBeUndefined();
+	expect(fs.existsSync(marker)).toBe(false);
+	expect(
+		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
+	).toBe(base);
+}, 15000);

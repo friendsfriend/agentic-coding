@@ -11,6 +11,7 @@ import { HostBuild } from "./host-build.ts";
 import type { Plan } from "./model.ts";
 import type { LogTiming, RuntimeStatus } from "./process.ts";
 import { type Exit, processEnvironment, ShellProcess } from "./shell.ts";
+import type { TelemetryCollector } from "./telemetry.ts";
 
 const hostLabel = "dev.agentic-coding.v2.host",
 	runLabel = "dev.agentic-coding.v2.run";
@@ -60,6 +61,7 @@ export class ContainerProcess {
 			target: string;
 			readOnly: boolean;
 		}[] = [],
+		private collector?: TelemetryCollector,
 	) {
 		if (
 			network &&
@@ -381,6 +383,7 @@ export class ContainerProcess {
 		const variables = [
 			...Object.keys(this.plan.environment),
 			...Object.keys(this.plan.secretRefs),
+			...Object.keys(this.collector?.containerEnvironment() ?? {}),
 		];
 		const create = [
 			"create",
@@ -405,6 +408,7 @@ export class ContainerProcess {
 				`${port.address.includes(":") ? `[${port.address}]` : port.address}:${port.host}:${port.container}/${port.protocol}`,
 			]),
 			...mounts,
+			...(this.collector ? ["--mount", this.collector.certificateMount()] : []),
 			...this.volumeMounts.flatMap((mount) => [
 				"--mount",
 				`type=volume,src=${mount.name},dst=${mount.target}${mount.readOnly ? ",readonly" : ""}`,

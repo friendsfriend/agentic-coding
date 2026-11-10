@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { digest, object, text } from "../config.ts";
 import { contained } from "../git.ts";
+import { checkComposeTelemetry } from "./compose-telemetry.ts";
 import {
 	composeArgv,
 	composeEnvironment,
@@ -646,6 +647,7 @@ export function bindComposeDiagnostics(
 	target: Target,
 	plan: ComposePlan,
 ): ComposePlan {
+	checkComposeTelemetry(target, plan);
 	for (const service of plan.services)
 		if (
 			Object.entries(service.secretRefs ?? {}).some(

@@ -6,6 +6,7 @@ import { clampedCapture } from "./log-timing.ts";
 import type { Plan } from "./model.ts";
 import type { EnvironmentProcess, Exit } from "./process.ts";
 import { processEnvironment } from "./shell.ts";
+import type { TelemetryCollector } from "./telemetry.ts";
 
 /** A Compose file is compiled to independent, receipt-fenced creations, never
  * `compose up/down`: project labels cannot prove which resources we created. */
@@ -30,7 +31,12 @@ export class ComposeProcess implements EnvironmentProcess {
 		private configDir: string,
 		private stateDir: string,
 		private run: string,
+		readonly telemetry?: TelemetryCollector,
 	) {
+		if (Boolean(plan.telemetry) !== Boolean(telemetry))
+			throw new Error(
+				"Compose telemetry requires the exact original live receiver",
+			);
 		const parent = processEnvironment(configDir, plan);
 		this.plans = containerPlans(plan);
 		// Resolve every service before creating a network or container. A missing
@@ -41,32 +47,35 @@ export class ComposeProcess implements EnvironmentProcess {
 		// One longest-first set across the stack also protects overlapping secrets
 		// in sibling logs; per-service sequential redaction could expose suffixes.
 		const hidden = [
-			...new Set(
-				this.plans.flatMap((service, index) =>
-					Object.keys(service.secretRefs).flatMap((key) => {
-						const env: Record<string, string> | undefined =
-							environments[index]?.env;
-						const value = env?.[key];
-						return value
-							? [value, ...value.split(/\r?\n/)].filter(Boolean)
-							: [];
-					}),
-				),
-			),
+			...new Set([
+				...parent.redactionValues,
+				...environments.flatMap((environment) => environment.redactionValues),
+			]),
 		].sort((a, b) => b.length - a.length);
+		telemetry?.includeRedactions(hidden);
 		const redact = (value: string) =>
 			environments.reduce(
 				(text, environment) => environment.redact(text),
 				parent.redact(
 					hidden.reduce(
 						(text, secret) => text.replaceAll(secret, "[REDACTED]"),
-						value,
+						telemetry?.redact(value) ?? value,
 					),
 				),
 			);
 		this.frozen = { ...parent, redact };
-		this.serviceEnvironments = environments.map((environment) => ({
+		this.serviceEnvironments = environments.map((environment, index) => ({
 			...environment,
+			env: {
+				...environment.env,
+				...(telemetry &&
+				plan.telemetry &&
+				"collectorService" in plan.telemetry &&
+				plan.composePlan?.services[index]?.id ===
+					plan.telemetry.collectorService
+					? telemetry.containerEnvironment()
+					: {}),
+			},
 			redact,
 		}));
 		if (plan.composePlan?.volumes?.length)
@@ -132,7 +141,28 @@ export class ComposeProcess implements EnvironmentProcess {
 	 * all non-completion children and the owned network; never borrow a sibling
 	 * credential or adopt a copied-label replacement. Queue cancellation covers
 	 * the whole observation window, not a fresh budget per queued service. */
-	async diagnosticService(id: string, signal?: AbortSignal) {
+	diagnosticService(id: string, signal?: AbortSignal) {
+		return this.observeService(id, true, signal);
+	}
+	async telemetryScope() {
+		const capture = this.plan.telemetry;
+		if (!this.telemetry || !capture || !("collectorService" in capture))
+			throw new Error("No original live Compose telemetry scope");
+		try {
+			this.telemetry.certificateMount();
+		} catch {
+			this.failedCleanup = true;
+			throw new Error(
+				"Original native telemetry certificate scope changed; inspection required",
+			);
+		}
+		await this.observeService(capture.collectorService, false);
+	}
+	private async observeService(
+		id: string,
+		requireSelectedHealth: boolean,
+		signal?: AbortSignal,
+	) {
 		const bounded = AbortSignal.any([
 			this.controller.signal,
 			AbortSignal.timeout(2000),
@@ -172,7 +202,7 @@ export class ComposeProcess implements EnvironmentProcess {
 						child.cleanupFailed ||
 						observed?.owned !== true ||
 						observed.state !== "running" ||
-						((position === index ||
+						(((position === index && requireSelectedHealth) ||
 							service?.container.readiness === "healthy") &&
 							observed.health !== "healthy")
 					)
@@ -273,6 +303,11 @@ export class ComposeProcess implements EnvironmentProcess {
 							: undefined,
 				},
 				volumeAttachments,
+				this.plan.telemetry &&
+					"collectorService" in this.plan.telemetry &&
+					alias === this.plan.telemetry.collectorService
+					? this.telemetry
+					: undefined,
 			);
 			this.children.push(child);
 			if (completion.has(alias ?? "")) {
@@ -324,6 +359,11 @@ export class ComposeProcess implements EnvironmentProcess {
 				} catch {
 					this.failedCleanup = true;
 				}
+			try {
+				await this.telemetry?.close();
+			} catch {
+				this.failedCleanup = true;
+			}
 			try {
 				await this.network?.stop();
 			} catch {

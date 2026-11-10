@@ -8,6 +8,7 @@ import {
 	compileCompose,
 	readCompose,
 } from "../src/environment/compose-config.ts";
+import { checkComposeTelemetry } from "../src/environment/compose-telemetry.ts";
 import {
 	composeArgv,
 	composeEnvironment,
@@ -18,6 +19,10 @@ import {
 	hostBuildSourceDigest,
 } from "../src/environment/host-build-spec.ts";
 import { discoverRepositoryTargets } from "../src/environment/repository-targets.ts";
+import {
+	collectorTelemetry,
+	legacyCollectorConfigDigest,
+} from "../src/environment/telemetry-bridge-spec.ts";
 
 class Refusal extends Error {}
 function flag(name: string, required = true) {
@@ -183,6 +188,41 @@ function flatten(
 }
 function convertedCompose(relative: string) {
 	const merged = flatten(relative);
+	let telemetry: typeof collectorTelemetry | undefined;
+	if (
+		relative === "apps/compose/grid-allocation-backend-compose.yml" &&
+		Object.hasOwn(merged.services, "otel-collector")
+	) {
+		const collector = object(merged.services["otel-collector"]),
+			producer = object(merged.services["grid-allocation-backend"]),
+			exporter = composeEnvironment(collector.environment),
+			appEnvironment = composeEnvironment(producer.environment);
+		if (
+			typeof exporter.OTEL_COLLECTOR_CONFIG !== "string" ||
+			digest(exporter.OTEL_COLLECTOR_CONFIG) !== legacyCollectorConfigDigest ||
+			exporter.AC_OTEL_ENDPOINT !==
+				`\${AC_OTEL_ENDPOINT:-http://host.docker.internal:4318}` ||
+			Object.keys(exporter).sort().join() !==
+				"AC_OTEL_ENDPOINT,OTEL_COLLECTOR_CONFIG" ||
+			appEnvironment.OTEL_SERVICE_NAME !==
+				`\${AC_OTEL_SERVICE_NAME:-grid-allocation-backend}` ||
+			appEnvironment.OTEL_RESOURCE_ATTRIBUTES !==
+				`\${AC_OTEL_RESOURCE_ATTRIBUTES:-ac.app=grid-allocation-backend}` ||
+			appEnvironment.OTEL_EXPORTER_OTLP_ENDPOINT !==
+				"http://otel-collector:4318" ||
+			appEnvironment.OTEL_EXPORTER_OTLP_PROTOCOL !== "http/protobuf"
+		)
+			throw new Refusal(
+				"Telemetry source changed; explicit collector/runtime binding conversion required",
+			);
+		collector.environment = {};
+		producer.environment = {
+			...appEnvironment,
+			OTEL_SERVICE_NAME: "grid-allocation-backend",
+			OTEL_RESOURCE_ATTRIBUTES: "ac.app=grid-allocation-backend",
+		};
+		telemetry = collectorTelemetry;
+	}
 	const refs = new Set<string>();
 	for (const [id, raw] of Object.entries(merged.services)) {
 		const service = object(raw),
@@ -262,7 +302,11 @@ function convertedCompose(relative: string) {
 		if (Object.keys(serviceRefs).length) service["x-secret-refs"] = serviceRefs;
 		for (const ref of Object.values(serviceRefs)) refs.add(ref);
 	}
-	return { source: Bun.YAML.stringify(merged), refs: [...refs].sort() };
+	return {
+		source: Bun.YAML.stringify(merged),
+		refs: [...refs].sort(),
+		telemetry,
+	};
 }
 function convertedBuild(relative: string) {
 	let source = capture(relative);
@@ -399,7 +443,11 @@ for (const project of projects) {
 					socket,
 					network: "shared",
 				};
-				compileCompose(repository, readCompose(definition));
+				const composed = readCompose(definition);
+				checkComposeTelemetry(
+					{ telemetry: converted.telemetry, compose: composed },
+					compileCompose(repository, composed),
+				);
 				target = {
 					id: targetId,
 					action: "run",
@@ -407,6 +455,7 @@ for (const project of projects) {
 					profile: candidate.profile,
 					timeoutMs: 180000,
 					compose: definition,
+					...(converted.telemetry ? { telemetry: converted.telemetry } : {}),
 				};
 				refs = converted.refs;
 			} else {

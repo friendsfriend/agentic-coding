@@ -195,18 +195,44 @@ function readTarget(raw: unknown): Target {
 	let telemetry: Target["telemetry"];
 	if (data.telemetry !== undefined) {
 		const capture = object(data.telemetry);
-		keysOnly(capture, ["protocol", "listen"]);
-		if (
-			capture.protocol !== "otlp-http-json" ||
-			capture.listen !== "127.0.0.1:0" ||
-			data.runtime !== "shell" ||
-			data.action !== "run" ||
-			!(data.readyText || data.readyUrl)
-		)
-			throw new Error(
-				"Native telemetry requires an explicit otlp-http-json loopback-ephemeral shell run target with readiness text",
-			);
-		telemetry = { protocol: "otlp-http-json", listen: "127.0.0.1:0" };
+		if (data.runtime === "compose") {
+			keysOnly(capture, [
+				"protocol",
+				"listen",
+				"collectorService",
+				"transport",
+			]);
+			if (
+				capture.protocol !== "otlp-http-json" ||
+				capture.listen !== "0.0.0.0:0" ||
+				capture.transport !== "tls-host-gateway-v1" ||
+				data.action !== "run" ||
+				typeof capture.collectorService !== "string" ||
+				!/^[a-z][a-z0-9-]{0,62}$/.test(capture.collectorService)
+			)
+				throw new Error(
+					"Compose telemetry requires an explicit TLS host-gateway collector service on a run target",
+				);
+			telemetry = {
+				protocol: "otlp-http-json",
+				listen: "0.0.0.0:0",
+				collectorService: capture.collectorService,
+				transport: "tls-host-gateway-v1",
+			};
+		} else {
+			keysOnly(capture, ["protocol", "listen"]);
+			if (
+				capture.protocol !== "otlp-http-json" ||
+				capture.listen !== "127.0.0.1:0" ||
+				data.runtime !== "shell" ||
+				data.action !== "run" ||
+				!(data.readyText || data.readyUrl)
+			)
+				throw new Error(
+					"Native telemetry requires an explicit otlp-http-json loopback-ephemeral shell run target with readiness text",
+				);
+			telemetry = { protocol: "otlp-http-json", listen: "127.0.0.1:0" };
+		}
 	}
 	const environment = variables(data.environment),
 		secretRefs = variables(data.secretRefs);
@@ -216,6 +242,7 @@ function readTarget(raw: unknown): Target {
 			(key) =>
 				key.startsWith("AC_OTEL_") ||
 				key.startsWith("OTEL_EXPORTER_OTLP_") ||
+				(data.runtime === "compose" && key === "OTEL_COLLECTOR_CONFIG") ||
 				key === "OTEL_RESOURCE_ATTRIBUTES" ||
 				key === "OTEL_METRICS_EXPORTER",
 		)

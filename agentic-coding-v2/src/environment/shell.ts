@@ -70,6 +70,7 @@ export function processEnvironment(configDir: string, plan: Plan) {
 		),
 	].sort((a, b) => b.length - a.length);
 	return {
+		redactionValues: Object.freeze(hidden),
 		queryCredentials: () => queryCredentials,
 		authorization: (endpoint: string) =>
 			Object.hasOwn(auth, endpoint) ? auth[endpoint] : undefined,
@@ -137,7 +138,10 @@ export class ShellProcess {
 	) {
 		if (process.platform === "win32")
 			throw new Error("Shell environment runtime currently requires POSIX");
-		if (Boolean(plan.telemetry) !== Boolean(capture))
+		if (
+			Boolean(plan.telemetry) !== Boolean(capture) &&
+			(!invocation || plan.runtime === "shell")
+		)
 			throw new Error(
 				"Native telemetry requires the exact live approved startup scope",
 			);

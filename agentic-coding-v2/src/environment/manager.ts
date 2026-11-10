@@ -753,6 +753,8 @@ export class Environments {
 		if (owner !== undefined)
 			for (const requirer of first ? requirers : [run])
 				this.idle.touchRun(owner, requirer.id);
+		if (process instanceof ComposeProcess) await process.telemetryScope();
+		this.check(run.owner, undefined, run.batch, run.id);
 		const query = await process.telemetry.query(options);
 		return root ? { ...query, root } : query;
 	}
@@ -1013,6 +1015,9 @@ export class Environments {
 					? new TelemetryCollector(
 							{ app: plan.app, owner: owner.id, run: id },
 							frozen.redact,
+							plan.runtime === "compose"
+								? { stateDir: this.config.stateDir }
+								: undefined,
 						)
 					: undefined;
 				let process: EnvironmentProcess;
@@ -1033,6 +1038,7 @@ export class Environments {
 										this.config.configDir,
 										this.config.stateDir,
 										id,
+										collector,
 									)
 								: plan.runtime === "kubernetes"
 									? new KubernetesProcess(this.config, plan, id)
