@@ -675,3 +675,113 @@ test("operator-owned loopback StatsD and Prometheus ingest through real sockets,
 		await foreign.stop(true);
 	}
 });
+
+test("authorized workspace scans and watchers refuse linked sources but retain ordinary incremental telemetry", async () => {
+	const { app } = await fixture(false);
+	const outside = await fixture(false);
+	const root = app.config.repositories[0],
+		foreignRoot = outside.app.config.repositories[0];
+	const workflowRoot = path.join(root, ".herdr-workflow");
+	const foreignWorkflow = path.join(foreignRoot, ".herdr-workflow", "outside");
+	fs.mkdirSync(foreignWorkflow, { recursive: true });
+	const event = (name: string) =>
+		`${JSON.stringify({ event: name, workflowId: "workspace-fixture", at: "2026-03-01T10:00:00Z", layer: "engine" })}\n`;
+	const foreignFile = path.join(foreignWorkflow, "telemetry.jsonl");
+	fs.writeFileSync(foreignFile, event("outside_marker"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	const manage = (operation: "scan" | "watch" | "unwatch") =>
+		client.call("telemetry.manage", { operation, repository: root });
+	const spans = async () =>
+		JSON.stringify(
+			(
+				await client.call("telemetry.read", {
+					signal: "spans",
+					changeId: "workspace-fixture",
+				})
+			).value,
+		);
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		fs.symlinkSync(path.dirname(foreignWorkflow), workflowRoot, "dir");
+		expect(await manage("scan")).toEqual({ count: 0 });
+		fs.unlinkSync(workflowRoot);
+		fs.mkdirSync(workflowRoot);
+		fs.symlinkSync(
+			foreignWorkflow,
+			path.join(workflowRoot, "linked-directory"),
+			"dir",
+		);
+		expect(await manage("scan")).toEqual({ count: 0 });
+		const local = path.join(workflowRoot, "workspace-fixture");
+		fs.mkdirSync(local);
+		const localFile = path.join(local, "telemetry.jsonl");
+		fs.symlinkSync(foreignFile, localFile);
+		expect(await manage("scan")).toEqual({ count: 0 });
+		fs.unlinkSync(localFile);
+		fs.linkSync(foreignFile, localFile);
+		expect(await manage("scan")).toEqual({ count: 0 });
+		fs.unlinkSync(localFile);
+		fs.writeFileSync(
+			localFile,
+			event("regular_first") +
+				'{"event":"invalid_duration","workflowId":"workspace-fixture","at":"2026-03-01T10:00:00Z","durationMs":1e999}\n' +
+				JSON.stringify({
+					event: "invalid_date",
+					workflowId: "workspace-fixture",
+					at: "9999-03-01T10:00:00Z",
+				}) +
+				"\n",
+		);
+		expect(await manage("scan")).toEqual({ count: 1 });
+		expect(await spans()).toContain("regular_first");
+		expect(await spans()).not.toContain("invalid_");
+		await manage("watch");
+		await manage("watch");
+		fs.appendFileSync(localFile, event("regular_append"));
+		await eventually(spans, (value) => value.includes("regular_append"));
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "spans",
+					changeId: "workspace-fixture",
+				})
+			).value,
+		).toHaveLength(2);
+		fs.unlinkSync(localFile);
+		fs.symlinkSync(foreignFile, localFile);
+		const barrier = path.join(workflowRoot, "watch-barrier");
+		fs.mkdirSync(barrier);
+		fs.writeFileSync(
+			path.join(barrier, "telemetry.jsonl"),
+			event("watch_barrier"),
+		);
+		await eventually(
+			async () =>
+				JSON.stringify(
+					(
+						await client.call("telemetry.read", {
+							signal: "spans",
+							changeId: "watch-barrier",
+						})
+					).value,
+				),
+			(value) => value.includes("watch_barrier"),
+		);
+		expect(await spans()).not.toContain("outside_marker");
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "spans",
+					changeId: "linked-directory",
+				})
+			).value,
+		).toEqual([]);
+		expect(fs.readFileSync(foreignFile, "utf8")).toBe(event("outside_marker"));
+		await manage("unwatch");
+	} finally {
+		client.close();
+		await host.stop();
+	}
+}, 15000);

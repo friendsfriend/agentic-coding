@@ -782,3 +782,30 @@ operator environment functional tests pass.
   not overall parity acceptance. Remote/config-discovered scrape targets are
   intentionally not enabled implicitly. Whole-application visual/runtime
   acceptance and any remaining original parity checklist items stay open.
+
+## Observability follow-up: confined workspace ingestion
+
+- Audited the copied v1 scan/watch reader against the configured-root fence.
+  Repository approval alone did not prevent a linked `.herdr-workflow` folder
+  or telemetry file from resolving elsewhere. Scan/watch now skip linked
+  descendants, multiply-linked files and non-regular sources. The canonical
+  root and each descendant are checked; reads use a no-follow/nonblocking
+  descriptor and check its file identity/type before reading, rather than
+  reopening a checked name through `Bun.file` after an async yield.
+- Both full scans and incremental watcher tails use that source fence. A
+  skipped source does not delete already retained telemetry, and background
+  scan diagnostics no longer print filesystem errors containing source paths.
+  Ordinary authorized appends still use their watermark without duplication.
+- Workspace parsing now rejects nonfinite durations and timestamps outside
+  SQLite's nonnegative signed-64-bit nanosecond range before BigInt conversion
+  or persistence. One malformed record cannot prevent later valid records from
+  being parsed. Parser version 5 invalidates old workspace watermarks through
+  the existing derived-index re-ingest path; no manual database surgery.
+- Added one authenticated public-boundary synthetic scenario covering linked
+  workflow roots, directories and files, hard links, normal scan/append,
+  duplicate watcher registration, a source replaced with a link while watched,
+  and malformed records mixed with good records. Foreign fixture files remain
+  unchanged. The six telemetry-port tests pass, as do unfiltered type-check
+  and zero-diagnostic lint. No real repositories/configuration were changed.
+- Overall visual/runtime parity remains open; this closes an ingestion fence,
+  not the developer's manual acceptance or an archive gate.

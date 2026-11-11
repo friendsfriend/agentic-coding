@@ -10,7 +10,9 @@ const id = (value: unknown, size: number) =>
 	/^[0-9a-f]+$/i.test(value) &&
 	value.length === size;
 const nanos = (value: unknown) =>
-	typeof value === "string" && /^\d+$/.test(value);
+	typeof value === "string" &&
+	/^\d{1,19}$/.test(value) &&
+	BigInt(value) <= 9223372036854775807n;
 type OtlpAttributeValue = {
 	stringValue?: unknown;
 	boolValue?: unknown;
@@ -214,6 +216,13 @@ export function parseTelemetryLine(
 		typeof envelope.durationMs === "number" && envelope.durationMs > 0
 			? envelope.durationMs
 			: 0;
+	if (!Number.isFinite(durationMs) || at - durationMs < 0 || at > 9223372036854)
+		return undefined;
+	const startTimeUnixNano = (
+		BigInt(Math.round(at - durationMs)) * 1_000_000n
+	).toString();
+	const endTimeUnixNano = (BigInt(Math.round(at)) * 1_000_000n).toString();
+	if (!nanos(startTimeUnixNano) || !nanos(endTimeUnixNano)) return undefined;
 	const attributes: Array<{
 		key: string;
 		value: string | number | boolean;
@@ -256,10 +265,8 @@ export function parseTelemetryLine(
 		spanId,
 		parentSpanId: "",
 		name: event,
-		startTimeUnixNano: (
-			BigInt(Math.round(at - durationMs)) * 1_000_000n
-		).toString(),
-		endTimeUnixNano: (BigInt(Math.round(at)) * 1_000_000n).toString(),
+		startTimeUnixNano,
+		endTimeUnixNano,
 		status: {
 			code: envelope.outcome === "error" ? 2 : 0,
 			message: envelope.outcome === "error" ? "error" : undefined,

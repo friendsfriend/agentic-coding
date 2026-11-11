@@ -1,14 +1,19 @@
 import { Database, type Statement } from "bun:sqlite";
 import {
 	closeSync,
+	constants,
 	existsSync,
+	fstatSync,
+	lstatSync,
 	mkdirSync,
 	openSync,
+	read as readAsync,
 	readdirSync,
 	readSync,
+	realpathSync,
 	statSync,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	type LogData,
 	type MetricData,
@@ -54,7 +59,7 @@ const MAX_TELEMETRY_SPANS = 50_000;
 /** Bumped whenever the ingest parser or the persisted watermark changes so
  * existing workspaces re-ingest from the start of their file instead of
  * resuming at an offset the new code did not write. */
-const PARSER_VERSION = 4;
+const PARSER_VERSION = 5;
 /** How often a watched repository is checked for appended bytes. */
 const WORKSPACE_WATCH_MS = 2000;
 /** Lines parsed between two yields of the event loop. The watcher runs inside
@@ -63,6 +68,7 @@ const INGEST_CHUNK_LINES = 500;
 
 interface TraceSource {
 	path: string;
+	root: string;
 	/** Parse one window of JSONL lines, continuing the line numbering of the
 	 * windows already parsed (`startIndex`); see `parseTelemetryJsonlFrom`. */
 	parse: (text: string, startIndex?: number) => SpanData[];
@@ -102,14 +108,70 @@ interface IngestWatermark {
  * `telemetry.jsonl`, and no other file is read as telemetry. */
 function workspaceTraceSource(herdrPath: string): TraceSource | undefined {
 	const telemetryPath = join(herdrPath, "telemetry.jsonl");
-	if (!existsSync(telemetryPath)) return undefined;
+	const root = resolve(herdrPath, "../..");
+	if (!confinedPath(root, telemetryPath)) return undefined;
 	return {
 		path: telemetryPath,
+		root,
 		parse: parseTelemetryJsonlFrom,
 		parseLine: parseTelemetryLine,
 	};
 }
 
+// Repository approval is not permission to follow a workspace link into an
+// unrelated checkout, secret file, device or pipe. Roots are canonical; every
+// descendant must be an unlinked directory or a singly-linked regular file.
+function confinedPath(root: string, file: string, directory = false): boolean {
+	try {
+		if (realpathSync(root) !== root || !lstatSync(root).isDirectory())
+			return false;
+		const tail = relative(root, file);
+		if (
+			!tail ||
+			isAbsolute(tail) ||
+			tail === ".." ||
+			tail.startsWith(`..${sep}`)
+		)
+			return false;
+		let current = root;
+		const parts = tail.split(sep);
+		for (const [index, part] of parts.entries()) {
+			current = join(current, part);
+			const stat = lstatSync(current);
+			if (stat.isSymbolicLink()) return false;
+			if (index < parts.length - 1 || directory) {
+				if (!stat.isDirectory()) return false;
+			} else if (!stat.isFile() || stat.nlink !== 1) return false;
+		}
+		return true;
+	} catch {
+		return false;
+	}
+}
+function openSource(source: TraceSource): number {
+	if (!confinedPath(source.root, source.path))
+		throw new Error("Workspace telemetry source unavailable");
+	const expected = lstatSync(source.path);
+	const fd = openSync(
+		source.path,
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
+	try {
+		const actual = fstatSync(fd);
+		if (
+			!actual.isFile() ||
+			actual.nlink !== 1 ||
+			actual.dev !== expected.dev ||
+			actual.ino !== expected.ino ||
+			!confinedPath(source.root, source.path)
+		)
+			throw new Error("Workspace telemetry source changed");
+		return fd;
+	} catch (error) {
+		closeSync(fd);
+		throw error;
+	}
+}
 const NEWLINE_BYTE = 0x0a;
 
 /** A trailing fragment is a complete record only when it parses: an append-only
@@ -139,11 +201,15 @@ function consumedLineBytes(window: Buffer): number {
 
 /** Read `[start, end)` without loading what precedes it: the point of the
  * watermark is that an append costs the appended bytes, not the whole file. */
-function readWindowSync(path: string, start: number, end: number): Buffer {
+function readWindowSync(
+	source: TraceSource,
+	start: number,
+	end: number,
+): Buffer {
 	const length = Math.max(0, end - start);
 	if (length === 0) return Buffer.alloc(0);
 	const buffer = Buffer.allocUnsafe(length);
-	const fd = openSync(path, "r");
+	const fd = openSource(source);
 	try {
 		let read = 0;
 		while (read < length) {
@@ -159,13 +225,34 @@ function readWindowSync(path: string, start: number, end: number): Buffer {
 
 /** The async read of the same window, so the watcher does not block on I/O. */
 async function readWindowAsync(
-	path: string,
+	source: TraceSource,
 	start: number,
 	end: number,
 ): Promise<Buffer> {
 	const length = Math.max(0, end - start);
 	if (length === 0) return Buffer.alloc(0);
-	return Buffer.from(await Bun.file(path).slice(start, end).arrayBuffer());
+	const fd = openSource(source);
+	try {
+		const buffer = Buffer.allocUnsafe(length);
+		let read = 0;
+		while (read < length) {
+			const chunk = await new Promise<number>((resolveRead, reject) => {
+				readAsync(
+					fd,
+					buffer,
+					read,
+					length - read,
+					start + read,
+					(error, size) => (error ? reject(error) : resolveRead(size)),
+				);
+			});
+			if (chunk <= 0) break;
+			read += chunk;
+		}
+		return buffer.subarray(0, read);
+	} finally {
+		closeSync(fd);
+	}
 }
 
 /** The aggregated trace-list columns for one ingested span. A malformed span
@@ -577,7 +664,7 @@ export class TraceDb {
 			this.workspaceFileState(changeId),
 		);
 		if (!plan) return 0;
-		const window = readWindowSync(source.path, plan.start, size);
+		const window = readWindowSync(source, plan.start, size);
 		const consumed = consumedLineBytes(window);
 		if (consumed === 0) {
 			// Only a half-written line so far: remember the check (an unchanged file
@@ -717,7 +804,7 @@ export class TraceDb {
 
 	async scanAllWorkspacesAsync(repoRoot: string): Promise<number> {
 		const workflowDir = join(repoRoot, ".herdr-workflow");
-		if (!existsSync(workflowDir)) return 0;
+		if (!confinedPath(repoRoot, workflowDir, true)) return 0;
 		let total = 0;
 		try {
 			const entries = readdirSync(workflowDir, { withFileTypes: true });
@@ -729,15 +816,15 @@ export class TraceDb {
 					entry.name,
 				);
 			}
-		} catch (e) {
-			console.error("scanAllWorkspaces error:", e);
+		} catch {
+			console.error("Telemetry workspace scan unavailable");
 		}
 		return total;
 	}
 
 	scanAllWorkspaces(repoRoot: string): number {
 		const workflowDir = join(repoRoot, ".herdr-workflow");
-		if (!existsSync(workflowDir)) return 0;
+		if (!confinedPath(repoRoot, workflowDir, true)) return 0;
 		let total = 0;
 		try {
 			const entries = readdirSync(workflowDir, { withFileTypes: true });
@@ -749,8 +836,8 @@ export class TraceDb {
 				);
 				total += count;
 			}
-		} catch (e) {
-			console.error("scanAllWorkspaces error:", e);
+		} catch {
+			console.error("Telemetry workspace scan unavailable");
 		}
 		return total;
 	}
@@ -781,7 +868,7 @@ export class TraceDb {
 		onNew: (changeId: string, spans: SpanData[]) => void,
 	): Promise<void> {
 		const workflowDir = join(repoRoot, ".herdr-workflow");
-		if (!existsSync(workflowDir)) return;
+		if (!confinedPath(repoRoot, workflowDir, true)) return;
 		const entries = readdirSync(workflowDir, { withFileTypes: true });
 		for (const entry of entries) {
 			if (this.closing) return;
@@ -829,7 +916,7 @@ export class TraceDb {
 		window: { size: number; mtime: number; plan: IngestPlan },
 	): Promise<SpanData[]> {
 		const { plan, size, mtime } = window;
-		const bytes = await readWindowAsync(source.path, plan.start, size);
+		const bytes = await readWindowAsync(source, plan.start, size);
 		const consumed = consumedLineBytes(bytes);
 		if (consumed === 0) {
 			// Only a half-written line so far, and no complete line to renumber from
