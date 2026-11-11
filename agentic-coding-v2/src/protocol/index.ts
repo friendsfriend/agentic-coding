@@ -420,6 +420,10 @@ export type Methods = {
 		output: SkillDocument;
 	};
 	"settings.read": { input: Data; output: SettingsDocument };
+	"settings.save": {
+		input: { baseRevision: string; settings: SettingsDefinition };
+		output: { revision: string; restartRequired: true };
+	};
 	"settings.preview": {
 		input: { baseRevision: string; settings: SettingsDefinition };
 		output: SettingsCandidate;
@@ -528,6 +532,7 @@ export const methods: Method[] = [
 	"skills.read",
 	"skill.read",
 	"settings.read",
+	"settings.save",
 	"settings.preview",
 	"settings.apply",
 	"providers.receipt",

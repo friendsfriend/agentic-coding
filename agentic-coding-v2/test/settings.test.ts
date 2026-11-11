@@ -266,3 +266,93 @@ test("authenticated settings preview/save is exact, disk-fenced and never change
 		await host.stop();
 	}
 });
+
+test("direct operator settings save is revision-bound, private and does not bypass candidate approval", async () => {
+	const { app, config } = await fixture();
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	const file = path.join(config.configDir, "config.json");
+	try {
+		client.connect();
+		await eventually(
+			async () => client.state,
+			(state) => state !== null,
+		);
+		const initial = await client.call("settings.read", {});
+		const settings = structuredClone(initial.settings);
+		settings.profiles.test = {
+			...settings.profiles.test,
+			model: `${config.profiles[0]?.provider}/operator-choice`,
+		};
+		const candidate = await client.call("settings.preview", {
+			baseRevision: initial.revision,
+			settings,
+		});
+		await expect(
+			client.call("settings.apply", {
+				id: candidate.id,
+				approval: "operator-click",
+			}),
+		).rejects.toThrow("Native operation refused");
+		expect(fs.existsSync(file)).toBe(false);
+		const receipt = await client.call("settings.save", {
+			baseRevision: initial.revision,
+			settings,
+		});
+		expect(receipt.restartRequired).toBe(true);
+		expect(receipt.revision).toBe(digest(fs.readFileSync(file)));
+		expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+		expect(config.profiles[0]?.modelId).toBe("original");
+		const saved = await client.call("settings.read", {});
+		expect(saved.settings).toEqual(settings);
+		// Neither an old direct action nor an approved old candidate may overwrite
+		// the revision just saved. No automatic retry/adoption is performed.
+		await expect(
+			client.call("settings.save", {
+				baseRevision: initial.revision,
+				settings: initial.settings,
+			}),
+		).rejects.toThrow("Native operation refused");
+		await expect(
+			client.call("settings.apply", {
+				id: candidate.id,
+				approval: `approve:${candidate.digest}`,
+			}),
+		).rejects.toThrow("Native operation refused");
+		await expect(
+			client.call("settings.save", {
+				baseRevision: saved.revision,
+				settings: {
+					...settings,
+					providers: [
+						{
+							name: "bad",
+							type: "gitlab",
+							baseUrl: "http://remote.invalid",
+							tokenRef: "REFERENCE_ONLY",
+						},
+					],
+				},
+			}),
+		).rejects.toThrow("Native operation refused");
+		expect(digest(fs.readFileSync(file))).toBe(receipt.revision);
+		// Foreign disk keys survive a direct operator save without being exposed.
+		fs.writeFileSync(
+			file,
+			JSON.stringify({ ...settings, opaque: { retained: true } }),
+		);
+		const foreign = await client.call("settings.read", {});
+		expect(JSON.stringify(foreign)).not.toContain("opaque");
+		await client.call("settings.save", {
+			baseRevision: foreign.revision,
+			settings: foreign.settings,
+		});
+		expect(JSON.parse(fs.readFileSync(file, "utf8")).opaque).toEqual({
+			retained: true,
+		});
+	} finally {
+		client.close();
+		await host.stop();
+		await app.close();
+	}
+});

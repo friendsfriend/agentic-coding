@@ -4,12 +4,19 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
 import { ClientConnection } from "./client/connection.ts";
+import {
+	applyTheme,
+	loadCustomThemes,
+	loadThemeName,
+} from "./features/environments/preferences.ts";
 import { App } from "./shell/App.tsx";
 
 /** Terminal lifecycle only; backend authority stays behind the client gateway. */
 export async function runTui(endpoint: { url: string; token: string }) {
 	if (!process.stdin.isTTY || !process.stdout.isTTY)
 		throw new Error("--tui requires an interactive terminal");
+	loadCustomThemes();
+	applyTheme(loadThemeName());
 	const client = new ClientConnection(endpoint);
 	const renderer = await createCliRenderer({
 		exitOnCtrlC: false,

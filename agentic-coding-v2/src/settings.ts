@@ -244,6 +244,19 @@ export class Settings {
 			restartRequired: true,
 		};
 	}
+	/** A direct operator save is its own confirmation. Keep normalization, the
+	 * disk revision fence and the atomic private-file writer shared with apply;
+	 * never mutate the running host's pinned configuration here. */
+	save(baseRevision: unknown, value: unknown) {
+		const stored = this.stored();
+		if (baseRevision !== stored.revision)
+			throw new Error("Stale settings revision");
+		const settings = normalize(value);
+		const bytes = `${JSON.stringify({ ...stored.data, ...settings }, null, 2)}\n`;
+		if (Buffer.byteLength(bytes) > maximum)
+			throw new Error("Configuration file oversized");
+		return this.write(stored.revision, bytes);
+	}
 	preview(baseRevision: unknown, value: unknown): SettingsCandidate {
 		const stored = this.stored();
 		if (baseRevision !== stored.revision)

@@ -1,8 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-// Settings as the original TUI composed it: a menu of sections, each opening a
-// list of cards, each card opening the shared two-pane form. Every edit changes
-// the local draft only; "Save changes" prepares `/settings-preview`, and the
-// native candidate is still applied only with an explicit approval command.
+// Settings menu → list → form. Edits stay local until the developer activates
+// Save changes; that action saves through the authenticated revision fence,
+// without putting a command or a typed digest in a non-conversation page.
 import { TextAttributes } from "@opentui/core";
 import {
 	createEffect,
@@ -14,11 +13,7 @@ import {
 	Show,
 	Switch,
 } from "solid-js";
-import type {
-	Data,
-	SettingsCandidate,
-	SettingsDocument,
-} from "../../../protocol/index.ts";
+import type { Data, SettingsDocument } from "../../../protocol/index.ts";
 import {
 	type CardEntry,
 	CardList,
@@ -35,13 +30,15 @@ import { uiColors } from "../../presentation/theme/colors";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
 import { type MenuKey, useMenuKeys } from "../../ui/menuKeys.ts";
-import { PreparedCandidate } from "../../ui/PreparedCandidate.tsx";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { getActiveThemeName } from "../../ui/theme/theme.ts";
+import { SettingsSectionView } from "./SettingsSectionView.tsx";
 
 type Section = "orchestrator" | "profiles" | "repositories" | "providers";
 type Level =
 	| { kind: "menu" }
+	| { kind: "appearance" }
 	| { kind: "list"; section: Section }
 	| { kind: "form"; section: Section; index: number }
 	| { kind: "advanced" };
@@ -69,10 +66,12 @@ export function SettingsPanel(props: {
 	change: (value: string) => void;
 	editing: boolean;
 	edit: (value: boolean) => void;
-	candidate: SettingsCandidate | null;
 	connected: boolean;
 	fresh: boolean;
-	prepare: (command: string) => void;
+	saving: boolean;
+	save: () => void;
+	reset: () => void;
+	openTheme: () => void;
 	/** The shell grants page keys only while content is focused, no dialog or
 	 * editor is open and the prompt is empty. */
 	keys: () => boolean;
@@ -95,8 +94,12 @@ export function SettingsPanel(props: {
 		generation: ++generation,
 	}));
 	const ready = () =>
-		!disposed && props.connected && props.fresh && !props.error;
-	const writable = () => !disposed && props.connected;
+		!disposed &&
+		props.connected &&
+		props.fresh &&
+		!props.error &&
+		!props.saving;
+	const writable = () => ready();
 	const parsed = createMemo(() => {
 		try {
 			const value: unknown = JSON.parse(props.draft);
@@ -122,14 +125,15 @@ export function SettingsPanel(props: {
 	const profileIds = () => Object.keys(profiles());
 	const list = (key: string): unknown[] =>
 		Array.isArray(parsed()?.[key]) ? (parsed()?.[key] as unknown[]) : [];
-	const prepare = (command: string) => {
-		if (!ready()) return;
-		props.edit(false);
-		props.prepare(command);
-	};
 
 	// ---- menu ----
 	const menuEntries = (): (CardEntry & { open: () => void })[] => [
+		{
+			id: "appearance",
+			title: "Appearance",
+			detail: "Theme and client-local UI preferences",
+			open: () => setLevel({ kind: "appearance" }),
+		},
 		{
 			id: "orchestrator",
 			title: SECTION_LABELS.orchestrator,
@@ -159,16 +163,16 @@ export function SettingsPanel(props: {
 					{
 						id: "save",
 						title: "Save changes",
-						detail: "Prepare a preview; approval is still required",
+						detail: "Save to the server · applies after a restart",
 						accent: uiColors.success,
-						open: () => prepare("/settings-preview"),
+						open: props.save,
 					},
 					{
 						id: "discard",
 						title: "Discard edits",
-						detail: "Prepare a reset to the settings on disk",
+						detail: "Restore the last settings read from the server",
 						accent: uiColors.warning,
-						open: () => prepare("/settings-reset"),
+						open: props.reset,
 					},
 				]
 			: []),
@@ -475,6 +479,11 @@ export function SettingsPanel(props: {
 				entries[clamp(menuIndex(), entries.length)]?.open();
 			return;
 		}
+		if (current.kind === "appearance") {
+			if (input === "back" || input === "left") setLevel({ kind: "menu" });
+			else if (input === "open" || input === "right") props.openTheme();
+			return;
+		}
 		if (current.kind === "advanced") {
 			if (input === "back" || input === "left") setLevel({ kind: "menu" });
 			return;
@@ -545,6 +554,7 @@ export function SettingsPanel(props: {
 		const current = level();
 		if (current.kind === "menu") return "";
 		if (current.kind === "advanced") return "Advanced";
+		if (current.kind === "appearance") return "Appearance";
 		const section = SECTION_LABELS[current.section];
 		if (current.kind === "list") return section;
 		return `${section} › ${listEntries(current.section)[current.index]?.title ?? ""}`;
@@ -559,9 +569,11 @@ export function SettingsPanel(props: {
 					<text fg={uiColors.textMuted}>{"  ·  "}</text>
 				</Show>
 				<text fg={dirty() ? uiColors.warning : uiColors.textMuted}>
-					{dirty()
-						? "Unsaved changes · they apply after a restart"
-						: "Saved · changes apply after a restart"}
+					{props.saving
+						? "Saving changes…"
+						: dirty()
+							? "Unsaved changes · they apply after a restart"
+							: "Saved · changes apply after a restart"}
 				</text>
 			</box>
 			<Show when={props.error}>
@@ -577,6 +589,21 @@ export function SettingsPanel(props: {
 			</Show>
 			<Show when={props.document}>
 				<Switch>
+					<Match when={level().kind === "appearance"}>
+						<SettingsSectionView
+							items={[
+								{
+									id: "appearance.theme",
+									label: "Theme",
+									value: getActiveThemeName(),
+									detail: "Changes the colorscheme of the application",
+									editable: true,
+								},
+							]}
+							selectedIndex={0}
+							onSelectIndex={() => {}}
+						/>
+					</Match>
 					<Match when={level().kind === "menu"}>
 						<CardList
 							entries={menuEntries()}
@@ -680,25 +707,6 @@ export function SettingsPanel(props: {
 					</Match>
 				</Switch>
 			</Show>
-			<PreparedCandidate
-				candidate={props.candidate}
-				scope={[documentSource(), props.draft, props.candidate, ready()]}
-				ready={
-					ready() && props.document?.revision === props.candidate?.baseRevision
-				}
-				label="Settings candidate"
-				metadata={
-					props.candidate
-						? {
-								baseRevision: props.candidate.baseRevision,
-								restartRequired: props.candidate.restartRequired,
-							}
-						: undefined
-				}
-				prepare={(id) =>
-					prepare(`/settings-apply ${id} approve:TYPE_THE_SNAPSHOT_DIGEST`)
-				}
-			/>
 		</box>
 	);
 }

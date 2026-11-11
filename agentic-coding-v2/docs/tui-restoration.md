@@ -506,3 +506,25 @@ operator environment functional tests pass.
 - The 17 v1 guides had been left in an orphaned `src/tui/devenv/app/guides`
   directory, so every Help-modal guide and the First Steps "config repository"
   guide failed to import. They now sit next to `guides/index.ts`.
+
+## Progress: Settings direct save and Appearance
+
+- Settings Save/Discard now act directly; neither prefills a command nor asks
+  for a typed digest. `settings.save` is the authenticated operator boundary;
+  it validates the complete document, requires the observed disk revision and
+  uses the existing atomic 0600 writer. It preserves opaque disk keys and does
+  not alter running profiles or repository/provider authority. Preview/apply
+  retains its exact digest approval and stale-revision fence for other callers.
+- The Settings page no longer renders a conversation prompt or advertises its
+  prompt bindings. A save is never replayed after an uncertain result; drafts
+  survive errors and a server re-read follows each attempted save.
+- Appearance opens the copied v1 `SettingsSectionView` Theme row and the shared
+  v1 `ThemePickerModal`. T opens it from Settings; `/` filters, j/k and arrows
+  preview, Enter saves to v2's local `tui.json`, Escape restores the original
+  theme. The modal owns its keys and preserves the existing settings draft.
+  Theme initialization now happens at TUI startup, not only after entering
+  Environments. No real configuration file was written during implementation.
+- Verification: unfiltered type-check and lint clean (including infos); 10/10
+  settings/client-gateway functional tests passed; the TUI bundles. No renderer,
+  mount, navigation or snapshot tests were introduced. Visual parity remains
+  developer-verified. Step 5 and runnable parity are not complete.

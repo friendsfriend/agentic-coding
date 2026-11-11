@@ -557,7 +557,7 @@ export function result<M extends Method>(
 			data.restartRequired !== true
 		)
 			throw new Error("Invalid settings candidate");
-	} else if (method === "settings.apply") {
+	} else if (method === "settings.apply" || method === "settings.save") {
 		const data = record(value);
 		if (typeof data.revision !== "string" || data.restartRequired !== true)
 			throw new Error("Invalid settings receipt");

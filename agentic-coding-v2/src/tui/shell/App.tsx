@@ -71,6 +71,7 @@ import {
 	Transcript,
 } from "../features/sessions/Transcript.tsx";
 import { SettingsPanel } from "../features/settings/SettingsPanel.tsx";
+import { SettingsThemePicker } from "../features/settings/SettingsThemePicker.tsx";
 import {
 	type SkillFileDraft,
 	SkillFileEditor,
@@ -239,6 +240,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[settingsCandidate, setSettingsCandidate] =
 			createSignal<SettingsCandidate | null>(null),
 		[settingsEditing, setSettingsEditing] = createSignal(false),
+		[settingsSaving, setSettingsSaving] = createSignal(false),
+		[settingsThemeOpen, setSettingsThemeOpen] = createSignal(false),
 		[helpRequested, setHelpOpen] = createSignal(false),
 		[paletteOpen, setPaletteOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
@@ -1440,6 +1443,59 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			});
 	});
 	let settingsEpoch = 0;
+	const saveSettings = async () => {
+		const document = settingsDocument(),
+			draft = settingsDraft(),
+			epoch = settingsEpoch;
+		if (
+			!document ||
+			settingsSaving() ||
+			settingsError() ||
+			status() !== "connected" ||
+			!snapshotFresh()
+		)
+			return;
+		setSettingsSaving(true);
+		setSettingsEditing(false);
+		setSettingsCandidate(null);
+		try {
+			const settings = JSON.parse(draft) as SettingsDefinition;
+			const receipt = await client.call("settings.save", {
+				baseRevision: document.revision,
+				settings,
+			});
+			// Preserve edits made during the request, and never replace a newer
+			// page read with this receipt. Only the exact submitted draft is saved.
+			if (epoch === settingsEpoch && status() === "connected") {
+				setSettingsDocument({
+					...document,
+					revision: receipt.revision,
+					settings,
+				});
+				if (settingsDraft() === draft)
+					setSettingsDraft(JSON.stringify(settings, null, 2));
+			}
+			setNotice(
+				"Settings saved. Running sessions are unchanged; restart separately to apply.",
+			);
+		} catch (error) {
+			reportError(
+				error instanceof Error ? error.message : String(error),
+				"Settings",
+			);
+			// Re-read, do not replay a possibly completed save. The draft stays intact.
+		} finally {
+			setSettingsSaving(false);
+			setRefreshRevision((value) => value + 1);
+		}
+	};
+	const resetSettings = () => {
+		const document = settingsDocument();
+		if (!document || settingsSaving() || settingsError()) return;
+		setSettingsEditing(false);
+		setSettingsCandidate(null);
+		setSettingsDraft(JSON.stringify(document.settings, null, 2));
+	};
 	createEffect(() => {
 		const selectedPage = page(),
 			connected = status() === "connected";
@@ -1450,6 +1506,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		});
 		setSettingsCandidate(null);
 		if (selectedPage !== "settings") {
+			setSettingsThemeOpen(false);
 			if (selectedPage !== "wiki") setSettingsEditing(false);
 			return;
 		}
@@ -2218,7 +2275,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		id: "v2.shell",
 		priority: 10,
 		enabled: () =>
-			messageDialog() === null && !quitConfirmation() && usageWindow() === null,
+			messageDialog() === null &&
+			!quitConfirmation() &&
+			usageWindow() === null &&
+			!settingsThemeOpen(),
 		commands: layerCommands([
 			{
 				id: "shell.quit",
@@ -3612,6 +3672,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		promptText().length === 0;
 	// Embedded conversations, workbenches and review/wiki/schedule bodies own Tab.
 	// Explicit breadcrumb pointer focus can always be left with Tab or Escape.
+	const unregisterSettingsTheme = keymap.registerLayer({
+		id: "v2.settings.theme-open",
+		priority: 30,
+		enabled: () => current().page === "settings" && menuKeysActive(),
+		bindings: [
+			{
+				key: "shift+t",
+				cmd: () => {
+					setSettingsEditing(true);
+					setSettingsThemeOpen(true);
+				},
+			},
+		],
+	});
+	onCleanup(unregisterSettingsTheme);
 	const pageFocusEnabled = () =>
 		current().focus === "content" &&
 		!settingsEditing() &&
@@ -4468,9 +4543,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											setSettingsEditing(value);
 											update();
 										}}
-										candidate={settingsCandidate()}
+										saving={settingsSaving()}
 										connected={status() === "connected"}
-										prepare={prepareCommand}
+										save={() => void saveSettings()}
+										reset={resetSettings}
+										openTheme={() => {
+											setSettingsEditing(true);
+											setSettingsThemeOpen(true);
+										}}
 										keys={menuKeysActive}
 									/>
 								</Show>
@@ -4688,8 +4768,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								)}
 							</Show>
 						</Show>
-						{/* v1 had no prompt on the environments page. */}
-						<Show when={current().page !== "environments"}>
+						{/* Form/list pages do not host a conversation prompt. */}
+						<Show
+							when={
+								current().page !== "environments" &&
+								current().page !== "settings"
+							}
+						>
 							<SessionPrompt
 								scope={(() => {
 									current();
@@ -4851,8 +4936,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				</box>
 				<StatusBar
 					keybinds={[
-						...(current().page === "environments" &&
-						environmentModal() &&
+						...((settingsThemeOpen() ||
+							(current().page === "environments" && environmentModal())) &&
 						!paletteOpen()
 							? []
 							: (paletteOpen()
@@ -4875,7 +4960,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 														]
 													: []),
 												...(contentFocused() &&
-												current().page !== "environments"
+												current().page !== "environments" &&
+												current().page !== "settings"
 													? promptFooterBindings()
 													: []),
 												...(current().focus === "sessions"
@@ -4898,7 +4984,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							? environmentCatalog().flatMap((section) => section.keybinds)
 							: []),
 					]}
-					showHelp={!paletteOpen()}
+					showHelp={!paletteOpen() && !settingsThemeOpen()}
 				/>
 				<Show when={connectionError()}>
 					<text height={1} fg={color("warning")} truncate>
@@ -4939,6 +5025,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								})),
 							})),
 						]}
+					/>
+				</Show>
+				<Show when={settingsThemeOpen()}>
+					<SettingsThemePicker
+						active={() =>
+							!helpOpen() &&
+							!paletteOpen() &&
+							!messageDialog() &&
+							!quitConfirmation()
+						}
+						close={() => {
+							setSettingsThemeOpen(false);
+							setSettingsEditing(false);
+						}}
+						error={(message) => reportError(message, "Appearance")}
 					/>
 				</Show>
 				<Show when={usageWindow()} keyed>

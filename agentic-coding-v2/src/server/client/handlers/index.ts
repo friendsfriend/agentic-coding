@@ -416,6 +416,11 @@ export async function dispatch(
 		case "settings.read":
 			fields(input, []);
 			return app.settings.read();
+		case "settings.save":
+			// The developer activated Save in the authenticated TUI. Automated
+			// callers keep the explicit preview/apply approval path.
+			fields(input, ["baseRevision", "settings"]);
+			return app.settings.save(input.baseRevision, input.settings);
 		case "settings.preview":
 			fields(input, ["baseRevision", "settings"]);
 			return app.settings.preview(input.baseRevision, input.settings);
