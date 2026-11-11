@@ -67,6 +67,19 @@ export async function dispatch(
 	{ method, input }: Request,
 ): Promise<unknown> {
 	switch (method) {
+		case "telemetry.receiver.read":
+			fields(input, []);
+			return app.telemetry.receiverStatus();
+		case "telemetry.receiver.start":
+			fields(input, ["revision", "port"]);
+			return app.telemetry.controlReceiver(
+				"start",
+				integer(input.revision),
+				integer(input.port),
+			);
+		case "telemetry.receiver.stop":
+			fields(input, ["revision"]);
+			return app.telemetry.controlReceiver("stop", integer(input.revision));
 		case "telemetry.manage": {
 			const operation = input.operation;
 			if (operation === "prune") {

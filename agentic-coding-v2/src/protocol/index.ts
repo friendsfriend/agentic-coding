@@ -1,3 +1,4 @@
+import type { TelemetryReceiverState } from "../telemetry/contracts.ts";
 // Wire-only types. No Runtime, storage, renderer or model-provider dependencies.
 export const protocolVersion = 1;
 export const clientPath = "/api/client";
@@ -226,6 +227,18 @@ export type EnvironmentAction = {
 	replicas?: number;
 };
 export type Methods = {
+	"telemetry.receiver.read": {
+		input: Record<string, never>;
+		output: TelemetryReceiverState;
+	};
+	"telemetry.receiver.start": {
+		input: { revision: number; port: number };
+		output: TelemetryReceiverState;
+	};
+	"telemetry.receiver.stop": {
+		input: { revision: number };
+		output: TelemetryReceiverState;
+	};
 	"telemetry.manage": {
 		input:
 			| { operation: "prune"; days: number }
@@ -580,6 +593,9 @@ export const methods: Method[] = [
 	"schedule.state",
 	"telemetry.read",
 	"telemetry.manage",
+	"telemetry.receiver.read",
+	"telemetry.receiver.start",
+	"telemetry.receiver.stop",
 	"environment.inspect",
 	"environment.preview",
 	"environment.apply",

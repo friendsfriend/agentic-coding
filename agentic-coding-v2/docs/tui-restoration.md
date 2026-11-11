@@ -705,3 +705,45 @@ operator environment functional tests pass.
 - Still open: gRPC/protobuf packaging, configured receiver start/stop controls,
   final retention/workspace UI, full v1 filter/sort modals and visual acceptance.
   This is progress toward parity, not a parity/archive claim.
+
+## Observability follow-up: gRPC, operator controls and v1 trace modals
+
+- Ported v1's in-process OTLP TraceService and bundled protobuf definition.
+  The v2 listener binds only 127.0.0.1, bounds protobuf messages to 1 MB,
+  authenticates bearer metadata before decoding, and supports ephemeral ports.
+  It is traces-only, as v1 was; metrics/logs remain HTTP receiver signals.
+  Added grpc-js/proto-loader dependencies and the bundled text asset loader.
+- Authenticated `telemetry.receiver.read/start/stop` exposes observations and
+  revision-fenced explicit controls. Starts create a private 0600 credential
+  file in the v2 telemetry directory and return only its reference. No token
+  value is sent through the gateway or displayed. Stop joins exports with a
+  bounded grace period, revokes that file, and never adopts another listener.
+  Runtime shutdown joins pending start/stop work before closing SQLite.
+  Receivers are not automatically restarted or replayed after uncertainty.
+- Observability → Controls now hosts list/form controls for gRPC port/start,
+  stop, retention pruning and configured-repository scan/watch/unwatch.
+  Stop/prune use the copied shared confirmation dialog. Back returns to the
+  category list; mutations require fresh native state and are never retried
+  implicitly. To configure a local exporter, use the displayed address and
+  bearer metadata from the displayed private credential-file reference; do
+  not paste token values into a conversation. A receiver restart rotates it.
+- Copied v1 `TraceModals.tsx`: `F` opens status/workspace/span-type filtering,
+  `O` opens multi-criterion sorting, h/l switches filter panes, j/k moves,
+  Enter applies, Escape cancels, x clears; Space cycles sort direction and
+  Shift+J/K reorders criteria. Loaded-page text search remains bounded and
+  Escape restores its previous query. Added J/K page aliases, w workspace
+  reset, g/G cursor endpoints and h/l tree collapse/expand, and corrected
+  topology keyboard selection to follow the selected graph service.
+- Receiver batches validate timestamps and finite metric samples before any
+  write; malformed payload diagnostics no longer echo submitted content.
+  Synthetic tests cover gRPC authentication, real protobuf ingestion, stale
+  controls, duplicate-running refusal, credential revocation and runtime
+  shutdown. A bundled receiver is also exercised over gRPC from an isolated
+  output directory to prove the embedded proto works without source assets.
+- Verification: four telemetry-port functional tests pass, including the
+  bundled wire test; existing telemetry/gateway regressions pass. Unfiltered
+  type-check, zero-diagnostic lint and TUI bundle pass. No real exporters,
+  applications, credentials, clusters or user configuration were used.
+- Still open: configured Prometheus scraper/StatsD UDP lifecycle (their decoders
+  are ported but listeners are not enabled), additional visual/runtime parity
+  acceptance and any remaining whole-application parity checklist items.

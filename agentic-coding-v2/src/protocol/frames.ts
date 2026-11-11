@@ -707,6 +707,26 @@ export function result<M extends Method>(
 		// the serialized size below the frame budget.
 		if (value !== null && !["string", "object"].includes(typeof value))
 			throw new Error("Invalid provider workbench value");
+	} else if (method.startsWith("telemetry.receiver.")) {
+		const data = record(value);
+		if (
+			!integer(data.revision) ||
+			!["starting", "running", "stopping", "stopped"].includes(
+				String(data.status),
+			) ||
+			data.protocol !== "otlp-grpc-traces" ||
+			!(
+				data.address === null ||
+				(typeof data.address === "string" &&
+					/^127\.0\.0\.1:\d{1,5}$/.test(data.address))
+			) ||
+			!(
+				data.credentialFile === null ||
+				(typeof data.credentialFile === "string" &&
+					data.credentialFile.length <= 4096)
+			)
+		)
+			throw new Error("Invalid telemetry receiver state");
 	} else if (method === "schedule.create") {
 		const data = record(value);
 		if (

@@ -118,3 +118,13 @@ export interface TraceSummaryPage {
 	page: number;
 	perPage: number;
 }
+
+/** Operator observation only. The credential is a private file reference,
+ * never a token value. gRPC currently implements OTLP TraceService only. */
+export interface TelemetryReceiverState {
+	revision: number;
+	status: "stopped" | "starting" | "running" | "stopping";
+	protocol: "otlp-grpc-traces";
+	address: string | null;
+	credentialFile: string | null;
+}

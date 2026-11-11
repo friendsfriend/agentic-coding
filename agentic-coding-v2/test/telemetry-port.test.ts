@@ -1,5 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
 import { serve } from "../src/server/index.ts";
+import type { SpanData } from "../src/telemetry/contracts.ts";
+import { createTraceServiceClient } from "../src/telemetry/receivers/otlp-grpc-proto.ts";
 import { ClientConnection } from "../src/tui/client/connection.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
@@ -179,6 +183,53 @@ test("native telemetry reads retain multi-signal data, publish changes and refus
 		expect(logs.value).toMatchObject([
 			{ body: "fixture failure", severity: "ERROR" },
 		]);
+		const invalid = await post("logs", {
+			resourceLogs: [
+				{
+					resource,
+					scopeLogs: [
+						{
+							logRecords: [
+								{
+									timeUnixNano: "private-invalid-timestamp",
+									body: { stringValue: "not stored" },
+								},
+							],
+						},
+					],
+				},
+			],
+		});
+		expect(invalid.status).toBe(400);
+		expect(await invalid.text()).not.toContain("private-invalid-timestamp");
+		expect(
+			(await client.call("telemetry.read", { signal: "logs" })).value,
+		).toMatchObject([{ body: "fixture failure" }]);
+		expect(
+			(
+				await post("metrics", {
+					resourceMetrics: [
+						{
+							resource,
+							scopeMetrics: [
+								{
+									metrics: [
+										{
+											name: "invalid",
+											gauge: {
+												dataPoints: [
+													{ timeUnixNano: "9223372036854775808", asDouble: 1 },
+												],
+											},
+										},
+									],
+								},
+							],
+						},
+					],
+				})
+			).status,
+		).toBe(400);
 		for (const query of ["?page=1&page=2", "?unrecognized=true", "?changeId="])
 			expect(
 				(
@@ -239,5 +290,190 @@ test("native telemetry reads retain multi-signal data, publish changes and refus
 	} finally {
 		client.close();
 		await host.stop();
+	}
+});
+
+test("native gRPC receiver authenticates real protobuf exports, fences controls and joins shutdown", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const operator = new ClientConnection(host.client);
+	const clients: Awaited<ReturnType<typeof createTraceServiceClient>>[] = [];
+	const exportTo = (
+		client: Awaited<ReturnType<typeof createTraceServiceClient>>,
+		payload: unknown,
+	) =>
+		new Promise<void>((resolve, reject) =>
+			client.Export(payload, { deadline: Date.now() + 2000 }, (error) =>
+				error ? reject(error) : resolve(),
+			),
+		);
+	try {
+		operator.connect();
+		await eventually(async () => operator.stateFresh, Boolean);
+		const stopped = await operator.call("telemetry.receiver.read", {});
+		expect(stopped.status).toBe("stopped");
+		const running = await operator.call("telemetry.receiver.start", {
+			revision: stopped.revision,
+			port: 0,
+		});
+		expect(running.status).toBe("running");
+		expect(running.address).toMatch(/^127\.0\.0\.1:[1-9]\d*$/);
+		if (!running.address || !running.credentialFile)
+			throw new Error("Receiver did not publish its references");
+		const file = running.credentialFile;
+		expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+		// Only a synthetic credential generated inside this isolated fixture is read.
+		const token = fs.readFileSync(file, "utf8");
+		const anonymous = await createTraceServiceClient(running.address);
+		const authenticated = await createTraceServiceClient(
+			running.address,
+			token,
+		);
+		clients.push(anonymous, authenticated);
+		const payload = {
+			resourceSpans: [
+				{
+					resource: {
+						attributes: [
+							{ key: "service.name", value: { stringValue: "grpc-fixture" } },
+						],
+					},
+					scopeSpans: [
+						{
+							spans: [
+								{
+									traceId: Buffer.from(
+										"12345678901234567890123456789012",
+										"hex",
+									),
+									spanId: Buffer.from("1234567890123456", "hex"),
+									name: "protobuf fixture",
+									kind: 2,
+									startTimeUnixNano: "1790000000000000000",
+									endTimeUnixNano: "1790000000100000000",
+									status: { code: 1 },
+								},
+							],
+						},
+					],
+				},
+			],
+		};
+		await expect(exportTo(anonymous, payload)).rejects.toThrow("credential");
+		expect(
+			(await operator.call("telemetry.read", { signal: "traces" })).value,
+		).toMatchObject({ total: 0 });
+		await exportTo(authenticated, payload);
+		expect(
+			(
+				await operator.call("telemetry.read", {
+					signal: "spans",
+					changeId: "12345678901234567890123456789012",
+				})
+			).value,
+		).toMatchObject([
+			{ name: "protobuf fixture", serviceName: "grpc-fixture" },
+		]);
+		await expect(
+			operator.call("telemetry.receiver.stop", { revision: stopped.revision }),
+		).rejects.toThrow("revision");
+		await expect(
+			operator.call("telemetry.receiver.start", {
+				revision: running.revision,
+				port: 0,
+			}),
+		).rejects.toThrow("already running");
+		const after = await operator.call("telemetry.receiver.stop", {
+			revision: running.revision,
+		});
+		expect(after.status).toBe("stopped");
+		expect(fs.existsSync(file)).toBe(false);
+		await expect(exportTo(authenticated, payload)).rejects.toThrow();
+		const restarted = await operator.call("telemetry.receiver.start", {
+			revision: after.revision,
+			port: 0,
+		});
+		if (!restarted.credentialFile)
+			throw new Error("Missing fixture credential reference");
+		await host.stop();
+		await app.close();
+		expect(fs.existsSync(restarted.credentialFile)).toBe(false);
+	} finally {
+		for (const client of clients) client.close();
+		operator.close();
+		await host.stop();
+	}
+});
+
+test("bundled gRPC receiver serves the embedded protobuf definition without a source-relative asset", async () => {
+	const { app } = await fixture(false);
+	const build = await Bun.build({
+		entrypoints: [
+			path.join(import.meta.dir, "../src/telemetry/receivers/otlp-grpc.ts"),
+		],
+		target: "bun",
+	});
+	expect(build.success).toBe(true);
+	const output = build.outputs.find((item) => item.path.endsWith(".js"));
+	if (!output) throw new Error("Missing bundled receiver");
+	const file = path.join(app.config.stateDir, "bundled-grpc.js");
+	await Bun.write(file, output);
+	const compiled = (await import(
+		file
+	)) as typeof import("../src/telemetry/receivers/otlp-grpc.ts");
+	const stored: SpanData[] = [];
+	const receiver = await compiled.startOtlpGrpcReceiver(
+		0,
+		{
+			pushTraces: (spans) => stored.push(...spans),
+			pushMetrics: () => {},
+			pushLogs: () => {},
+		},
+		(values) =>
+			values.length === 1 && values[0] === "Bearer synthetic-bundle-credential",
+	);
+	const client = await createTraceServiceClient(
+		receiver.address,
+		"synthetic-bundle-credential",
+	);
+	try {
+		await new Promise<void>((resolve, reject) =>
+			client.Export(
+				{
+					resourceSpans: [
+						{
+							scopeSpans: [
+								{
+									spans: [
+										{
+											traceId: Buffer.from(
+												"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+												"hex",
+											),
+											spanId: Buffer.from("bbbbbbbbbbbbbbbb", "hex"),
+											name: "bundled wire export",
+											startTimeUnixNano: "1790000000000000000",
+											endTimeUnixNano: "1790000000100000000",
+										},
+									],
+								},
+							],
+						},
+					],
+				},
+				{ deadline: Date.now() + 2000 },
+				(error) => (error ? reject(error) : resolve()),
+			),
+		);
+		expect(stored).toMatchObject([
+			{
+				traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				spanId: "bbbbbbbbbbbbbbbb",
+				name: "bundled wire export",
+			},
+		]);
+	} finally {
+		client.close();
+		await receiver.stop();
 	}
 });

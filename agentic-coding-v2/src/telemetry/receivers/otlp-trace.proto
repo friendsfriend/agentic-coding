@@ -1,0 +1,36 @@
+syntax = "proto3";
+package opentelemetry.proto.collector.trace.v1;
+service TraceService {
+rpc Export(ExportTraceServiceRequest) returns (ExportTraceServiceResponse);
+}
+message ExportTraceServiceRequest {
+repeated ResourceSpans resourceSpans = 1;
+}
+message ExportTraceServiceResponse {
+PartialSuccess partialSuccess = 1;
+}
+message PartialSuccess {
+int64 rejectedSpans = 1;
+string errorMessage = 2;
+}
+message ResourceSpans {
+Resource resource = 1;
+repeated ScopeSpans scopeSpans = 2;
+}
+message Resource {
+repeated KeyValue attributes = 1;
+}
+message ScopeSpans {
+Scope scope = 1;
+repeated Span spans = 2;
+}
+message Scope { string name = 1; string version = 2; }
+message Span {
+bytes traceId = 1; bytes spanId = 2; bytes parentSpanId = 3;
+string name = 4; int32 kind = 5; fixed64 startTimeUnixNano = 6;
+fixed64 endTimeUnixNano = 7; repeated KeyValue attributes = 8;
+Status status = 9;
+}
+message Status { int32 code = 1; string message = 2; }
+message KeyValue { string key = 1; AnyValue value = 2; }
+message AnyValue { oneof value { string stringValue = 1; bool boolValue = 2; int64 intValue = 3; double doubleValue = 4; } }

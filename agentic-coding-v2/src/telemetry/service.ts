@@ -1,9 +1,71 @@
 // v1 receiver/storage composition, owned by the v2 runtime. Receiver input is
 // data, never native task/lease authority. Reads share the authenticated host.
-import { chmodSync, mkdirSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { equalSecret } from "../server/auth.ts";
+import { Refusal } from "../server/refusal.ts";
+import type {
+	LogData,
+	MetricData,
+	SpanData,
+	TelemetryReceiverState,
+} from "./contracts.ts";
 import { routeReceiverRequest, type SignalRouter } from "./receivers/index.ts";
+import {
+	type OwnedGrpcReceiver,
+	startOtlpGrpcReceiver,
+} from "./receivers/otlp-grpc.ts";
 import { TraceDb } from "./telemetry-db.ts";
+
+// Receiver records are untrusted even when the exporter is authenticated.
+// Reject invalid/overflowing timestamps and non-renderable scalar fields before
+// SQLite or a view sees them. Never persist a partially validated batch.
+const validNanos = (value: unknown) =>
+	typeof value === "string" &&
+	/^\d{1,19}$/.test(value) &&
+	BigInt(value) <= 9223372036854775807n;
+const validText = (value: unknown) => typeof value === "string";
+function assertSpans(spans: SpanData[]) {
+	for (const span of spans)
+		if (
+			!validNanos(span.startTimeUnixNano) ||
+			!validNanos(span.endTimeUnixNano) ||
+			!validText(span.name) ||
+			!validText(span.serviceName) ||
+			!Number.isFinite(span.status.code)
+		)
+			throw new Error("Invalid trace record");
+}
+function assertMetrics(metrics: MetricData[]) {
+	for (const metric of metrics)
+		if (
+			!validText(metric.name) ||
+			!validText(metric.serviceName) ||
+			!validText(metric.unit) ||
+			!validText(metric.description) ||
+			!Array.isArray(metric.dataPoints) ||
+			metric.dataPoints.some(
+				(point) =>
+					!validNanos(point.timeUnixNano) ||
+					!validNanos(point.startTimeUnixNano) ||
+					!Number.isFinite(point.value) ||
+					point.bucketCounts?.some((count) => !Number.isFinite(count)) ||
+					point.explicitBounds?.some((bound) => !Number.isFinite(bound)),
+			)
+		)
+			throw new Error("Invalid metric record");
+}
+function assertLogs(logs: LogData[]) {
+	for (const log of logs)
+		if (
+			!validNanos(log.timeUnixNano) ||
+			!validText(log.body) ||
+			!validText(log.severity) ||
+			!validText(log.serviceName)
+		)
+			throw new Error("Invalid log record");
+}
 
 export class Telemetry {
 	readonly db: TraceDb;
@@ -12,6 +74,105 @@ export class Telemetry {
 	private readonly watchers = new Map<string, () => void>();
 	private closed = false;
 	private scans = 0;
+	private receiver?: OwnedGrpcReceiver;
+	private receiverWork?: Promise<void>;
+	private receiverState: TelemetryReceiverState = {
+		revision: 0,
+		status: "stopped",
+		protocol: "otlp-grpc-traces",
+		address: null,
+		credentialFile: null,
+	};
+	receiverStatus(): TelemetryReceiverState {
+		return { ...this.receiverState };
+	}
+	async controlReceiver(
+		operation: "start" | "stop",
+		revision: number,
+		port = 0,
+	): Promise<TelemetryReceiverState> {
+		if (this.closed || this.receiverWork)
+			throw new Refusal(
+				"Telemetry receiver transition is unavailable; refresh its state",
+			);
+		if (this.receiverState.revision !== revision)
+			throw new Refusal(
+				"Telemetry receiver revision changed; refresh its state",
+			);
+		if (operation === "start" && this.receiver)
+			throw new Refusal("Telemetry receiver is already running");
+		if (operation === "stop" && !this.receiver)
+			throw new Refusal("Telemetry receiver is already stopped");
+		if (!Number.isSafeInteger(port) || port < 0 || port > 65535)
+			throw new Refusal("Invalid telemetry receiver port");
+		this.receiverState = {
+			...this.receiverState,
+			revision: revision + 1,
+			status: operation === "start" ? "starting" : "stopping",
+		};
+		const work = (async () => {
+			if (operation === "stop") {
+				await this.stopReceiver();
+				return;
+			}
+			const token = randomBytes(32).toString("hex");
+			const file = join(this.directory, `grpc-${randomUUID()}.token`);
+			try {
+				writeFileSync(file, token, { mode: 0o600, flag: "wx" });
+				const receiver = await startOtlpGrpcReceiver(
+					port,
+					this.router,
+					(values) =>
+						values.length === 1 &&
+						typeof values[0] === "string" &&
+						equalSecret(values[0], `Bearer ${token}`),
+				);
+				this.receiver = receiver;
+				this.receiverState = {
+					...this.receiverState,
+					status: "running",
+					address: receiver.address,
+					credentialFile: file,
+				};
+			} catch {
+				try {
+					unlinkSync(file);
+				} catch {}
+				this.receiverState = {
+					...this.receiverState,
+					status: "stopped",
+					address: null,
+					credentialFile: null,
+				};
+				throw new Refusal(
+					"Telemetry receiver could not start; check the selected port and refresh",
+				);
+			}
+		})();
+		this.receiverWork = work;
+		try {
+			await work;
+			return this.receiverStatus();
+		} finally {
+			this.receiverWork = undefined;
+		}
+	}
+	private async stopReceiver() {
+		await this.receiver?.stop();
+		this.receiver = undefined;
+		const file = this.receiverState.credentialFile;
+		if (file) {
+			try {
+				unlinkSync(file);
+			} catch {}
+		}
+		this.receiverState = {
+			...this.receiverState,
+			status: "stopped",
+			address: null,
+			credentialFile: null,
+		};
+	}
 	async scan(repository: string) {
 		if (this.closed) throw new Error("Telemetry service is closed");
 		this.scans++;
@@ -42,7 +203,7 @@ export class Telemetry {
 		this.revision++;
 		return removed;
 	}
-	constructor(directory: string) {
+	constructor(private readonly directory: string) {
 		mkdirSync(directory, { recursive: true, mode: 0o700 });
 		chmodSync(directory, 0o700);
 		this.db = new TraceDb(directory);
@@ -50,6 +211,7 @@ export class Telemetry {
 		chmodSync(join(directory, "traces.sqlite"), 0o600);
 		this.router = {
 			pushTraces: (spans) => {
+				assertSpans(spans);
 				for (const span of spans) {
 					const workspace = span.attributes.find(
 						(attribute) => attribute.key === "herdr.change.id",
@@ -66,11 +228,13 @@ export class Telemetry {
 				if (spans.length) this.revision++;
 			},
 			pushMetrics: (metrics) => {
+				assertMetrics(metrics);
 				for (const metric of metrics)
 					this.db.ingestMetrics(metric.serviceName || "unknown", [metric]);
 				if (metrics.length) this.revision++;
 			},
 			pushLogs: (logs) => {
+				assertLogs(logs);
 				for (const log of logs)
 					this.db.ingestLogs(log.serviceName || "unknown", [log]);
 				if (logs.length) this.revision++;
@@ -155,6 +319,8 @@ export class Telemetry {
 	}
 	async close() {
 		this.closed = true;
+		await this.receiverWork?.catch(() => {});
+		await this.stopReceiver();
 		for (const stop of this.watchers.values()) stop();
 		this.watchers.clear();
 		while (this.scans) await Bun.sleep(1);

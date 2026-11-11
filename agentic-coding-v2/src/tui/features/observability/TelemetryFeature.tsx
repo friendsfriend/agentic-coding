@@ -17,10 +17,20 @@ import type {
 import type { ClientConnection } from "../../client/connection.ts";
 import type { KeybindSection } from "../../ui/index.ts";
 import { HomeView } from "../home/HomeView.tsx";
+import {
+	FilterModal,
+	SortModal,
+	statusOptions,
+} from "./components/TraceModals.tsx";
 import { LogStore } from "./model/logStore.ts";
 import { MetricStore } from "./model/metricStore.ts";
 import { TopologyStore } from "./model/topologyStore.ts";
-import { TraceStore } from "./model/traceStore.ts";
+import {
+	type SortCriterion,
+	type StatusFilter,
+	TraceStore,
+} from "./model/traceStore.ts";
+import { TelemetryControls } from "./TelemetryControls.tsx";
 import { LogDetailView } from "./views/LogDetailView.tsx";
 import { LogsView } from "./views/LogsView.tsx";
 import { MetricDetailView } from "./views/MetricDetailView.tsx";
@@ -49,8 +59,44 @@ export function TelemetryFeature(props: {
 		signal: string;
 		value: unknown;
 	}>();
-	const [query, setQuery] = createSignal("");
+	const [queries, setQueries] = createSignal<Record<string, string>>({});
+	const queryKey = () =>
+		surface().startsWith("log")
+			? "logs"
+			: surface().startsWith("metric")
+				? "metrics"
+				: "traces";
+	const query = () => queries()[queryKey()] ?? "";
+	const setQuery = (value: string | ((previous: string) => string)) =>
+		setQueries((previous) => ({
+			...previous,
+			[queryKey()]:
+				typeof value === "function" ? value(previous[queryKey()] ?? "") : value,
+		}));
+	let searchPrevious = "";
 	const [searching, setSearching] = createSignal(false);
+	const [modal, setModal] = createSignal<"filter" | "sort">();
+	const [filterPane, setFilterPane] = createSignal<"criteria" | "values">(
+		"criteria",
+	);
+	const [criterion, setCriterion] = createSignal(0);
+	const [statusIndex, setStatusIndex] = createSignal(0);
+	const [workspaceIndex, setWorkspaceIndex] = createSignal(0);
+	const [spanTypeIndex, setSpanTypeIndex] = createSignal(0);
+	const [knownWorkspaces, setKnownWorkspaces] = createSignal<
+		{ changeId: string; spanCount: number }[]
+	>([]);
+	const [statusFilter, setStatusFilter] = createSignal<StatusFilter>("all");
+	const [spanTypeFilter, setSpanTypeFilter] = createSignal("all");
+	const [workspace, setWorkspace] = createSignal<string>();
+	const [sortCriteria, setSortCriteria] = createSignal<SortCriterion[]>([
+		{ field: "received", mode: "desc" },
+		{ field: "latency", mode: "none" },
+		{ field: "service", mode: "none" },
+		{ field: "name", mode: "none" },
+	]);
+	const [sortDraft, setSortDraft] = createSignal<SortCriterion[]>([]);
+	const [sortIndex, setSortIndex] = createSignal(0);
 	const [trace, setTrace] = createSignal("");
 	const [span, setSpan] = createSignal<TreeNode>();
 	const [metric, setMetric] = createSignal({ name: "", service: "" });
@@ -65,15 +111,17 @@ export function TelemetryFeature(props: {
 	const navigate = (next: string) => {
 		setIndex(0);
 		setSearching(false);
+		setModal(undefined);
 		setSurface(next);
 	};
 	createEffect(() => {
 		const current = surface();
 		const selectedTrace = trace();
 		const currentPage = page();
+		const selectedWorkspace = workspace();
 		revision();
 		const generation = ++epoch;
-		if (current === "home") {
+		if (current === "home" || current === "controls") {
 			setLoading(false);
 			return;
 		}
@@ -91,7 +139,13 @@ export function TelemetryFeature(props: {
 		void props.client
 			.call("telemetry.read", {
 				signal: signal as "traces" | "spans" | "metrics" | "logs",
-				...(current === "traces" ? { page: currentPage, perPage: 50 } : {}),
+				...(current === "traces"
+					? {
+							page: currentPage,
+							perPage: 50,
+							...(selectedWorkspace ? { changeId: selectedWorkspace } : {}),
+						}
+					: {}),
 				...(["tree", "span"].includes(current)
 					? { changeId: selectedTrace }
 					: {}),
@@ -125,6 +179,9 @@ export function TelemetryFeature(props: {
 		if (response?.signal === "tree" && Array.isArray(response.value))
 			store.setTraceSpans(response.value as SpanData[]);
 		store.applyFilter(query());
+		store.setStatusFilter(statusFilter());
+		store.setSpanTypeFilter(spanTypeFilter());
+		store.setSortCriteria(sortCriteria());
 		return store;
 	});
 	const logs = createMemo(() => {
@@ -223,7 +280,11 @@ export function TelemetryFeature(props: {
 				setSurface("log-detail");
 				break;
 			case "topology": {
-				const entry = topology().getServices()[index()];
+				const entry =
+					topology()
+						.getLayout()
+						.find((node) => node.id === service()) ??
+					topology().getLayout()[index()];
 				if (entry) {
 					setService(entry.id);
 					navigate("service-detail");
@@ -231,6 +292,158 @@ export function TelemetryFeature(props: {
 				break;
 			}
 		}
+	};
+	const openFilter = () => {
+		setCriterion(0);
+		setFilterPane("criteria");
+		setStatusIndex(
+			Math.max(
+				0,
+				statusOptions.findIndex((option) => option.value === statusFilter()),
+			),
+		);
+		const loaded = traces()
+			.getTraceSummaries()
+			.map((summary) => ({
+				changeId: summary.traceId,
+				spanCount: summary.spanCount,
+			}));
+		setKnownWorkspaces(loaded);
+		setWorkspaceIndex(
+			Math.max(
+				0,
+				loaded.findIndex((item) => item.changeId === workspace()) + 1,
+			),
+		);
+		setSpanTypeIndex(
+			Math.max(0, ["all", ...traces().spanTypes_].indexOf(spanTypeFilter())),
+		);
+		setModal("filter");
+		void props.client
+			.call("telemetry.read", { signal: "workspaces" })
+			.then((result) => {
+				if (disposed || modal() !== "filter" || !Array.isArray(result.value))
+					return;
+				const merged = new Map(loaded.map((item) => [item.changeId, item]));
+				for (const row of result.value) {
+					if (
+						row &&
+						typeof row === "object" &&
+						typeof row.changeId === "string" &&
+						typeof row.spanCount === "number"
+					)
+						merged.set(row.changeId, {
+							changeId: row.changeId,
+							spanCount: row.spanCount,
+						});
+				}
+				const items = [...merged.values()];
+				setKnownWorkspaces(items);
+				setWorkspaceIndex(
+					Math.max(
+						0,
+						items.findIndex((item) => item.changeId === workspace()) + 1,
+					),
+				);
+			})
+			.catch((error: unknown) => {
+				if (!disposed && modal() === "filter")
+					props.notify(
+						error instanceof Error
+							? error.message
+							: "Workspace list unavailable",
+					);
+			});
+	};
+	const handleModal = (key: string, shifted: boolean) => {
+		if (key === "escape") {
+			setModal(undefined);
+			return true;
+		}
+		if (modal() === "sort") {
+			if (key === "space")
+				setSortDraft((items) =>
+					items.map((item, index) =>
+						index === sortIndex()
+							? {
+									...item,
+									mode:
+										item.mode === "asc"
+											? "desc"
+											: item.mode === "desc"
+												? "none"
+												: "asc",
+								}
+							: item,
+					),
+				);
+			else if ((key === "j" || key === "k") && shifted) {
+				const from = sortIndex(),
+					to = from + (key === "j" ? 1 : -1);
+				const items = [...sortDraft()],
+					first = items[from],
+					second = items[to];
+				if (first && second) {
+					items[from] = second;
+					items[to] = first;
+					setSortDraft(items);
+					setSortIndex(to);
+				}
+			} else if (key === "j" || key === "down")
+				setSortIndex((index) => Math.min(sortDraft().length - 1, index + 1));
+			else if (key === "k" || key === "up")
+				setSortIndex((index) => Math.max(0, index - 1));
+			else if (key === "enter" || key === "return") {
+				setSortCriteria(sortDraft());
+				setIndex(0);
+				setModal(undefined);
+			} else return false;
+			return true;
+		}
+		if (key === "h" || key === "left") setFilterPane("criteria");
+		else if (key === "l" || key === "right") setFilterPane("values");
+		else if (key === "x") {
+			setQuery("");
+			setStatusFilter("all");
+			setSpanTypeFilter("all");
+			setWorkspace(undefined);
+			setPage(1);
+			setStatusIndex(0);
+			setWorkspaceIndex(0);
+			setSpanTypeIndex(0);
+			setCriterion(0);
+			setFilterPane("criteria");
+		} else if (["j", "k", "down", "up"].includes(key)) {
+			const delta = key === "j" || key === "down" ? 1 : -1;
+			if (filterPane() === "criteria")
+				setCriterion((value) => Math.max(0, Math.min(2, value + delta)));
+			else if (criterion() === 0)
+				setStatusIndex((value) =>
+					Math.max(0, Math.min(statusOptions.length - 1, value + delta)),
+				);
+			else if (criterion() === 1)
+				setWorkspaceIndex((value) =>
+					Math.max(0, Math.min(knownWorkspaces().length, value + delta)),
+				);
+			else
+				setSpanTypeIndex((value) =>
+					Math.max(0, Math.min(traces().spanTypes_.length, value + delta)),
+				);
+		} else if (key === "enter" || key === "return") {
+			setStatusFilter(statusOptions[statusIndex()]?.value ?? "all");
+			setSpanTypeFilter(
+				["all", ...traces().spanTypes_][spanTypeIndex()] ?? "all",
+			);
+			setWorkspace(
+				workspaceIndex() === 0
+					? undefined
+					: knownWorkspaces()[workspaceIndex() - 1]?.changeId,
+			);
+			setPage(1);
+			setIndex(0);
+			setModal(undefined);
+		} else return false;
+		return true;
 	};
 	const count = () =>
 		surface() === "traces"
@@ -245,16 +458,24 @@ export function TelemetryFeature(props: {
 	const unregister = useKeymap().registerLayer({
 		id: "v2.telemetry",
 		priority: 80,
-		enabled: () => props.active() && surface() !== "home",
+		enabled: () =>
+			props.active() && surface() !== "home" && surface() !== "controls",
 		commands: [
 			{
 				name: "telemetry.key",
 				run: ({ event }) => {
 					if (event.ctrl || event.meta || event.option) return false;
+					if (modal())
+						return handleModal(
+							event.name.toLowerCase(),
+							Boolean(event.shift) || /^[A-Z]$/.test(event.name),
+						);
 					if (searching()) {
 						const key = event.name.toLowerCase();
-						if (key === "escape" || key === "enter" || key === "return")
+						if (key === "escape") {
+							setQuery(searchPrevious);
 							setSearching(false);
+						} else if (key === "enter" || key === "return") setSearching(false);
 						else if (key === "backspace")
 							setQuery((value) => value.slice(0, -1));
 						else if (event.sequence?.length === 1 && event.sequence >= " ")
@@ -263,22 +484,87 @@ export function TelemetryFeature(props: {
 						setIndex(0);
 						return true;
 					}
+					const shifted = Boolean(event.shift) || /^[A-Z]$/.test(event.name);
+					if (
+						surface() === "traces" &&
+						shifted &&
+						["j", "k"].includes(event.name.toLowerCase())
+					) {
+						setPage((value) =>
+							event.name.toLowerCase() === "j"
+								? Math.min(traces().totalPages_, value + 1)
+								: Math.max(1, value - 1),
+						);
+						setIndex(0);
+						return true;
+					}
 					switch (event.name.toLowerCase()) {
+						case "f":
+							if (surface() === "traces" && shifted) {
+								openFilter();
+								break;
+							}
+							return false;
+						case "o":
+							if (surface() === "traces" && shifted) {
+								setSortDraft(sortCriteria().map((item) => ({ ...item })));
+								setSortIndex(0);
+								setModal("sort");
+								break;
+							}
+							return false;
 						case "/":
+							searchPrevious = query();
 							setSearching(true);
 							break;
 						case "j":
 						case "down":
-							setIndex(Math.min(Math.max(0, count() - 1), index() + 1));
+							if (surface() === "topology") {
+								const items = topology().getLayout();
+								const current = Math.max(
+									0,
+									items.findIndex((node) => node.id === service()),
+								);
+								setService(items[Math.min(items.length - 1, current + 1)]?.id);
+							} else setIndex(Math.min(Math.max(0, count() - 1), index() + 1));
 							break;
 						case "k":
 						case "up":
-							setIndex(Math.max(0, index() - 1));
+							if (surface() === "topology") {
+								const items = topology().getLayout();
+								const current = Math.max(
+									0,
+									items.findIndex((node) => node.id === service()),
+								);
+								setService(items[Math.max(0, current - 1)]?.id);
+							} else setIndex(Math.max(0, index() - 1));
 							break;
 						case "enter":
 						case "return":
 							open();
 							break;
+						case "g":
+							setIndex(shifted ? Math.max(0, count() - 1) : 0);
+							break;
+						case "w":
+							if (surface() === "traces") {
+								setWorkspace(undefined);
+								setPage(1);
+								break;
+							}
+							return false;
+						case "h":
+						case "l": {
+							if (surface() !== "tree") return false;
+							const node = flat()[index()];
+							if (node)
+								setExpansion((previous) => ({
+									...previous,
+									[`${node.span.traceId}:${node.span.spanId}`]:
+										event.name.toLowerCase() === "l",
+								}));
+							break;
+						}
 						case "space": {
 							const node = flat()[index()];
 							if (node) toggle(node);
@@ -321,6 +607,8 @@ export function TelemetryFeature(props: {
 				.split("")
 				.map((key) => (key === " " ? "space" : key)),
 			"backspace",
+			"left",
+			"right",
 			"j",
 			"k",
 			"down",
@@ -335,7 +623,7 @@ export function TelemetryFeature(props: {
 		].map((key) => ({ key, cmd: "telemetry.key" })),
 	});
 	createEffect(() => {
-		if (surface() === "home") return;
+		if (surface() === "home" || surface() === "controls") return;
 		props.catalog([
 			{
 				title: "Observability",
@@ -346,6 +634,12 @@ export function TelemetryFeature(props: {
 					{ key: "[/]", action: "Previous/next trace page", short: "page" },
 					{ key: "r", action: "Reload telemetry", short: "reload" },
 					{ key: "/", action: "Search loaded records", short: "search" },
+					...(surface() === "traces"
+						? [
+								{ key: "F", action: "Filter traces", short: "filter" },
+								{ key: "O", action: "Sort traces", short: "sort" },
+							]
+						: []),
 					{ key: "Esc", action: "Back", standard: true },
 				],
 			},
@@ -360,12 +654,43 @@ export function TelemetryFeature(props: {
 	});
 	return (
 		<box flexDirection="column" flexGrow={1}>
+			<Show when={modal() === "filter"}>
+				<FilterModal
+					pane={filterPane}
+					criterion={criterion}
+					statusIndex={statusIndex}
+					workspaceIndex={workspaceIndex}
+					spanTypeIndex={spanTypeIndex}
+					workspaces={knownWorkspaces}
+					spanTypes={() => traces().spanTypes_}
+					onSelectParameter={setCriterion}
+					onSelectValue={(index) => {
+						if (criterion() === 0) setStatusIndex(index);
+						else if (criterion() === 1) setWorkspaceIndex(index);
+						else setSpanTypeIndex(index);
+					}}
+				/>
+			</Show>
+			<Show when={modal() === "sort"}>
+				<SortModal
+					selected={sortIndex}
+					criteria={sortDraft}
+					onSelectRow={setSortIndex}
+				/>
+			</Show>
 			<Show when={loading()}>
 				<text>Reading telemetry…</text>
 			</Show>
 			<Show when={surface() === "home"}>
 				<HomeView
-					destinations={["traces", "metrics", "logs", "topology"].map((id) => ({
+					title="Observability"
+					destinations={[
+						"traces",
+						"metrics",
+						"logs",
+						"topology",
+						"controls",
+					].map((id) => ({
 						id,
 						label: id[0].toUpperCase() + id.slice(1),
 						description: "",
@@ -375,6 +700,15 @@ export function TelemetryFeature(props: {
 					selected={index()}
 					select={setIndex}
 					catalog={props.catalog}
+				/>
+			</Show>
+			<Show when={surface() === "controls"}>
+				<TelemetryControls
+					client={props.client}
+					active={props.active}
+					back={() => navigate("home")}
+					catalog={props.catalog}
+					notify={props.notify}
 				/>
 			</Show>
 			<Show when={surface() === "traces"}>

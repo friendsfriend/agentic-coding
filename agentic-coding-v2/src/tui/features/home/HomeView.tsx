@@ -24,6 +24,7 @@ export type Destination = {
 
 export function HomeView(props: {
 	destinations: Destination[];
+	title?: string;
 	active: () => boolean;
 	open: (id: string) => void;
 	catalog: (catalog: KeybindSection[]) => void;
@@ -82,7 +83,7 @@ export function HomeView(props: {
 	createEffect(() => {
 		props.catalog([
 			{
-				title: "Home",
+				title: props.title ?? "Home",
 				keybinds: [
 					{ key: "j/k or ↑/↓", action: "Move selection", standard: true },
 					{ key: "Enter", action: "Open destination", standard: true },

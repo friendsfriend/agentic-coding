@@ -106,7 +106,10 @@ async function handleOtlpTraces(
 		router.pushTraces(spans);
 		return otlpResponse();
 	} catch (e) {
-		return errorResponse(e instanceof RangeError ? 413 : 400, String(e));
+		return errorResponse(
+			e instanceof RangeError ? 413 : 400,
+			"Invalid telemetry payload",
+		);
 	}
 }
 
@@ -127,7 +130,10 @@ async function handleOtlpMetrics(
 		router.pushMetrics(metrics);
 		return otlpResponse();
 	} catch (e) {
-		return errorResponse(e instanceof RangeError ? 413 : 400, String(e));
+		return errorResponse(
+			e instanceof RangeError ? 413 : 400,
+			"Invalid telemetry payload",
+		);
 	}
 }
 
@@ -148,7 +154,10 @@ async function handleOtlpLogs(
 		router.pushLogs(logs);
 		return otlpResponse();
 	} catch (e) {
-		return errorResponse(e instanceof RangeError ? 413 : 400, String(e));
+		return errorResponse(
+			e instanceof RangeError ? 413 : 400,
+			"Invalid telemetry payload",
+		);
 	}
 }
 
@@ -162,8 +171,8 @@ async function handleZipkin(
 		const spans = normalizeZipkinSpans(JSON.parse(await body(request)));
 		router.pushTraces(spans);
 		return Response.json({});
-	} catch (e) {
-		return errorResponse(400, String(e));
+	} catch {
+		return errorResponse(400, "Invalid telemetry payload");
 	}
 }
 
@@ -177,8 +186,8 @@ async function handleDatadogTraces(
 		const spans = normalizeDatadogSpans(JSON.parse(await body(request)));
 		router.pushTraces(spans);
 		return Response.json({});
-	} catch (e) {
-		return errorResponse(400, String(e));
+	} catch {
+		return errorResponse(400, "Invalid telemetry payload");
 	}
 }
 
@@ -190,8 +199,8 @@ async function handleDatadogSeries(
 		const metrics = normalizeDatadogSeries(JSON.parse(await body(request)));
 		router.pushMetrics(metrics);
 		return Response.json({});
-	} catch (e) {
-		return errorResponse(400, String(e));
+	} catch {
+		return errorResponse(400, "Invalid telemetry payload");
 	}
 }
 
@@ -203,8 +212,8 @@ async function handleDatadogLogs(
 		const logs = normalizeDatadogLogs(JSON.parse(await body(request)));
 		router.pushLogs(logs);
 		return Response.json({});
-	} catch (e) {
-		return errorResponse(400, String(e));
+	} catch {
+		return errorResponse(400, "Invalid telemetry payload");
 	}
 }
 
