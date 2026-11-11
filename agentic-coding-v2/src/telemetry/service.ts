@@ -12,6 +12,7 @@ import type {
 	TelemetryReceiverState,
 } from "./contracts.ts";
 import { routeReceiverRequest, type SignalRouter } from "./receivers/index.ts";
+import { MetricCollectors } from "./receivers/metric-collectors.ts";
 import {
 	type OwnedGrpcReceiver,
 	startOtlpGrpcReceiver,
@@ -69,6 +70,7 @@ function assertLogs(logs: LogData[]) {
 
 export class Telemetry {
 	readonly db: TraceDb;
+	readonly collectors: MetricCollectors;
 	revision = 0;
 	private readonly router: SignalRouter;
 	private readonly watchers = new Map<string, () => void>();
@@ -240,6 +242,9 @@ export class Telemetry {
 				if (logs.length) this.revision++;
 			},
 		};
+		this.collectors = new MetricCollectors((metrics) =>
+			this.router.pushMetrics(metrics),
+		);
 	}
 	async route(request: Request, url: URL): Promise<Response | null> {
 		const received = routeReceiverRequest(request, this.router);
@@ -319,6 +324,7 @@ export class Telemetry {
 	}
 	async close() {
 		this.closed = true;
+		await this.collectors.close();
 		await this.receiverWork?.catch(() => {});
 		await this.stopReceiver();
 		for (const stop of this.watchers.values()) stop();

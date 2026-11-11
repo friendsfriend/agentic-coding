@@ -119,6 +119,19 @@ export interface TraceSummaryPage {
 	perPage: number;
 }
 
+/** Explicit, loopback-only metric sources; observations confer no identity. */
+export type MetricCollectorKind = "statsd" | "prometheus";
+export interface MetricCollectorState {
+	revision: number;
+	status: "stopped" | "starting" | "running" | "stopping";
+	address: string | null;
+	lastError: string | null;
+}
+export type MetricCollectorSnapshot = Record<
+	MetricCollectorKind,
+	MetricCollectorState
+>;
+
 /** Operator observation only. The credential is a private file reference,
  * never a token value. gRPC currently implements OTLP TraceService only. */
 export interface TelemetryReceiverState {

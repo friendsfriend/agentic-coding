@@ -707,6 +707,30 @@ export function result<M extends Method>(
 		// the serialized size below the frame budget.
 		if (value !== null && !["string", "object"].includes(typeof value))
 			throw new Error("Invalid provider workbench value");
+	} else if (method.startsWith("telemetry.collector.")) {
+		const snapshot = record(value);
+		for (const kind of ["statsd", "prometheus"]) {
+			const state = record(snapshot[kind]);
+			if (
+				!integer(state.revision) ||
+				!["starting", "running", "stopping", "stopped"].includes(
+					String(state.status),
+				) ||
+				!(
+					state.lastError === null ||
+					(typeof state.lastError === "string" && state.lastError.length <= 256)
+				) ||
+				!(
+					state.address === null ||
+					(typeof state.address === "string" &&
+						(kind === "statsd"
+							? /^udp:\/\/127\.0\.0\.1:\d{1,5}$/
+							: /^http:\/\/127\.0\.0\.1:\d{1,5}\/metrics$/
+						).test(state.address))
+				)
+			)
+				throw new Error("Invalid metric collector state");
+		}
 	} else if (method.startsWith("telemetry.receiver.")) {
 		const data = record(value);
 		if (

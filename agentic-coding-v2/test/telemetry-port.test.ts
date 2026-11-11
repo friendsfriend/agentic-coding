@@ -477,3 +477,201 @@ test("bundled gRPC receiver serves the embedded protobuf definition without a so
 		await receiver.stop();
 	}
 });
+
+test("operator-owned loopback StatsD and Prometheus ingest through real sockets, refuse redirects and join shutdown", async () => {
+	const { createSocket } = await import("node:dgram");
+	const { app } = await fixture(false);
+	const host = serve(app),
+		operator = new ClientConnection(host.client);
+	const udp = createSocket("udp4");
+	let requests = 0,
+		escaped = 0;
+	let mode: "ok" | "redirect" | "large" | "wait" = "ok";
+	let release: ((response: Response) => void) | undefined;
+	const foreign = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: () => {
+			escaped++;
+			return new Response("secret_fixture 99\n");
+		},
+	});
+	const target = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: (request) => {
+			requests++;
+			expect(new URL(request.url).pathname).toBe("/metrics");
+			if (mode === "redirect") return Response.redirect(foreign.url);
+			if (mode === "large")
+				return new Response("too_large_fixture 1\n".repeat(20000));
+			if (mode === "wait")
+				return new Promise<Response>((resolve) => {
+					release = resolve;
+				});
+			return new Response(
+				'# HELP fixture_counter synthetic\n# TYPE fixture_counter counter\nfixture_counter{route="synthetic"} 7\n',
+			);
+		},
+	});
+	try {
+		operator.connect();
+		await eventually(async () => operator.stateFresh, Boolean);
+		let states = await operator.call("telemetry.collector.read", {});
+		expect(states.statsd.status).toBe("stopped");
+		await expect(
+			operator.call("telemetry.collector.start", {
+				kind: "prometheus",
+				revision: 0,
+				port: 0,
+			}),
+		).rejects.toThrow("port");
+		states = await operator.call("telemetry.collector.start", {
+			kind: "statsd",
+			revision: states.statsd.revision,
+			port: 0,
+		});
+		let udpPort = Number(new URL(states.statsd.address ?? "").port);
+		expect(udpPort).toBeGreaterThan(0);
+		await new Promise<void>((resolve, reject) =>
+			udp.send(
+				"fixture_udp:42|g|#source:synthetic",
+				udpPort,
+				"127.0.0.1",
+				(error) => (error ? reject(error) : resolve()),
+			),
+		);
+		await eventually(
+			async () =>
+				JSON.stringify(
+					(await operator.call("telemetry.read", { signal: "metrics" })).value,
+				),
+			(value) => value.includes("fixture_udp"),
+		);
+		await expect(
+			operator.call("telemetry.collector.stop", {
+				kind: "statsd",
+				revision: 0,
+			}),
+		).rejects.toThrow("revision");
+		await expect(
+			operator.call("telemetry.collector.start", {
+				kind: "statsd",
+				revision: states.statsd.revision,
+				port: 0,
+			}),
+		).rejects.toThrow("already running");
+		const send = (text: string) =>
+			new Promise<void>((resolve, reject) =>
+				udp.send(text, udpPort, "127.0.0.1", (error) =>
+					error ? reject(error) : resolve(),
+				),
+			);
+		await send(`oversized_fixture:1|g\n${"x".repeat(8192)}`);
+		await send("overflow_fixture:1e999|g");
+		await send("sync_fixture:1|g");
+		await eventually(
+			async () =>
+				JSON.stringify(
+					(await operator.call("telemetry.read", { signal: "metrics" })).value,
+				),
+			(value) => value.includes("sync_fixture"),
+		);
+		const metricsAfter = JSON.stringify(
+			(await operator.call("telemetry.read", { signal: "metrics" })).value,
+		);
+		expect(metricsAfter).not.toContain("oversized_fixture");
+		expect(metricsAfter).not.toContain("overflow_fixture");
+		states = await operator.call("telemetry.collector.stop", {
+			kind: "statsd",
+			revision: states.statsd.revision,
+		});
+		const occupiedPort = udp.address().port;
+		await expect(
+			operator.call("telemetry.collector.start", {
+				kind: "statsd",
+				revision: states.statsd.revision,
+				port: occupiedPort,
+			}),
+		).rejects.toThrow("could not start");
+		expect(udp.address().port).toBe(occupiedPort);
+		states = await operator.call("telemetry.collector.read", {});
+		expect(states.statsd.status).toBe("stopped");
+		states = await operator.call("telemetry.collector.start", {
+			kind: "statsd",
+			revision: states.statsd.revision,
+			port: 0,
+		});
+		udpPort = Number(new URL(states.statsd.address ?? "").port);
+		states = await operator.call("telemetry.collector.start", {
+			kind: "prometheus",
+			revision: states.prometheus.revision,
+			port: target.port ?? 0,
+		});
+		await eventually(
+			async () =>
+				JSON.stringify(
+					(await operator.call("telemetry.read", { signal: "metrics" })).value,
+				),
+			(value) => value.includes("fixture_counter"),
+		);
+		for (const next of ["redirect", "large"] as const) {
+			states = await operator.call("telemetry.collector.stop", {
+				kind: "prometheus",
+				revision: states.prometheus.revision,
+			});
+			mode = next;
+			states = await operator.call("telemetry.collector.start", {
+				kind: "prometheus",
+				revision: states.prometheus.revision,
+				port: target.port ?? 0,
+			});
+			await eventually(
+				async () => operator.call("telemetry.collector.read", {}),
+				(state) => state.prometheus.lastError !== null,
+			);
+			expect(escaped).toBe(0);
+			expect(
+				JSON.stringify(
+					(await operator.call("telemetry.read", { signal: "metrics" })).value,
+				),
+			).not.toContain(
+				next === "large" ? "too_large_fixture" : "secret_fixture",
+			);
+		}
+		states = await operator.call("telemetry.collector.stop", {
+			kind: "prometheus",
+			revision: states.prometheus.revision,
+		});
+		mode = "wait";
+		const before = requests;
+		await operator.call("telemetry.collector.start", {
+			kind: "prometheus",
+			revision: states.prometheus.revision,
+			port: target.port ?? 0,
+		});
+		await eventually(
+			async () => requests,
+			(count) => count > before,
+		);
+		await host.stop();
+		await app.close();
+		// Shutdown revokes only its own UDP listener; the original endpoint is free.
+		const probe = createSocket("udp4");
+		try {
+			await new Promise<void>((resolve, reject) => {
+				probe.once("error", reject);
+				probe.bind(udpPort, "127.0.0.1", resolve);
+			});
+		} finally {
+			probe.close();
+		}
+	} finally {
+		release?.(new Response("late_fixture 1\n"));
+		udp.close();
+		operator.close();
+		await host.stop();
+		await target.stop(true);
+		await foreign.stop(true);
+	}
+});

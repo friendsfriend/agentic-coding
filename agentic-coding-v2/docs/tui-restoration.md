@@ -747,3 +747,38 @@ operator environment functional tests pass.
 - Still open: configured Prometheus scraper/StatsD UDP lifecycle (their decoders
   are ported but listeners are not enabled), additional visual/runtime parity
   acceptance and any remaining whole-application parity checklist items.
+
+## Observability follow-up: owned StatsD and Prometheus lifecycle
+
+- Implemented runtime-owned metric collectors and authenticated typed
+  `telemetry.collector.read/start/stop` controls. Each source has its own
+  transition/revision fence. Duplicate starts and stale controls are refused;
+  bind failures never adopt or close an existing listener. Nothing starts on
+  launch, reconnect or configuration discovery. Both feed the existing v1
+  SQLite metric index and live metric views, not a separate substitute store.
+- StatsD binds IPv4 loopback only. Its standard UDP protocol has no credentials
+  or trusted identity; the controls explicitly disclose that before opt-in.
+  Datagrams are capped at 8 KB/128 lines and 100 packets per second, with
+  invalid/nonfinite samples refused before persistence. Stop closes only this
+  runtime's socket. Port zero supports isolated synthetic verification.
+- Prometheus takes an explicit local port and scrapes only
+  `http://127.0.0.1:<port>/metrics`, immediately and every ten seconds without
+  overlap. Redirects and process-level proxies are disabled; no credentials,
+  hostnames or arbitrary paths are accepted. Each request has a two-second
+  timeout and 256 KB response ceiling. Errors are sanitized and observable.
+  Stop aborts and joins an in-flight scrape before SQLite closes.
+- Observability → Controls now offers start/stop forms for both sources,
+  separate state/address/error observations and explicit r refresh. Stops use
+  the shared confirmation modal. These controls do not start an application,
+  acquire a native app slot, broaden owner authority or change configuration.
+- Verification uses real UDP/HTTP sockets against isolated synthetic fixtures
+  through the authenticated native gateway. It covers ingestion, stale and
+  duplicate controls, occupied-port no-adoption, oversized/invalid datagrams,
+  redirect refusal, oversized scrape refusal, pending-scrape shutdown and
+  release of the owned UDP port. The existing native app telemetry owner/run
+  tests are unchanged. Fifteen focused telemetry/gateway tests pass;
+  unfiltered type-check, zero-diagnostic lint and TUI bundle pass.
+- This closes the missing explicitly controlled loopback collector lifecycle,
+  not overall parity acceptance. Remote/config-discovered scrape targets are
+  intentionally not enabled implicitly. Whole-application visual/runtime
+  acceptance and any remaining original parity checklist items stay open.

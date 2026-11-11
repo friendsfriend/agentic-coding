@@ -1,7 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { useKeymap } from "@opentui/keymap/solid";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
-import type { TelemetryReceiverState } from "../../../telemetry/contracts.ts";
+import type {
+	MetricCollectorSnapshot,
+	TelemetryReceiverState,
+} from "../../../telemetry/contracts.ts";
 import type { ClientConnection } from "../../client/connection.ts";
 import {
 	Form,
@@ -11,7 +14,19 @@ import {
 } from "../../ui/index.ts";
 import { HomeView } from "../home/HomeView.tsx";
 
-type Operation = "start" | "stop" | "prune" | "scan" | "watch" | "unwatch";
+type Operation =
+	| "start"
+	| "stop"
+	| "statsd-start"
+	| "statsd-stop"
+	| "prometheus-start"
+	| "prometheus-stop"
+	| "prune"
+	| "scan"
+	| "watch"
+	| "unwatch";
+const isStop = (operation: Operation | undefined) =>
+	operation === "stop" || operation?.endsWith("-stop");
 
 /** v1 list/form/modal controls, attached to native operator boundaries. No
  * prompt prefill or token rendering; a credential is displayed by reference. */
@@ -29,6 +44,7 @@ export function TelemetryControls(props: {
 	const [confirm, setConfirm] = createSignal(false);
 	const [busy, setBusy] = createSignal(false);
 	const [receiver, setReceiver] = createSignal<TelemetryReceiverState>();
+	const [collectors, setCollectors] = createSignal<MetricCollectorSnapshot>();
 	let disposed = false;
 	const ready = () => !disposed && props.client.stateFresh && !busy();
 	const repositories = () => props.client.state?.repositories ?? [];
@@ -40,8 +56,14 @@ export function TelemetryControls(props: {
 		if (!ready()) return;
 		setBusy(true);
 		try {
-			const state = await props.client.call("telemetry.receiver.read", {});
-			if (!disposed) setReceiver(state);
+			const [state, sources] = await Promise.all([
+				props.client.call("telemetry.receiver.read", {}),
+				props.client.call("telemetry.collector.read", {}),
+			]);
+			if (!disposed) {
+				setReceiver(state);
+				setCollectors(sources);
+			}
 		} catch (error) {
 			if (!disposed) report(error);
 		} finally {
@@ -58,13 +80,17 @@ export function TelemetryControls(props: {
 		setConfirm(false);
 		setChoice(0);
 		setValue(
-			action === "start"
-				? "4317"
-				: action === "prune"
-					? "30"
-					: (repositories()[0] ?? ""),
+			action === "statsd-start"
+				? "8125"
+				: action === "prometheus-start"
+					? "9090"
+					: action === "start"
+						? "4317"
+						: action === "prune"
+							? "30"
+							: (repositories()[0] ?? ""),
 		);
-		if (action === "stop") setConfirm(true);
+		if (isStop(action)) setConfirm(true);
 	};
 	const cancel = () => {
 		setConfirm(false);
@@ -75,7 +101,29 @@ export function TelemetryControls(props: {
 		if (!action || !ready()) return;
 		setBusy(true);
 		try {
-			if (action === "start" || action === "stop") {
+			if (action.startsWith("statsd-") || action.startsWith("prometheus-")) {
+				const kind = action.startsWith("statsd-") ? "statsd" : "prometheus";
+				const basis = collectors()?.[kind];
+				if (!basis) throw new Error("Reload collector state first");
+				if (
+					!isStop(action) &&
+					(!/^\d+$/.test(value()) ||
+						Number(value()) > 65535 ||
+						(kind === "prometheus" && Number(value()) < 1))
+				)
+					throw new Error("Choose a valid local port");
+				const state = isStop(action)
+					? await props.client.call("telemetry.collector.stop", {
+							kind,
+							revision: basis.revision,
+						})
+					: await props.client.call("telemetry.collector.start", {
+							kind,
+							revision: basis.revision,
+							port: Number(value()),
+						});
+				if (!disposed) setCollectors(state);
+			} else if (action === "start" || action === "stop") {
 				const basis = receiver();
 				if (!basis) throw new Error("Reload receiver state first");
 				if (
@@ -105,6 +153,8 @@ export function TelemetryControls(props: {
 					days: Number(value()),
 				});
 			} else {
+				if (action !== "scan" && action !== "watch" && action !== "unwatch")
+					throw new Error("Unknown telemetry control");
 				if (!repositories().includes(value()))
 					throw new Error("Choose an authorized repository");
 				await props.client.call("telemetry.manage", {
@@ -155,7 +205,7 @@ export function TelemetryControls(props: {
 						return false;
 					}
 					if (key === "return" || key === "enter") {
-						if (operation() === "prune" || operation() === "stop")
+						if (operation() === "prune" || isStop(operation()))
 							setConfirm(true);
 						else void execute();
 						return true;
@@ -230,6 +280,24 @@ export function TelemetryControls(props: {
 					Bearer credential file: {receiver()?.credentialFile}
 				</text>
 			</Show>
+			<text fg={uiColors.warning}>
+				StatsD is unauthenticated UDP: explicit loopback-only opt-in, not a
+				trusted identity.
+			</text>
+			<text>
+				StatsD: {collectors()?.statsd.status ?? "unavailable"}{" "}
+				{collectors()?.statsd.address ?? ""}
+			</text>
+			<text>
+				Prometheus: {collectors()?.prometheus.status ?? "unavailable"}{" "}
+				{collectors()?.prometheus.address ?? ""}
+			</text>
+			<Show when={collectors()?.statsd.lastError}>
+				<text fg={uiColors.warning}>{collectors()?.statsd.lastError}</text>
+			</Show>
+			<Show when={collectors()?.prometheus.lastError}>
+				<text fg={uiColors.warning}>{collectors()?.prometheus.lastError}</text>
+			</Show>
 			<Show when={busy()}>
 				<text>Applying telemetry control…</text>
 			</Show>
@@ -237,6 +305,28 @@ export function TelemetryControls(props: {
 				<HomeView
 					title="Telemetry controls"
 					destinations={[
+						{
+							id: "statsd-start",
+							label: "Start StatsD receiver",
+							description:
+								"Unauthenticated loopback UDP only; 8 KB datagrams, 100/second limit",
+						},
+						{
+							id: "statsd-stop",
+							label: "Stop StatsD receiver",
+							description: "Close this runtime's UDP socket",
+						},
+						{
+							id: "prometheus-start",
+							label: "Start Prometheus scraper",
+							description:
+								"127.0.0.1 port, /metrics only; every 10 seconds, no redirects",
+						},
+						{
+							id: "prometheus-stop",
+							label: "Stop Prometheus scraper",
+							description: "Abort and join this runtime's in-flight scrape",
+						},
 						{
 							id: "start",
 							label: "Start gRPC receiver",
@@ -274,11 +364,25 @@ export function TelemetryControls(props: {
 					open={open}
 					selected={selected()}
 					select={select}
-					catalog={props.catalog}
+					catalog={(sections) =>
+						props.catalog([
+							...sections,
+							{
+								title: "Collector observations",
+								keybinds: [
+									{
+										key: "r",
+										action: "Refresh receiver and collector state",
+										short: "refresh",
+									},
+								],
+							},
+						])
+					}
 				/>
 			</Show>
 			<Show when={operation()}>
-				<Show when={operation() !== "stop"}>
+				<Show when={!isStop(operation())}>
 					<Form
 						fields={[
 							isRepository()
@@ -291,8 +395,8 @@ export function TelemetryControls(props: {
 								: {
 										key: "value",
 										label:
-											operation() === "start"
-												? "Port (0 = automatic)"
+											operation() === "start" || operation()?.endsWith("-start")
+												? "Port (StatsD/gRPC: 0 = automatic)"
 												: "Retain days",
 										kind: "text",
 									},
@@ -323,7 +427,9 @@ export function TelemetryControls(props: {
 					<text fg={uiColors.warning}>
 						{operation() === "prune"
 							? `Remove telemetry older than ${value()} days. This cannot be undone.`
-							: "Stop this receiver and revoke its credential. Exporters must be reconfigured after restart."}
+							: operation() === "stop"
+								? "Stop this receiver and revoke its credential. Exporters must be reconfigured after restart."
+								: "Stop this runtime’s collector and join its pending work."}
 					</text>
 				</GenericModal>
 			</Show>

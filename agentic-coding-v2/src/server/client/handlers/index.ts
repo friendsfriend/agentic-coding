@@ -67,6 +67,25 @@ export async function dispatch(
 	{ method, input }: Request,
 ): Promise<unknown> {
 	switch (method) {
+		case "telemetry.collector.read":
+			fields(input, []);
+			return app.telemetry.collectors.read();
+		case "telemetry.collector.start":
+		case "telemetry.collector.stop": {
+			const start = method === "telemetry.collector.start";
+			fields(
+				input,
+				start ? ["kind", "revision", "port"] : ["kind", "revision"],
+			);
+			if (input.kind !== "statsd" && input.kind !== "prometheus")
+				throw new Refusal("Unknown metric collector");
+			return app.telemetry.collectors.control(
+				input.kind,
+				start ? "start" : "stop",
+				integer(input.revision),
+				start ? integer(input.port) : 0,
+			);
+		}
 		case "telemetry.receiver.read":
 			fields(input, []);
 			return app.telemetry.receiverStatus();
