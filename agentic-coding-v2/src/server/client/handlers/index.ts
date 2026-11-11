@@ -130,6 +130,24 @@ export async function dispatch(
 			else app.telemetry.unwatch(repository);
 			return { count: 0 };
 		}
+		case "telemetry.trace.resolve": {
+			fields(input, ["traceId", "spanId"]);
+			const traceId = text(input.traceId, "trace identity", 32).toLowerCase();
+			const spanId =
+				input.spanId === undefined
+					? undefined
+					: text(input.spanId, "span identity", 16).toLowerCase();
+			if (
+				!/^[a-f0-9]{32}$/.test(traceId) ||
+				(spanId !== undefined && !/^[a-f0-9]{16}$/.test(spanId))
+			)
+				throw new Refusal("Invalid wire trace/span identity");
+			const candidates = app.telemetry.db.traceWorkspaces(traceId, spanId);
+			if (candidates.length > 1)
+				throw new Refusal("Trace identity is ambiguous across workspaces");
+			const changeId = candidates[0];
+			return changeId ? { changeId, traceId, spanId: spanId ?? null } : null;
+		}
 		case "telemetry.read": {
 			fields(input, ["signal", "page", "perPage", "changeId", "limit"]);
 			const signal = text(input.signal, "telemetry signal", 16);

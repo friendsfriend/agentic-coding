@@ -389,6 +389,9 @@ export class TraceDb {
 		this.db.run(
 			`CREATE INDEX IF NOT EXISTS idx_traces_change_start ON traces(change_id, start_nanos)`,
 		);
+		this.db.run(
+			`CREATE INDEX IF NOT EXISTS idx_traces_wire_identity ON traces(json_extract(span, '$.traceId'), json_extract(span, '$.spanId'))`,
+		);
 		this.db.run(`CREATE TABLE IF NOT EXISTS workspace_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       change_id TEXT UNIQUE NOT NULL,
@@ -750,6 +753,22 @@ export class TraceDb {
 		return rows.map((r) => JSON.parse(r.log) as LogData);
 	}
 
+	/** Wire identities are not workspace IDs. Bound the candidate set and let
+	 * the authenticated caller refuse ambiguity rather than choose a row. */
+	traceWorkspaces(traceId: string, spanId?: string): string[] {
+		const rows = spanId
+			? this.db
+					.query(
+						"SELECT DISTINCT change_id FROM traces WHERE json_extract(span, '$.traceId')=? AND json_extract(span, '$.spanId')=? LIMIT 2",
+					)
+					.all(traceId, spanId)
+			: this.db
+					.query(
+						"SELECT DISTINCT change_id FROM traces WHERE json_extract(span, '$.traceId')=? LIMIT 2",
+					)
+					.all(traceId);
+		return (rows as Array<{ change_id: string }>).map((row) => row.change_id);
+	}
 	loadSpans(changeId?: string): SpanData[] {
 		const rows = changeId
 			? (this.db

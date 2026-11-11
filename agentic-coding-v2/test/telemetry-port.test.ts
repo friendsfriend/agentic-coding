@@ -785,3 +785,112 @@ test("authorized workspace scans and watchers refuse linked sources but retain o
 		await host.stop();
 	}
 }, 15000);
+
+test("correlated log trace references resolve wire IDs without guessing workspace IDs or ambiguous matches", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const traceId = "a".repeat(32),
+		firstSpan = "b".repeat(16),
+		secondSpan = "c".repeat(16);
+	const ingest = async (
+		changeId: string,
+		wireTrace: string,
+		spanId: string,
+	) => {
+		const response = await fetch(new URL("/v1/traces", host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({
+				resourceSpans: [
+					{
+						resource: {
+							attributes: [
+								{ key: "herdr.change.id", value: { stringValue: changeId } },
+							],
+						},
+						scopeSpans: [
+							{
+								spans: [
+									{
+										traceId: wireTrace,
+										spanId,
+										name: `operation-${changeId}`,
+										startTimeUnixNano: "1790000000000000000",
+										endTimeUnixNano: "1790000000100000000",
+									},
+								],
+							},
+						],
+					},
+				],
+			}),
+		});
+		expect(response.status).toBe(200);
+	};
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		expect(
+			await client.call("telemetry.trace.resolve", { traceId }),
+		).toBeNull();
+		await ingest("workspace-a", traceId, firstSpan);
+		expect(
+			await client.call("telemetry.trace.resolve", {
+				traceId: traceId.toUpperCase(),
+			}),
+		).toEqual({ changeId: "workspace-a", traceId, spanId: null });
+		await ingest("workspace-b", traceId, secondSpan);
+		// A workspace whose name happens to be a wire ID is not a wire match.
+		await ingest(traceId, "d".repeat(32), "e".repeat(16));
+		await expect(
+			client.call("telemetry.trace.resolve", { traceId }),
+		).rejects.toThrow("ambiguous");
+		const reference = await client.call("telemetry.trace.resolve", {
+			traceId,
+			spanId: firstSpan.toUpperCase(),
+		});
+		expect(reference).toEqual({
+			changeId: "workspace-a",
+			traceId,
+			spanId: firstSpan,
+		});
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "spans",
+					changeId: reference?.changeId,
+				})
+			).value,
+		).toMatchObject([
+			{ traceId, spanId: firstSpan, name: "operation-workspace-a" },
+		]);
+		expect(
+			await client.call("telemetry.trace.resolve", {
+				traceId,
+				spanId: secondSpan,
+			}),
+		).toEqual({ changeId: "workspace-b", traceId, spanId: secondSpan });
+		expect(
+			await client.call("telemetry.trace.resolve", {
+				traceId,
+				spanId: "f".repeat(16),
+			}),
+		).toBeNull();
+		await ingest("workspace-b", traceId, firstSpan);
+		await expect(
+			client.call("telemetry.trace.resolve", { traceId, spanId: firstSpan }),
+		).rejects.toThrow("ambiguous");
+		await expect(
+			client.call("telemetry.trace.resolve", { traceId: "not-a-wire-id" }),
+		).rejects.toThrow("identity");
+		expect(await client.call("state.read", {})).toHaveProperty("sessions");
+		expect(client.status).toBe("connected");
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});

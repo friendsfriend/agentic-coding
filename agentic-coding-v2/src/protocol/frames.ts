@@ -707,6 +707,23 @@ export function result<M extends Method>(
 		// the serialized size below the frame budget.
 		if (value !== null && !["string", "object"].includes(typeof value))
 			throw new Error("Invalid provider workbench value");
+	} else if (method === "telemetry.trace.resolve") {
+		if (value !== null) {
+			const data = record(value);
+			if (
+				typeof data.changeId !== "string" ||
+				!data.changeId ||
+				data.changeId.length > 256 ||
+				typeof data.traceId !== "string" ||
+				!/^[a-f0-9]{32}$/.test(data.traceId) ||
+				!(
+					data.spanId === null ||
+					(typeof data.spanId === "string" &&
+						/^[a-f0-9]{16}$/.test(data.spanId))
+				)
+			)
+				throw new Error("Invalid trace reference");
+		}
 	} else if (method.startsWith("telemetry.collector.")) {
 		const snapshot = record(value);
 		for (const kind of ["statsd", "prometheus"]) {

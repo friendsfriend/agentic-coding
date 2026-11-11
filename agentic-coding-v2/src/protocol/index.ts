@@ -231,6 +231,10 @@ export type EnvironmentAction = {
 	replicas?: number;
 };
 export type Methods = {
+	"telemetry.trace.resolve": {
+		input: { traceId: string; spanId?: string };
+		output: { changeId: string; traceId: string; spanId: string | null } | null;
+	};
 	"telemetry.collector.read": {
 		input: Record<string, never>;
 		output: MetricCollectorSnapshot;
@@ -607,6 +611,7 @@ export const methods: Method[] = [
 	"schedule.delete",
 	"schedule.create",
 	"schedule.state",
+	"telemetry.trace.resolve",
 	"telemetry.read",
 	"telemetry.manage",
 	"telemetry.collector.read",

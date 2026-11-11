@@ -107,13 +107,62 @@ export function TelemetryFeature(props: {
 	);
 	const [expansion, setExpansion] = createSignal<Record<string, boolean>>({});
 	let epoch = 0;
+	let linkEpoch = 0;
+	const [resolvingTrace, setResolvingTrace] = createSignal(false);
 	let disposed = false;
 	const navigate = (next: string) => {
+		linkEpoch++;
+		setResolvingTrace(false);
 		setIndex(0);
 		setSearching(false);
 		setModal(undefined);
 		setSurface(next);
 	};
+	const openLinkedTrace = async (traceId: string, spanId?: string) => {
+		if (
+			disposed ||
+			!props.active() ||
+			!props.client.stateFresh ||
+			resolvingTrace()
+		)
+			return;
+		const generation = ++linkEpoch;
+		const origin = surface();
+		setResolvingTrace(true);
+		try {
+			const reference = await props.client.call("telemetry.trace.resolve", {
+				traceId,
+				...(spanId ? { spanId } : {}),
+			});
+			if (
+				disposed ||
+				generation !== linkEpoch ||
+				surface() !== origin ||
+				!props.active() ||
+				!props.client.stateFresh
+			)
+				return;
+			if (!reference) {
+				props.notify("Correlated trace is not retained");
+				return;
+			}
+			setTrace(reference.changeId);
+			navigate("tree");
+		} catch (error) {
+			if (!disposed && generation === linkEpoch)
+				props.notify(
+					error instanceof Error ? error.message : "Trace resolution refused",
+				);
+		} finally {
+			if (!disposed && generation === linkEpoch) setResolvingTrace(false);
+		}
+	};
+	createEffect(() => {
+		if (!props.active()) {
+			linkEpoch++;
+			setResolvingTrace(false);
+		}
+	});
 	createEffect(() => {
 		const current = surface();
 		const selectedTrace = trace();
@@ -543,6 +592,12 @@ export function TelemetryFeature(props: {
 						case "return":
 							open();
 							break;
+						case "t": {
+							const entry = selectedLog();
+							if (surface() !== "log-detail" || !entry?.traceId) return false;
+							void openLinkedTrace(entry.traceId, entry.spanId || undefined);
+							break;
+						}
 						case "g":
 							setIndex(shifted ? Math.max(0, count() - 1) : 0);
 							break;
@@ -640,6 +695,9 @@ export function TelemetryFeature(props: {
 								{ key: "O", action: "Sort traces", short: "sort" },
 							]
 						: []),
+					...(surface() === "log-detail" && selectedLog()?.traceId
+						? [{ key: "t", action: "Open correlated trace", short: "trace" }]
+						: []),
 					{ key: "Esc", action: "Back", standard: true },
 				],
 			},
@@ -677,6 +735,9 @@ export function TelemetryFeature(props: {
 					criteria={sortDraft}
 					onSelectRow={setSortIndex}
 				/>
+			</Show>
+			<Show when={resolvingTrace()}>
+				<text>Resolving correlated trace…</text>
 			</Show>
 			<Show when={loading()}>
 				<text>Reading telemetry…</text>
@@ -783,9 +844,8 @@ export function TelemetryFeature(props: {
 				<LogDetailView
 					store={detailLogs()}
 					index={0}
-					onTraceLink={(id) => {
-						setTrace(id);
-						navigate("tree");
+					onTraceLink={(id, spanId) => {
+						void openLinkedTrace(id, spanId);
 					}}
 				/>
 			</Show>

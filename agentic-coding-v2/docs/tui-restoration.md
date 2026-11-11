@@ -809,3 +809,27 @@ operator environment functional tests pass.
   and zero-diagnostic lint. No real repositories/configuration were changed.
 - Overall visual/runtime parity remains open; this closes an ingestion fence,
   not the developer's manual acceptance or an archive gate.
+
+## Observability follow-up: correlated log → trace navigation
+
+- Wired the existing log-detail trace callback to the visible trace link and
+  added t/help access while viewing a correlated log. Navigation resolves the
+  wire trace/span IDs through the authenticated native gateway before opening
+  a workspace tree; wire trace IDs are not treated as workspace names.
+- Added `telemetry.trace.resolve`, a read-only, strict bounded identity lookup
+  backed by an additive SQLite expression index. It returns an exact retained
+  workspace reference or null; multiple candidate workspaces are refused as
+  ambiguous. A supplied span ID must match exactly, with no silent fallback to
+  another span or a workspace whose name happens to equal the trace ID.
+- Uppercase wire IDs canonicalize to lowercase. Resolution never grants native
+  task/run authority. Missing/ambiguous references notify without replacing
+  the captured log. Async resolution is fenced by navigation, feature focus,
+  client freshness and disposal, and is never automatically replayed.
+- One synthetic authenticated-boundary scenario covers missing, exact,
+  uppercase, shared-trace, colliding-workspace-name, span-specific and ambiguous
+  references plus connection survival after invalid reads. Seventeen focused
+  telemetry/gateway regressions pass (280 assertions); unfiltered type-check,
+  zero-diagnostic lint, diff whitespace checks and the official Solid-enabled
+  `bun run build` pass. No real exporters, credentials or apps were used.
+- Visual/runtime parity acceptance remains with the developer; parity is not
+  archived by these implementation or synthetic verification results.

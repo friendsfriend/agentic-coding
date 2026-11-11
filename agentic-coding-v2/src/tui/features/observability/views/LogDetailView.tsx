@@ -14,7 +14,7 @@ import type { LogStore } from "../model/logStore.ts";
 export function LogDetailView(props: {
 	store: LogStore;
 	index: number;
-	onTraceLink?: (traceId: string) => void;
+	onTraceLink?: (traceId: string, spanId?: string) => void;
 }) {
 	const log = createMemo(() => props.store.getLogs()[props.index]);
 	const attributes = createKeyedItems(
@@ -52,7 +52,16 @@ export function LogDetailView(props: {
 			{/* Trace/span link */}
 			<Show when={log()?.traceId}>
 				{(traceId) => (
-					<box height={1} flexDirection="row" paddingLeft={1}>
+					<box
+						height={1}
+						flexDirection="row"
+						paddingLeft={1}
+						onMouseUp={() => {
+							const entry = log();
+							if (entry?.traceId)
+								props.onTraceLink?.(entry.traceId, entry.spanId || undefined);
+						}}
+					>
 						<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
 							Trace:{" "}
 						</text>
