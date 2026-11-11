@@ -501,6 +501,20 @@ export class GatewayBackend implements DevEnvBackend {
 		});
 	}
 
+	private tasks(
+		operation: string,
+		input: {
+			path?: string;
+			sourcePath?: string;
+			values?: Data;
+			limit?: number;
+		} = {},
+	) {
+		return this.client.call("environment.tasks", {
+			operation: operation as "list",
+			...input,
+		}) as Promise<never>;
+	}
 	/** Native kind cluster status (read-only; never creates or deletes). */
 	private async cluster(): Promise<KubernetesClusterStatus> {
 		try {
@@ -908,7 +922,25 @@ export class GatewayBackend implements DevEnvBackend {
 					app: arg(0),
 				});
 			case "getScripts":
-				return Promise.resolve({ scripts: [] });
+				return this.tasks("list").then((scripts) => ({ scripts }));
+			case "getScriptMetadata":
+				return this.tasks("metadata", { path: arg(0) });
+			case "createScript":
+				return this.tasks("create", { path: arg(0) });
+			case "linkScript":
+				return this.tasks("link", { path: arg(0), sourcePath: arg(1) });
+			case "deleteScript":
+				return this.tasks("delete", { path: arg(0) });
+			case "getScriptArgsHistory":
+				return this.tasks("history", {
+					path: arg(0),
+					limit: typeof args[1] === "number" ? args[1] : 50,
+				});
+			case "addScriptArgsHistory":
+				return this.tasks("add-history", {
+					path: arg(0),
+					values: (args[1] ?? {}) as Data,
+				}).then(() => undefined);
 			case "getProviders":
 				return Promise.resolve([]);
 			case "getStages":

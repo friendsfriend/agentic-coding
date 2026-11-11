@@ -267,3 +267,33 @@ operator environment functional tests pass.
   into KUBECONFIG; recreate; delete removing private client files; exact kind
   mutation argv order. Cluster/Kubernetes/operator/protocol/gateway suites:
   38/38.
+
+## Tasks tab: native developer task collection (v1 Scripts/Tasks)
+
+- New authenticated gateway method `environment.tasks`, backed by
+  `src/environment/task-collection.ts` (`TaskCollection`): list (v1
+  tree), metadata (`--devenv-metadata`), create (v1 template, `.sh` default,
+  `wx`), link (symlink to an existing file), delete, and argument history
+  (durable `v2.task-args-history`, deduplicated, newest first, 50 entries).
+- Location: `CONFIG_DIR/tasks/` (v1: `$DEVENV_HOME/scripts`).
+  `CONFIG_DIR/scripts/` stays reserved for environment target dispatchers.
+  The v1 collection is not imported automatically; link or copy tasks
+  explicitly.
+- Safety:
+  - Paths stay relative to `tasks/`: no absolute, `..` or dot segments, and
+    every existing ancestor must resolve inside the real directory.
+  - Discovery never follows symlinked directories, is depth/count bounded and
+    lists only executable regular files.
+  - Delete unlinks a symlink and never touches its source.
+  - Metadata probes run in their own process group with a minimal environment
+    (no configuration secrets) and a 2 s deadline, kill the whole group, cap
+    stdout at 64 KiB, and run at most 10 at once within an 8 s list budget.
+    Results are cached per mtime.
+- Running a task stays v1's foreground or tmux TUI action on the developer's
+  terminal. The server never executes a task. The key press is the approval,
+  and agents and HTTP have no access.
+- Functional test via the authenticated gateway: tree, parameters and
+  interpreter; a non-executable file is skipped; the probe environment does not
+  receive the server's variables; create, duplicate refusal and escape
+  refusals; link and delete keeping the source; history dedupe/order; folder
+  delete.

@@ -571,3 +571,103 @@ test("restored v1 git controls act on the authorized checkout through the gatewa
 		await host.stop();
 	}
 });
+
+test("restored v1 Tasks tab lists, probes, creates, links, deletes and remembers task arguments through the gateway", async () => {
+	const { app, config } = await fixture(false, (config) => {
+		config.profiles = [];
+		fs.mkdirSync(config.configDir);
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify(definitions(config.repositories[0] ?? "")),
+		);
+		const tasks = path.join(config.configDir, "tasks", "deploy");
+		fs.mkdirSync(tasks, { recursive: true });
+		fs.writeFileSync(
+			path.join(tasks, "release.sh"),
+			`#!/bin/sh\nif [ "$1" = "--devenv-metadata" ]; then\n  [ -n "$FIXTURE_TOKEN" ] && echo leaked\n  echo '{"parameters":[{"name":"environment","type":"enum","required":true,"choices":["dev","prod"],"desc":"Target","flag":"--env"}]}'\n  exit 0\nfi\necho release\n`,
+			{ mode: 0o755 },
+		);
+		fs.writeFileSync(path.join(tasks, "notes.txt"), "not executable", {
+			mode: 0o644,
+		});
+	});
+	const outside = path.join(path.dirname(config.configDir), "existing-task.py");
+	fs.writeFileSync(outside, "#!/usr/bin/env python3\nprint('hi')\n", {
+		mode: 0o755,
+	});
+	process.env.FIXTURE_TOKEN = "must-not-reach-metadata";
+	const host = serve(app),
+		connection = new ClientConnection(host.client),
+		client = new DevEnvClient(new GatewayBackend(connection, () => {}));
+	try {
+		connection.connect();
+		await eventually(
+			async () => connection.state,
+			(state) => state !== null,
+		);
+		const listed = await client.getScripts();
+		expect(listed.scripts).toEqual([
+			expect.objectContaining({
+				name: "deploy",
+				nodeType: "folder",
+				children: [
+					expect.objectContaining({
+						name: "release.sh",
+						relativePath: "deploy/release.sh",
+						nodeType: "script",
+						interpreter: "sh",
+						parameters: [
+							{
+								name: "environment",
+								type: "enum",
+								required: true,
+								description: "Target",
+								choices: ["dev", "prod"],
+								flag: "--env",
+							},
+						],
+					}),
+				],
+			}),
+		]);
+		expect(
+			(await client.getScriptMetadata("deploy/release.sh")).parameters,
+		).toHaveLength(1);
+		const created = await client.createScript("ops/cleanup");
+		expect(created).toMatchObject({
+			operation: "create",
+			relativePath: "ops/cleanup.sh",
+		});
+		expect(fs.statSync(created.absolutePath).mode & 0o111).not.toBe(0);
+		await expect(client.createScript("ops/cleanup")).rejects.toThrow(
+			"already exists",
+		);
+		for (const outsidePath of ["../outside", "/etc/passwd", ".git/hooks/x"])
+			await expect(client.createScript(outsidePath)).rejects.toThrow("tasks/");
+		const linked = await client.linkScript("linked/existing", outside);
+		expect(linked.relativePath).toBe("linked/existing.py");
+		expect(fs.readlinkSync(linked.absolutePath)).toBe(outside);
+		await client.deleteScript("linked/existing.py");
+		expect(fs.existsSync(outside)).toBe(true);
+		await client.addScriptArgsHistory("deploy/release.sh", {
+			environment: "dev",
+		});
+		await client.addScriptArgsHistory("deploy/release.sh", {
+			environment: "prod",
+		});
+		await client.addScriptArgsHistory("deploy/release.sh", {
+			environment: "dev",
+		});
+		expect(
+			(await client.getScriptArgsHistory("deploy/release.sh", 50)).entries,
+		).toEqual([{ environment: "dev" }, { environment: "prod" }]);
+		await client.deleteScript("ops");
+		expect(
+			(await client.getScripts()).scripts.map((node) => node.name),
+		).toEqual(["deploy"]);
+	} finally {
+		delete process.env.FIXTURE_TOKEN;
+		connection.close();
+		await host.stop();
+	}
+}, 20000);

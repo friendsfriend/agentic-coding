@@ -328,6 +328,23 @@ export type Methods = {
 		};
 		output: Data;
 	};
+	"environment.tasks": {
+		input: {
+			operation:
+				| "list"
+				| "metadata"
+				| "create"
+				| "link"
+				| "delete"
+				| "history"
+				| "add-history";
+			path?: string;
+			sourcePath?: string;
+			values?: Data;
+			limit?: number;
+		};
+		output: Data | Data[];
+	};
 	"environment.stats": {
 		input: { app: string };
 		output: {
@@ -463,6 +480,7 @@ export const methods: Method[] = [
 	"environment.stop",
 	"environment.git",
 	"environment.cluster",
+	"environment.tasks",
 	"environment.stats",
 	"environment.logs",
 	"wiki.list",

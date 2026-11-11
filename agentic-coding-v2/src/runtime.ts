@@ -20,6 +20,7 @@ import {
 	OperatorEnvironments,
 } from "./environment/operator.ts";
 import { RepositoryGit } from "./environment/repository-git.ts";
+import { TaskCollection } from "./environment/task-collection.ts";
 import {
 	createEnvironmentTools,
 	environmentInspectionTools,
@@ -64,6 +65,7 @@ export class Runtime {
 	readonly environmentWorkbench: EnvironmentWorkbench;
 	readonly repositoryGit: RepositoryGit;
 	readonly clusterOperator: ClusterOperator;
+	readonly tasks: TaskCollection;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
@@ -80,6 +82,7 @@ export class Runtime {
 			this.environments,
 			() => this.harness,
 		);
+		this.tasks = new TaskCollection(config, () => this.harness);
 		this.clusterOperator = new ClusterOperator(
 			config,
 			this.environments,

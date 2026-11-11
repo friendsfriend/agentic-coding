@@ -302,6 +302,29 @@ export async function dispatch(
 				input.requestId,
 			);
 		}
+		case "environment.tasks": {
+			// Direct developer task collection; the key press is the approval.
+			fields(input, ["operation", "path", "sourcePath", "values", "limit"]);
+			const tasks = app.tasks;
+			switch (text(input.operation, "task operation", 32)) {
+				case "list":
+					return tasks.list() as unknown as Data[];
+				case "metadata":
+					return tasks.metadata(input.path);
+				case "create":
+					return tasks.create(input.path);
+				case "link":
+					return tasks.link(input.path, input.sourcePath);
+				case "delete":
+					return tasks.remove(input.path);
+				case "history":
+					return tasks.history(input.path, input.limit);
+				case "add-history":
+					return tasks.addHistory(input.path, input.values);
+				default:
+					throw new Error("Unsupported task operation");
+			}
+		}
 		case "environment.stats":
 			fields(input, ["app"]);
 			return app.environments.stats(text(input.app, "app", 64)).catch(() => {
