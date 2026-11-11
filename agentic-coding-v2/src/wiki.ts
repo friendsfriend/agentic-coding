@@ -102,7 +102,7 @@ export class Wiki {
 				),
 		};
 	}
-	async preview(input: Data) {
+	private async pageInput(input: Data) {
 		fields(input, ["id", "title", "content", "baseRevision"]);
 		const id = slug(input.id),
 			title = text(input.title, "wiki title", 256),
@@ -116,7 +116,10 @@ export class Wiki {
 			(!previous && Object.keys(state.pages).length >= 64)
 		)
 			throw new Error("Stale wiki revision or page limit");
-		const page = { id, title, content: input.content, baseRevision },
+		return { id, title, content: input.content, baseRevision };
+	}
+	async preview(input: Data) {
+		const page = await this.pageInput(input),
 			snapshot = JSON.stringify(page, null, 2),
 			now = Date.now();
 		for (const [id, candidate] of this.candidates)
@@ -143,28 +146,41 @@ export class Wiki {
 			input.approval !== `approve:${candidate.digest}`
 		)
 			throw new Error("Exact fresh wiki approval required");
-		const page = await this.app.home.commit(async (tx) => {
+		const page = await this.commitPage(candidate.page);
+		this.candidates.delete(candidate.id);
+		return page;
+	}
+	/** The authenticated operator's Save action is the confirmation. Validation
+	 * and the transaction's native revision fence are identical to apply. */
+	async save(input: Data) {
+		return this.commitPage(await this.pageInput(input));
+	}
+	private async commitPage(input: {
+		id: string;
+		title: string;
+		content: string;
+		baseRevision: number;
+	}) {
+		return this.app.home.commit(async (tx) => {
 			const state = await tx.doc(WikiState),
-				previous = state.pages[candidate.page.id];
+				previous = state.pages[input.id];
 			if (
 				(previous ? parse<WikiPage>(previous).revision : 0) !==
-					candidate.page.baseRevision ||
+					input.baseRevision ||
 				(!previous && Object.keys(state.pages).length >= 64)
 			)
 				throw new Error("Stale wiki page revision");
 			const page = {
-				id: candidate.page.id,
-				title: candidate.page.title,
-				content: candidate.page.content,
-				revision: candidate.page.baseRevision + 1,
-				digest: digest(candidate.page.content),
+				id: input.id,
+				title: input.title,
+				content: input.content,
+				revision: input.baseRevision + 1,
+				digest: digest(input.content),
 				updatedAt: Date.now(),
 			};
 			state.pages[page.id] = JSON.stringify(page);
 			return page;
 		}, context);
-		this.candidates.delete(candidate.id);
-		return page;
 	}
 	async comment(input: Data) {
 		fields(input, [

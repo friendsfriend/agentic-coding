@@ -166,3 +166,75 @@ test("native wiki saves exact revision-fenced snapshots and binds one read-only 
 	).toEqual({ taskId });
 	expect((await reopened.snapshot()).tasks).toHaveLength(1);
 });
+
+test("direct operator wiki save is revision-fenced, private to the native doc and does not bypass candidate approval", async () => {
+	const { app } = await fixture();
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.state,
+			(state) => state !== null,
+		);
+		expect(await client.call("wiki.list", {})).toEqual([]);
+		const page = {
+			id: "ops-runbook",
+			title: "Ops runbook",
+			content: "# Runbook\n\nRestart the gateway.\n",
+			baseRevision: 0,
+		};
+		const candidate = await client.call("wiki.preview", page);
+		// An authenticated operator save needs no typed digest…
+		const saved = await client.call("wiki.save", page);
+		expect(saved).toMatchObject({
+			id: "ops-runbook",
+			title: "Ops runbook",
+			revision: 1,
+			content: page.content,
+		});
+		// …while the agent/HTTP candidate path still requires the exact approval.
+		await expect(
+			client.call("wiki.apply", {
+				id: candidate.id,
+				approval: "operator-click",
+			}),
+		).rejects.toThrow("Native operation refused");
+		// A stale editor revision is refused rather than overwriting the save.
+		await expect(client.call("wiki.save", page)).rejects.toThrow(
+			"Native operation refused",
+		);
+		await expect(
+			client.call("wiki.save", {
+				...page,
+				id: "../../README",
+				baseRevision: 1,
+			}),
+		).rejects.toThrow("Native operation refused");
+		await expect(
+			client.call("wiki.save", {
+				...page,
+				content: "x".repeat(32001),
+				baseRevision: 1,
+			}),
+		).rejects.toThrow("Native operation refused");
+		const read = await client.call("wiki.read", { id: "ops-runbook" });
+		expect(read.page.content).toBe(page.content);
+		expect(read.page.revision).toBe(1);
+		expect(await client.call("wiki.list", {})).toHaveLength(1);
+		const updated = await client.call("wiki.save", {
+			...page,
+			title: "Ops runbook v2",
+			content: "# Runbook\n\nRestart the gateway, then the worker.\n",
+			baseRevision: 1,
+		});
+		expect(updated.revision).toBe(2);
+		expect(
+			(await client.call("wiki.read", { id: "ops-runbook" })).page.title,
+		).toBe("Ops runbook v2");
+	} finally {
+		client.close();
+		await host.stop();
+		await app.close();
+	}
+});

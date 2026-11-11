@@ -433,7 +433,8 @@ export function result<M extends Method>(
 				)
 					throw new Error("Invalid wiki comment");
 			});
-		} else if (method === "wiki.apply") page(value, true);
+		} else if (method === "wiki.apply" || method === "wiki.save")
+			page(value, true);
 		else if (method === "wiki.comment") {
 			if (!integer(record(value).taskId, 0))
 				throw new Error("Invalid comment task");

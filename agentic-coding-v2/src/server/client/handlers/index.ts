@@ -393,6 +393,10 @@ export async function dispatch(
 			return app.wiki.preview(input);
 		case "wiki.apply":
 			return app.wiki.apply(input);
+		case "wiki.save":
+			// The developer's authenticated Save action is the confirmation; agents
+			// and HTTP keep the exact preview/apply digest approval.
+			return app.wiki.save(input);
 		case "wiki.comment":
 			return app.wiki.comment(input);
 		case "skill-file.read":

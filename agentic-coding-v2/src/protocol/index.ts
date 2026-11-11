@@ -393,6 +393,15 @@ export type Methods = {
 		output: { id: string; snapshot: string; digest: string; expiresAt: number };
 	};
 	"wiki.apply": { input: { id: string; approval: string }; output: Data };
+	"wiki.save": {
+		input: {
+			id: string;
+			title: string;
+			content: string;
+			baseRevision: number;
+		};
+		output: Data;
+	};
 	"wiki.comment": {
 		input: {
 			pageId: string;
@@ -535,6 +544,7 @@ export const methods: Method[] = [
 	"wiki.list",
 	"wiki.read",
 	"wiki.preview",
+	"wiki.save",
 	"wiki.apply",
 	"wiki.comment",
 	"skill-file.read",

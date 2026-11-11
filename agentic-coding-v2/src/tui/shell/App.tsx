@@ -78,7 +78,7 @@ import {
 } from "../features/skills/SkillFileEditor.tsx";
 import { SkillPanel } from "../features/skills/SkillPanel.tsx";
 import { TaskPanel } from "../features/tasks/TaskPanel.tsx";
-import { WikiPanel } from "../features/wiki/WikiPanel.tsx";
+import { WikiView } from "../features/wiki/WikiView.tsx";
 import { Badge } from "../presentation/components/Badge.tsx";
 import { JumpToLatest } from "../presentation/components/JumpToLatest.tsx";
 import { NotificationOverlay } from "../presentation/components/Notification.tsx";
@@ -173,8 +173,7 @@ const help = [
 	"/provider-attempts | /provider-receipt REQUEST_ID (native journal only)",
 	"/view settings · /settings-preview · /settings-reset",
 	"/settings-apply CANDIDATE_ID approve:DIGEST (explicit file save; restart required)",
-	"/wiki-page ID · /wiki-new · /wiki-reset · /wiki-preview",
-	"/wiki-apply CANDIDATE_ID approve:DIGEST · /wiki-comment (explicit read-only admission)",
+	"/wiki-page ID · open a native wiki note (the Wiki page edits and saves)",
 	"/bookmark NAME · /jump NAME_OR_ID · /forget ID",
 
 	"Unknown commands refuse locally. // sends a literal slash.",
@@ -198,21 +197,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		(LocalChoice & { origin: View }) | null
 	>(null);
 	const [revision, setRevision] = createSignal(0),
-		[wikiData, setWikiData] = createSignal<Data[]>([]),
-		[wikiDocument, setWikiDocument] = createSignal<{
-			page: Data;
-			comments: Data[];
-		} | null>(null),
-		[wikiError, setWikiError] = createSignal<string | null>(null),
-		[wikiDraft, setWikiDraft] = createSignal(""),
-		[wikiCommentDraft, setWikiCommentDraft] = createSignal(""),
-		[wikiMode, setWikiMode] = createSignal<"page" | "comment">("page"),
-		[wikiCandidate, setWikiCandidate] = createSignal<{
-			id: string;
-			snapshot: string;
-			digest: string;
-			expiresAt: number;
-		} | null>(null),
 		[skillData, setSkillData] = createSignal<SkillSummary[]>([]),
 		[skillDocument, setSkillDocument] = createSignal<SkillDocument | null>(
 			null,
@@ -1369,82 +1353,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					);
 			});
 	});
-	let wikiEpoch = 0;
-	const wikiTarget = createMemo(() =>
-		page() === "wiki" ? current().resource : null,
-	);
-	createEffect(() => {
-		const selectedPage = page(),
-			connected = status() === "connected",
-			target = wikiTarget();
-		refreshRevision();
-		const epoch = ++wikiEpoch;
-		onCleanup(() => {
-			wikiEpoch++;
-		});
-		setWikiCandidate(null);
-		if (selectedPage !== "wiki") {
-			setWikiDocument(null);
-			return;
-		}
-		if (!connected) {
-			setWikiError("Disconnected; wiki document is cached");
-			setSettingsEditing(false);
-			return;
-		}
-		setWikiDocument(null);
-		setWikiError("Reading native wiki…");
-		void client
-			.call("wiki.list", {})
-			.then(async (pages) => {
-				if (epoch !== wikiEpoch || status() !== "connected") return;
-				setWikiData(pages);
-				if (target) {
-					if (!pages.some((page) => page.id === target))
-						throw new Error(
-							"Saved wiki page is unavailable; its draft remains unsent",
-						);
-					const document = await client.call("wiki.read", { id: target });
-					if (epoch !== wikiEpoch || status() !== "connected") return;
-					if (document.page.id !== target)
-						throw new Error("Wrong native wiki page identity");
-					setWikiDocument(document);
-				}
-				if (!wikiDraft())
-					setWikiDraft(
-						JSON.stringify(
-							{
-								id: "new-page",
-								title: "New page",
-								content: "",
-								baseRevision: 0,
-							},
-							null,
-							2,
-						),
-					);
-				if (!wikiCommentDraft())
-					setWikiCommentDraft(
-						JSON.stringify(
-							{
-								pageId: "",
-								pageRevision: 0,
-								comment: "",
-								profile: "",
-								repository: "",
-								baseRef: "",
-								requestId: crypto.randomUUID(),
-							},
-							null,
-							2,
-						),
-					);
-				setWikiError(null);
-			})
-			.catch((error: Error) => {
-				if (epoch === wikiEpoch) setWikiError(error.message);
-			});
-	});
 	let settingsEpoch = 0;
 	const saveSettings = async () => {
 		const document = settingsDocument(),
@@ -1530,7 +1438,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		setSettingsCandidate(null);
 		if (selectedPage !== "settings") {
 			setSettingsThemeOpen(false);
-			if (selectedPage !== "wiki") setSettingsEditing(false);
+			setSettingsEditing(false);
 			return;
 		}
 		if (!connected) {
@@ -2033,8 +1941,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			"/bookmark NAME",
 			"/jump VIEWPOINT_ID",
 			"/settings-preview",
-			"/wiki-preview",
-			"/wiki-new",
 		].map((command) => ({
 			command,
 			description:
@@ -2962,127 +2868,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						throw new Error("Supply an exact native wiki page identity");
 					clear();
 					go("wiki", args);
-				} else if (
-					[
-						"wiki-new",
-						"wiki-reset",
-						"wiki-preview",
-						"wiki-apply",
-						"wiki-comment",
-					].includes(command)
-				) {
-					if (origin.page !== "wiki" || wikiError() || status() !== "connected")
-						throw new Error("Open wiki and refresh the native document first");
-					if (command === "wiki-apply") {
-						const candidate = wikiCandidate();
-						if (
-							!candidate ||
-							words.length !== 2 ||
-							identity !== candidate.id ||
-							comments !== `approve:${candidate.digest}` ||
-							candidate.expiresAt <= Date.now()
-						)
-							throw new Error(
-								"A fresh displayed wiki snapshot and manually typed exact approve:DIGEST are required",
-							);
-						setWikiCandidate(null);
-						const result = await client.call("wiki.apply", {
-							id: candidate.id,
-							approval: comments,
-						});
-						clear();
-						if (navigation.current === origin) go("wiki", String(result.id));
-						setNotice(
-							"Native wiki page saved only; no files, models or providers changed",
-						);
-					} else {
-						if (args)
-							throw new Error("Wiki editor commands accept no arguments");
-						if (command === "wiki-new") {
-							setWikiCandidate(null);
-							setWikiDraft(
-								JSON.stringify(
-									{
-										id: "new-page",
-										title: "New page",
-										content: "",
-										baseRevision: 0,
-									},
-									null,
-									2,
-								),
-							);
-							setWikiMode("page");
-							clear();
-						} else if (command === "wiki-reset") {
-							const page = wikiDocument()?.page;
-							if (!page)
-								throw new Error("Select and read an existing native wiki page");
-							setWikiCandidate(null);
-							setWikiDraft(
-								JSON.stringify(
-									{
-										id: page.id,
-										title: page.title,
-										content: page.content,
-										baseRevision: page.revision,
-									},
-									null,
-									2,
-								),
-							);
-							setWikiCommentDraft(
-								JSON.stringify(
-									{
-										pageId: page.id,
-										pageRevision: page.revision,
-										comment: "",
-										profile: "",
-										repository: "",
-										baseRef: "",
-										requestId: crypto.randomUUID(),
-									},
-									null,
-									2,
-								),
-							);
-							clear();
-						} else if (command === "wiki-preview") {
-							const draft = wikiDraft(),
-								epoch = wikiEpoch;
-							setWikiCandidate(null);
-							const candidate = await client.call(
-								"wiki.preview",
-								JSON.parse(draft),
-							);
-							if (
-								navigation.current !== origin ||
-								epoch !== wikiEpoch ||
-								wikiDraft() !== draft ||
-								status() !== "connected"
-							)
-								throw new Error(
-									"Wiki selection/draft changed; prepare a fresh snapshot",
-								);
-							setWikiCandidate(candidate);
-							clear();
-							setNotice(
-								"Native wiki candidate only; inspect the exact snapshot before confirmation",
-							);
-						} else {
-							const draft = wikiCommentDraft();
-							const result = await client.call(
-								"wiki.comment",
-								JSON.parse(draft),
-							);
-							clear();
-							if (navigation.current === origin && wikiCommentDraft() === draft)
-								setRefreshRevision((value) => value + 1);
-							setNotice(
-								`Read-only native comment task #${result.taskId} admitted; admission is not completion or page modification. Keep the request identity if the outcome is uncertain.`,
-							);
-						}
-					}
 				} else if (command === "settings-reset") {
 					if (
 						origin.page !== "settings" ||
@@ -4609,55 +4394,26 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									/>
 								</Show>
 								<Show when={current().page === "wiki"}>
-									<WikiPanel
-										catalog={wikiData()}
+									<WikiView
+										client={client}
+										resource={current().resource}
 										tasks={state()?.tasks ?? []}
-										selectedId={current().resource}
-										fresh={snapshotFresh()}
-										rows={wikiData().filter((row) =>
-											JSON.stringify(row)
-												.toLowerCase()
-												.includes(current().filter.toLowerCase()),
+										repositories={state()?.repositories ?? []}
+										orchestratorProfile={String(
+											settingsDocument()?.settings.orchestratorProfile ?? "",
 										)}
-										document={wikiDocument()}
-										candidate={wikiCandidate()}
-										error={wikiError()}
 										connected={status() === "connected"}
-										pageDraft={wikiDraft()}
-										commentDraft={wikiCommentDraft()}
-										mode={wikiMode()}
-										changePage={(value) => {
-											if (value !== wikiDraft()) {
-												setWikiDraft(value);
-												setWikiCandidate(null);
-											}
-										}}
-										changeComment={setWikiCommentDraft}
-										editing={
-											settingsEditing() && contentFocused() && !helpOpen()
+										active={() =>
+											contentFocused() && !helpOpen() && !paletteOpen()
 										}
-										edit={(mode) => {
-											setWikiMode(mode);
-											navigation.current.focus = "content";
-											setSettingsEditing(true);
-											update();
-										}}
-										leave={() => setSettingsEditing(false)}
-										select={(id) => go("wiki", id)}
-										prepare={prepareCommand}
-										openTask={(id) => {
-											if (
-												Number.isSafeInteger(id) &&
-												id > 0 &&
-												state()?.tasks.filter((task) => task.id === id)
-													.length === 1
-											)
-												go("tasks", String(id));
-											else
-												setNotice(
-													"Comment task is not in the observed native catalog; refresh first",
-												);
-										}}
+										open={(id) => go("wiki", id)}
+										close={() => go("wiki")}
+										changed={() => setRefreshRevision((value) => value + 1)}
+										notify={(message, error) =>
+											error ? reportError(message, "Wiki") : setNotice(message)
+										}
+										catalog={setWikiCatalog}
+										openTask={(id) => go("tasks", String(id))}
 									/>
 								</Show>
 								<Show
@@ -4826,7 +4582,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						<Show
 							when={
 								current().page !== "environments" &&
-								current().page !== "settings"
+								current().page !== "settings" &&
+								current().page !== "wiki"
 							}
 						>
 							<SessionPrompt
@@ -4992,6 +4749,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					keybinds={[
 						...((settingsThemeOpen() ||
 							(current().page === "settings" && settingsCatalog().length > 0) ||
+							(current().page === "wiki" && wikiCatalog().length > 0) ||
 							(current().page === "environments" && environmentModal())) &&
 						!paletteOpen()
 							? []
@@ -5018,7 +4776,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 													: []),
 												...(contentFocused() &&
 												current().page !== "environments" &&
-												current().page !== "settings"
+												current().page !== "settings" &&
+												current().page !== "wiki"
 													? promptFooterBindings()
 													: []),
 												...(current().focus === "sessions"
@@ -5039,6 +4798,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						!paletteOpen() &&
 						!settingsThemeOpen()
 							? settingsCatalog()
+									.flatMap((section) => section.keybinds)
+									.filter((binding) => !binding.standard)
+							: []),
+						...(current().page === "wiki" && contentFocused() && !paletteOpen()
+							? wikiCatalog()
 									.flatMap((section) => section.keybinds)
 									.filter((binding) => !binding.standard)
 							: []),
@@ -5067,6 +4831,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						close={() => setHelpOpen(false)}
 						sections={[
 							...(current().page === "settings" ? settingsCatalog() : []),
+							...(current().page === "wiki" ? wikiCatalog() : []),
 							...(current().page === "environments"
 								? environmentCatalog()
 								: []),

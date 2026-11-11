@@ -564,3 +564,39 @@ operator environment functional tests pass.
   and unchanged running authority. No renderer/mount/snapshot/navigation tests
   or real provider/cluster/engine runs. Visual parity is still manual; Step 5
   and full runnable parity remain open.
+
+## Progress: v1 Wiki list, note reader and review comments
+
+- The Wiki page is the copied v1 `WikiView` interaction
+  (`src/tui/otel/views/WikiView.tsx`) adapted to the native wiki in
+  `src/tui/features/wiki/WikiView.tsx` plus the copied deterministic tree
+  (`tree.ts`, from v1 `buildWikiTree`/`flattenWikiTree`, index/log reserved):
+  a tree list with `j/k`, Enter to open or expand a directory, `w` for a new
+  page, `r` to reload; an open note renders its markdown through the shared
+  viewer with title/id/revision/digest, its review comments, and `e`, `c`,
+  `n`/`N`, `r`, Esc exactly as v1 assigned them. The shell footer and `?` help
+  read the wiki's live catalog; the Wiki page has no conversation prompt (v1
+  had none) so its keys are never eaten.
+- Editing is form/list based with v1's keys: h/l focus panes, j/k move
+  fields/choices, Space selects, Tab moves fields, Enter validates and saves,
+  Esc leaves the field or cancels; a text field opens a bounded textarea
+  (Enter inserts a line, Ctrl+S saves, Esc leaves the text). Page identity,
+  title and content are validated before the call.
+- `wiki.save` is the authenticated operator boundary: the developer's Save
+  activation is the confirmation. It reuses the native slug/title/content/
+  revision validation and the same revision-fenced pi-durable transaction as
+  `wiki.apply`, so stale editors are refused instead of overwritten; agents and
+  HTTP keep the exact `wiki.preview`/`wiki.apply` digest approval. A review
+  comment still admits one read-only `wiki-comment` task with a fresh request
+  identity and its usual human review; admission is not completion and never
+  modifies the page.
+- Removed the previous v2 wiki JSON drafts, `/wiki-new`, `/wiki-reset`,
+  `/wiki-preview`, `/wiki-apply` and `/wiki-comment` prefill commands and the
+  old `WikiPanel`, so there is one wiki surface and no duplicate draft state.
+  `/wiki-page ID` still opens a note. Saved pages are re-read from the server;
+  uncertain saves are never replayed.
+- Verification: unfiltered type-check and lint clean; 2/2 wiki functional tests
+  passed (the new one covers direct saves, candidate approval still required,
+  stale revisions, traversal-shaped ids, the 32000-byte bound and updates);
+  TUI bundles. No renderer/mount/snapshot/navigation tests and no real runs.
+  Visual parity remains manual; Step 5 and full runnable parity stay open.
