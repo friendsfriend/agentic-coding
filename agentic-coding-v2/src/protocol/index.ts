@@ -295,6 +295,25 @@ export type Methods = {
 		input: { runId: string; revision: number; requestId: string };
 		output: { stopped: true; owner: number };
 	};
+	"environment.git": {
+		input: {
+			operation:
+				| "status"
+				| "branches"
+				| "worktrees"
+				| "fetch"
+				| "pull"
+				| "push"
+				| "checkout"
+				| "create-branch"
+				| "create-worktree"
+				| "remove-worktree"
+				| "switch-worktree";
+			app?: string;
+			branch?: string;
+		};
+		output: Data | Data[];
+	};
 	"environment.logs": { input: { app: string }; output: string };
 	"wiki.list": { input: Data; output: Data[] };
 	"wiki.read": {
@@ -418,6 +437,7 @@ export const methods: Method[] = [
 	"environment.apply",
 	"environment.action",
 	"environment.stop",
+	"environment.git",
 	"environment.logs",
 	"wiki.list",
 	"wiki.read",

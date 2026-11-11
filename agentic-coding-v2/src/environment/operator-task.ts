@@ -38,6 +38,8 @@ type Input = {
 	 * Never settable by agents or the HTTP API. */
 	interactive?: true;
 	repository: string;
+	/** Server-derived active linked worktree of a direct UI action. */
+	checkout?: string;
 	baseCommit: string;
 };
 type ActiveCheckpoint<P extends string> = {
@@ -98,7 +100,7 @@ export function createOperatorTask(config: Config, manager: Environments) {
 							Number(task.id),
 							task.input.baseCommit,
 						)
-					: task.input.repository;
+					: (task.input.checkout ?? task.input.repository);
 				const owner = operatorOwner(Number(task.id), task.input, workspace);
 				const plans = operatorInfrastructurePlans(
 					(
@@ -190,7 +192,11 @@ export function createOperatorTask(config: Config, manager: Environments) {
 				if (
 					task.input.request.workspaceMode !== "worktree" &&
 					(
-						await git(task.input.repository, ["rev-parse", "--verify", "HEAD"])
+						await git(task.input.checkout ?? task.input.repository, [
+							"rev-parse",
+							"--verify",
+							"HEAD",
+						])
 					).trim() !== task.input.baseCommit
 				)
 					return runtime.commit(

@@ -174,3 +174,33 @@ operator environment functional tests pass.
   suites: 7 tests passed (93 assertions). Unfiltered type-check and Biome clean.
 - Shared UI remains in `src/tui/ui`; environment integration remains in
   `src/tui/features/environments`. No real app or cluster was started.
+
+## Native git controls (v1 `f`/`p`/`P`/`g`/`W`)
+
+- New authenticated gateway method `environment.git`, implemented by
+  `src/environment/repository-git.ts` (`RepositoryGit`), covering the original
+  operations: status, branches, worktrees, fetch, pull, push, checkout, create
+  branch, and create/switch/remove worktree. Only configured apps/libraries in
+  authorized repositories; `git()` keeps hooks, filter drivers, fsmonitor and
+  prompts disabled.
+- Safety over v1: pull is `fetch` + `merge --ff-only` (v1 hard-reset onto the
+  remote, which could discard local commits); worktree removal is never forced;
+  existing directories are never adopted. Checkout refuses uncommitted changes.
+  HEAD-changing operations refuse while a native run uses that checkout. One
+  mutation per repository at a time; no automatic retry. A key press in the
+  TUI is the approval, so neither agents nor HTTP get this surface.
+- The active linked worktree is durable native state (`v2.repository-git`).
+  Direct UI runs/builds/tests execute in it, as in v1: the server derives the
+  workspace from the authorized repository and the fingerprint includes it.
+  A missing active worktree is refused rather than substituted.
+- Gateway refusals: a new `Refusal` type (`src/server/refusal.ts`) lets curated,
+  single-line, redacted diagnostics (for example git's own first error line)
+  reach the original error dialog. Every other backend error stays masked.
+- The original table now shows the native branch, `+a ~c -r`/`✓` git status
+  and the linked-worktree marker, and `localDirectoryPath` follows the active
+  worktree, so editor/lazygit launches open the right checkout.
+- Functional test: authenticated gateway against a local bare origin. It
+  covers fetch/branches/pull, refusal on dirty checkout, worktree creation and
+  activation, a direct build executing in the linked worktree, the
+  active-worktree removal refusal, switch back and removal, create-branch and
+  push to origin, and an option-injection refusal. Operator suite: 6 passed.

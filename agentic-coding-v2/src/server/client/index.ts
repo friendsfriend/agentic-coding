@@ -7,6 +7,7 @@ import {
 	request,
 } from "../../protocol/index.ts";
 import type { Runtime } from "../../runtime.ts";
+import { Refusal } from "../refusal.ts";
 import { dispatch } from "./handlers/index.ts";
 import { clientSession, clientSnapshot } from "./handlers/sessions.ts";
 import { type SessionWatch, watchSession } from "./watch.ts";
@@ -202,14 +203,16 @@ export function clientGateway(app: Runtime) {
 							id: value.id,
 							value: result,
 						});
-				} catch {
+				} catch (error) {
 					send(socket, {
 						version: 1,
 						type: "error",
 						id: value.id,
 						code: "refused",
 						message:
-							"Native operation refused; refresh state and inspect the requested operation",
+							error instanceof Refusal
+								? error.message
+								: "Native operation refused; refresh state and inspect the requested operation",
 					});
 				} finally {
 					socket.data.pending.delete(value.id);

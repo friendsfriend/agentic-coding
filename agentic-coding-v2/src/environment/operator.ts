@@ -42,6 +42,7 @@ export class OperatorEnvironments {
 		home: Conversation,
 		request: OperatorAction,
 		interactive = false,
+		checkout?: string,
 	) {
 		if (
 			Object.keys(request).some(
@@ -110,7 +111,9 @@ export class OperatorEnvironments {
 		)
 			throw new Error("Environment apps must share one authorized repository");
 		const fingerprint = digest(
-				JSON.stringify(interactive ? { request, interactive } : request),
+				JSON.stringify(
+					interactive ? { request, interactive, checkout } : request,
+				),
 			),
 			key = `environment:${request.requestId}`;
 		const previous = (raw: string | undefined) => {
@@ -126,8 +129,12 @@ export class OperatorEnvironments {
 			(await harness.snapshot(Catalog, background))?.launches[key],
 		);
 		if (saved !== undefined) return saved;
+		// A direct UI action runs in the app's active linked worktree (v1 parity);
+		// the server derives it from the authorized repository, never the client.
+		const workspace =
+			checkout && request.workspaceMode !== "worktree" ? checkout : repository;
 		const baseCommit = (
-			await git(repository, [
+			await git(workspace, [
 				"rev-parse",
 				"--verify",
 				"--end-of-options",
@@ -137,7 +144,7 @@ export class OperatorEnvironments {
 		// Validate selection before admitting a native task or creating its worktree.
 		operatorInfrastructurePlans(
 			await this.manager.resolvePlans(
-				{ policy: "workspace-write", repository, workspace: repository },
+				{ policy: "workspace-write", repository, workspace },
 				request.apps,
 				request.action,
 				request,
@@ -155,6 +162,7 @@ export class OperatorEnvironments {
 				baseCommit,
 				createdAt: Date.now(),
 				...(interactive ? { interactive: true as const } : {}),
+				...(workspace !== repository ? { checkout: workspace } : {}),
 			};
 			const id = Number(
 				await tx.createTask(this.definition, input, {

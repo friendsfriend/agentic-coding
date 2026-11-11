@@ -456,13 +456,101 @@ test("the restored v1 environments client runs, reads and stops a native run thr
 			async () => (await client.getApps())[0]?.runtimeStatus?.state,
 			(state) => state !== "running" && state !== "starting",
 		);
-		await expect(client.gitPull("api")).rejects.toThrow("not available");
+		await expect(client.gitPull("api")).rejects.toThrow("git fetch: fatal");
 		expect(
 			(await app.snapshot()).reviews.every(
 				(review) => review.state !== "pending",
 			),
 		).toBe(true);
 		expect(errors).toEqual([]);
+	} finally {
+		connection.close();
+		await host.stop();
+	}
+});
+
+test("restored v1 git controls act on the authorized checkout through the gateway; direct runs follow the active worktree", async () => {
+	const { app, config } = await fixture(false, (config) => {
+		config.profiles = [];
+		fs.mkdirSync(config.configDir);
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify(definitions(config.repositories[0] ?? "")),
+		);
+	});
+	const repository = config.repositories[0] ?? "",
+		origin = `${repository}-origin.git`;
+	await git(path.dirname(repository), ["init", "--bare", "-b", "main", origin]);
+	await git(repository, ["remote", "add", "origin", origin]);
+	await git(repository, ["push", "origin", "main"]);
+	const host = serve(app),
+		connection = new ClientConnection(host.client),
+		client = new DevEnvClient(new GatewayBackend(connection, () => {}));
+	try {
+		connection.connect();
+		await eventually(
+			async () => connection.state,
+			(state) => state !== null,
+		);
+		expect((await client.getApps())[0]).toMatchObject({
+			ident: "api",
+			branch: "main",
+			gitStatus: "✓",
+		});
+		await client.gitFetch("api");
+		expect(await client.getBranches("api")).toMatchObject({
+			currentBranch: "main",
+			localBranches: ["main"],
+			remoteBranches: ["origin/main"],
+		});
+		// Pull fast-forwards only; uncommitted work blocks a branch switch.
+		await client.gitPull("api");
+		fs.writeFileSync(path.join(repository, "dirty.txt"), "local\n");
+		await expect(client.gitCheckout("api", "feature")).rejects.toThrow(
+			"uncommitted",
+		);
+		fs.rmSync(path.join(repository, "dirty.txt"));
+		await client.createWorktree("api", "feature");
+		const worktrees = await client.listWorktrees("api");
+		expect(
+			worktrees.map((item) => [item.branch, item.isMain, item.active]),
+		).toEqual([
+			["main", true, false],
+			["feature", false, true],
+		]);
+		const linked = worktrees[1]?.path ?? "";
+		expect((await client.getApps())[0]).toMatchObject({
+			branch: "feature",
+			activeWorktree: "feature",
+			localDirectoryPath: linked,
+		});
+		await expect(client.removeWorktree("api", "feature")).rejects.toThrow(
+			"active or primary",
+		);
+		const build = (await client.getActionDefinitions("api")).actions.find(
+			(definition) => definition.type === "build",
+		);
+		if (!build) throw new Error("Missing build definition");
+		await client.startActionRun(build.id);
+		const run = await eventually(
+			async () =>
+				(await app.snapshot()).environments.runs.find(
+					(item) => item.plan.app === "api" && item.plan.action === "build",
+				),
+			(item) => item?.state === "exited",
+		);
+		expect(run?.plan.workspace).toBe(linked);
+		await client.switchWorktree("api", "main");
+		await client.removeWorktree("api", "feature");
+		expect(fs.existsSync(linked)).toBe(false);
+		await client.gitCreateBranch("api", "topic");
+		await client.gitPush("api");
+		expect((await git(origin, ["branch", "--list", "topic"])).trim()).toContain(
+			"topic",
+		);
+		await expect(client.gitCheckout("api", "--force")).rejects.toThrow(
+			"Invalid branch",
+		);
 	} finally {
 		connection.close();
 		await host.stop();

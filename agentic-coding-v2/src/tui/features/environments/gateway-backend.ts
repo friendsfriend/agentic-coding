@@ -117,7 +117,18 @@ const runStatus = (run: Run): ActionRunStatus =>
 			? "failed"
 			: "active";
 
+type GitRow = {
+	app: string;
+	path: string;
+	branch: string;
+	status: string;
+	activeWorktree: string | null;
+	mainWorktreeBranch: string;
+};
+
 export class GatewayBackend implements DevEnvBackend {
+	/** Last native Git observation per app, refreshed with every status read. */
+	private git = new Map<string, GitRow>();
 	/** Output already published per native run, for incremental action events. */
 	private published = new Map<string, number>();
 	private announced = new Map<string, ActionRunStatus>();
@@ -152,17 +163,46 @@ export class GatewayBackend implements DevEnvBackend {
 			)[0];
 	}
 
+	private async refreshGit() {
+		try {
+			const rows = (await this.client.call("environment.git", {
+				operation: "status",
+			})) as GitRow[];
+			this.git = new Map(rows.map((row) => [row.app, row]));
+		} catch {
+			// Git status is decoration; the table keeps its last observation.
+		}
+	}
+	private gitCall(operation: string, app: string, branch?: string) {
+		return this.client
+			.call("environment.git", {
+				operation: operation as "fetch",
+				app,
+				...(branch ? { branch } : {}),
+			})
+			.then(async (value) => {
+				await this.refreshGit();
+				return value;
+			});
+	}
+
 	private app(project: Project): App {
 		const run = this.latest(project.id);
 		const runtimeStatus = runtimeOf(run);
+		const git = this.git.get(project.id);
 		return {
 			ident: project.id,
 			resourceId: project.id,
 			resourceKind: project.kind,
 			displayName: project.id,
-			localDirectoryPath: project.repository,
+			localDirectoryPath: git?.path ?? project.repository,
 			repositoryPath: project.repository,
-			branch: "",
+			branch: git?.branch ?? "",
+			...(git ? { gitStatus: git.status } : {}),
+			...(git?.activeWorktree ? { activeWorktree: git.activeWorktree } : {}),
+			...(git?.mainWorktreeBranch
+				? { mainWorktreeBranch: git.mainWorktreeBranch }
+				: {}),
 			appType: project.kind === "library" ? "LIB" : "APP",
 			containerBaseName: project.id,
 			...(runtimeStatus ? { runtimeStatus } : {}),
@@ -319,6 +359,9 @@ export class GatewayBackend implements DevEnvBackend {
 					ident: app.ident,
 					resourceId: app.resourceId,
 					resourceKind: app.resourceKind,
+					branch: app.branch,
+					...(app.gitStatus ? { gitStatus: app.gitStatus } : {}),
+					...(app.activeWorktree ? { activeWorktree: app.activeWorktree } : {}),
 					runtimeStatus: app.runtimeStatus ?? null,
 					runTargetInfo: app.runTargetInfo ?? null,
 					status: app.status,
@@ -568,7 +611,7 @@ export class GatewayBackend implements DevEnvBackend {
 				});
 			}
 			case "getApps":
-				return Promise.resolve(
+				return this.refreshGit().then(() =>
 					this.projects()
 						.filter((project) => project.kind !== "infrastructure")
 						.map((project) => this.app(project)),
@@ -580,7 +623,46 @@ export class GatewayBackend implements DevEnvBackend {
 						.map((project) => this.infra(project)),
 				);
 			case "getStatus":
-				return Promise.resolve(this.status());
+				return this.refreshGit().then(() => this.status());
+			case "getGitInfo":
+				return this.refreshGit().then(() => ({
+					branch: this.git.get(arg(0))?.branch ?? "",
+					status: this.git.get(arg(0))?.status ?? "",
+				}));
+			case "gitPull":
+				return this.gitCall("pull", arg(0)).then(() => undefined);
+			case "gitPush":
+				return this.gitCall("push", arg(0)).then(() => undefined);
+			case "gitFetch":
+				return this.gitCall("fetch", arg(0)).then(() => undefined);
+			case "gitCheckout":
+				return this.gitCall("checkout", arg(0), arg(1)).then(() => undefined);
+			case "gitCreateBranch":
+				return this.gitCall("create-branch", arg(0), arg(1)).then(
+					() => undefined,
+				);
+			case "createWorktree":
+				return this.gitCall("create-worktree", arg(0), arg(1)).then(
+					() => undefined,
+				);
+			case "switchWorktree":
+				return this.gitCall("switch-worktree", arg(0), arg(1)).then(
+					() => undefined,
+				);
+			case "removeWorktree":
+				return this.gitCall("remove-worktree", arg(0), arg(1)).then(
+					() => undefined,
+				);
+			case "getBranches":
+				return this.client.call("environment.git", {
+					operation: "branches",
+					app: arg(0),
+				});
+			case "listWorktrees":
+				return this.client.call("environment.git", {
+					operation: "worktrees",
+					app: arg(0),
+				});
 			case "getScripts":
 				return Promise.resolve({ scripts: [] });
 			case "getProviders":

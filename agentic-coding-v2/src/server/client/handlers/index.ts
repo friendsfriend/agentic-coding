@@ -1,6 +1,10 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { text } from "../../../config.ts";
 import type { OperatorAction } from "../../../environment/operator.ts";
+import {
+	type GitOperation,
+	gitOperations,
+} from "../../../environment/repository-git.ts";
 import type {
 	EnvironmentInspection,
 	EnvironmentIntention,
@@ -261,6 +265,23 @@ export async function dispatch(
 				revision: integer(input.revision),
 				requestId: text(input.requestId, "request identity", 256),
 			});
+		case "environment.git": {
+			fields(input, ["operation", "app", "branch"]);
+			const operation = text(input.operation, "Git operation", 32);
+			if (operation === "status") return app.repositoryGit.status();
+			if (operation === "branches")
+				return app.repositoryGit.branches(input.app);
+			if (operation === "worktrees")
+				return app.repositoryGit.worktrees(input.app);
+			if (!gitOperations.includes(operation as GitOperation))
+				throw new Error("Unsupported Git operation");
+			// A direct developer action in the authenticated TUI is its approval.
+			return app.repositoryGit.mutate(
+				operation as GitOperation,
+				input.app,
+				input.branch,
+			);
+		}
 		case "environment.logs":
 			fields(input, ["app"]);
 			return app.environments.logs(text(input.app, "app", 64));

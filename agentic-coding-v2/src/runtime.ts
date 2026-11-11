@@ -18,6 +18,7 @@ import {
 	type OperatorAction,
 	OperatorEnvironments,
 } from "./environment/operator.ts";
+import { RepositoryGit } from "./environment/repository-git.ts";
 import {
 	createEnvironmentTools,
 	environmentInspectionTools,
@@ -27,6 +28,7 @@ import { createOrchestrator, orchestratorPrompt } from "./orchestrator.ts";
 import { projectState } from "./projection.ts";
 import { ProviderActions } from "./provider-actions.ts";
 import { Scheduler, type ScheduleSlot } from "./scheduler.ts";
+import { Refusal } from "./server/refusal.ts";
 import { Settings } from "./settings.ts";
 import { SkillFiles } from "./skill-files.ts";
 import { createSkillTask } from "./skill-task.ts";
@@ -59,6 +61,7 @@ export class Runtime {
 	readonly environments: Environments;
 	readonly operatorEnvironments: OperatorEnvironments;
 	readonly environmentWorkbench: EnvironmentWorkbench;
+	readonly repositoryGit: RepositoryGit;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
@@ -70,6 +73,11 @@ export class Runtime {
 		this.skillFiles = new SkillFiles(config);
 		this.environments = new Environments(config);
 		this.environmentWorkbench = new EnvironmentWorkbench(this);
+		this.repositoryGit = new RepositoryGit(
+			config,
+			this.environments,
+			() => this.harness,
+		);
 		this.operatorEnvironments = new OperatorEnvironments(
 			config,
 			this.environments,
@@ -191,6 +199,9 @@ export class Runtime {
 			this.home,
 			request,
 			interactive,
+			interactive
+				? await this.repositoryGit.workspaceFor(request.apps)
+				: undefined,
 		);
 	}
 	/** Direct developer stop: exact live revision, operator-owned only. Revokes
@@ -211,13 +222,13 @@ export class Runtime {
 				]
 			: undefined;
 		if (!run || !raw || decode<TaskInfo>(raw).kind !== "operator-environment")
-			throw new Error("Only a native operator-owned run can be stopped here");
+			throw new Refusal("Only a native operator-owned run can be stopped here");
 		const receipt = await this.environments.operator.revoke({
 			...input,
 			reason: "Developer stopped the run from the environments UI",
 		});
 		if (receipt.state !== "completed" || receipt.inspectionRequired)
-			throw new Error(
+			throw new Refusal(
 				"Native cleanup is uncertain; inspect resources before restarting",
 			);
 		await this.cancel(receipt.owner);
