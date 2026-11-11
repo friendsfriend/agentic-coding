@@ -1,4 +1,5 @@
 import type { MetricData } from "../../../../telemetry/contracts.ts";
+import { metricStreamId } from "../../../../telemetry/metric-streams.ts";
 
 export type MetricSortKey = "name" | "type" | "service" | "unit";
 
@@ -53,10 +54,18 @@ export class MetricStore {
 		return this.filtered;
 	}
 
-	getStream(name: string, serviceName: string): MetricData | undefined {
-		return this.filtered.find(
-			(m) => m.name === name && m.serviceName === serviceName,
+	getStream(
+		name: string,
+		serviceName: string,
+		streamId?: string,
+	): MetricData | undefined {
+		const matches = this.metrics.filter(
+			(metric) =>
+				metric.name === name &&
+				metric.serviceName === serviceName &&
+				(!streamId || metricStreamId(metric) === streamId),
 		);
+		return matches.length === 1 ? matches[0] : undefined;
 	}
 
 	aggregate(stream: MetricData): {

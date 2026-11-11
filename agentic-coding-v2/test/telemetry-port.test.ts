@@ -894,3 +894,147 @@ test("correlated log trace references resolve wire IDs without guessing workspac
 		await host.stop();
 	}
 });
+
+test("metric history merges compatible batches chronologically, replaces retransmitted samples and preserves stream identities across reopen", async () => {
+	const initial = await fixture(true);
+	let app = initial.app,
+		host = serve(app),
+		client = new ClientConnection(host.client);
+	const earlier = "1790000000000000100",
+		later = "1790000000000000200";
+	const post = async (
+		time: string,
+		value: number,
+		options: {
+			unit?: string;
+			instance?: string;
+			service?: string;
+			version?: string;
+			type?: "gauge" | "sum";
+			reverse?: boolean;
+			route?: string;
+			description?: string;
+		} = {},
+	) => {
+		const resource = [
+			{
+				key: "service.name",
+				value: { stringValue: options.service ?? "history-service" },
+			},
+			{ key: "instance", value: { stringValue: options.instance ?? "one" } },
+		];
+		const attributes = [
+			{ key: "route", value: { stringValue: options.route ?? "first" } },
+			{ key: "zone", value: { stringValue: "synthetic" } },
+		];
+		if (options.reverse) {
+			resource.reverse();
+			attributes.reverse();
+		}
+		const response = await fetch(new URL("/v1/metrics", host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({
+				resourceMetrics: [
+					{
+						resource: { attributes: resource },
+						scopeMetrics: [
+							{
+								scope: {
+									name: "synthetic-scope",
+									version: options.version ?? "1",
+								},
+								metrics: [
+									{
+										name: "history.value",
+										unit: options.unit ?? "ms",
+										description: options.description ?? "initial description",
+										[options.type ?? "gauge"]: {
+											dataPoints: [
+												{
+													startTimeUnixNano: "0",
+													timeUnixNano: time,
+													asDouble: value,
+													attributes,
+												},
+											],
+										},
+									},
+								],
+							},
+						],
+					},
+				],
+			}),
+		});
+		expect(response.status).toBe(200);
+	};
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		await post(later, 20);
+		await post(earlier, 10, { reverse: true });
+		await post(later, 21, {
+			reverse: true,
+			description: "corrected description",
+		});
+		await post(later, 30, {
+			route: "second",
+			description: "latest description",
+		});
+		await post(later, 100, { unit: "s" });
+		await post(later, 200, { instance: "two" });
+		await post(later, 300, { version: "2" });
+		await post(later, 400, { type: "sum" });
+		await post(later, 500, { service: "other-service" });
+		const read = async () =>
+			(await client.call("telemetry.read", { signal: "metrics" }))
+				.value as import("../src/telemetry/contracts.ts").MetricData[];
+		const retained = await read();
+		expect(retained).toHaveLength(6);
+		const stream = retained.find(
+			(metric) =>
+				metric.serviceName === "history-service" &&
+				metric.type === "gauge" &&
+				metric.unit === "ms" &&
+				metric.scope.version === "1" &&
+				metric.resource.attributes.some(
+					(attribute) =>
+						attribute.key === "instance" && attribute.value === "one",
+				),
+		);
+		expect(stream?.description).toBe("latest description");
+		expect(stream?.dataPoints.map((point) => point.timeUnixNano)).toEqual([
+			earlier,
+			later,
+			later,
+		]);
+		expect(stream?.dataPoints.map((point) => point.value)).toEqual([
+			10, 21, 30,
+		]);
+		expect(stream?.dataPoints[2]?.attributes).toContainEqual({
+			key: "route",
+			value: "second",
+		});
+		// HTTP and native clients see the same coherent stream history.
+		const response = await fetch(new URL("/api/telemetry/metrics", host.url), {
+			headers: { authorization: `Bearer ${host.client.token}` },
+		});
+		expect(await response.json()).toEqual(retained);
+		client.close();
+		await host.stop();
+		await app.close();
+		app = await initial.open();
+		host = serve(app);
+		client = new ClientConnection(host.client);
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		expect(await read()).toEqual(retained);
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});

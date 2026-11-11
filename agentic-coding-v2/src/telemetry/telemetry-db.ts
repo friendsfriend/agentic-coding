@@ -24,6 +24,7 @@ import {
 	type TraceSummaryRow,
 } from "./contracts.ts";
 
+import { mergeMetricBatches } from "./metric-streams.ts";
 import {
 	jsonlLines,
 	parseTelemetryJsonlFrom,
@@ -737,7 +738,9 @@ export class TraceDb {
 			: (this.db
 					.prepare("SELECT metric FROM metrics ORDER BY id DESC LIMIT 5000")
 					.all() as MetricRow[]);
-		return rows.map((r) => JSON.parse(r.metric) as MetricData);
+		return mergeMetricBatches(
+			rows.map((r) => JSON.parse(r.metric) as MetricData),
+		);
 	}
 
 	loadLogs(changeId?: string): LogData[] {

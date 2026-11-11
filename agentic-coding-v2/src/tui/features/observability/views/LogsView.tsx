@@ -20,6 +20,8 @@ const severityColor = (sev: string) => {
 
 export function LogsView(props: {
 	store: LogStore;
+	searchMode?: () => boolean;
+	searchQuery?: () => string;
 	selectedIndex: () => number;
 	onSelectIndex: (index: number) => void;
 	onOpen: (index: number) => void;
@@ -31,7 +33,11 @@ export function LogsView(props: {
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
-			<SearchHeader>
+			<SearchHeader
+				searchMode={props.searchMode}
+				searchQuery={props.searchQuery}
+				resultCount={() => props.store.filteredCount_}
+			>
 				<text fg={uiColors.textMuted}>({props.store.filteredCount_})</text>
 			</SearchHeader>
 			{logs().length > 0 && (

@@ -15,15 +15,17 @@ export function MetricDetailView(props: {
 	store: MetricStore;
 	name: string;
 	serviceName: string;
+	streamId?: string;
 }) {
 	const stream = createMemo(() =>
-		props.store.getStream(props.name, props.serviceName),
+		props.store.getStream(props.name, props.serviceName, props.streamId),
 	);
 	const agg = createMemo(() => {
 		const current = stream();
 		return current ? props.store.aggregate(current) : undefined;
 	});
-	const buckets = () => stream()?.dataPoints[0]?.bucketCounts ?? [];
+	const latest = () => stream()?.dataPoints.at(-1);
+	const buckets = () => latest()?.bucketCounts ?? [];
 	const maxCount = createMemo(() => Math.max(...buckets(), 0));
 	// A sample's value is mutable payload. Timestamp/series coordinates own its
 	// row; canonical attributes avoid resets when a snapshot changes their order.
@@ -82,8 +84,7 @@ export function MetricDetailView(props: {
 			{/* Histogram bar chart (if histogram) */}
 			<Show
 				when={
-					stream()?.type === "histogram" &&
-					stream()?.dataPoints[0]?.bucketCounts !== undefined
+					stream()?.type === "histogram" && latest()?.bucketCounts !== undefined
 				}
 			>
 				<box height={4} flexDirection="column">
@@ -104,9 +105,7 @@ export function MetricDetailView(props: {
 										? Math.max(1, Math.round((count() / maxCount()) * 3))
 										: 1;
 								const label = () =>
-									stream()?.dataPoints[0]?.explicitBounds?.[index]?.toFixed(
-										0,
-									) ?? "";
+									latest()?.explicitBounds?.[index]?.toFixed(0) ?? "";
 								return (
 									<box
 										style={{
@@ -114,8 +113,7 @@ export function MetricDetailView(props: {
 											alignItems: "center",
 											width: Math.max(
 												3,
-												60 /
-													(stream()?.dataPoints[0]?.bucketCounts?.length ?? 1),
+												60 / (latest()?.bucketCounts?.length ?? 1),
 											),
 										}}
 									>

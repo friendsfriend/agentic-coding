@@ -833,3 +833,34 @@ operator environment functional tests pass.
   `bun run build` pass. No real exporters, credentials or apps were used.
 - Visual/runtime parity acceptance remains with the developer; parity is not
   archived by these implementation or synthetic verification results.
+
+## Observability follow-up: coherent live metric history
+
+- Native/HTTP metric reads now project retained batches into compatible stream
+  histories instead of rendering a duplicate row for each scrape/datagram.
+  Stream identity includes service, name, type, unit, instrumentation scope
+  and canonical resource attributes. Different resources/scopes/types/units
+  never merge merely because their names happen to match.
+- Point coordinates include start/end timestamps and canonical point labels.
+  Newest-ingested corrections/retransmissions replace the same coordinates in
+  the read projection; independently labelled points survive. Samples are
+  ordered by nanosecond time, not ingest order. Raw stored batches remain
+  append-only and use the existing 5000-record read window/retention policy;
+  values are not silently converted into rates or delta/cumulative totals.
+- Metric list row keys and both pointer/keyboard detail navigation carry the
+  complete stream identity. Detail lookup refuses a name/service ambiguity
+  rather than switching to another unit, scope or resource. Histogram details
+  use the latest retained sample's buckets instead of the oldest sample.
+- Metrics/logs now pass their existing query/edit state into the copied shared
+  SearchHeader, making loaded-record search visible instead of silently
+  filtering behind a count-only header. No prompt or new renderer was added.
+- Metric ingest validates resource/scope/attribute shapes before persistence
+  so incompatible input cannot poison the stream identity projection.
+- One synthetic authenticated-boundary scenario verifies chronological
+  history, retransmitted/corrected coordinates, canonical attribute ordering,
+  distinct labels/resources/scopes/units/types/services, matching HTTP/native
+  reads and persistence across reopen. Eighteen focused telemetry/gateway
+  tests pass (296 assertions), plus unfiltered type-check, zero-diagnostic
+  lint, official Solid-enabled build and diff whitespace checks. No real
+  applications, credentials, providers or user configuration were used.
+- Overall visual/runtime parity remains open and unarchived.

@@ -1,4 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
+import { metricStreamId } from "../../../../telemetry/metric-streams.ts";
 import {
 	createKeyedItems,
 	HighlightedText,
@@ -21,20 +22,24 @@ const metricColor = (type: string) =>
 
 export function MetricsView(props: {
 	store: MetricStore;
+	searchMode?: () => boolean;
+	searchQuery?: () => string;
 	selectedIndex: () => number;
 	onSelectIndex: (index: number) => void;
-	onOpen: (name: string, serviceName: string) => void;
+	onOpen: (name: string, serviceName: string, streamId: string) => void;
 }) {
 	/** One holder per list: a row the store replaced still completes its press. */
 	const gesture: RowGestureState = {};
 	const streams = createMemo(() => props.store.getStreams());
-	const streamSlots = createKeyedItems(streams, (stream) =>
-		JSON.stringify([stream.serviceName, stream.name]),
-	);
+	const streamSlots = createKeyedItems(streams, metricStreamId);
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
-			<SearchHeader>
+			<SearchHeader
+				searchMode={props.searchMode}
+				searchQuery={props.searchQuery}
+				resultCount={() => props.store.filteredCount_}
+			>
 				<text fg={uiColors.textMuted}>({props.store.filteredCount_})</text>
 			</SearchHeader>
 			<Show
@@ -62,7 +67,11 @@ export function MetricsView(props: {
 								onSelect: (row: number) => props.onSelectIndex(row),
 								onActivate: (row: number) => {
 									props.onSelectIndex(row);
-									props.onOpen(stream().name, stream().serviceName);
+									props.onOpen(
+										stream().name,
+										stream().serviceName,
+										metricStreamId(stream()),
+									);
 								},
 							});
 							const hover = useHover(mouse.onMouseOut);

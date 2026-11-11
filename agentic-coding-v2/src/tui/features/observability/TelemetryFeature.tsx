@@ -14,6 +14,7 @@ import type {
 	TraceSummaryPage,
 	TreeNode,
 } from "../../../telemetry/contracts.ts";
+import { metricStreamId } from "../../../telemetry/metric-streams.ts";
 import type { ClientConnection } from "../../client/connection.ts";
 import type { KeybindSection } from "../../ui/index.ts";
 import { HomeView } from "../home/HomeView.tsx";
@@ -99,7 +100,7 @@ export function TelemetryFeature(props: {
 	const [sortIndex, setSortIndex] = createSignal(0);
 	const [trace, setTrace] = createSignal("");
 	const [span, setSpan] = createSignal<TreeNode>();
-	const [metric, setMetric] = createSignal({ name: "", service: "" });
+	const [metric, setMetric] = createSignal({ name: "", service: "", id: "" });
 	const [service, setService] = createSignal<string>();
 	const [selectedLog, setSelectedLog] = createSignal<LogData>();
 	const detailLogs = createMemo(
@@ -319,7 +320,11 @@ export function TelemetryFeature(props: {
 			case "metrics": {
 				const entry = metrics().getStreams()[index()];
 				if (entry) {
-					setMetric({ name: entry.name, service: entry.serviceName });
+					setMetric({
+						name: entry.name,
+						service: entry.serviceName,
+						id: metricStreamId(entry),
+					});
 					navigate("metric-detail");
 				}
 				break;
@@ -812,11 +817,13 @@ export function TelemetryFeature(props: {
 			</Show>
 			<Show when={surface() === "metrics"}>
 				<MetricsView
+					searchMode={searching}
+					searchQuery={query}
 					store={metrics()}
 					selectedIndex={index}
 					onSelectIndex={setIndex}
-					onOpen={(name, serviceName) => {
-						setMetric({ name, service: serviceName });
+					onOpen={(name, serviceName, id) => {
+						setMetric({ name, service: serviceName, id });
 						navigate("metric-detail");
 					}}
 				/>
@@ -826,10 +833,13 @@ export function TelemetryFeature(props: {
 					store={metrics()}
 					name={metric().name}
 					serviceName={metric().service}
+					streamId={metric().id}
 				/>
 			</Show>
 			<Show when={surface() === "logs"}>
 				<LogsView
+					searchMode={searching}
+					searchQuery={query}
 					store={logs()}
 					selectedIndex={index}
 					onSelectIndex={setIndex}

@@ -38,6 +38,15 @@ function assertSpans(spans: SpanData[]) {
 		)
 			throw new Error("Invalid trace record");
 }
+const validAttributes = (value: unknown) =>
+	Array.isArray(value) &&
+	value.every(
+		(item) =>
+			item &&
+			typeof item === "object" &&
+			typeof item.key === "string" &&
+			typeof item.value === "string",
+	);
 function assertMetrics(metrics: MetricData[]) {
 	for (const metric of metrics)
 		if (
@@ -45,12 +54,17 @@ function assertMetrics(metrics: MetricData[]) {
 			!validText(metric.serviceName) ||
 			!validText(metric.unit) ||
 			!validText(metric.description) ||
+			!["gauge", "sum", "histogram"].includes(metric.type) ||
+			!validText(metric.scope?.name) ||
+			!validText(metric.scope?.version) ||
+			!validAttributes(metric.resource?.attributes) ||
 			!Array.isArray(metric.dataPoints) ||
 			metric.dataPoints.some(
 				(point) =>
 					!validNanos(point.timeUnixNano) ||
 					!validNanos(point.startTimeUnixNano) ||
 					!Number.isFinite(point.value) ||
+					!validAttributes(point.attributes) ||
 					point.bucketCounts?.some((count) => !Number.isFinite(count)) ||
 					point.explicitBounds?.some((bound) => !Number.isFinite(bound)),
 			)
