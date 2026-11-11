@@ -4,6 +4,7 @@ import type {
 	UiWorkspaceLayout,
 } from "../../protocol/viewpoints.ts";
 export type Page =
+	| "home"
 	| "opencode"
 	| "pi"
 	| "pi-durable"

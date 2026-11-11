@@ -120,6 +120,7 @@ export function SchedulesView(props: {
 	}>();
 	const [busy, setBusy] = createSignal(false);
 	let disposed = false;
+	let area: { plainText?: string } | null = null;
 	const ready = () => !disposed && props.connected && props.fresh && !busy();
 	const report = (value: unknown) =>
 		props.notify(value instanceof Error ? value.message : String(value), true);
@@ -614,14 +615,18 @@ export function SchedulesView(props: {
 										Esc leaves the text
 									</text>
 									<textarea
+										ref={(value) => {
+											area = value as unknown as {
+												plainText?: string;
+											} | null;
+										}}
 										initialValue={values()[field()?.key ?? ""] ?? ""}
 										focused={true}
 										height={8}
 										width="100%"
 										keyBindings={textareaBindings(editorKeybinds)}
-										onContentChange={(event) => {
-											const value =
-												typeof event === "string" ? event : event.plainText;
+										onContentChange={() => {
+											const value = area?.plainText;
 											if (
 												typeof value === "string" &&
 												value !== values()[field()?.key ?? ""]

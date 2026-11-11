@@ -87,6 +87,7 @@ export function WikiView(props: {
 	const [editing, setEditing] = createSignal(false);
 	let disposed = false,
 		generation = 0;
+	let area: { plainText?: string } | null = null;
 	const ready = () => !disposed && props.connected && !busy() && !error();
 	const report = (value: unknown) =>
 		props.notify(value instanceof Error ? value.message : String(value), true);
@@ -632,14 +633,18 @@ export function WikiView(props: {
 										leaves the text
 									</text>
 									<textarea
+										ref={(value) => {
+											area = value as unknown as {
+												plainText?: string;
+											} | null;
+										}}
 										initialValue={values()[active().key] ?? ""}
 										focused={true}
 										height={12}
 										width="100%"
 										keyBindings={textareaBindings(editorKeybinds)}
-										onContentChange={(event) => {
-											const value =
-												typeof event === "string" ? event : event.plainText;
+										onContentChange={() => {
+											const value = area?.plainText;
 											if (
 												typeof value === "string" &&
 												value !== values()[active().key]

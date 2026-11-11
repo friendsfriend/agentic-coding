@@ -51,6 +51,7 @@ import {
 	startPi,
 } from "../features/agents/terminal-agent-process.ts";
 import { EnvironmentsFeature } from "../features/environments/EnvironmentsFeature.tsx";
+import { type Destination, HomeView } from "../features/home/HomeView.tsx";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
@@ -134,6 +135,7 @@ import { Navigation, type Page, type View, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
 
 const pages: [Page, string][] = [
+	["home", "Home"],
 	["tasks", "Tasks & reviews"],
 	["environments", "Environments"],
 	["providers", "Providers"],
@@ -144,6 +146,19 @@ const pages: [Page, string][] = [
 	["wiki", "Wiki"],
 	["settings", "Settings"],
 ];
+// One line per destination, shown on Home (v1 described every destination).
+const PAGE_DESCRIPTIONS: Partial<Record<Page, string>> = {
+	home: "Destinations",
+	tasks: "Admitted native tasks, their reviews and evidence",
+	environments: "Run, build and inspect native application environments",
+	providers: "Authenticated source hosts and their repositories",
+	profiles: "Agent profiles and the models they bundle",
+	skills: "Loaded skill instructions and their files",
+	observability: "Native operation journals: http, query, waits, references",
+	schedules: "Recurring native skill runs and their occurrences",
+	wiki: "Repository knowledge notes",
+	settings: "Application settings, agent profiles and appearance",
+};
 const help = [
 	"Plain input: send to the selected native conversation",
 	"/help · /view tasks|environments|providers|schedules",
@@ -256,6 +271,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	>([]);
 	const [environmentModal, setEnvironmentModal] = createSignal(false);
 	const [settingsCatalog, setSettingsCatalog] = createSignal<
+		import("../ui/index.ts").KeybindSection[]
+	>([]);
+	const [wikiCatalog, setWikiCatalog] = createSignal<
+		import("../ui/index.ts").KeybindSection[]
+	>([]);
+	const [schedulesCatalog, setSchedulesCatalog] = createSignal<
+		import("../ui/index.ts").KeybindSection[]
+	>([]);
+	const [homeCatalog, setHomeCatalog] = createSignal<
 		import("../ui/index.ts").KeybindSection[]
 	>([]);
 	// Existing helpOpen guards are shell interaction fences, including the two
@@ -1290,7 +1314,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		setProviderCandidate(null);
 		setEvidence(null);
 		setUsageWindow(null);
-		setWikiCandidate(null);
 		setSettingsCandidate(null);
 		setSettingsEditing(false);
 		if (navigation.current.page === "settings")
@@ -1587,7 +1610,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				if (epoch === providerEpoch) setProviderError(error.message);
 			});
 	});
+	// v1 Home: the shell's own destinations, each a page of its own. The agent
+	// pages are sidebar pins, not destinations, exactly as in v1.
+	const homeDestinations = (): Destination[] =>
+		pages
+			.filter(([page]) => page !== "home")
+			.map(([page, title]) => ({
+				id: page,
+				label: title,
+				description: PAGE_DESCRIPTIONS[page] ?? "",
+			}));
 	const formPage = () =>
+		current().page === "home" ||
 		current().page === "environments" ||
 		current().page === "settings" ||
 		current().page === "wiki" ||
@@ -4060,6 +4094,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										/>
 									</Show>
 								</Show>
+								<Show when={current().page === "home"}>
+									<HomeView
+										destinations={homeDestinations()}
+										active={() =>
+											contentFocused() && !helpOpen() && !paletteOpen()
+										}
+										selected={current().selection}
+										select={(index) => {
+											navigation.current.selection = index;
+											update();
+										}}
+										open={(id) => go(id as Page)}
+										catalog={setHomeCatalog}
+									/>
+								</Show>
 								<Show when={current().page === "pi-durable"}>
 									<SessionExplorer
 										sessions={(state()?.sessions ?? []).filter((session) =>
@@ -4780,6 +4829,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							(current().page === "wiki" && wikiCatalog().length > 0) ||
 							(current().page === "schedules" &&
 								schedulesCatalog().length > 0) ||
+							(current().page === "home" && homeCatalog().length > 0) ||
 							(current().page === "environments" && environmentModal())) &&
 						!paletteOpen()
 							? []
@@ -4831,6 +4881,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									.flatMap((section) => section.keybinds)
 									.filter((binding) => !binding.standard)
 							: []),
+						...(current().page === "home" && contentFocused() && !paletteOpen()
+							? homeCatalog()
+									.flatMap((section) => section.keybinds)
+									.filter((binding) => !binding.standard)
+							: []),
 						...(current().page === "wiki" && contentFocused() && !paletteOpen()
 							? wikiCatalog()
 									.flatMap((section) => section.keybinds)
@@ -4861,6 +4916,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						close={() => setHelpOpen(false)}
 						sections={[
 							...(current().page === "settings" ? settingsCatalog() : []),
+							...(current().page === "home" ? homeCatalog() : []),
 							...(current().page === "wiki" ? wikiCatalog() : []),
 							...(current().page === "schedules" ? schedulesCatalog() : []),
 							...(current().page === "environments"

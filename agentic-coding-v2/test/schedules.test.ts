@@ -36,7 +36,12 @@ test("authenticated schedule create, pause and delete are revision-fenced operat
 		);
 		// The developer's form save is the approval: no candidate digest, and no
 		// task is admitted until an occurrence is due.
-		const schedule = await client.call("schedule.create", created);
+		const schedule = (await client.call("schedule.create", created)) as {
+			id: string;
+			revision: number;
+			state: string;
+			lateGraceMs: number | null;
+		};
 		expect(schedule).toMatchObject({
 			id: created.id,
 			state: "enabled",
