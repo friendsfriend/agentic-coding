@@ -314,6 +314,20 @@ export type Methods = {
 		};
 		output: Data | Data[];
 	};
+	"environment.cluster": {
+		input: {
+			operation:
+				| "status"
+				| "operations"
+				| "create"
+				| "delete"
+				| "recreate"
+				| "export-kubeconfig";
+			cluster?: string;
+			requestId?: string;
+		};
+		output: Data;
+	};
 	"environment.stats": {
 		input: { app: string };
 		output: {
@@ -448,6 +462,7 @@ export const methods: Method[] = [
 	"environment.action",
 	"environment.stop",
 	"environment.git",
+	"environment.cluster",
 	"environment.stats",
 	"environment.logs",
 	"wiki.list",

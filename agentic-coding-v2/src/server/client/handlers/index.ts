@@ -1,5 +1,9 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { text } from "../../../config.ts";
+import {
+	type ClusterOperation,
+	clusterOperations,
+} from "../../../environment/cluster-operator.ts";
 import type { OperatorAction } from "../../../environment/operator.ts";
 import {
 	type GitOperation,
@@ -281,6 +285,21 @@ export async function dispatch(
 				operation as GitOperation,
 				input.app,
 				input.branch,
+			);
+		}
+		case "environment.cluster": {
+			fields(input, ["operation", "cluster", "requestId"]);
+			const operation = text(input.operation, "cluster operation", 32);
+			if (operation === "status")
+				return app.clusterOperator.status(input.cluster);
+			if (operation === "operations") return app.clusterOperator.receipts();
+			if (!clusterOperations.includes(operation as ClusterOperation))
+				throw new Error("Unsupported cluster operation");
+			// A direct developer action in the authenticated TUI is its approval.
+			return app.clusterOperator.start(
+				operation as ClusterOperation,
+				input.cluster,
+				input.requestId,
 			);
 		}
 		case "environment.stats":

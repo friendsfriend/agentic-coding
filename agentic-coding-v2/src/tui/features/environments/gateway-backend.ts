@@ -68,6 +68,16 @@ type Run = {
 	};
 };
 
+type ClusterReceipt = {
+	id: string;
+	cluster: string;
+	operation: string;
+	state: "issued" | "completed" | "failed";
+	createdAt: number;
+	output?: string;
+	error?: string;
+};
+
 const unavailable = (what: string) =>
 	new Error(
 		`${what} is not available in agentic-coding-v2 yet. The native gateway refused nothing; this operation has no native backend.`,
@@ -133,6 +143,7 @@ export class GatewayBackend implements DevEnvBackend {
 	/** Output already published per native run, for incremental action events. */
 	private published = new Map<string, number>();
 	private announced = new Map<string, ActionRunStatus>();
+	private clusterRuns = new Map<string, ClusterReceipt>();
 	constructor(
 		private readonly client: ClientConnection,
 		private readonly showError: (title: string, message: string) => void,
@@ -330,6 +341,7 @@ export class GatewayBackend implements DevEnvBackend {
 
 	private async start(id: string) {
 		const { app, action, target } = parseDefinition(id);
+		if (app === "local") return this.clusterAction(action, target);
 		if (action === "stop") return this.stop(app);
 		if (action === "restart") return this.restart(app);
 		const native = action === "start" ? "run" : action;
@@ -489,33 +501,170 @@ export class GatewayBackend implements DevEnvBackend {
 		});
 	}
 
-	private cluster(): KubernetesClusterStatus {
-		const cluster = list<{ id: string; context: string; provision?: Data }>(
+	/** Native kind cluster status (read-only; never creates or deletes). */
+	private async cluster(): Promise<KubernetesClusterStatus> {
+		try {
+			return (await this.client.call("environment.cluster", {
+				operation: "status",
+			})) as unknown as KubernetesClusterStatus;
+		} catch (error) {
+			const cluster = list<{ id: string; context: string; provision?: Data }>(
+				this.environments().clusters,
+			).find((item) => item.id === "devenv");
+			return {
+				clusterName: cluster?.id ?? "devenv",
+				contextName: cluster?.context ?? "kind-devenv",
+				provider: String(cluster?.provision?.provider ?? "docker"),
+				exists: false,
+				reachable: false,
+				state: "unreachable",
+				nodes: [],
+				namespaces: [],
+				pods: {
+					total: 0,
+					running: 0,
+					pending: 0,
+					succeeded: 0,
+					failed: 0,
+					unknown: 0,
+				},
+				releases: [],
+				warnings: [error instanceof Error ? error.message : String(error)],
+				collectedAt: new Date().toISOString(),
+			};
+		}
+	}
+	/** v1's `local` Kubernetes cluster actions, one per lifecycle operation. */
+	private clusterDefinitions(): ActionDefinitionList {
+		const cluster = list<{ id: string; provision?: Data }>(
 			this.environments().clusters,
-		).find((item) => item.id === "devenv");
+		).find((item) => item.provision);
+		if (!cluster) return { version: 1, actions: [] };
+		const provider = String(cluster.provision?.provider ?? "docker");
 		return {
-			clusterName: cluster?.id ?? "devenv",
-			contextName: cluster?.context ?? "kind-devenv",
-			provider: String(cluster?.provision?.provider ?? "docker"),
-			exists: false,
-			reachable: false,
-			state: "missing",
-			nodes: [],
-			namespaces: [],
-			pods: {
-				total: 0,
-				running: 0,
-				pending: 0,
-				succeeded: 0,
-				failed: 0,
-				unknown: 0,
-			},
-			releases: [],
-			warnings: [
-				"agentic-coding-v2 creates the devenv kind cluster on the first Kubernetes run; it is never deleted here.",
-			],
-			collectedAt: new Date().toISOString(),
+			version: 1,
+			actions: (
+				[
+					["create", "Create cluster"],
+					["delete", "Delete cluster"],
+					["recreate", "Recreate cluster"],
+					["export-kubeconfig", "Export kubeconfig"],
+				] as const
+			).map(([type, label]) => ({
+				id: definitionId("local", type, cluster.id),
+				owner: { kind: "kubernetes", id: "local" },
+				type,
+				runtime: provider,
+				label,
+				inputs: [],
+				availability: { available: true },
+				root: {
+					id: `${cluster.id}:${type}`,
+					kind: "process",
+					label,
+				},
+			})) as ActionDefinition[],
 		};
+	}
+	private async clusterAction(operation: string, cluster = "devenv") {
+		const receipt = (await this.client.call("environment.cluster", {
+			operation: operation as "create",
+			cluster,
+			requestId: `tui-cluster-${crypto.randomUUID()}`,
+		})) as unknown as ClusterReceipt;
+		this.clusterRuns.set(receipt.id, receipt);
+	}
+	/** Cluster operation receipts as v1 action-run events. */
+	private async clusterEvents(): Promise<ServerEvent[]> {
+		if (![...this.clusterRuns.values()].some((r) => r.state === "issued"))
+			return [];
+		const receipts = (await this.client
+			.call("environment.cluster", { operation: "operations" })
+			.catch(() => [])) as unknown as ClusterReceipt[];
+		const events: ServerEvent[] = [],
+			at = new Date().toISOString();
+		for (const receipt of receipts) {
+			const known = this.clusterRuns.get(receipt.id);
+			if (!known) continue;
+			const step = `${receipt.id}:process`;
+			if (!this.announced.has(receipt.id)) {
+				events.push({
+					type: "action.started",
+					properties: {
+						run: {
+							id: receipt.id,
+							appIdent: "local",
+							action: receipt.operation,
+							kind: "kubernetes",
+							title: `${receipt.operation} kind cluster ${receipt.cluster}`,
+							status: "active",
+							startedAt: new Date(receipt.createdAt).toISOString(),
+							steps: [
+								{
+									id: step,
+									label: `kind ${receipt.operation}`,
+									status: "active",
+									commands: [],
+								},
+							],
+						} satisfies ActionRun,
+					} as unknown as Data,
+					timestamp: at,
+				});
+				this.announced.set(receipt.id, "active");
+			}
+			if (receipt.state === "issued") continue;
+			this.clusterRuns.set(receipt.id, receipt);
+			events.push(
+				{
+					type: "action.command.output",
+					properties: {
+						runId: receipt.id,
+						stepId: step,
+						commandId: `${step}:0`,
+						command: receipt.operation,
+						stream: "stdout",
+						output: `${receipt.output ?? receipt.error ?? ""}\n`,
+					},
+					timestamp: at,
+				},
+				{
+					type:
+						receipt.state === "completed"
+							? "action.step.completed"
+							: "action.step.failed",
+					properties: {
+						runId: receipt.id,
+						stepId: step,
+						error: receipt.error ?? "",
+					},
+					timestamp: at,
+				},
+				{
+					type: "action.completed",
+					properties: {
+						runId: receipt.id,
+						status: receipt.state === "completed" ? "completed" : "failed",
+						appIdent: "local",
+						resourceKind: "kubernetes",
+					},
+					timestamp: at,
+				},
+			);
+			if (receipt.operation === "delete" && receipt.state === "completed")
+				events.push({
+					type: "kubernetes.cluster.deleted",
+					properties: {},
+					timestamp: at,
+				});
+			events.push({
+				type: "kubernetes.cluster.refreshed",
+				properties: (await this.cluster()) as unknown as Data,
+				timestamp: at,
+			});
+			this.announced.set(receipt.id, receipt.state);
+		}
+		return events;
 	}
 
 	/** Native runs as v1 action-run events: started, output, completed. */
@@ -645,6 +794,7 @@ export class GatewayBackend implements DevEnvBackend {
 			for (const run of live)
 				for (const event of this.actionEvents(run, outputs.get(run.id)))
 					yield event;
+			for (const event of await this.clusterEvents()) yield event;
 			if (key !== previous) {
 				previous = key;
 				for (const status of this.status())
@@ -766,13 +916,17 @@ export class GatewayBackend implements DevEnvBackend {
 			case "getAppSlots":
 				return Promise.resolve(this.slots());
 			case "getActionDefinitions":
-				return Promise.resolve().then(() => this.definitions(arg(0)));
+				return Promise.resolve().then(() =>
+					arg(0) === "local"
+						? this.clusterDefinitions()
+						: this.definitions(arg(0)),
+				);
 			case "getActionDefinition":
 				return Promise.resolve().then(() => {
 					const { app } = parseDefinition(arg(0));
-					const found = this.definitions(app).actions.find(
-						(item) => item.id === arg(0),
-					);
+					const found = (
+						app === "local" ? this.clusterDefinitions() : this.definitions(app)
+					).actions.find((item) => item.id === arg(0));
 					if (!found) throw new Error(`Unknown action ${arg(0)}`);
 					return found;
 				});
@@ -876,7 +1030,15 @@ export class GatewayBackend implements DevEnvBackend {
 				return this.domainEvents(args[0] as AbortSignal | undefined);
 			case "getKubernetesClusterStatus":
 			case "refreshKubernetesCluster":
-				return Promise.resolve(this.cluster());
+				return this.cluster();
+			case "createKubernetesCluster":
+				return this.clusterAction("create");
+			case "deleteKubernetesCluster":
+				return this.clusterAction("delete");
+			case "recreateKubernetesCluster":
+				return this.clusterAction("recreate");
+			case "exportKubernetesKubeconfig":
+				return this.clusterAction("export-kubeconfig");
 			case "reportActionEvent":
 				return Promise.resolve();
 			case "getPiSessions":

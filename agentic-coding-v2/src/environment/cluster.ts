@@ -234,14 +234,18 @@ export function prepareCluster(
 		throw new Error(
 			"Cluster inspection requires this repository's workspace-write task and separate human approval",
 		);
+	return clusterRequest(config, cluster, owner.workspace);
+}
+/** The connection request for one configured cluster; callers own authority. */
+export function clusterRequest(
+	config: Config,
+	cluster: Cluster,
+	workspace: string,
+): ClusterRequest {
 	const provision = cluster.provision;
 	if (provision)
-		return {
-			cluster: { ...cluster, provision },
-			workspace: owner.workspace,
-			provision,
-		};
-	return inspectKubeconfig(config, cluster, owner.workspace);
+		return { cluster: { ...cluster, provision }, workspace, provision };
+	return inspectKubeconfig(config, cluster, workspace);
 }
 function inspectKubeconfig(
 	config: Config,
@@ -360,17 +364,7 @@ export async function connectCluster(
 		directory = contained(root, path.join("clusters", cluster.id));
 	// One kind lifecycle call per cluster at a time: concurrent first starts
 	// must not both issue `kind create cluster`.
-	const previous = provisioning.get(cluster.id) ?? Promise.resolve();
-	let release = () => {};
-	const chain = previous.then(
-		() =>
-			new Promise<void>((resolve) => {
-				release = resolve;
-			}),
-	);
-	provisioning.set(cluster.id, chain);
-	await previous;
-	try {
+	return clusterLifecycle(cluster.id, async () => {
 		signal?.throwIfAborted();
 		const search = request.cluster.environment.PATH ?? process.env.PATH ?? "";
 		for (const tool of ["kind", provision.provider])
@@ -411,16 +405,39 @@ export async function connectCluster(
 			{ ...cluster, kubeconfig },
 			request.workspace,
 		);
+	});
+}
+/** Serializes every kind lifecycle effect (create, delete) per cluster. */
+export async function clusterLifecycle<T>(
+	id: string,
+	effect: () => Promise<T>,
+): Promise<T> {
+	const previous = provisioning.get(id) ?? Promise.resolve();
+	let release = () => {};
+	const chain = previous.then(
+		() =>
+			new Promise<void>((resolve) => {
+				release = resolve;
+			}),
+	);
+	provisioning.set(id, chain);
+	await previous;
+	try {
+		return await effect();
 	} finally {
 		release();
-		if (provisioning.get(cluster.id) === undefined)
-			provisioning.delete(cluster.id);
+		if (provisioning.get(id) === chain) provisioning.delete(id);
 	}
 }
-function kindCommands(
+/** A kind lifecycle effect (a run's first start or an operator action) is live. */
+export const clusterBusy = (id: string) => provisioning.has(id);
+/** kind client for one provisioned cluster. kind writes credentials only to
+ * the private export file unless the developer explicitly exports them. */
+export function kindCommands(
 	config: Config,
 	request: ProvisionedCluster,
 	directory: string,
+	kubeconfig = path.join(directory, "kind-export.yaml"),
 ) {
 	const plan: Plan = {
 		id: request.cluster.id,
@@ -436,7 +453,7 @@ function kindCommands(
 			...request.cluster.environment,
 			// kind writes its own kubeconfig here instead of the developer's
 			// ~/.kube/config; the native client never reads this file.
-			KUBECONFIG: path.join(directory, "kind-export.yaml"),
+			KUBECONFIG: kubeconfig,
 			...(request.provision.provider === "podman"
 				? { KIND_EXPERIMENTAL_PROVIDER: "podman" }
 				: {}),

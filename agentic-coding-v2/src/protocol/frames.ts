@@ -676,6 +676,7 @@ export function result<M extends Method>(
 		method === "environment.inspect" ||
 		method === "environment.apply" ||
 		method === "environment.git" ||
+		method === "environment.cluster" ||
 		method === "environment.stats"
 	) {
 		if (Array.isArray(value)) list(value);

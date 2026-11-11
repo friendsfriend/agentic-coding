@@ -225,3 +225,45 @@ operator environment functional tests pass.
   `stats --no-stream <64-hex owned id>` argv, and stop removing the container.
   Container + operator suites: 30/31 pass on a combined run; the remaining
   timing-sensitive pre-existing test passes alone (3/3).
+
+## Kubernetes tab: native kind cluster lifecycle (v1 `s`/`S`/`R`/`r`/`e`)
+
+- New authenticated gateway method `environment.cluster`, backed by
+  `src/environment/cluster-operator.ts` (`ClusterOperator`):
+  - `status`: v1's read model (kind list, `kubectl version`, nodes, pods by
+    phase/namespace, Helm releases, kind node CPU/memory) over the same
+    validated private connection a run uses (loopback HTTPS, config-contained
+    credential files, private Helm home). Unavailable observations are
+    warnings, never confirmed absence. Status never creates, imports or
+    deletes anything.
+  - `create` (create-if-missing plus private kubeconfig import; the same
+    serialized path a run's first start takes), `delete`, `recreate` and
+    `export-kubeconfig` (v1's `kind export kubeconfig` into the developer's
+    KUBECONFIG / `~/.kube/config`).
+- Direct key press = approval (decision 1a); agents and HTTP have no access.
+  Kind lifecycle effects are serialized per cluster (`clusterLifecycle`)
+  together with a run's first start. Only one operator operation runs at a
+  time. Delete/recreate refuse while any native Kubernetes run on that cluster
+  is not exited, and re-check under the lock. Delete also removes the private
+  credential files for the deleted cluster.
+- `kind create` can take minutes, longer than the gateway's 15 s call bound, so
+  admission is async. Each operation is first journaled durably in
+  `v2.cluster-operations` with the request id; a duplicate request id returns
+  the same receipt. An issued receipt that this process no longer runs is
+  reported as interrupted/uncertain, and nothing is retried. Failures carry the
+  redacted one-line reason.
+- TUI: `getActionDefinitions("local")` returns the original
+  create/delete/recreate/export actions. Receipts become the original
+  action-run events (actions modal), followed by
+  `kubernetes.cluster.refreshed` / `kubernetes.cluster.deleted`, so sparklines
+  and the panel update as in v1. The confirm dialogs for delete/recreate are
+  unchanged.
+- Earlier decision revised: "a run never deletes or recreates the cluster"
+  still holds; only the developer's explicit Kubernetes-tab action can.
+- Functional test (synthetic kind/kubectl/helm/docker via the authenticated
+  gateway): missing status without creation; delete of a missing cluster fails
+  visibly; create via the action definition; full status (version, nodes, pod
+  phases, namespaces, release, node stats) without credential bytes; export
+  into KUBECONFIG; recreate; delete removing private client files; exact kind
+  mutation argv order. Cluster/Kubernetes/operator/protocol/gateway suites:
+  38/38.

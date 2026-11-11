@@ -13,6 +13,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { TaskAdmission } from "./admission.ts";
 import { createAgentTools, createTaskCodingTools } from "./agent-tools.ts";
 import { type Config, text } from "./config.ts";
+import { ClusterOperator } from "./environment/cluster-operator.ts";
 import { Environments } from "./environment/manager.ts";
 import {
 	type OperatorAction,
@@ -62,6 +63,7 @@ export class Runtime {
 	readonly operatorEnvironments: OperatorEnvironments;
 	readonly environmentWorkbench: EnvironmentWorkbench;
 	readonly repositoryGit: RepositoryGit;
+	readonly clusterOperator: ClusterOperator;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
@@ -74,6 +76,11 @@ export class Runtime {
 		this.environments = new Environments(config);
 		this.environmentWorkbench = new EnvironmentWorkbench(this);
 		this.repositoryGit = new RepositoryGit(
+			config,
+			this.environments,
+			() => this.harness,
+		);
+		this.clusterOperator = new ClusterOperator(
 			config,
 			this.environments,
 			() => this.harness,
@@ -395,6 +402,7 @@ export class Runtime {
 		await this.standalone.close();
 		while (this.reconciling) await Bun.sleep(10);
 		try {
+			await this.clusterOperator.settle();
 			await this.environments.close();
 		} finally {
 			await this.harness.close(context);
