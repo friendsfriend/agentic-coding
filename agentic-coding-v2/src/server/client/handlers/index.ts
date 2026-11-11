@@ -16,6 +16,7 @@ import {
 	removeViewpoint,
 	saveViewpoint,
 } from "../../../viewpoints.ts";
+import { Refusal } from "../../refusal.ts";
 import { readEvidence } from "./evidence.ts";
 import { SessionHistory } from "./history.ts";
 import { inspectProvider } from "./providers.ts";
@@ -282,6 +283,11 @@ export async function dispatch(
 				input.branch,
 			);
 		}
+		case "environment.stats":
+			fields(input, ["app"]);
+			return app.environments.stats(text(input.app, "app", 64)).catch(() => {
+				throw new Refusal("No live owned container statistics are available");
+			});
 		case "environment.logs":
 			fields(input, ["app"]);
 			return app.environments.logs(text(input.app, "app", 64));

@@ -9,6 +9,9 @@ import { validateProjects } from "../src/environment/catalog.ts";
 import type { EnvironmentRun } from "../src/environment/state.ts";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server/index.ts";
+import { ClientConnection } from "../src/tui/client/connection.ts";
+import { DevEnvClient } from "../src/tui/features/environments/core/client.ts";
+import { GatewayBackend } from "../src/tui/features/environments/gateway-backend.ts";
 import {
 	readEngineFile,
 	serveContainerFixture,
@@ -1718,4 +1721,62 @@ test("uncertain startup rollback retains already-started prerequisites instead o
 		),
 	).toBe(true);
 	await app.cancel(owner);
+}, 20000);
+
+test("the restored detail view samples live owned container CPU/memory through the authenticated gateway", async () => {
+	const { app, config } = await fixture(false, configure);
+	const host = serve(app),
+		connection = new ClientConnection(host.client),
+		client = new DevEnvClient(new GatewayBackend(connection, () => {}));
+	try {
+		connection.connect();
+		await eventually(
+			async () => connection.state,
+			(state) => state !== null,
+		);
+		await expect(
+			connection.call("environment.stats", { app: "api" }),
+		).rejects.toThrow("No live owned container statistics");
+		const run = (await client.getActionDefinitions("api")).actions.find(
+			(definition) => definition.type === "run" && definition.label === "serve",
+		);
+		if (!run) throw new Error("Missing container run definition");
+		await client.startActionRun(run.id);
+		await eventually(
+			async () => (await client.getApps())[0]?.dockerInfo?.ContainerID,
+			(id) => id === "api",
+		);
+		const controller = new AbortController(),
+			samples: {
+				cpuPercent: number;
+				memoryUsage: number;
+				memoryPercent: number;
+			}[] = [];
+		void client.streamContainerStats("api", controller.signal, (sample) =>
+			samples.push(sample),
+		);
+		await eventually(
+			async () => samples,
+			(seen) => seen.length > 0,
+		);
+		controller.abort();
+		expect(samples[0]).toMatchObject({
+			cpuPercent: 12.5,
+			memoryUsage: 256 * 1024 ** 2,
+			memoryPercent: 25,
+		});
+		const stats = readEngine(config).history.find((args) =>
+			args.includes("stats"),
+		);
+		expect(stats?.slice(2, 4)).toEqual(["stats", "--no-stream"]);
+		expect(stats?.at(-1)).toMatch(/^[a-f0-9]{64}$/);
+		await client.stopApp("api");
+		await eventually(
+			async () => Object.keys(readEngine(config).containers).length,
+			(count) => count === 0,
+		);
+	} finally {
+		connection.close();
+		await host.stop();
+	}
 }, 20000);

@@ -402,6 +402,22 @@ export function serveContainerFixture(file: string) {
 								delete state.containers[found.Id];
 								break;
 							}
+							case "stats": {
+								// Fixed synthetic sample for the owned container only.
+								const found = find(args.at(-1));
+								if (!found?.State.Running) {
+									exit = 1;
+									break;
+								}
+								print(
+									JSON.stringify({
+										CPUPerc: "12.50%",
+										MemPerc: "25.00%",
+										MemUsage: "256MiB / 1GiB",
+									}),
+								);
+								break;
+							}
 							case "build":
 								print("build");
 								exit = state.buildExit ?? 0;

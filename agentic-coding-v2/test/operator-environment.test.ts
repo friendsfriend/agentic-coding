@@ -408,6 +408,21 @@ test("the restored v1 environments client runs, reads and stops a native run thr
 			(await client.getAppSlots()).find((slot) => slot.app === "api")?.holder,
 		).toMatch(/^task:/);
 		expect(await client.getContainerLogs("api")).toContain("OPERATOR READY");
+		// v1 follow stream: the app's live native output, line by line.
+		const follow = new AbortController(),
+			lines: string[] = [];
+		void client.streamContainerLogs("api", follow.signal, (line) =>
+			lines.push(line),
+		);
+		await eventually(
+			async () => lines,
+			(seen) => seen.includes("OPERATOR READY"),
+		);
+		follow.abort();
+		// A shell run has no container statistics; refused, never estimated.
+		await expect(
+			connection.call("environment.stats", { app: "api" }),
+		).rejects.toThrow("No live owned container statistics");
 		const original = (await app.snapshot()).environments.runs.find(
 			(item) => item.plan.app === "api" && item.state === "running",
 		);

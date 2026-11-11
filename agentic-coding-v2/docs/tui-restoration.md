@@ -204,3 +204,24 @@ operator environment functional tests pass.
   activation, a direct build executing in the linked worktree, the
   active-worktree removal refusal, switch back and removal, create-branch and
   push to origin, and an option-injection refusal. Operator suite: 6 passed.
+
+## Live logs and container statistics (v1 log modal and app detail)
+
+- The original "container ID" handle is the app ident. The gateway exposes
+  `dockerInfo` only for a ready, running native run. The server always resolves
+  the handle to that app's current live run; it never trusts a saved ID or name.
+- `streamContainerLogs` follows the native run output (1 s poll, only new
+  lines, honoring v1's `tail`), so the original live log modal and the detail
+  log pane update in place.
+- New read-only gateway method `environment.stats`. `ContainerProcess.stats()`
+  verifies the live-created container identity and ownership, then runs one
+  bounded `stats --no-stream` against that exact ID. Compose sums its owned
+  service containers. Shell runs and unverifiable identities refuse with a
+  curated message; samples are never estimated. `streamContainerStats` polls
+  every 2 s and feeds the original CPU/memory sparklines.
+- Functional coverage: the gateway test follows live shell output and verifies
+  that stats are refused for shell. A new container test uses the synthetic
+  engine for a direct UI start, gateway CPU/memory samples, an exact
+  `stats --no-stream <64-hex owned id>` argv, and stop removing the container.
+  Container + operator suites: 30/31 pass on a combined run; the remaining
+  timing-sensitive pre-existing test passes alone (3/3).

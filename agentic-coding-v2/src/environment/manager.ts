@@ -781,6 +781,24 @@ export class Environments {
 		const query = await process.telemetry.query(options);
 		return root ? { ...query, root } : query;
 	}
+	/** Read-only live CPU/memory of one app's current container run, through
+	 * its original live handle only (never a saved identity or a name). */
+	async stats(app: string, signal?: AbortSignal) {
+		const run = (await this.records())
+			.filter(
+				(item) =>
+					item.plan.app === app &&
+					item.state === "running" &&
+					this.hasLiveAuthority(item),
+			)
+			.sort((a, b) => b.createdAt - a.createdAt)[0];
+		const live = run ? this.live.get(run.id) : undefined;
+		if (!live || !("stats" in live) || typeof live.stats !== "function")
+			throw new Error("No live container run to observe");
+		return (
+			live as { stats: (signal?: AbortSignal) => Promise<unknown> }
+		).stats(signal);
+	}
 	async selectedLogs(
 		app: string,
 		owner: number | undefined,

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { digest } from "../config.ts";
+import { digest, object } from "../config.ts";
 import { contained } from "../git.ts";
 import { freezeBuildSecrets } from "./build-secrets.ts";
 import { EnvironmentCommands } from "./command.ts";
@@ -175,6 +175,33 @@ export class ContainerProcess {
 			machine,
 			effect,
 		});
+	}
+	/** One bounded read-only CPU/memory observation of this handle's own
+	 * live-created container (v1's detail sparkline). Never a control channel;
+	 * an unverifiable identity or engine failure is refused, not estimated. */
+	async stats(signal?: AbortSignal) {
+		if (this.result || this.cleanupFailed || !this.createdId || !this.didStart)
+			throw new Error("No live owned container to observe");
+		const bounded = AbortSignal.any([
+			this.controller.signal,
+			AbortSignal.timeout(5000),
+			...(signal ? [signal] : []),
+		]);
+		const observation = await this.observe(false, bounded);
+		if (!observation || this.ownership(observation) !== true)
+			throw new Error("Container ownership could not be verified");
+		const raw = await this.commands.checked(
+			[
+				"stats",
+				"--no-stream",
+				"--no-trunc",
+				"--format",
+				"{{json .}}",
+				observation.id,
+			],
+			{ signal: bounded, timeoutMs: 5000, machine: true },
+		);
+		return containerStats(raw);
 	}
 	/** Live re-observation for admission decisions: a start-time health reading is
 	 * never treated as continuing authority. Failure stays unknown, never healthy. */
@@ -628,4 +655,50 @@ export class ContainerProcess {
 		})();
 		return this.stopping;
 	}
+}
+const units: Record<string, number> = {
+	b: 1,
+	kb: 1e3,
+	mb: 1e6,
+	gb: 1e9,
+	tb: 1e12,
+	kib: 1024,
+	mib: 1024 ** 2,
+	gib: 1024 ** 3,
+	tib: 1024 ** 4,
+};
+const bytes = (value: string) => {
+	const match = /^([0-9.]+)\s*([a-z]*)$/i.exec(value.trim());
+	if (!match) return null;
+	const unit = units[(match[2] || "b").toLowerCase()];
+	return unit ? Math.round(Number(match[1]) * unit) : null;
+};
+const percent = (value: unknown) => {
+	const parsed = Number(String(value ?? "").replace(/%$/, ""));
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+/** Docker/Podman `stats --format json` line → bounded numeric sample. */
+export function containerStats(raw: string) {
+	let line: Record<string, unknown>;
+	try {
+		line = object(JSON.parse(raw.trim().split("\n")[0] ?? ""));
+	} catch {
+		throw new Error("Invalid container statistics observation");
+	}
+	const cpu = percent(line.CPUPerc ?? line.cpu_percent),
+		memory = percent(line.MemPerc ?? line.mem_percent),
+		[used = "", limit = ""] = String(
+			line.MemUsage ?? line.mem_usage ?? "",
+		).split("/"),
+		usage = bytes(used),
+		total = bytes(limit);
+	if (cpu === null || memory === null || usage === null || total === null)
+		throw new Error("Invalid container statistics observation");
+	return {
+		cpuPercent: cpu,
+		memoryUsage: usage,
+		memoryLimit: total,
+		memoryPercent: memory,
+		timestamp: new Date().toISOString(),
+	};
 }

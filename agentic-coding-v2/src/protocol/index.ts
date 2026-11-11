@@ -314,6 +314,16 @@ export type Methods = {
 		};
 		output: Data | Data[];
 	};
+	"environment.stats": {
+		input: { app: string };
+		output: {
+			cpuPercent: number;
+			memoryUsage: number;
+			memoryLimit: number;
+			memoryPercent: number;
+			timestamp: string;
+		};
+	};
 	"environment.logs": { input: { app: string }; output: string };
 	"wiki.list": { input: Data; output: Data[] };
 	"wiki.read": {
@@ -438,6 +448,7 @@ export const methods: Method[] = [
 	"environment.action",
 	"environment.stop",
 	"environment.git",
+	"environment.stats",
 	"environment.logs",
 	"wiki.list",
 	"wiki.read",

@@ -56,6 +56,7 @@ type Run = {
 	signal: string | null;
 	error: string | null;
 	runtimeStatus?: RuntimeStatus;
+	endpoints?: Record<string, string>;
 	plan: {
 		app: string;
 		id: string;
@@ -207,6 +208,9 @@ export class GatewayBackend implements DevEnvBackend {
 			containerBaseName: project.id,
 			...(runtimeStatus ? { runtimeStatus } : {}),
 			status: runtimeStatus?.state ?? "stopped",
+			...(this.dockerInfo(run, project.id)
+				? { dockerInfo: this.dockerInfo(run, project.id) }
+				: {}),
 			...(run && run.state !== "exited"
 				? {
 						runTargetInfo: {
@@ -219,6 +223,31 @@ export class GatewayBackend implements DevEnvBackend {
 						},
 					}
 				: {}),
+		};
+	}
+	/** v1's per-app live container handle. The "container ID" is the app ident:
+	 * the server resolves it to the current live native run, never a saved ID. */
+	private dockerInfo(run: Run | undefined, app: string) {
+		if (run?.state !== "running" || run.ready === false) return undefined;
+		if (
+			!["docker", "podman", "compose", "shell", "systemshell"].includes(
+				run.plan.runtime,
+			)
+		)
+			return undefined;
+		return {
+			Status: "running",
+			ContainerID: app,
+			Ports: Object.values(run.endpoints ?? {})
+				.map((url) => {
+					try {
+						return new URL(url).port;
+					} catch {
+						return "";
+					}
+				})
+				.filter(Boolean)
+				.join(", "),
 		};
 	}
 	private infra(project: Project): InfraService {
@@ -350,6 +379,70 @@ export class GatewayBackend implements DevEnvBackend {
 		return value.runs?.[0]?.output ?? "";
 	}
 
+	/** Polls native output and yields only new lines (v1's follow stream). */
+	private async streamLogs(
+		app: string,
+		signal: AbortSignal,
+		onLine: (line: string) => void,
+		onError?: (error: Error) => void,
+		tail = "100",
+	) {
+		let seen: string | null = null;
+		const limit = Number(tail);
+		while (!signal.aborted) {
+			try {
+				const output = await this.logs(app);
+				const lines = output ? output.replace(/\n$/, "").split("\n") : [];
+				let fresh: string[];
+				if (seen === null)
+					fresh = limit > 0 ? lines.slice(-limit) : limit === 0 ? [] : lines;
+				else if (output.startsWith(seen))
+					fresh = output
+						.slice(seen.length)
+						.replace(/^\n/, "")
+						.replace(/\n$/, "")
+						.split("\n")
+						.filter((line, index, all) => line || index < all.length - 1);
+				else fresh = lines.slice(-Math.max(limit, 100));
+				seen = output;
+				for (const line of fresh) if (!signal.aborted) onLine(line);
+			} catch (error) {
+				onError?.(error instanceof Error ? error : new Error(String(error)));
+			}
+			await this.pause(signal, 1000);
+		}
+	}
+	private async streamStats(
+		app: string,
+		signal: AbortSignal,
+		onData: (stats: never) => void,
+		onError?: (error: Error) => void,
+	) {
+		while (!signal.aborted) {
+			try {
+				onData((await this.client.call("environment.stats", { app })) as never);
+			} catch (error) {
+				// Shell runs have no container statistics; stop polling quietly.
+				onError?.(error instanceof Error ? error : new Error(String(error)));
+				return;
+			}
+			await this.pause(signal, 2000);
+		}
+	}
+	private pause(signal: AbortSignal, ms: number) {
+		return new Promise<void>((resolve) => {
+			const timer = setTimeout(resolve, ms);
+			signal.addEventListener(
+				"abort",
+				() => {
+					clearTimeout(timer);
+					resolve();
+				},
+				{ once: true },
+			);
+		});
+	}
+
 	private status(): AppStatus[] {
 		return this.projects()
 			.filter((project) => project.kind !== "infrastructure")
@@ -360,6 +453,7 @@ export class GatewayBackend implements DevEnvBackend {
 					resourceId: app.resourceId,
 					resourceKind: app.resourceKind,
 					branch: app.branch,
+					...(app.dockerInfo ? { dockerInfo: app.dockerInfo } : {}),
 					...(app.gitStatus ? { gitStatus: app.gitStatus } : {}),
 					...(app.activeWorktree ? { activeWorktree: app.activeWorktree } : {}),
 					runtimeStatus: app.runtimeStatus ?? null,
@@ -745,6 +839,29 @@ export class GatewayBackend implements DevEnvBackend {
 				return this.restart(arg(1) || arg(0));
 			case "stopContainer":
 				return this.stop(arg(1) || arg(0));
+			case "streamContainerLogs":
+				return this.streamLogs(
+					arg(0),
+					args[1] as AbortSignal,
+					args[2] as (line: string) => void,
+					args[3] as ((error: Error) => void) | undefined,
+					String(args[4] ?? "100"),
+				);
+			case "streamContainerStats":
+				return this.streamStats(
+					arg(0),
+					args[1] as AbortSignal,
+					args[2] as (stats: never) => void,
+					args[3] as ((error: Error) => void) | undefined,
+				);
+			case "getDockerInfo":
+				return Promise.resolve(
+					this.dockerInfo(this.latest(arg(0)), arg(0)) ?? {
+						Status: "stopped",
+						ContainerID: "",
+						Ports: "",
+					},
+				);
 			case "getContainerLogs":
 			case "getInfraServiceLogs":
 			case "getKubernetesLogs":

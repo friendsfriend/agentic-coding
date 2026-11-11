@@ -206,6 +206,25 @@ export class ComposeProcess implements EnvironmentProcess {
 			.join("\n")
 			.slice(-64000);
 	}
+	/** Aggregate CPU/memory of the stack's owned service containers. */
+	async stats(signal?: AbortSignal) {
+		const samples = await Promise.all(
+			this.children.map((child) => child.stats(signal)),
+		);
+		if (!samples.length) throw new Error("No live owned container to observe");
+		const limit = Math.max(...samples.map((sample) => sample.memoryLimit)),
+			usage = samples.reduce((total, sample) => total + sample.memoryUsage, 0);
+		return {
+			cpuPercent: samples.reduce(
+				(total, sample) => total + sample.cpuPercent,
+				0,
+			),
+			memoryUsage: usage,
+			memoryLimit: limit,
+			memoryPercent: limit ? (usage / limit) * 100 : 0,
+			timestamp: new Date().toISOString(),
+		};
+	}
 	/** A service remains authority only inside this original live stack. Check
 	 * all non-completion children and the owned network; never borrow a sibling
 	 * credential or adopt a copied-label replacement. Queue cancellation covers
