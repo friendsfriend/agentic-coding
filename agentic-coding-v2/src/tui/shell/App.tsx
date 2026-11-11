@@ -45,6 +45,11 @@ import {
 	uiWorkspaceLayout,
 } from "../../protocol/viewpoints.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
+import { EmbeddedAgentView } from "../features/agents/EmbeddedAgentView.tsx";
+import {
+	startOpenCode,
+	startPi,
+} from "../features/agents/terminal-agent-process.ts";
 import { EnvironmentsFeature } from "../features/environments/EnvironmentsFeature.tsx";
 import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
@@ -60,7 +65,6 @@ import {
 } from "../features/sessions/NativeAgentNavigation.tsx";
 import { ReportedUsageModal } from "../features/sessions/ReportedUsageModal.tsx";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
-import { StandalonePanel } from "../features/sessions/StandalonePanel.tsx";
 import {
 	type PromptTimelineRow,
 	TimelinePicker,
@@ -192,6 +196,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		null,
 	);
 	const [standaloneFresh, setStandaloneFresh] = createSignal(false);
+	// v1 mounts an embedded agent page on its first visit and keeps it mounted
+	// (hidden) afterwards, so the PTY, scrollback and a running turn survive
+	// navigation. The terminal owns the keyboard while its body has focus.
+	const [startedAgents, setStartedAgents] = createSignal<("opencode" | "pi")[]>(
+		[],
+	);
+	const [agentTerminalFocus, setAgentTerminalFocus] = createSignal<
+		"opencode" | "pi" | null
+	>(null);
 	const [localChoice, setLocalChoice] = createSignal<
 		(LocalChoice & { origin: View }) | null
 	>(null);
@@ -1574,6 +1587,38 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				if (epoch === providerEpoch) setProviderError(error.message);
 			});
 	});
+	const formPage = () =>
+		current().page === "environments" ||
+		current().page === "settings" ||
+		current().page === "wiki" ||
+		current().page === "schedules";
+	const agentPage = (): "opencode" | "pi" | null =>
+		current().page === "opencode"
+			? "opencode"
+			: current().page === "pi"
+				? "pi"
+				: null;
+	createEffect(() => {
+		const agent = agentPage();
+		if (!agent) return;
+		if (!startedAgents().includes(agent))
+			setStartedAgents((agents) => [...agents, agent]);
+	});
+	// The standalone inventory is native authority for the model/thinking picker
+	// and for `/standalone` commands; the page body is the agent's own terminal.
+	createEffect(() => {
+		if (!agentPage()) return;
+		const connected = status() === "connected";
+		refreshRevision();
+		if (!connected) return;
+		void client
+			.call("standalone.read", {})
+			.then((inventory) => {
+				setStandalone(inventory);
+				setStandaloneFresh(true);
+			})
+			.catch(() => setStandaloneFresh(false));
+	});
 	const resourcePreferences = (): UiResourcePreferences =>
 		current().resourcePreferences ?? {
 			category: null,
@@ -2188,7 +2233,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			messageDialog() === null &&
 			!quitConfirmation() &&
 			usageWindow() === null &&
-			!settingsThemeOpen(),
+			!settingsThemeOpen() &&
+			agentTerminalFocus() === null,
 		commands: layerCommands([
 			{
 				id: "shell.quit",
@@ -2368,6 +2414,42 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		),
 	});
 	onCleanup(unregister);
+	// An embedded agent terminal owns the keyboard while its body has focus
+	// (v1: the renderable handles its own keys). Only the host escape hatches
+	// stay bound, so the developer can always leave the page or quit.
+	const unregisterAgentTerminal = keymap.registerLayer({
+		id: "v2.agentTerminals",
+		priority: 30,
+		enabled: () => agentTerminalFocus() !== null,
+		commands: layerCommands([
+			{
+				id: "agent.quit",
+				name: "Confirm local terminal exit",
+				run: requestQuit,
+			},
+			{
+				id: "agent.help",
+				name: "Show keybinding/command help",
+				run: () => queueMicrotask(() => setHelpOpen((value) => !value)),
+			},
+			{
+				id: "agent.workspace",
+				name: "Toggle workspace/content focus",
+				run: () => {
+					setBreadcrumbFocused(false);
+					navigation.current.focus =
+						current().focus === "sessions" ? "content" : "sessions";
+					update();
+				},
+			},
+		]),
+		bindings: [
+			{ key: "ctrl+q", cmd: "agent.quit" },
+			{ key: "f1", cmd: "agent.help" },
+			{ key: "ctrl+s", cmd: "agent.workspace" },
+		],
+	});
+	onCleanup(unregisterAgentTerminal);
 	// v1: prompt-free form/list pages route `?` to shell help except during
 	// text entry. Their own higher-priority confirmation layers keep their keys.
 	const unregisterEnvironmentHelp = keymap.registerLayer({
@@ -3652,7 +3734,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const sidebarOptions = () => [
 		...["OpenCode", "Pi", "Pi Durable", "Orchestrator"].map((name, index) => ({
 			name,
-			description: index < 2 ? "Independent native standalone chat" : "Native",
+			description:
+				index < 2
+					? "Embedded coding agent terminal (PTY) · shares this shell's lifetime"
+					: "Native",
 			value: `mode:${index}`,
 		})),
 		{
@@ -3833,7 +3918,39 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							onNavigate={navigateCrumb}
 						/>
 						<box height={1} flexShrink={0} />
+						<For each={["opencode", "pi"] as ("opencode" | "pi")[]}>
+							{(agent) => (
+								<Show when={startedAgents().includes(agent)}>
+									<box
+										visible={current().page === agent}
+										style={{ flexGrow: 1, minHeight: 0 }}
+									>
+										<EmbeddedAgentView
+											label={agent === "opencode" ? "OpenCode" : "Pi"}
+											cwd={state()?.repositories[0] ?? process.cwd()}
+											active={() =>
+												current().page === agent &&
+												contentFocused() &&
+												!helpOpen() &&
+												!paletteOpen() &&
+												!settingsEditing() &&
+												messageDialog() === null
+											}
+											onFocus={() => {
+												navigation.current.focus = "content";
+												update();
+											}}
+											launcher={agent === "opencode" ? startOpenCode : startPi}
+											onOwnership={(owns) =>
+												setAgentTerminalFocus(owns ? agent : null)
+											}
+										/>
+									</box>
+								</Show>
+							)}
+						</For>
 						<scrollbox
+							visible={agentPage() === null}
 							onMouse={observeReaderPointer}
 							ref={(value) => {
 								scroll = value;
@@ -3942,33 +4059,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											}}
 										/>
 									</Show>
-								</Show>
-								<Show
-									when={
-										current().page === "opencode" || current().page === "pi"
-									}
-								>
-									<StandalonePanel
-										scope={workspaceScope()}
-										interactive={workspaceInteractive() && !settingsEditing()}
-										filter={current().filter}
-										sort={current().sort === "newest" ? "newest" : "default"}
-										onFresh={setStandaloneFresh}
-										client={client}
-										mode={current().page === "pi" ? "pi" : "opencode"}
-										resource={current().resource}
-										connected={status() === "connected"}
-										refresh={refreshRevision()}
-										select={(id) => {
-											const mode = current().page;
-											if (
-												(mode === "pi" || mode === "opencode") &&
-												current().resource !== id
-											)
-												go(mode, id);
-										}}
-										observe={setStandalone}
-									/>
 								</Show>
 								<Show when={current().page === "pi-durable"}>
 									<SessionExplorer
@@ -4521,15 +4611,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								)}
 							</Show>
 						</Show>
-						{/* Form/list pages do not host a conversation prompt. */}
-						<Show
-							when={
-								current().page !== "environments" &&
-								current().page !== "settings" &&
-								current().page !== "wiki" &&
-								current().page !== "schedules"
-							}
-						>
+						{/* Form/list pages and embedded agent terminals do not host a
+						    conversation prompt: the terminal owns its own input. */}
+						<Show when={agentPage() === null && !formPage()}>
 							<SessionPrompt
 								scope={(() => {
 									current();
