@@ -254,6 +254,13 @@ export async function dispatch(
 			return {
 				taskId: await app.startEnvironmentAction(input as OperatorAction, true),
 			};
+		case "environment.stop":
+			fields(input, ["runId", "revision", "requestId"]);
+			return app.stopEnvironmentRun({
+				runId: text(input.runId, "run identity", 512),
+				revision: integer(input.revision),
+				requestId: text(input.requestId, "request identity", 256),
+			});
 		case "environment.logs":
 			fields(input, ["app"]);
 			return app.environments.logs(text(input.app, "app", 64));

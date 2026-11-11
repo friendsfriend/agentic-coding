@@ -154,3 +154,23 @@ new locations directly, with no compatibility forwarding modules. The existing
 shell theme entry point is preserved. This relocation changes no backend behavior.
 Validation: unfiltered type-check, Biome (zero diagnostics), and the five native
 operator environment functional tests pass.
+
+## Native stop/restart controls
+
+- The authenticated gateway now exposes `environment.stop` with an exact
+  `runId`, `revision` and `requestId`. The backend rejects non-operator owners
+  and delegates atomic revision/live-authority validation and durable deduplication
+  to native operator revocation. This stops the entire owning batch, including
+  prerequisites; it is not per-container or per-service stop.
+- Success requires a completed revocation with certain cleanup, then native task
+  cancellation. Interrupted/quarantined runs and uncertain cleanup refuse instead
+  of adopting resources or authorizing restart.
+- The original list's stop action uses that boundary. Restart definitions are
+  now offered for configured run targets. Restart stops the observed owner first,
+  then admits a fresh interactive run using its original target. No restart is
+  attempted after a refused/uncertain stop, and no mutations retry on reconnect.
+- Functional verification extends the authenticated gateway test with stale
+  revision refusal and fresh-owner restart followed by stop. Operator and idle
+  suites: 7 tests passed (93 assertions). Unfiltered type-check and Biome clean.
+- Shared UI remains in `src/tui/ui`; environment integration remains in
+  `src/tui/features/environments`. No real app or cluster was started.

@@ -706,6 +706,11 @@ export function result<M extends Method>(
 			!integer(data.taskId)
 		)
 			throw new Error("Invalid task identity");
+		if (
+			method === "environment.stop" &&
+			(data.stopped !== true || !integer(data.owner))
+		)
+			throw new Error("Invalid environment stop acknowledgement");
 		if (method === "task.cancel" && !("requested" in data))
 			throw new Error("Invalid cancellation acknowledgement");
 	}

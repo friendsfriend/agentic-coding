@@ -291,6 +291,10 @@ export type Methods = {
 		input: EnvironmentAction;
 		output: { taskId: number };
 	};
+	"environment.stop": {
+		input: { runId: string; revision: number; requestId: string };
+		output: { stopped: true; owner: number };
+	};
 	"environment.logs": { input: { app: string }; output: string };
 	"wiki.list": { input: Data; output: Data[] };
 	"wiki.read": {
@@ -413,6 +417,7 @@ export const methods: Method[] = [
 	"environment.preview",
 	"environment.apply",
 	"environment.action",
+	"environment.stop",
 	"environment.logs",
 	"wiki.list",
 	"wiki.read",

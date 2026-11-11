@@ -408,6 +408,49 @@ test("the restored v1 environments client runs, reads and stops a native run thr
 			(await client.getAppSlots()).find((slot) => slot.app === "api")?.holder,
 		).toMatch(/^task:/);
 		expect(await client.getContainerLogs("api")).toContain("OPERATOR READY");
+		const original = (await app.snapshot()).environments.runs.find(
+			(item) => item.plan.app === "api" && item.state === "running",
+		);
+		if (!original) throw new Error("Missing live native run");
+		await expect(
+			connection.call("environment.stop", {
+				runId: original.id,
+				revision: original.revision + 1,
+				requestId: "stale-ui-stop",
+			}),
+		).rejects.toThrow("Native operation refused");
+		expect(await client.getContainerLogs("api")).toContain("OPERATOR READY");
+		const restart = (await client.getActionDefinitions("api")).actions.find(
+			(definition) => definition.type === "restart",
+		);
+		if (!restart) throw new Error("Missing restart definition");
+		await connection.call("state.read", {}).then((state) => {
+			connection.state = state;
+		});
+		await client.startActionRun(restart.id);
+		await eventually(
+			() => app.snapshot(),
+			(state) =>
+				state.environments.runs.some(
+					(item) =>
+						item.plan.app === "api" &&
+						item.id !== original.id &&
+						item.state === "running" &&
+						item.ready === true,
+				),
+		);
+		await eventually(
+			async () => connection.state,
+			(state) =>
+				Array.isArray(state?.environments.runs) &&
+				state.environments.runs.some(
+					(item: { id: string; state: string; plan: { app: string } }) =>
+						item.id !== original.id &&
+						item.state === "running" &&
+						item.plan.app === "api",
+				),
+		);
+
 		await client.stopApp("api");
 		await eventually(
 			async () => (await client.getApps())[0]?.runtimeStatus?.state,

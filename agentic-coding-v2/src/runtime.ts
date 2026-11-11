@@ -193,6 +193,36 @@ export class Runtime {
 			interactive,
 		);
 	}
+	/** Direct developer stop: exact live revision, operator-owned only. Revokes
+	 * the entire owning batch, including prerequisites, before task cancellation.
+	 * Never claims success when native cleanup remains uncertain. */
+	async stopEnvironmentRun(input: {
+		runId: string;
+		revision: number;
+		requestId: string;
+	}) {
+		if (this.closed) throw new Error("Runtime is closing");
+		const run = (await this.environments.snapshot()).runs.find(
+			(run) => run.id === input.runId,
+		);
+		const raw = run
+			? (await this.harness.snapshot(Catalog, context))?.tasks[
+					String(run.owner)
+				]
+			: undefined;
+		if (!run || !raw || decode<TaskInfo>(raw).kind !== "operator-environment")
+			throw new Error("Only a native operator-owned run can be stopped here");
+		const receipt = await this.environments.operator.revoke({
+			...input,
+			reason: "Developer stopped the run from the environments UI",
+		});
+		if (receipt.state !== "completed" || receipt.inspectionRequired)
+			throw new Error(
+				"Native cleanup is uncertain; inspect resources before restarting",
+			);
+		await this.cancel(receipt.owner);
+		return { stopped: true as const, owner: receipt.owner };
+	}
 	async ownerOf(id: ConversationId): Promise<TaskInfo> {
 		const owner = await this.harness.commit(
 			(tx) => tx.conversation(id),

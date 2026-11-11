@@ -3,7 +3,7 @@
 // Every v1 `DevEnvClient` method arrives here by name. Reads are projected from
 // the authenticated gateway's native snapshot (`state.read`); a run/build/test
 // becomes one interactive `environment.action` (the key press is the approval)
-// and a stop becomes `task.cancel` of the owning operator task. Native run
+// and stop binds to an exact run revision through `environment.stop`. Native run
 // output is presented as v1's action-run event stream so the original action
 // modal renders it. A v1 operation v2 does not offer rejects with a visible
 // message; it never falls back to a shell, Docker or another server.
@@ -46,6 +46,7 @@ type Project = {
 };
 type Run = {
 	id: string;
+	revision: number;
 	batch: string;
 	owner: number;
 	state: "reserved" | "running" | "stopping" | "exited" | "interrupted";
@@ -64,12 +65,6 @@ type Run = {
 		label?: string;
 		projectKind?: Project["kind"];
 	};
-};
-type Task = {
-	id: number;
-	kind?: string;
-	status: string | null;
-	detail?: string;
 };
 
 const unavailable = (what: string) =>
@@ -140,9 +135,6 @@ export class GatewayBackend implements DevEnvBackend {
 	}
 	private runs(): Run[] {
 		return list<Run>(this.environments().runs);
-	}
-	private tasks(): Task[] {
-		return list<Task>(this.client.state?.tasks);
 	}
 	private project(app: string) {
 		const project = this.projects().find((item) => item.id === app);
@@ -258,7 +250,11 @@ export class GatewayBackend implements DevEnvBackend {
 			actions.push(definition(target.action));
 			// v1 infrastructure rows start/stop; a native run target serves both.
 			if (target.action === "run")
-				actions.push(definition("start"), definition("stop"));
+				actions.push(
+					definition("start"),
+					definition("stop"),
+					definition("restart"),
+				);
 		}
 		return { version: 1, actions };
 	}
@@ -266,6 +262,7 @@ export class GatewayBackend implements DevEnvBackend {
 	private async start(id: string) {
 		const { app, action, target } = parseDefinition(id);
 		if (action === "stop") return this.stop(app);
+		if (action === "restart") return this.restart(app);
 		const native = action === "start" ? "run" : action;
 		if (native !== "run" && native !== "build" && native !== "test")
 			throw unavailable(`The ${action} action`);
@@ -282,25 +279,27 @@ export class GatewayBackend implements DevEnvBackend {
 			requestId: `tui-${app}-${native}-${chosen.id}-${crypto.randomUUID()}`,
 		});
 	}
-	/** Stop = cancel the operator task that holds the app's live run. */
+	/** Direct UI stop binds to one observed run and its exact native revision.
+	 * The server validates operator ownership and revokes its whole batch. */
 	private async stop(app: string) {
-		const live = this.runs().filter(
-			(run) => run.plan.app === app && run.state !== "exited",
-		);
-		if (!live.length) throw new Error(`${app} has no live native run`);
-		const owners = [...new Set(live.map((run) => run.owner))];
-		const operator = new Set(
-			this.tasks()
-				.filter((task) => task.kind === "operator-environment")
-				.map((task) => task.id),
-		);
-		const foreign = owners.filter((owner) => !operator.has(owner));
-		if (foreign.length)
-			throw new Error(
-				`${app} is held by task ${foreign.join(", ")}; only runs you started from this UI stop here`,
-			);
-		for (const owner of owners)
-			await this.client.call("task.cancel", { id: owner });
+		const run = this.latest(app);
+		if (!run || run.state === "exited")
+			throw new Error(`${app} has no live native run`);
+		await this.client.call("environment.stop", {
+			runId: run.id,
+			revision: run.revision,
+			requestId: `tui-stop-${crypto.randomUUID()}`,
+		});
+	}
+
+	private async restart(app: string) {
+		const run = this.latest(app);
+		if (run?.state !== "running" || run.plan.action !== "run")
+			throw new Error(`${app} has no running native run to restart`);
+		// Stop acknowledgement is issued only after certain native cleanup. Never
+		// retry or start after a stale revision, disconnection or uncertain cleanup.
+		await this.stop(app);
+		await this.start(definitionId(app, "run", run.plan.id));
 	}
 
 	private async logs(app: string) {
@@ -660,6 +659,8 @@ export class GatewayBackend implements DevEnvBackend {
 			case "cancelAction":
 			case "releaseApp":
 				return this.stop(arg(0));
+			case "restartContainer":
+				return this.restart(arg(1) || arg(0));
 			case "stopContainer":
 				return this.stop(arg(1) || arg(0));
 			case "getContainerLogs":
