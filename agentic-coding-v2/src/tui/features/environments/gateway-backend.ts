@@ -140,6 +140,8 @@ type GitRow = {
 export class GatewayBackend implements DevEnvBackend {
 	/** Last native Git observation per app, refreshed with every status read. */
 	private git = new Map<string, GitRow>();
+	/** Checkouts the server is cloning (or failed to clone) after add-repository. */
+	private clones: Record<string, { state: string; message?: string }> = {};
 	/** Provider serving each app's origin remote (v1 `provider`/`sourceType`). */
 	private identities: Record<
 		string,
@@ -190,6 +192,13 @@ export class GatewayBackend implements DevEnvBackend {
 			// Git status is decoration; the table keeps its last observation.
 		}
 		try {
+			this.clones = (await this.client.call("environment.apps", {
+				operation: "pending",
+			})) as typeof this.clones;
+		} catch {
+			// Clone progress is decoration.
+		}
+		try {
 			this.identities = (await this.client.call("providers.workbench", {
 				operation: "identity",
 			})) as typeof this.identities;
@@ -237,6 +246,21 @@ export class GatewayBackend implements DevEnvBackend {
 					}
 				: {}),
 			containerBaseName: project.id,
+			...(this.clones[project.id]
+				? {
+						operationStatus: {
+							operation: "checkout" as const,
+							status:
+								this.clones[project.id]?.state === "failed"
+									? ("failed" as const)
+									: ("active" as const),
+							message:
+								this.clones[project.id]?.state === "failed"
+									? `Clone failed: ${this.clones[project.id]?.message ?? ""}`
+									: "Checking out...",
+						},
+					}
+				: {}),
 			...(runtimeStatus ? { runtimeStatus } : {}),
 			status: runtimeStatus?.state ?? "stopped",
 			...(this.dockerInfo(run, project.id)
@@ -806,6 +830,54 @@ export class GatewayBackend implements DevEnvBackend {
 		);
 	};
 
+	/** v1 cleared the add-repository "Checking out..." status when the clone
+	 * finished; v2 polls the server's clone table and does the same. */
+	private async cloneEvents(): Promise<ServerEvent[]> {
+		let current: typeof this.clones;
+		try {
+			current = (await this.client.call("environment.apps", {
+				operation: "pending",
+			})) as typeof this.clones;
+		} catch {
+			return [];
+		}
+		const previous = this.clones;
+		this.clones = current;
+		const events: ServerEvent[] = [];
+		const timestamp = new Date().toISOString();
+		for (const [appIdent, clone] of Object.entries(current))
+			if (clone.state === "failed" && previous[appIdent]?.state !== "failed")
+				events.push({
+					type: "operation.status.changed",
+					properties: {
+						appIdent,
+						operation: "checkout",
+						status: "failed",
+						message: `Clone failed: ${clone.message ?? ""}`,
+					},
+					timestamp,
+				});
+		const finished = Object.keys(previous).filter((id) => !current[id]);
+		if (finished.length) {
+			await this.refreshGit();
+			for (const appIdent of finished) {
+				events.push({
+					type: "operation.status.cleared",
+					properties: { appIdent },
+					timestamp,
+				});
+				const status = this.status().find((item) => item.ident === appIdent);
+				if (status)
+					events.push({
+						type: "status.updated",
+						properties: status as unknown as Data,
+						timestamp,
+					});
+			}
+		}
+		return events;
+	}
+
 	private async *events(signal?: AbortSignal): AsyncGenerator<ServerEvent> {
 		yield {
 			type: "connection.established",
@@ -829,6 +901,7 @@ export class GatewayBackend implements DevEnvBackend {
 				for (const event of this.actionEvents(run, outputs.get(run.id)))
 					yield event;
 			for (const event of await this.clusterEvents()) yield event;
+			for (const event of await this.cloneEvents()) yield event;
 			if (key !== previous) {
 				previous = key;
 				for (const status of this.status())
@@ -961,6 +1034,24 @@ export class GatewayBackend implements DevEnvBackend {
 					path: arg(0),
 					values: (args[1] ?? {}) as Data,
 				}).then(() => undefined);
+			case "createApp": {
+				const request = (args[0] ?? {}) as Record<string, unknown>;
+				return this.client.call("environment.apps", {
+					operation: "create",
+					displayName: String(request.displayName ?? ""),
+					repositoryURL: String(request.repositoryURL ?? ""),
+					branch: String(request.branch ?? ""),
+					provider: String(request.provider ?? ""),
+					definitionLocation:
+						request.definitionLocation === "libraries" ? "libraries" : "apps",
+				});
+			}
+			case "deleteApp":
+				return this.client
+					.call("environment.apps", { operation: "delete", ident: arg(0) })
+					.then(async () => {
+						await this.refreshGit();
+					});
 			case "getProviders":
 				return this.registry("providers");
 			case "getProvider":

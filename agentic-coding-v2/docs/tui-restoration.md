@@ -393,3 +393,55 @@ operator environment functional tests pass.
   - a `${VAR}` reference reported as missing;
   - delete removing the generated secret;
   - the no-provider refusal.
+
+## Add repository and remove repository
+
+- The v1 add-repository submit (`createApp`) and the "Remove Selected Item"
+  confirm (`deleteApp`) run through the gateway method `environment.apps`
+  (`create`, `delete`, `pending`) on `AppRegistry`
+  (`src/environment/app-registry.ts`). The modal submit and the confirm dialog
+  are the developer's approval (decision 1a).
+- Create (v1 behavior: `$DEVENV_HOME/<ident>/<ident>`, ident = v1 slugify,
+  clone at the chosen branch, row shown at once with "Checking out..."):
+  - The URL must be an HTTPS clone URL on the selected provider's host
+    (loopback http only for tests), with no credentials, query or fragment.
+  - An existing `$DEVENV_HOME/<ident>` is never adopted.
+  - The checkout is authorized in `config.json` (`Settings.updateRepositories`,
+    revision-bound) and registered as a definition-less project in
+    `environments.json`. That write uses the definition-promotion lock, is
+    validated by `validateProjects`, is atomic, and is verified afterwards.
+    The live catalog, the authorized repository list and v1's implicit
+    `devenv` cluster scope update in place.
+  - Run, build and test targets come later through the normal definition
+    review. The repository has none until then.
+  - The clone runs asynchronously. v1 put the credential in a Basic
+    `http.extraheader` argument. v2 passes it to a one-shot `credential.helper`
+    through the child environment only, so the token never appears in an
+    argument or in `.git/config`. The environment is minimal and hooks are
+    disabled.
+  - `pending` reports cloning or failed checkouts. The TUI shows them as v1's
+    checkout operation status and clears it with `operation.status.cleared`
+    when the clone finishes.
+- Remove (v1 deleted the definition and `$DEVENV_HOME/<ident>`). v2 is
+  stricter and refuses, never forces, when:
+  - the repository is not exactly `$DEVENV_HOME/<ident>/<ident>`;
+  - another project or an explicit cluster definition references it;
+  - a native environment run uses it;
+  - a non-terminal task or workflow uses it;
+  - any worktree has uncommitted changes, or a linked worktree lives outside
+    the container;
+  - local commits are not pushed;
+  - it is still cloning.
+  Otherwise the project is dropped from `environments.json`, the repository is
+  deauthorized, and the container directory is deleted.
+- Functional test: "restored v1 add-repository clones under DEVENV_HOME…" in
+  `test/provider-workbench.test.ts`. It uses a loopback smart-HTTP Git host
+  (`git http-backend` behind a Basic challenge) and covers:
+  - the clone authenticating with `oauth2:<token>` from the reference;
+  - no token in `.git/config`;
+  - the `config.json` and `environments.json` registration;
+  - the row appearing with its provider and branch and the checkout status
+    cleared;
+  - the duplicate-ident refusal;
+  - the uncommitted-changes refusal;
+  - removal deleting the container and both registrations.

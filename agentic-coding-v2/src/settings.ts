@@ -281,25 +281,34 @@ export class Settings {
 		if (typeof id === "string") this.candidates.delete(id);
 		return receipt;
 	}
-	/** The restored v1 Providers view edits only the `providers` key: the
-	 * developer's direct TUI action is the approval, the write stays bound to the
-	 * revision it read and the whole document is still validated. */
+	/** The restored v1 Providers view and add/remove-repository flow edit one
+	 * key: the developer's direct TUI action is the approval, the write stays
+	 * bound to the revision it read and the whole document is still validated. */
 	updateProviders(
 		change: (
 			providers: SettingsDefinition["providers"],
 		) => SettingsDefinition["providers"],
 	) {
+		return this.updateKey("providers", change).providers;
+	}
+	updateRepositories(change: (repositories: string[]) => string[]) {
+		return this.updateKey("repositories", change).repositories;
+	}
+	private updateKey<K extends "providers" | "repositories">(
+		key: K,
+		change: (value: SettingsDefinition[K]) => SettingsDefinition[K],
+	) {
 		const stored = this.stored();
 		const current = this.read().settings;
 		const next = normalize({
 			...current,
-			providers: change(current.providers.map((entry) => ({ ...entry }))),
+			[key]: change(structuredClone(current[key])),
 		});
-		const bytes = `${JSON.stringify({ ...stored.data, providers: next.providers }, null, 2)}\n`;
+		const bytes = `${JSON.stringify({ ...stored.data, [key]: next[key] }, null, 2)}\n`;
 		if (Buffer.byteLength(bytes) > maximum)
 			throw new Error("Configuration file oversized");
 		this.write(stored.revision, bytes);
-		return next.providers;
+		return next;
 	}
 	private write(baseRevision: string, bytes: string) {
 		const file = this.file();

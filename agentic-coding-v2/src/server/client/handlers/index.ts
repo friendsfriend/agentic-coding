@@ -307,6 +307,29 @@ export async function dispatch(
 				input.requestId,
 			);
 		}
+		case "environment.apps": {
+			// Restored v1 add/remove repository: the modal submit or confirm
+			// dialog is the developer's approval.
+			fields(input, [
+				"operation",
+				"displayName",
+				"repositoryURL",
+				"branch",
+				"provider",
+				"definitionLocation",
+				"ident",
+			]);
+			switch (text(input.operation, "app operation", 16)) {
+				case "create":
+					return app.appRegistry.create(input) as Promise<never>;
+				case "delete":
+					return app.appRegistry.remove(input) as Promise<never>;
+				case "pending":
+					return app.appRegistry.pending() as never;
+				default:
+					throw new Error("Unsupported app operation");
+			}
+		}
 		case "environment.tasks": {
 			// Direct developer task collection; the key press is the approval.
 			fields(input, ["operation", "path", "sourcePath", "values", "limit"]);

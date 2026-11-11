@@ -140,7 +140,7 @@ function acquire(lock: string) {
 }
 /** Cooperative exclusion only. Never infer abandonment from age: a paused
  * writer may still own the directory. Crash recovery requires operator action. */
-function locked<T>(destination: string, action: () => T) {
+export function locked<T>(destination: string, action: () => T) {
 	const lock = path.join(path.dirname(destination), lockName);
 	if (!acquire(lock))
 		throw new Error(

@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server/index.ts";
@@ -370,3 +371,174 @@ test("restored v1 Providers view and add-repository flow keep typed tokens out o
 		await host.stop();
 	}
 }, 20000);
+
+/** Loopback smart-HTTP Git host: `git http-backend` behind a Basic challenge,
+ * so a clone only succeeds with the provider token from the credential helper. */
+const gitRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ac-v2-git-host-"));
+const gitAuth: string[] = [];
+const gitHost = Bun.serve({
+	hostname: "127.0.0.1",
+	port: 0,
+	async fetch(request) {
+		const url = new URL(request.url);
+		const auth = request.headers.get("authorization");
+		if (!auth)
+			return new Response("auth", {
+				status: 401,
+				headers: { "WWW-Authenticate": 'Basic realm="git"' },
+			});
+		gitAuth.push(Buffer.from(auth.replace(/^Basic /, ""), "base64").toString());
+		const child = Bun.spawn(["git", "http-backend"], {
+			stdin: new Uint8Array(await request.arrayBuffer()),
+			stdout: "pipe",
+			stderr: "ignore",
+			env: {
+				PATH: process.env.PATH ?? "",
+				GIT_PROJECT_ROOT: gitRoot,
+				GIT_HTTP_EXPORT_ALL: "1",
+				PATH_INFO: url.pathname,
+				QUERY_STRING: url.search.slice(1),
+				REQUEST_METHOD: request.method,
+				CONTENT_TYPE: request.headers.get("content-type") ?? "",
+				HTTP_CONTENT_ENCODING: request.headers.get("content-encoding") ?? "",
+				GIT_PROTOCOL: request.headers.get("git-protocol") ?? "",
+			},
+		});
+		const output = Buffer.from(await new Response(child.stdout).arrayBuffer());
+		const split = output.indexOf("\r\n\r\n");
+		const headers = new Headers();
+		let status = 200;
+		for (const line of output.subarray(0, split).toString().split("\r\n")) {
+			const [name, ...rest] = line.split(":");
+			const value = rest.join(":").trim();
+			if (name?.toLowerCase() === "status") status = Number.parseInt(value, 10);
+			else if (name) headers.set(name, value);
+		}
+		return new Response(output.subarray(split + 4), { status, headers });
+	},
+});
+
+test("restored v1 add-repository clones under DEVENV_HOME, registers the app and remove refuses unsafe deletes", async () => {
+	const home = fs.realpathSync(
+		fs.mkdtempSync(path.join(os.tmpdir(), "ac-v2-devenv-home-")),
+	);
+	const source = path.join(home, "source");
+	fs.mkdirSync(source);
+	await git(source, ["init", "-b", "develop"]);
+	await git(source, ["config", "user.name", "Test"]);
+	await git(source, ["config", "user.email", "test@example.invalid"]);
+	fs.writeFileSync(path.join(source, "README.md"), "service\n");
+	await git(source, ["add", "README.md"]);
+	await git(source, ["commit", "-m", "initial"]);
+	fs.mkdirSync(path.join(gitRoot, "group"), { recursive: true });
+	await git(gitRoot, [
+		"clone",
+		"--bare",
+		source,
+		path.join(gitRoot, "group", "service.git"),
+	]);
+	const previousHome = process.env.DEVENV_HOME;
+	process.env.DEVENV_HOME = home;
+	process.env.WORKBENCH_TOKEN = "clone-secret";
+	const { app, config } = await fixture(false, (config) => {
+		config.providers.push({
+			name: "gl",
+			type: "gitlab",
+			baseUrl: `http://127.0.0.1:${gitHost.port}`,
+			username: "dev",
+			tokenRef: "WORKBENCH_TOKEN",
+		});
+	});
+	const host = serve(app),
+		connection = new ClientConnection(host.client),
+		client = new DevEnvClient(new GatewayBackend(connection, () => {}));
+	const remote = `http://127.0.0.1:${gitHost.port}/group/service.git`;
+	const checkout = path.join(home, "new-service", "new-service");
+	try {
+		connection.connect();
+		await eventually(
+			async () => connection.state,
+			(state) => state !== null,
+		);
+		const created = await client.createApp({
+			displayName: "New Service",
+			repositoryURL: remote,
+			branch: "develop",
+			provider: "gl",
+			definitionLocation: "apps",
+		});
+		expect(created).toMatchObject({
+			ident: "new-service",
+			localDirectoryPath: checkout,
+			provider: "gl",
+			sourceType: "gitlab",
+		});
+		const apps = await eventually(
+			() => client.getApps(),
+			(list) =>
+				list.some(
+					(item) =>
+						item.ident === "new-service" &&
+						item.branch === "develop" &&
+						!item.operationStatus,
+				),
+		);
+		expect(apps.find((item) => item.ident === "new-service")).toMatchObject({
+			provider: "gl",
+			appType: "APP",
+		});
+		expect(gitAuth).toContain("oauth2:clone-secret");
+		expect(
+			fs.readFileSync(path.join(checkout, ".git", "config"), "utf8"),
+		).not.toContain("clone-secret");
+		const configFile = JSON.parse(
+			fs.readFileSync(path.join(config.configDir, "config.json"), "utf8"),
+		);
+		expect(configFile.repositories).toContain(checkout);
+		expect(
+			JSON.parse(
+				fs.readFileSync(
+					path.join(config.configDir, "environments.json"),
+					"utf8",
+				),
+			).projects,
+		).toEqual([
+			{ id: "new-service", kind: "app", repository: checkout, targets: [] },
+		]);
+		await expect(
+			client.createApp({
+				displayName: "new service",
+				repositoryURL: remote,
+				branch: "develop",
+				provider: "gl",
+				definitionLocation: "apps",
+			}),
+		).rejects.toThrow('app with ident "new-service" already exists');
+		fs.writeFileSync(path.join(checkout, "scratch.txt"), "local work\n");
+		await expect(client.deleteApp("new-service")).rejects.toThrow(
+			"uncommitted changes",
+		);
+		fs.rmSync(path.join(checkout, "scratch.txt"));
+		await client.deleteApp("new-service");
+		expect(fs.existsSync(path.join(home, "new-service"))).toBe(false);
+		expect(
+			JSON.parse(
+				fs.readFileSync(path.join(config.configDir, "config.json"), "utf8"),
+			).repositories,
+		).not.toContain(checkout);
+		expect(
+			JSON.parse(
+				fs.readFileSync(
+					path.join(config.configDir, "environments.json"),
+					"utf8",
+				),
+			).projects,
+		).toEqual([]);
+	} finally {
+		connection.close();
+		await host.stop();
+		if (previousHome === undefined) delete process.env.DEVENV_HOME;
+		else process.env.DEVENV_HOME = previousHome;
+		fs.rmSync(home, { recursive: true, force: true });
+	}
+}, 30000);

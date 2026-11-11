@@ -328,6 +328,19 @@ export type Methods = {
 		};
 		output: Data;
 	};
+	/** Restored v1 add/remove repository (direct developer actions). */
+	"environment.apps": {
+		input: {
+			operation: "create" | "delete" | "pending";
+			displayName?: string;
+			repositoryURL?: string;
+			branch?: string;
+			provider?: string;
+			definitionLocation?: "apps" | "libraries";
+			ident?: string;
+		};
+		output: Data;
+	};
 	"environment.tasks": {
 		input: {
 			operation:
@@ -486,6 +499,7 @@ export const methods: Method[] = [
 	"environment.git",
 	"environment.cluster",
 	"environment.tasks",
+	"environment.apps",
 	"environment.stats",
 	"environment.logs",
 	"wiki.list",
