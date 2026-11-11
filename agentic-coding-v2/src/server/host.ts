@@ -20,6 +20,7 @@ export function serve(app: Runtime, port = 0) {
 	const assets = webAssets();
 	const route = httpRoutes(app, json, security);
 	const gateway = clientGateway(app);
+	const telemetry = app.telemetry;
 	const server = Bun.serve<Connection>({
 		websocket: gateway.websocket,
 		hostname: "127.0.0.1",
@@ -60,7 +61,7 @@ export function serve(app: Runtime, port = 0) {
 					? undefined
 					: json({ error: "WebSocket upgrade required" }, 426);
 			}
-			return route(request, url);
+			return (await telemetry.route(request, url)) ?? route(request, url);
 		},
 	});
 	return {

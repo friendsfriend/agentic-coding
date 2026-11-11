@@ -66,6 +66,26 @@ export async function dispatch(
 	{ method, input }: Request,
 ): Promise<unknown> {
 	switch (method) {
+		case "telemetry.read": {
+			fields(input, ["signal", "page", "perPage", "changeId", "limit"]);
+			const signal = text(input.signal, "telemetry signal", 16);
+			if (
+				!["traces", "spans", "metrics", "logs", "workspaces"].includes(signal)
+			)
+				throw new Refusal("Unknown telemetry signal");
+			const url = new URL(`http://127.0.0.1/api/telemetry/${signal}`);
+			for (const key of ["page", "perPage", "limit"])
+				if (input[key] !== undefined)
+					url.searchParams.set(key, String(integer(input[key])));
+			if (input.changeId !== undefined)
+				url.searchParams.set(
+					"changeId",
+					text(input.changeId, "telemetry identity", 256),
+				);
+			const response = await app.telemetry.route(new Request(url), url);
+			if (!response?.ok) throw new Refusal("Invalid telemetry query");
+			return { value: await response.json() };
+		}
 		case "viewpoints.read":
 			fields(input, []);
 			return readViewpoints(app);

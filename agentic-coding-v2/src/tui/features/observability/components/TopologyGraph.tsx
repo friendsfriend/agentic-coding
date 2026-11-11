@@ -1,0 +1,179 @@
+/** @jsxImportSource @opentui/solid */
+
+import { TextAttributes } from "@opentui/core";
+import { createMemo, For, Show } from "solid-js";
+import {
+	HighlightedText,
+	ScrollableContent,
+	uiColors,
+	useHover,
+	useKeyDispatch,
+	useTap,
+} from "../../../ui/index.ts";
+import type { LayoutNode } from "../model/topologyStore.ts";
+
+const cardWidth = 24;
+const cardHeight = 3;
+
+export function TopologyGraph(props: {
+	layout: () => LayoutNode[];
+	selected: () => string | undefined;
+	onSelect: (id: string) => void;
+}) {
+	// A tap on a node selects it; a tap on the selected node is the view's `Enter`
+	// (the service detail), dispatched through the keymap like any other key.
+	const dispatch = useKeyDispatch();
+	const layers = createMemo(() => {
+		const map = new Map<number, LayoutNode[]>();
+		for (const node of props.layout()) {
+			const layer = map.get(node.layer) ?? [];
+			layer.push(node);
+			map.set(node.layer, layer);
+		}
+		return [...map.entries()].sort(([a], [b]) => a - b);
+	});
+	// Layout projections allocate fresh layer tuples and nodes. Only layer
+	// numbers/service IDs own mounted surfaces; metrics are reactive payloads.
+	const layerEntries = createMemo(() => new Map(layers()));
+	const layerKeys = () => layers().map(([layer]) => layer);
+	const nodeEntries = createMemo(
+		() => new Map(props.layout().map((node) => [node.id, node])),
+	);
+	const graphHeight = () =>
+		Math.max(
+			6,
+			Math.max(...layers().map(([, nodes]) => nodes.length), 1) *
+				(cardHeight + 1) +
+				1,
+		);
+
+	return (
+		<ScrollableContent focusable={false}>
+			<box
+				style={{
+					minWidth: Math.max(60, layers().length * (cardWidth + 3)),
+					height: graphHeight(),
+					flexDirection: "row",
+				}}
+			>
+				<For each={layerKeys()}>
+					{(layer, index) => (
+						<>
+							<box
+								style={{
+									width: cardWidth,
+									flexShrink: 0,
+									flexDirection: "column",
+								}}
+							>
+								<box
+									height={1}
+									backgroundColor={uiColors.bgSurface1}
+									paddingLeft={1}
+								>
+									<text
+										fg={uiColors.textMuted}
+										attributes={TextAttributes.BOLD}
+									>
+										Layer {layer}
+									</text>
+								</box>
+								<For
+									each={(layerEntries().get(layer) ?? []).map(
+										(node) => node.id,
+									)}
+								>
+									{(id) => (
+										<Show when={nodeEntries().get(id)}>
+											{(ln) => {
+												const selected = () => props.selected() === id;
+												const tap = useTap(() =>
+													selected() ? dispatch("Enter") : props.onSelect(id),
+												);
+												const hover = useHover(tap.onMouseOut);
+												return (
+													<box
+														height={cardHeight}
+														width={cardWidth}
+														flexShrink={0}
+														flexDirection="column"
+														backgroundColor={
+															selected()
+																? uiColors.bgSurface1
+																: uiColors.bgMantle
+														}
+														{...tap}
+														{...hover}
+													>
+														<box
+															width={1}
+															height={cardHeight}
+															position="absolute"
+															backgroundColor={
+																hover.hovered()
+																	? uiColors.borderFocus
+																	: selected()
+																		? uiColors.accent
+																		: uiColors.border
+															}
+														/>
+														<box
+															paddingLeft={2}
+															paddingRight={1}
+															overflow="hidden"
+														>
+															<HighlightedText
+																text={ln().id}
+																highlight={
+																	selected() ? "highlight" : "secondary"
+																}
+																attributes={TextAttributes.BOLD}
+															/>
+														</box>
+														<box
+															paddingLeft={2}
+															paddingRight={1}
+															flexDirection="row"
+														>
+															<text fg={uiColors.textMuted}>
+																{ln().node.spanCount} spans ·{" "}
+																{ln().node.avgDurationMs.toFixed(1)}ms
+															</text>
+														</box>
+														<box paddingLeft={2}>
+															<text
+																fg={
+																	ln().node.errorCount
+																		? uiColors.error
+																		: uiColors.success
+																}
+															>
+																{ln().node.errorCount
+																	? `${ln().node.errorCount} errors`
+																	: "healthy"}
+															</text>
+														</box>
+													</box>
+												);
+											}}
+										</Show>
+									)}
+								</For>
+							</box>
+							<Show when={index() < layers().length - 1}>
+								<box
+									width={3}
+									height={graphHeight()}
+									flexShrink={0}
+									justifyContent="center"
+								>
+									<text fg={uiColors.textMuted}>──▶</text>
+								</box>
+							</Show>
+						</>
+					)}
+				</For>
+			</box>
+		</ScrollableContent>
+	);
+}

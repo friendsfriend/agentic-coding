@@ -648,3 +648,28 @@ operator environment functional tests pass.
   needs a native telemetry source decision first; the current v2 page shows the
   native operation journals (http, query, waits, references) and does not
   pretend to be telemetry it never received.
+
+## Observability port: storage, receivers and first shell integration
+
+- Ported v1 contracts, SQLite TraceDb and JSONL parser into `src/telemetry`,
+  removing v1 project discovery/runtime dependencies. The database requires an
+  explicit v2 state directory, with private directory/database permissions.
+- Ported OTLP HTTP, Datadog, Zipkin, Prometheus and StatsD decoding modules.
+  HTTP ingest and bounded read endpoints run behind the existing authenticated,
+  loopback-only host; this does not add unauthenticated listeners. The runtime
+  owns the lazy telemetry service and closes it on shutdown. `telemetry.read`
+  exposes reads through the native typed gateway.
+- Copied all nine v1 trace/metric/log/topology views, their four stores and
+  sparkline/topology components into the v2 observability feature. They import
+  only local v2 shared UI/contracts. The initial feature composition connects
+  category/list/detail navigation to authenticated reads; no conversation prompt
+  is rendered on Observability.
+- Synthetic authenticated HTTP test verifies ingest/read auth rejection, trace
+  summary and span data, page bounds and actual runtime/database reopen.
+  Focused gateway regressions pass; unfiltered type-check, zero-diagnostic lint
+  and TUI bundle pass.
+- NOT full parity yet: gRPC/protobuf packaging, configurable receiver lifecycle
+  (including Prometheus scraping and StatsD UDP), retention controls/workspace
+  registration, live change subscriptions, complete v1 filters/search/keymaps,
+  footer integration and additional multi-signal security/boundary tests remain.
+  No real apps, providers, telemetry collectors or user configuration were used.

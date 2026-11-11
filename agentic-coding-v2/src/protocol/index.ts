@@ -225,6 +225,16 @@ export type EnvironmentAction = {
 	replicas?: number;
 };
 export type Methods = {
+	"telemetry.read": {
+		input: {
+			signal: "traces" | "spans" | "metrics" | "logs" | "workspaces";
+			page?: number;
+			perPage?: number;
+			changeId?: string;
+			limit?: number;
+		};
+		output: { value: unknown };
+	};
 	"environment.inspect": { input: EnvironmentInspection; output: unknown };
 	"environment.preview": {
 		input: EnvironmentIntention;
@@ -561,6 +571,7 @@ export const methods: Method[] = [
 	"schedule.delete",
 	"schedule.create",
 	"schedule.state",
+	"telemetry.read",
 	"environment.inspect",
 	"environment.preview",
 	"environment.apply",

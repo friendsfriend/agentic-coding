@@ -1,0 +1,260 @@
+import type {
+	LogData,
+	MetricData,
+	MetricDataPoint,
+	SpanData,
+	SpanEvent,
+} from "../contracts.ts";
+
+function id(value: unknown, size: number): boolean {
+	return (
+		typeof value === "string" &&
+		/^[0-9a-f]+$/i.test(value) &&
+		value.length === size
+	);
+}
+
+function nanos(value: unknown): string | undefined {
+	if (typeof value === "string" && /^\d+$/.test(value)) return value;
+	if (typeof value === "number" && Number.isInteger(value) && value > 0)
+		return value.toString();
+	return undefined;
+}
+
+type OtlpAttributeValue = {
+	stringValue?: unknown;
+	boolValue?: unknown;
+	intValue?: unknown;
+	doubleValue?: unknown;
+};
+
+function attrValue(
+	item: OtlpAttributeValue | undefined,
+): string | number | boolean | undefined {
+	if (typeof item?.stringValue === "string") return item.stringValue;
+	if (typeof item?.boolValue === "boolean") return item.boolValue;
+	if (item?.intValue !== undefined) return Number(item.intValue);
+	return typeof item?.doubleValue === "number" ? item.doubleValue : undefined;
+}
+
+function normAttrs(
+	attrs: unknown,
+): Array<{ key: string; value: string | number | boolean }> {
+	if (Array.isArray(attrs))
+		return attrs.map((a) => ({
+			key: String(a.key ?? ""),
+			value: attrValue(a.value) ?? "",
+		}));
+	if (attrs && typeof attrs === "object")
+		return Object.entries(attrs as Record<string, unknown>).map(([k, v]) => ({
+			key: k,
+			value:
+				typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+					? v
+					: String(v),
+		}));
+	return [];
+}
+
+function strAttrs(attrs: unknown): Array<{ key: string; value: string }> {
+	if (Array.isArray(attrs))
+		return attrs.map((a) => ({
+			key: String(a.key ?? ""),
+			value: String(attrValue(a.value) ?? ""),
+		}));
+	if (attrs && typeof attrs === "object")
+		return Object.entries(attrs as Record<string, unknown>).map(([k, v]) => ({
+			key: k,
+			value: String(v),
+		}));
+	return [];
+}
+
+// ---- Spans ----
+
+export // biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, validated field-by-field
+function normalizeOtlpSpan(raw: any): SpanData | undefined {
+	const startTimeUnixNano = nanos(raw?.startTimeUnixNano);
+	const endTimeUnixNano = nanos(raw?.endTimeUnixNano);
+	if (
+		!raw ||
+		!id(raw.traceId, 32) ||
+		!id(raw.spanId, 16) ||
+		typeof raw.name !== "string" ||
+		!startTimeUnixNano ||
+		!endTimeUnixNano
+	)
+		return undefined;
+	const status =
+		typeof raw.status === "object" && raw.status !== null
+			? {
+					code: Number(raw.status.code ?? 0),
+					message: raw.status.message ?? undefined,
+				}
+			: { code: raw.status === "ERROR" ? 2 : 0 };
+	const attributes = normAttrs(raw.attributes ?? []);
+	const resourceAttributes = normAttrs(raw.resource?.attributes ?? []);
+	// Exceptions and log points arrive as span events. They are kept (bounded to
+	// their name, time and normalized attributes) because they are usually the
+	// reason a span failed, and dropping them would leave a status code as the
+	// only explanation a debug tool can report.
+	const events: SpanEvent[] = Array.isArray(raw.events)
+		? raw.events
+				.filter(
+					(event: unknown) =>
+						typeof (event as { name?: unknown } | null)?.name === "string",
+				)
+				.map(
+					(event: {
+						name: string;
+						timeUnixNano?: unknown;
+						attributes?: unknown;
+					}) => ({
+						name: event.name,
+						timeUnixNano: nanos(event.timeUnixNano) ?? startTimeUnixNano,
+						attributes: normAttrs(event.attributes ?? []).map((attribute) => ({
+							key: attribute.key,
+							value: String(attribute.value),
+						})),
+					}),
+				)
+		: [];
+	const serviceName = String(
+		attributes.find((a) => a.key === "service.name")?.value ??
+			resourceAttributes.find((a) => a.key === "service.name")?.value ??
+			"unknown",
+	);
+	return {
+		traceId: String(raw.traceId).toLowerCase(),
+		spanId: String(raw.spanId).toLowerCase(),
+		parentSpanId: id(raw.parentSpanId, 16)
+			? String(raw.parentSpanId).toLowerCase()
+			: "",
+		name: raw.name,
+		startTimeUnixNano,
+		endTimeUnixNano,
+		status,
+		attributes,
+		resource: {
+			attributes: resourceAttributes,
+			droppedAttributesCount: Number(raw.resource?.droppedAttributesCount ?? 0),
+		},
+		scope: { name: raw.scope?.name ?? "", version: raw.scope?.version ?? "" },
+		serviceName,
+		kind: Number(raw.kind ?? 0),
+		...(events.length > 0 ? { events } : {}),
+	};
+}
+
+export // biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, validated field-by-field
+function decodeOtlpTraces(payload: any): SpanData[] {
+	const spans: SpanData[] = [];
+	for (const resource of payload?.resourceSpans ?? []) {
+		// The resource's attributes are handed to the span normalizer *raw* (in
+		// their OTLP `{stringValue}` form) and merged into the span's own: it
+		// normalizes once, so a value that arrives typed (an int, a bool) stays
+		// typed, and `ac.owner`/`ac.run` survive for attribution.
+		const resourceAttributes = resource.resource?.attributes ?? [];
+		for (const scope of resource.scopeSpans ?? []) {
+			for (const span of scope.spans ?? []) {
+				const normalized = normalizeOtlpSpan({
+					...span,
+					attributes: [...resourceAttributes, ...(span.attributes ?? [])],
+					resource: {
+						attributes: resourceAttributes,
+						droppedAttributesCount: Number(
+							resource.resource?.droppedAttributesCount ?? 0,
+						),
+					},
+				});
+				if (normalized) spans.push(normalized);
+			}
+		}
+	}
+	return spans;
+}
+
+// ---- Metrics ----
+
+export // biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, validated field-by-field
+function decodeOtlpMetrics(payload: any): MetricData[] {
+	const metrics: MetricData[] = [];
+	for (const resource of payload?.resourceMetrics ?? []) {
+		const resAttrs = strAttrs(resource.resource?.attributes ?? []);
+		const serviceName =
+			resAttrs.find((a) => a.key === "service.name")?.value ?? "unknown";
+		for (const scope of resource.scopeMetrics ?? []) {
+			for (const metric of scope.metrics ?? []) {
+				const pts =
+					metric.gauge?.dataPoints ??
+					metric.sum?.dataPoints ??
+					metric.histogram?.dataPoints ??
+					[];
+				const type = metric.gauge
+					? "gauge"
+					: metric.sum
+						? "sum"
+						: metric.histogram
+							? "histogram"
+							: "gauge";
+				// biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, validated field-by-field
+				const dataPoints: MetricDataPoint[] = pts.map((dp: any) => ({
+					startTimeUnixNano: dp.startTimeUnixNano ?? dp.timeUnixNano ?? "0",
+					timeUnixNano: dp.timeUnixNano ?? "0",
+					value: Number(dp.asDouble ?? dp.asInt ?? dp.count ?? 0),
+					bucketCounts: dp.bucketCounts?.map(Number),
+					explicitBounds: dp.explicitBounds?.map(Number),
+					attributes: strAttrs(dp.attributes ?? []),
+				}));
+				metrics.push({
+					resource: { attributes: resAttrs },
+					scope: {
+						name: scope.scope?.name ?? "",
+						version: scope.scope?.version ?? "",
+					},
+					name: metric.name ?? "",
+					description: metric.description ?? "",
+					unit: metric.unit ?? "",
+					type: type as "gauge" | "sum" | "histogram",
+					dataPoints,
+					serviceName,
+				});
+			}
+		}
+	}
+	return metrics;
+}
+
+// ---- Logs ----
+
+export // biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, validated field-by-field
+function decodeOtlpLogs(payload: any): LogData[] {
+	const logs: LogData[] = [];
+	for (const resource of payload?.resourceLogs ?? []) {
+		const resAttrs = strAttrs(resource.resource?.attributes ?? []);
+		const serviceName =
+			resAttrs.find((a) => a.key === "service.name")?.value ?? "unknown";
+		for (const scope of resource.scopeLogs ?? []) {
+			for (const log of scope.logRecords ?? []) {
+				logs.push({
+					resource: { attributes: resAttrs },
+					scope: {
+						name: scope.scope?.name ?? "",
+						version: scope.scope?.version ?? "",
+					},
+					timeUnixNano: log.timeUnixNano ?? "0",
+					severity: log.severityText ?? "INFO",
+					body:
+						typeof log.body?.stringValue === "string"
+							? log.body.stringValue
+							: JSON.stringify(log.body ?? ""),
+					attributes: strAttrs(log.attributes ?? []),
+					traceId: log.traceId ? String(log.traceId).toLowerCase() : undefined,
+					spanId: log.spanId ? String(log.spanId).toLowerCase() : undefined,
+					serviceName,
+				});
+			}
+		}
+	}
+	return logs;
+}

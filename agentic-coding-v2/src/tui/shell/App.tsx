@@ -52,7 +52,7 @@ import {
 } from "../features/agents/terminal-agent-process.ts";
 import { EnvironmentsFeature } from "../features/environments/EnvironmentsFeature.tsx";
 import { type Destination, HomeView } from "../features/home/HomeView.tsx";
-import { ObservabilityPanel } from "../features/observability/ObservabilityPanel.tsx";
+import { TelemetryFeature } from "../features/observability/TelemetryFeature.tsx";
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
@@ -277,6 +277,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		import("../ui/index.ts").KeybindSection[]
 	>([]);
 	const [schedulesCatalog, setSchedulesCatalog] = createSignal<
+		import("../ui/index.ts").KeybindSection[]
+	>([]);
+	const [telemetryCatalog, setTelemetryCatalog] = createSignal<
 		import("../ui/index.ts").KeybindSection[]
 	>([]);
 	const [homeCatalog, setHomeCatalog] = createSignal<
@@ -1622,6 +1625,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			}));
 	const formPage = () =>
 		current().page === "home" ||
+		current().page === "observability" ||
 		current().page === "environments" ||
 		current().page === "settings" ||
 		current().page === "wiki" ||
@@ -4407,26 +4411,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									/>
 								</Show>
 								<Show when={current().page === "observability"}>
-									<ObservabilityPanel
-										rows={rows()}
-										selected={rowSelected}
-										select={(row, index) => {
-											navigation.current.selection = index;
-											navigation.current.resource = String(row.id);
-											update();
-										}}
-										environments={state()?.environments}
-										connected={status() === "connected"}
-										expanded={current().expanded}
-										toggle={toggleDetail}
-										openTask={(id) => {
-											if (state()?.tasks.some((task) => task.id === id))
-												go("tasks", String(id));
-											else
-												setNotice(
-													"Owner task is not in the native catalog; no arbitrary task is adopted.",
-												);
-										}}
+									<TelemetryFeature
+										client={client}
+										active={() =>
+											contentFocused() && !helpOpen() && !paletteOpen()
+										}
+										catalog={setTelemetryCatalog}
+										notify={(message) => reportError(message, "Observability")}
 									/>
 								</Show>
 								<Show when={current().page === "settings"}>
@@ -4917,6 +4908,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						sections={[
 							...(current().page === "settings" ? settingsCatalog() : []),
 							...(current().page === "home" ? homeCatalog() : []),
+							...(current().page === "observability" ? telemetryCatalog() : []),
 							...(current().page === "wiki" ? wikiCatalog() : []),
 							...(current().page === "schedules" ? schedulesCatalog() : []),
 							...(current().page === "environments"

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
@@ -48,10 +49,18 @@ import {
 	type TaskInput,
 	values,
 } from "./state.ts";
+import { Telemetry } from "./telemetry/service.ts";
 import { Wiki } from "./wiki.ts";
 
 const nativeTaskId = (id: number) => id as TaskId;
 export class Runtime {
+	private telemetryService?: Telemetry;
+	get telemetry(): Telemetry {
+		this.telemetryService ??= new Telemetry(
+			join(this.config.stateDir, "telemetry"),
+		);
+		return this.telemetryService;
+	}
 	private engine: Harness | null = null;
 	private root: Conversation | null = null;
 	private timer: Scheduler | null = null;
@@ -422,6 +431,8 @@ export class Runtime {
 	async close() {
 		this.closed = true;
 		this.logAnalysis.close();
+		this.telemetryService?.close();
+		this.telemetryService = undefined;
 		await this.standalone.close();
 		while (this.reconciling) await Bun.sleep(10);
 		try {

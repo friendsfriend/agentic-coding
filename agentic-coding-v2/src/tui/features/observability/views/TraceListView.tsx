@@ -1,0 +1,120 @@
+/** @jsxImportSource @opentui/solid */
+
+import { TextAttributes } from "@opentui/core";
+import type { TraceSummary } from "../../../../telemetry/contracts.ts";
+import {
+	Badge,
+	HighlightedText,
+	hostBodyLines,
+	SearchHeader,
+	SelectableList,
+	uiColors,
+	useKeyDispatch,
+	useTerminalDimensions,
+} from "../../../ui/index.ts";
+
+const duration = (ms: number) =>
+	ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+const time = (ns: bigint) =>
+	new Date(Number(ns / 1_000_000n)).toLocaleTimeString();
+const attribute = (
+	span: TraceSummary["rootSpans"][number] | undefined,
+	key: string,
+) =>
+	String(
+		span?.attributes.find((attribute) => attribute.key === key)?.value ?? "—",
+	);
+
+export function TraceListView(props: {
+	summaries: () => TraceSummary[];
+	selectedIndex: () => number;
+	onSelect: (index: number) => void;
+	searchMode: () => boolean;
+	searchQuery: () => string;
+	resultCount: () => number;
+	/** Trace-list paging: `[`/`K` and `]`/`J` move between pages. */
+	page: () => number;
+	totalPages: () => number;
+	loading: () => boolean;
+}) {
+	const dispatch = useKeyDispatch();
+	const size = useTerminalDimensions();
+	// The view's own search header takes one row above the list.
+	const listLines = () => Math.max(1, hostBodyLines(size().height) - 1);
+	return (
+		<box flexDirection="column" width="100%" height="100%">
+			<SearchHeader
+				searchMode={props.searchMode}
+				searchQuery={props.searchQuery}
+				resultCount={props.resultCount}
+			>
+				<text fg={uiColors.textMuted}>
+					{props.loading()
+						? "loading…"
+						: `page ${props.page()}/${props.totalPages()}`}
+				</text>
+			</SearchHeader>
+			{props.summaries().length > 0 && (
+				<SelectableList
+					items={props.summaries()}
+					itemKey={(summary) => summary.traceId}
+					availableLines={listLines()}
+					selectedIndex={props.selectedIndex}
+					onSelect={props.onSelect}
+					onActivate={() => dispatch("Enter")}
+					renderItem={(summary, selected) => {
+						const root = summary.rootSpans[0];
+						const workspace = attribute(root, "herdr.change.id");
+						const agent =
+							summary.agents.join(", ") || attribute(root, "herdr.role");
+						return (
+							<box
+								height={2}
+								flexDirection="column"
+								paddingLeft={1}
+								paddingRight={1}
+							>
+								<box height={1} flexDirection="row">
+									<HighlightedText
+										text={workspace}
+										highlight={selected ? "highlight" : "secondary"}
+										attributes={TextAttributes.BOLD}
+									/>
+									<text fg={uiColors.textMuted}>
+										{" "}
+										{agent} · {root?.name ?? summary.traceId.slice(0, 16)}
+									</text>
+									<box style={{ flexGrow: 1 }} />
+									<Badge
+										text={
+											summary.errorCount ? `${summary.errorCount} error` : "ok"
+										}
+										highlight={summary.errorCount ? "negative" : "positive"}
+									/>
+								</box>
+								<box height={1} flexDirection="row">
+									<HighlightedText
+										text={duration(summary.durationMs)}
+										highlight="warning"
+									/>
+									<text fg={uiColors.textMuted}>
+										{" "}
+										{summary.spanCount} spans · {time(summary.startTime)} ·{" "}
+										{summary.traceId.slice(0, 12)}
+									</text>
+								</box>
+							</box>
+						);
+					}}
+				/>
+			)}
+			{props.summaries().length === 0 && (
+				<box paddingLeft={1}>
+					<text fg={uiColors.textMuted}>
+						{props.loading() ? "Loading traces…" : "No traces on this page"}
+					</text>
+				</box>
+			)}
+		</box>
+	);
+}
