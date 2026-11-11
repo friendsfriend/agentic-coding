@@ -250,6 +250,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		origin: View;
 	} | null>(null);
 	const [quitConfirmation, setQuitConfirmation] = createSignal(false);
+	// v1: the embedded environment publishes its live command catalog and its
+	// dialog state; the shell footer/help project them instead of menu keys.
+	const [environmentCatalog, setEnvironmentCatalog] = createSignal<
+		Array<{ title: string; keybinds: Array<{ key: string; action: string }> }>
+	>([]);
+	const [environmentModal, setEnvironmentModal] = createSignal(false);
 	// Existing helpOpen guards are shell interaction fences, including the two
 	// higher-priority local dialogs. Actual help rendering uses helpRequested.
 	const helpOpen = () =>
@@ -2392,6 +2398,27 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		),
 	});
 	onCleanup(unregister);
+	// v1: `?` is host-owned and opens the shared help over the environment page
+	// (which has no prompt to catch it), unless the environment is taking text.
+	const unregisterEnvironmentHelp = keymap.registerLayer({
+		id: "v2.environment-help",
+		priority: 20,
+		enabled: () =>
+			current().page === "environments" &&
+			contentFocused() &&
+			!helpOpen() &&
+			!paletteOpen() &&
+			keymap.getData?.("textEntry.active") !== true,
+		commands: layerCommands([
+			{
+				id: "environment.help",
+				name: "Open help",
+				run: () => queueMicrotask(() => setHelpOpen(true)),
+			},
+		]),
+		bindings: [{ key: "?", cmd: "environment.help" }],
+	});
+	onCleanup(unregisterEnvironmentHelp);
 	let pendingSubmissions = 0;
 	async function submit() {
 		if (crumbActive()) return;
@@ -4203,6 +4230,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 											messageDialog() === null &&
 											!quitConfirmation()
 										}
+										onKeybindCatalog={setEnvironmentCatalog}
+										onModalChange={setEnvironmentModal}
 									/>
 								</Show>
 								<Show when={current().page === "schedules"}>
@@ -4821,33 +4850,54 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					</Show>
 				</box>
 				<StatusBar
-					keybinds={(paletteOpen()
-						? paletteKeybinds
-						: settingsEditing()
-							? [...shellKeybinds, ...editorKeybinds]
-							: [
-									...shellKeybinds,
-									...(crumbActive() ? breadcrumbKeybinds : actionKeybinds),
-									...(pageFocusEnabled() ? pageFocusKeybinds : []),
-									...(menuKeysActive() &&
-									(current().page === "settings" ||
-										current().page === "environments")
-										? menuKeybinds
-										: []),
-									...(isTranscript() && !crumbActive()
-										? [...transcriptKeybinds, ...transcriptViewportKeybinds]
-										: []),
-									...(contentFocused() ? promptFooterBindings() : []),
-									...(current().focus === "sessions"
-										? workspaceNavigationKeybinds
-										: []),
-									...(current().focus === "viewpoints"
-										? nativeAgentNavigationKeybinds
-										: []),
-								]
-					)
-						.filter((binding) => !binding.standard)
-						.map((binding) => ({ ...binding, key: keyLabel(binding.key) }))}
+					keybinds={[
+						...(current().page === "environments" &&
+						environmentModal() &&
+						!paletteOpen()
+							? []
+							: (paletteOpen()
+									? paletteKeybinds
+									: settingsEditing()
+										? [...shellKeybinds, ...editorKeybinds]
+										: [
+												...shellKeybinds,
+												...(crumbActive()
+													? breadcrumbKeybinds
+													: actionKeybinds),
+												...(pageFocusEnabled() ? pageFocusKeybinds : []),
+												...(menuKeysActive() && current().page === "settings"
+													? menuKeybinds
+													: []),
+												...(isTranscript() && !crumbActive()
+													? [
+															...transcriptKeybinds,
+															...transcriptViewportKeybinds,
+														]
+													: []),
+												...(contentFocused() &&
+												current().page !== "environments"
+													? promptFooterBindings()
+													: []),
+												...(current().focus === "sessions"
+													? workspaceNavigationKeybinds
+													: []),
+												...(current().focus === "viewpoints"
+													? nativeAgentNavigationKeybinds
+													: []),
+											]
+								)
+									.filter((binding) => !binding.standard)
+									.map((binding) => ({
+										...binding,
+										key: keyLabel(binding.key),
+									}))),
+						// The environment's own labels are already v1 display labels.
+						...(current().page === "environments" &&
+						contentFocused() &&
+						!paletteOpen()
+							? environmentCatalog().flatMap((section) => section.keybinds)
+							: []),
+					]}
 					showHelp={!paletteOpen()}
 				/>
 				<Show when={connectionError()}>
@@ -4865,6 +4915,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					<HelpOverlay
 						close={() => setHelpOpen(false)}
 						sections={[
+							...(current().page === "environments"
+								? environmentCatalog()
+								: []),
 							{
 								title: "Prompt commands",
 								keybinds: help.map((line) => {

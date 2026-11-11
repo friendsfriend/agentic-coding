@@ -22,6 +22,13 @@ export function EnvironmentsFeature(props: {
 	client: ClientConnection;
 	active: () => boolean;
 	onModalChange?: (open: boolean) => void;
+	/** The environment's live footer/help catalog (v1 `onKeybindCatalog`). */
+	onKeybindCatalog?: (
+		sections: Array<{
+			title: string;
+			keybinds: Array<{ key: string; action: string }>;
+		}>,
+	) => void;
 }) {
 	const keymap = useKeymap();
 	// v1's embedded layers declare `shellFeature`; the v2 shell names the
@@ -33,7 +40,7 @@ export function EnvironmentsFeature(props: {
 			},
 		}),
 	);
-	const disposeKeymap = setupDevenvKeymap(keymap);
+	const disposeKeymap = setupDevenvKeymap(keymap, true);
 	createEffect(() => {
 		keymap.setData("shell.feature", props.active() ? "environments" : "none");
 	});
@@ -58,6 +65,9 @@ export function EnvironmentsFeature(props: {
 			chromeLines={SHELL_CHROME_LINES}
 			active={props.active}
 			{...(props.onModalChange ? { onModalChange: props.onModalChange } : {})}
+			{...(props.onKeybindCatalog
+				? { onKeybindCatalog: props.onKeybindCatalog }
+				: {})}
 		/>
 	);
 }

@@ -610,7 +610,9 @@ export function TUIApp(props: TUIAppProps) {
 		if (!props.embedded || !props.onModalChange) return;
 		keymapVersion();
 		const active = props.active?.() ?? true;
-		const modal = String(keymap.getData?.("modal.active") ?? "none");
+		const modal = String(
+			keymap.getData?.("modal.active.environments") ?? "none",
+		);
 		props.onModalChange(active && modal !== "none");
 	});
 	const footerKeybinds = createMemo(() => {

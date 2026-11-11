@@ -51,7 +51,15 @@ const normalizeBoolean = (field: string, value: unknown): boolean => {
 	return value;
 };
 
-export function setupDevenvKeymap(keymap: DevenvKeymap): () => void {
+export function setupDevenvKeymap(
+	keymap: DevenvKeymap,
+	/** Embedded in the v2 shell the runtime writes the environment's own
+	 * namespaced modal key (as v1's dashboard host registered it), so the
+	 * `envModal` field must read that key; reading the shared `modal.active`
+	 * left every environment layer unmatched. */
+	embedded = false,
+): () => void {
+	const modalKey = embedded ? "modal.active.environments" : "modal.active";
 	return keymap.acquireResource(APP_KEYMAP_SETUP_RESOURCE, () => {
 		const disposers = [
 			registerBaseLayoutFallback(keymap),
@@ -94,7 +102,7 @@ export function setupDevenvKeymap(keymap: DevenvKeymap): () => void {
 				// plain key; embedded the host points it at the environment's
 				// namespaced key so another body's dialog state cannot park it.
 				envModal(value, ctx) {
-					ctx.require("modal.active", normalizeText("envModal", value));
+					ctx.require(modalKey, normalizeText("envModal", value));
 				},
 				textEntry(value, ctx) {
 					ctx.require("textEntry.active", normalizeBoolean("textEntry", value));

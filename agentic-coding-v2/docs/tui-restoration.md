@@ -483,3 +483,26 @@ operator environment functional tests pass.
   headers, a `scripts/` directory under the home directory) that v2 does not
   read, and it would clone third-party demo repositories. Porting it needs a
   developer decision on v2-native demo content.
+
+## Environment keybindings, footer and help
+
+- **Fixed:** every environment keymap layer was dead in the shell. The runtime
+  writes the embedded dialog state to `modal.active.environments` (as v1's
+  dashboard host did), but the `envModal` layer field and the modal report read
+  `modal.active`, which nobody sets in v2. Every layer requires
+  `envModal: "none"` or a specific dialog, so no environment key matched.
+  `setupDevenvKeymap(keymap, embedded)` now points the field at the namespaced
+  key, as v1's `dash/keymap-setup.ts` did, and `onModalChange` reads the same
+  key.
+- The shell wires v1's `onKeybindCatalog` and `onModalChange`:
+  - The footer on the environments page shows the environment's live command
+    catalog (v1 display labels) instead of the generic menu keys and prompt
+    bindings. The environments page has no prompt, as in v1.
+  - While an environment dialog is open, the shell footer gives way to the
+    dialog's own footer.
+  - The `F1`/`?` help overlay leads with the environment's catalog.
+  - `?` on the environments page opens the shared help (host-owned, as in v1),
+    except while the environment takes text input (`textEntry.active`).
+- The 17 v1 guides had been left in an orphaned `src/tui/devenv/app/guides`
+  directory, so every Help-modal guide and the First Steps "config repository"
+  guide failed to import. They now sit next to `guides/index.ts`.
