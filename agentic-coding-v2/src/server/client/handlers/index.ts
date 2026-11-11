@@ -47,6 +47,15 @@ function fields(input: Data, allowed: string[]) {
 	if (Object.keys(input).some((key) => !allowed.includes(key)))
 		throw new Error("Unsupported command field");
 }
+function record(value: unknown): Data {
+	if (value === null || typeof value !== "object" || Array.isArray(value))
+		throw new Error("Unsupported command value");
+	return value as Data;
+}
+function list(value: unknown): unknown[] {
+	if (!Array.isArray(value)) throw new Error("Unsupported command value");
+	return value;
+}
 function integer(value: unknown) {
 	if (!Number.isSafeInteger(value) || Number(value) < 0)
 		throw new Error("Invalid identity or revision");
@@ -250,6 +259,59 @@ export async function dispatch(
 				input.comments,
 			);
 			return { decided: true };
+		}
+		case "schedule.create": {
+			// The developer's authenticated form save is the authorization; the
+			// orchestrator's schedule tool keeps its human review. Occurrences still
+			// admit ordinary native tasks with their own policy and reviews.
+			fields(input, ["id", "invocation", "timing", "lateGraceMs"]);
+			const invocation = record(input.invocation);
+			fields(invocation, [
+				"topicId",
+				"skill",
+				"profile",
+				"repository",
+				"baseRef",
+				"inputs",
+				"requestId",
+			]);
+			const timing = record(input.timing);
+			const kind = text(timing.kind, "timing", 16);
+			return app.scheduler.create(
+				{
+					...invocation,
+					policy: "read-only",
+				} as unknown as Parameters<typeof app.scheduler.create>[0],
+				(kind === "once"
+					? { kind, at: integer(timing.at) }
+					: kind === "interval"
+						? {
+								kind,
+								everyMs: integer(timing.everyMs),
+								anchor: integer(timing.anchor),
+							}
+						: {
+								kind: "calendar" as const,
+								timezone: text(timing.timezone, "timezone", 64),
+								weekdays: list(timing.weekdays).map((day) => integer(day)),
+								hour: integer(timing.hour),
+								minute: integer(timing.minute),
+							}) as Parameters<typeof app.scheduler.create>[1],
+				input.lateGraceMs === null ? null : integer(input.lateGraceMs),
+				text(input.id, "schedule identity", 128),
+			);
+		}
+		case "schedule.state": {
+			fields(input, ["id", "revision", "state"]);
+			const state = text(input.state, "schedule state", 16);
+			if (state !== "enabled" && state !== "paused")
+				throw new Refusal("Unknown schedule state");
+			await app.scheduler.setState(
+				text(input.id, "schedule identity", 128),
+				integer(input.revision),
+				state,
+			);
+			return { updated: true as const };
 		}
 		case "schedule.delete":
 			fields(input, ["id", "revision"]);
@@ -529,6 +591,7 @@ export async function dispatch(
 				"query",
 				"url",
 			]);
+
 			return app.providerWorkbench.run(
 				operation as WorkbenchOperation,
 				input,

@@ -705,6 +705,20 @@ export function result<M extends Method>(
 		// the serialized size below the frame budget.
 		if (value !== null && !["string", "object"].includes(typeof value))
 			throw new Error("Invalid provider workbench value");
+	} else if (method === "schedule.create") {
+		const data = record(value);
+		if (
+			typeof data.id !== "string" ||
+			data.id.length === 0 ||
+			data.id.length > 128 ||
+			typeof data.invocation !== "object" ||
+			typeof data.timing !== "object" ||
+			!(data.lateGraceMs === null || integer(data.lateGraceMs))
+		)
+			throw new Error("Invalid schedule creation");
+	} else if (method === "schedule.delete") {
+		if (record(value).deleted !== true)
+			throw new Error("Invalid schedule deletion");
 	} else if (method !== "providers.read") {
 		const data = record(value);
 		const expected =
@@ -718,7 +732,9 @@ export function result<M extends Method>(
 							? "decided"
 							: method === "schedule.delete"
 								? "deleted"
-								: null;
+								: method === "schedule.state"
+									? "updated"
+									: null;
 		if (expected && data[expected] !== true)
 			throw new Error("Invalid server acknowledgement");
 		if (method === "session.send" && !integer(data.submissionId))

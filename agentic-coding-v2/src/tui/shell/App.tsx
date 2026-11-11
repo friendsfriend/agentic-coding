@@ -40,7 +40,6 @@ import type {
 import type { StandaloneInventory } from "../../protocol/standalone.ts";
 import {
 	type UiResourcePreferences,
-	uiResourcePreferences,
 	uiView,
 	uiWorkspaceFilter,
 	uiWorkspaceLayout,
@@ -51,7 +50,7 @@ import { ObservabilityPanel } from "../features/observability/ObservabilityPanel
 import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
-import { ResourcePanel } from "../features/resources/ResourcePanel.tsx";
+import { SchedulesView } from "../features/resources/SchedulesView.tsx";
 import { ContextPanel } from "../features/sessions/ContextPanel.tsx";
 import { HistoryPanel } from "../features/sessions/HistoryPanel.tsx";
 import { DraftHistory } from "../features/sessions/history.ts";
@@ -1582,33 +1581,6 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			pins: [],
 			pinnedOnly: false,
 		};
-	const changeResourcePreferences = (next: UiResourcePreferences): boolean => {
-		if (
-			busy() ||
-			helpOpen() ||
-			settingsEditing() ||
-			(paletteOpen() && !localChoice())
-		)
-			return false;
-		try {
-			const checked = uiResourcePreferences(next, current().page);
-			const selected = rows().find(rowSelected);
-			if (
-				navigation.current.resource === null &&
-				selected &&
-				rows().filter((row) => row.id === selected.id).length === 1
-			)
-				navigation.current.resource = String(selected.id);
-			navigation.current.resourcePreferences = checked;
-			update();
-			return true;
-		} catch (cause) {
-			setNotice(
-				cause instanceof Error ? cause.message : "Resource preference refused",
-			);
-			return false;
-		}
-	};
 	const rows = createMemo(() => {
 		const snapshot = state(),
 			selected = current();
@@ -1661,14 +1633,10 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					.includes(selected.filter.toLowerCase()),
 			);
 		if (selected.sort === "newest") rows = [...rows].reverse();
-		if (selected.page === "environments" || selected.page === "schedules") {
+		if (selected.page === "environments") {
 			const preferences = resourcePreferences();
 			if (preferences.category !== null)
-				rows = rows.filter(
-					(row) =>
-						(selected.page === "environments" ? row.kind : row.state) ===
-						preferences.category,
-				);
+				rows = rows.filter((row) => row.kind === preferences.category);
 			if (preferences.pinnedOnly)
 				rows = rows.filter((row) => preferences.pins.includes(String(row.id)));
 			if (preferences.order === "identity")
@@ -4134,49 +4102,24 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									/>
 								</Show>
 								<Show when={current().page === "schedules"}>
-									<ResourcePanel
-										preferences={resourcePreferences()}
-										changePreferences={changeResourcePreferences}
-										filter={current().filter}
-										inventory={
-											current().page === "schedules"
-												? dataList(state()?.schedules)
-												: dataList(state()?.environments.projects)
-										}
-										scope={workspaceScope()}
-										interactive={workspaceInteractive() && !settingsEditing()}
-										fresh={snapshotFresh()}
-										choose={openLocalChoice}
-										kind={
-											current().page === "schedules"
-												? "schedules"
-												: "environments"
-										}
-										rows={rows()}
-										selected={rowSelected}
-										select={(row, index) => {
-											navigation.current.selection = index;
-											navigation.current.resource = String(row.id);
-											update();
-										}}
-										environments={state()?.environments}
+									<SchedulesView
+										client={client}
+										schedules={dataList(state()?.schedules)}
+										profiles={state()?.profiles ?? []}
+										repositories={state()?.repositories ?? []}
+										skills={skillData()}
 										connected={status() === "connected"}
-										expanded={current().expanded}
-										toggle={toggleDetail}
-										prepare={(command) => {
-											remember();
-											if (navigation.current.draft.trim()) return false;
-											prepareCommand(command);
-											return navigation.current.draft === command;
-										}}
-										openTask={(id) => {
-											if (state()?.tasks.some((task) => task.id === id))
-												go("tasks", String(id));
-											else
-												setNotice(
-													"Owner task is not in the native catalog; no arbitrary native task is adopted.",
-												);
-										}}
+										fresh={snapshotFresh()}
+										active={() =>
+											contentFocused() && !helpOpen() && !paletteOpen()
+										}
+										changed={() => setRefreshRevision((value) => value + 1)}
+										notify={(message, error) =>
+											error
+												? reportError(message, "Schedules")
+												: setNotice(message)
+										}
+										catalog={setSchedulesCatalog}
 									/>
 								</Show>
 								<Show when={current().page === "skills"}>
@@ -4583,7 +4526,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							when={
 								current().page !== "environments" &&
 								current().page !== "settings" &&
-								current().page !== "wiki"
+								current().page !== "wiki" &&
+								current().page !== "schedules"
 							}
 						>
 							<SessionPrompt
@@ -4750,6 +4694,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						...((settingsThemeOpen() ||
 							(current().page === "settings" && settingsCatalog().length > 0) ||
 							(current().page === "wiki" && wikiCatalog().length > 0) ||
+							(current().page === "schedules" &&
+								schedulesCatalog().length > 0) ||
 							(current().page === "environments" && environmentModal())) &&
 						!paletteOpen()
 							? []
@@ -4832,6 +4778,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						sections={[
 							...(current().page === "settings" ? settingsCatalog() : []),
 							...(current().page === "wiki" ? wikiCatalog() : []),
+							...(current().page === "schedules" ? schedulesCatalog() : []),
 							...(current().page === "environments"
 								? environmentCatalog()
 								: []),

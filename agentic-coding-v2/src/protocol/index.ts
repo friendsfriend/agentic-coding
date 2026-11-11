@@ -287,6 +287,36 @@ export type Methods = {
 		input: { id: string; revision: number };
 		output: { deleted: true };
 	};
+	"schedule.create": {
+		input: {
+			id: string;
+			invocation: {
+				topicId: string;
+				skill: string;
+				profile: string;
+				repository: string;
+				baseRef?: string;
+				inputs: string;
+				requestId: string;
+			};
+			timing:
+				| { kind: "once"; at: number }
+				| { kind: "interval"; everyMs: number; anchor: number }
+				| {
+						kind: "calendar";
+						timezone: string;
+						weekdays: number[];
+						hour: number;
+						minute: number;
+				  };
+			lateGraceMs: number | null;
+		};
+		output: Data;
+	};
+	"schedule.state": {
+		input: { id: string; revision: number; state: "enabled" | "paused" };
+		output: { updated: true };
+	};
 	"environment.action": {
 		input: EnvironmentAction;
 		output: { taskId: number };
@@ -529,6 +559,8 @@ export const methods: Method[] = [
 	"task.cancel",
 	"review.decide",
 	"schedule.delete",
+	"schedule.create",
+	"schedule.state",
 	"environment.inspect",
 	"environment.preview",
 	"environment.apply",
