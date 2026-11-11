@@ -2,7 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import {
+	fauxAssistantMessage,
+	fauxText,
+	fauxToolCall,
+} from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server/index.ts";
@@ -671,3 +675,66 @@ test("restored v1 Tasks tab lists, probes, creates, links, deletes and remembers
 		await host.stop();
 	}
 }, 20000);
+
+test("restored v1 log AI panel streams a tool-less analysis of the newest logs from the orchestrator profile through the gateway", async () => {
+	const { app, fake } = await fixture(false, undefined, {
+		tokensPerSecond: 40,
+		tokenSize: { min: 4, max: 8 },
+	});
+	const seen: string[] = [];
+	const answer =
+		"Errors: database connection refused at startup. Warnings: retrying. ".repeat(
+			3,
+		);
+	fake.setResponses([
+		(context) => {
+			const message = context.messages.at(-1);
+			seen.push(
+				typeof message?.content === "string"
+					? message.content
+					: JSON.stringify(message?.content),
+			);
+			return fauxAssistantMessage([fauxText(answer)]);
+		},
+		() => fauxAssistantMessage([fauxText("The retries succeeded.")]),
+	]);
+	const host = serve(app),
+		connection = new ClientConnection(host.client),
+		client = new DevEnvClient(new GatewayBackend(connection, () => {}));
+	try {
+		connection.connect();
+		await eventually(
+			async () => connection.state,
+			(state) => state !== null,
+		);
+		const logs = `${"x".repeat(120 * 1024)}\nERROR connection refused\n`;
+		const deltas: string[] = [];
+		for await (const delta of client.analyzeLogsWithAIStream(
+			logs,
+			"summarize errors",
+		))
+			deltas.push(delta);
+		expect(deltas.length).toBeGreaterThan(1);
+		expect(deltas.join("")).toBe(answer);
+		expect(seen[0]).toStartWith(
+			"summarize errors\n[Note: log was truncated to the most recent 100 KB]",
+		);
+		expect(seen[0]).toEndWith("ERROR connection refused\n");
+		expect(Buffer.byteLength(seen[0] ?? "")).toBeLessThan(101 * 1024);
+		expect(
+			await client.analyzeLogsWithAI("short log", "User: did it recover?"),
+		).toBe("The retries succeeded.");
+		await expect(
+			(async () => {
+				for await (const _ of client.analyzeLogsWithAIStream("  ")) {
+				}
+			})(),
+		).rejects.toThrow("No logs to analyze");
+		const snapshot = await app.snapshot();
+		expect(snapshot.tasks).toHaveLength(0);
+		expect(snapshot.messages).toHaveLength(0);
+	} finally {
+		connection.close();
+		await host.stop();
+	}
+});

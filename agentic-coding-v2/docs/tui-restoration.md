@@ -445,3 +445,41 @@ operator environment functional tests pass.
   - the duplicate-ident refusal;
   - the uncommitted-changes refusal;
   - removal deleting the container and both registrations.
+
+## Log AI panel, create-target script and the example config
+
+- **Log AI panel.** In v1, `analyzeLogsWithAI` and `analyzeLogsWithAIStream`
+  ran `pi --print --no-session --no-tools` and sent the output over SSE. In v2
+  they go through the gateway method `environment.logs.analyze`
+  (`start`/`read`/`cancel`) on `LogAnalysis`
+  (`src/environment/log-analysis.ts`).
+  - Each request streams one tool-less completion from the configured
+    orchestrator profile's model, with the profile's thinking level.
+  - The developer submitting the prompt is the approval. There are no tools,
+    no transcript and no durable state, and the answer is kept in memory only
+    until it has been read.
+  - v1's bounds are kept: the newest 100 KB of the log with v1's truncation
+    note, a 90 s timeout ("AI analysis timed out") and v1's default prompt.
+    At most 2 analyses run at once and 8 are kept.
+  - A gateway call is limited to 15 s, so the TUI starts the analysis and
+    polls its text. The TUI's own streaming, follow-up and history flow is
+    unchanged. Abandoning the stream cancels the completion.
+  - The faux-provider functional test is in `operator-environment.test.ts`.
+- **"No Target Configured → Create target script"** (`createShellActionScript`)
+  uses `environment.apps` `shell-target`.
+  - It writes v1's template to v1's path,
+    `CONFIG_DIR/apps/{run,build}/<ident>-<profile|action>.sh`. An existing
+    file is never replaced.
+  - It registers a native `shell` target (`build-shell`, `test-shell`,
+    `run-shell-<profile>`) that runs the script with `/bin/sh` in the checkout.
+    The registration is validated and written atomically under the definition
+    lock.
+  - Duplicate targets and PowerShell are refused.
+  - The add-repository test covers creating the target, editing the script,
+    then building the app and reading its output.
+- **First Steps → "Create example config"** is refused with guidance: add a
+  provider and a repository, then create a target script. v1's generator
+  writes a v1-format tree (`apps/*.json`, compose files, `devenv:` script
+  headers, a `scripts/` directory under the home directory) that v2 does not
+  read, and it would clone third-party demo repositories. Porting it needs a
+  developer decision on v2-native demo content.

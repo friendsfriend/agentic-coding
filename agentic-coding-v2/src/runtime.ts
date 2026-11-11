@@ -15,6 +15,7 @@ import { createAgentTools, createTaskCodingTools } from "./agent-tools.ts";
 import { type Config, text } from "./config.ts";
 import { AppRegistry } from "./environment/app-registry.ts";
 import { ClusterOperator } from "./environment/cluster-operator.ts";
+import { LogAnalysis } from "./environment/log-analysis.ts";
 import { Environments } from "./environment/manager.ts";
 import {
 	type OperatorAction,
@@ -70,6 +71,7 @@ export class Runtime {
 	readonly tasks: TaskCollection;
 	readonly providerWorkbench: ProviderWorkbench;
 	readonly appRegistry: AppRegistry;
+	readonly logAnalysis: LogAnalysis;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
@@ -93,6 +95,7 @@ export class Runtime {
 			this.repositoryGit,
 			this.settings,
 		);
+		this.logAnalysis = new LogAnalysis(config, models);
 		this.appRegistry = new AppRegistry(
 			config,
 			this.environments,
@@ -418,6 +421,7 @@ export class Runtime {
 	}
 	async close() {
 		this.closed = true;
+		this.logAnalysis.close();
 		await this.standalone.close();
 		while (this.reconciling) await Bun.sleep(10);
 		try {

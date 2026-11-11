@@ -342,6 +342,88 @@ export class AppRegistry {
 			});
 		}
 	}
+	/** v1 "No Target Configured → Create target script": v1 wrote
+	 * `CONFIG_DIR/apps/{run,build}/<ident>-<profile|action>.sh` and discovered it
+	 * as a shell target. v2 writes the same template (never replacing an
+	 * existing file) and registers a native shell target running it with
+	 * `/bin/sh` in the checkout; the confirm dialog is the approval. */
+	async shellTarget(input: Record<string, unknown>) {
+		const ident = text(input.ident, "app", 64);
+		const action = text(input.action, "action", 16);
+		if (action !== "build" && action !== "test" && action !== "run")
+			throw new Refusal(`unsupported shell action "${action}"`);
+		if (input.runtime !== undefined && input.runtime !== "shell")
+			throw new Refusal(
+				"Only POSIX shell targets are available in agentic-coding-v2; PowerShell is not",
+			);
+		const profile =
+			action === "run"
+				? typeof input.profile === "string" && input.profile
+					? input.profile
+					: "dev"
+				: "";
+		if (action === "run" && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(profile))
+			throw new Refusal(
+				"profile must contain only letters, numbers, underscores, and dashes",
+			);
+		return this.serial(async () => {
+			const project = this.environments.projects.find(
+				(item) => item.id === ident,
+			);
+			if (!project || project.kind === "infrastructure")
+				throw new Refusal(`app with ident "${ident}" not found`);
+			const id = action === "run" ? `run-shell-${profile}` : `${action}-shell`;
+			if (project.targets.some((target) => target.id === id))
+				throw new Refusal(`${ident} already has target ${id}`);
+			const file = this.catalogFile();
+			const directory = path.join(
+				fs.realpathSync(this.config.configDir),
+				"apps",
+				action === "run" ? "run" : "build",
+			);
+			const script = path.join(
+				directory,
+				action === "run" ? `${ident}-${profile}.sh` : `${ident}-${action}.sh`,
+			);
+			const label =
+				action === "run"
+					? profile
+					: action.charAt(0).toUpperCase() + action.slice(1);
+			fs.mkdirSync(directory, { recursive: true, mode: 0o755 });
+			if (
+				fs.realpathSync(directory) !== directory ||
+				(fs.existsSync(script) && !fs.lstatSync(script).isFile())
+			)
+				throw new Refusal(`${script} must be a regular file in CONFIG_DIR`);
+			if (!fs.existsSync(script))
+				fs.writeFileSync(
+					script,
+					`#!/usr/bin/env sh\n# devenv:name=${label}\n# devenv:mode=${action === "run" ? "tmux" : "logged"}\nset -eu\n\necho "TODO: replace with your command"\n`,
+					{ mode: 0o755, flag: "wx" },
+				);
+			this.writeCatalog(file, (projects) =>
+				projects.map((item) =>
+					item.id !== ident
+						? item
+						: {
+								...item,
+								targets: [
+									...((item.targets as unknown[]) ?? []),
+									{
+										id,
+										action,
+										runtime: "shell",
+										command: `/bin/sh '${script.replaceAll("'", "'\\''")}'`,
+										...(action === "run" ? { profile } : {}),
+										label,
+									},
+								],
+							},
+				),
+			);
+			return { success: true, path: script };
+		});
+	}
 	async remove(input: Record<string, unknown>) {
 		const ident = text(input.ident, "app", 64);
 		return this.serial(async () => {

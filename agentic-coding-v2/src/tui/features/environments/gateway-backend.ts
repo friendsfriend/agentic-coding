@@ -1052,6 +1052,34 @@ export class GatewayBackend implements DevEnvBackend {
 					.then(async () => {
 						await this.refreshGit();
 					});
+			case "createShellActionScript": {
+				const request = (args[0] ?? {}) as Record<string, unknown>;
+				return this.client.call("environment.apps", {
+					operation: "shell-target",
+					ident: String(request.ident ?? ""),
+					action: String(request.action ?? "") as "run",
+					...(request.profile ? { profile: String(request.profile) } : {}),
+					...(request.runtime ? { runtime: String(request.runtime) } : {}),
+				});
+			}
+			case "createExampleConfig":
+				return Promise.reject(
+					new Error(
+						"agentic-coding-v2 does not generate the v1 example tree. Add a provider and a repository, then press b/t/r on the app to create its first target script.",
+					),
+				);
+			case "analyzeLogsWithAIStream":
+				return this.analyzeLogs(arg(0), args[1] === undefined ? "" : arg(1));
+			case "analyzeLogsWithAI":
+				return (async () => {
+					let summary = "";
+					for await (const delta of this.analyzeLogs(
+						arg(0),
+						args[1] === undefined ? "" : arg(1),
+					))
+						summary += delta;
+					return summary;
+				})();
 			case "getProviders":
 				return this.registry("providers");
 			case "getProvider":
@@ -1373,6 +1401,45 @@ export class GatewayBackend implements DevEnvBackend {
 	}
 	/** v1 streamed GitLab job traces; v2 polls the bounded trace every 2 s and
 	 * emits only new lines until aborted. */
+	/** v1 streamed `pi --print` output over SSE; v2 starts a tool-less
+	 * completion on the orchestrator profile and polls its text. */
+	private async *analyzeLogs(logs: string, prompt: string) {
+		const started = (await this.client.call("environment.logs.analyze", {
+			operation: "start",
+			logs,
+			...(prompt ? { prompt } : {}),
+		})) as { id: string };
+		let offset = 0,
+			finished = false;
+		try {
+			while (true) {
+				const part = (await this.client.call("environment.logs.analyze", {
+					operation: "read",
+					id: started.id,
+					offset,
+				})) as { delta: string; done: boolean; error: string | null };
+				if (part.delta) {
+					offset += part.delta.length;
+					yield part.delta;
+				}
+				if (part.done) {
+					finished = true;
+					if (part.error) throw new Error(part.error);
+					return;
+				}
+				if (!part.delta) await Bun.sleep(150);
+			}
+		} finally {
+			if (!finished)
+				void this.client
+					.call("environment.logs.analyze", {
+						operation: "cancel",
+						id: started.id,
+					})
+					.catch(() => undefined);
+		}
+	}
+
 	private async streamJobLogs(
 		app: string,
 		job: number,

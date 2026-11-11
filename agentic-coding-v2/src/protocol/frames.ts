@@ -679,6 +679,7 @@ export function result<M extends Method>(
 		method === "environment.cluster" ||
 		method === "environment.tasks" ||
 		method === "environment.apps" ||
+		method === "environment.logs.analyze" ||
 		method === "environment.stats"
 	) {
 		if (Array.isArray(value)) list(value);

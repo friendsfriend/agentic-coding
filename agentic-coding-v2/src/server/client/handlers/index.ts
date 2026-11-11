@@ -318,6 +318,9 @@ export async function dispatch(
 				"provider",
 				"definitionLocation",
 				"ident",
+				"action",
+				"profile",
+				"runtime",
 			]);
 			switch (text(input.operation, "app operation", 16)) {
 				case "create":
@@ -326,8 +329,23 @@ export async function dispatch(
 					return app.appRegistry.remove(input) as Promise<never>;
 				case "pending":
 					return app.appRegistry.pending() as never;
+				case "shell-target":
+					return app.appRegistry.shellTarget(input) as Promise<never>;
 				default:
 					throw new Error("Unsupported app operation");
+			}
+		}
+		case "environment.logs.analyze": {
+			fields(input, ["operation", "logs", "prompt", "id", "offset"]);
+			switch (text(input.operation, "analysis operation", 16)) {
+				case "start":
+					return app.logAnalysis.start(input) as never;
+				case "read":
+					return app.logAnalysis.read(input) as never;
+				case "cancel":
+					return app.logAnalysis.cancel(input) as never;
+				default:
+					throw new Error("Unsupported analysis operation");
 			}
 		}
 		case "environment.tasks": {

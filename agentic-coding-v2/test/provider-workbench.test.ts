@@ -514,6 +514,55 @@ test("restored v1 add-repository clones under DEVENV_HOME, registers the app and
 				definitionLocation: "apps",
 			}),
 		).rejects.toThrow('app with ident "new-service" already exists');
+		// v1 "No Target Configured → Create target script" on the new app.
+		const created_ = await client.createShellActionScript({
+			ident: "new-service",
+			action: "build",
+			runtime: "shell",
+		});
+		const script = path.join(
+			config.configDir,
+			"apps",
+			"build",
+			"new-service-build.sh",
+		);
+		expect(created_.path).toBe(fs.realpathSync(script));
+		expect(fs.readFileSync(script, "utf8")).toContain(
+			"# devenv:name=Build\n# devenv:mode=logged\n",
+		);
+		fs.writeFileSync(script, "#!/usr/bin/env sh\necho SHELL TARGET BUILT\n");
+		await expect(
+			client.createShellActionScript({
+				ident: "new-service",
+				action: "build",
+				runtime: "shell",
+			}),
+		).rejects.toThrow("already has target build-shell");
+		await expect(
+			client.createShellActionScript({
+				ident: "new-service",
+				action: "test",
+				runtime: "powershell",
+			}),
+		).rejects.toThrow("PowerShell");
+		const build = (
+			await eventually(
+				() => client.getActionDefinitions("new-service"),
+				(value) => value.actions.some((item) => item.type === "build"),
+			)
+		).actions.find((definition) => definition.type === "build");
+		if (!build) throw new Error("Missing build definition");
+		await client.startActionRun(build.id);
+		await eventually(
+			async () =>
+				(await app.snapshot()).environments.runs.find(
+					(item) => item.plan.app === "new-service",
+				)?.state,
+			(state) => state === "exited",
+		);
+		expect(await client.getContainerLogs("new-service")).toContain(
+			"SHELL TARGET BUILT",
+		);
 		fs.writeFileSync(path.join(checkout, "scratch.txt"), "local work\n");
 		await expect(client.deleteApp("new-service")).rejects.toThrow(
 			"uncommitted changes",

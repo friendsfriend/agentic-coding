@@ -331,13 +331,27 @@ export type Methods = {
 	/** Restored v1 add/remove repository (direct developer actions). */
 	"environment.apps": {
 		input: {
-			operation: "create" | "delete" | "pending";
+			operation: "create" | "delete" | "pending" | "shell-target";
 			displayName?: string;
 			repositoryURL?: string;
 			branch?: string;
 			provider?: string;
 			definitionLocation?: "apps" | "libraries";
 			ident?: string;
+			action?: "run" | "build" | "test";
+			profile?: string;
+			runtime?: string;
+		};
+		output: Data;
+	};
+	/** Restored v1 log AI panel (direct developer action, polled). */
+	"environment.logs.analyze": {
+		input: {
+			operation: "start" | "read" | "cancel";
+			logs?: string;
+			prompt?: string;
+			id?: string;
+			offset?: number;
 		};
 		output: Data;
 	};
@@ -500,6 +514,7 @@ export const methods: Method[] = [
 	"environment.cluster",
 	"environment.tasks",
 	"environment.apps",
+	"environment.logs.analyze",
 	"environment.stats",
 	"environment.logs",
 	"wiki.list",
