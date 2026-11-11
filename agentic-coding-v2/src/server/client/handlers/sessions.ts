@@ -47,6 +47,7 @@ export async function sessionCatalog(
 export async function clientSnapshot(app: Runtime): Promise<Snapshot> {
 	const state = await app.snapshot();
 	return {
+		telemetryRevision: app.telemetryRevision,
 		tasks: state.tasks,
 		reviews: state.reviews,
 		schedules: state.schedules,

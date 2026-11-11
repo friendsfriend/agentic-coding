@@ -45,16 +45,26 @@ export function TelemetryFeature(props: {
 	const [page, setPage] = createSignal(1);
 	const [revision, refresh] = createSignal(0);
 	const [loading, setLoading] = createSignal(false);
-	const [payload, setPayload] = createSignal<unknown>();
+	const [payload, setPayload] = createSignal<{
+		signal: string;
+		value: unknown;
+	}>();
+	const [query, setQuery] = createSignal("");
+	const [searching, setSearching] = createSignal(false);
 	const [trace, setTrace] = createSignal("");
 	const [span, setSpan] = createSignal<TreeNode>();
 	const [metric, setMetric] = createSignal({ name: "", service: "" });
 	const [service, setService] = createSignal<string>();
-	const [expanded, setExpanded] = createSignal(0);
+	const [selectedLog, setSelectedLog] = createSignal<LogData>();
+	const detailLogs = createMemo(
+		() => new LogStore(selectedLog() ? [selectedLog() as LogData] : []),
+	);
+	const [expansion, setExpansion] = createSignal<Record<string, boolean>>({});
 	let epoch = 0;
 	let disposed = false;
 	const navigate = (next: string) => {
 		setIndex(0);
+		setSearching(false);
 		setSurface(next);
 	};
 	createEffect(() => {
@@ -63,21 +73,35 @@ export function TelemetryFeature(props: {
 		const currentPage = page();
 		revision();
 		const generation = ++epoch;
-		if (current === "home" || current.endsWith("-detail") || current === "span")
+		if (current === "home") {
+			setLoading(false);
 			return;
+		}
 		setLoading(true);
-		const signal =
-			current === "tree" ? "spans" : current === "topology" ? "spans" : current;
+		const signal = ["tree", "span", "topology", "service-detail"].includes(
+			current,
+		)
+			? "spans"
+			: current === "metric-detail"
+				? "metrics"
+				: current === "log-detail"
+					? "logs"
+					: current;
 		if (!["traces", "spans", "metrics", "logs"].includes(signal)) return;
 		void props.client
 			.call("telemetry.read", {
 				signal: signal as "traces" | "spans" | "metrics" | "logs",
 				...(current === "traces" ? { page: currentPage, perPage: 50 } : {}),
-				...(current === "tree" ? { changeId: selectedTrace } : {}),
+				...(["tree", "span"].includes(current)
+					? { changeId: selectedTrace }
+					: {}),
 			})
 			.then((result) => {
 				if (disposed || generation !== epoch) return;
-				setPayload(result.value);
+				setPayload({
+					signal: current === "tree" || current === "span" ? "tree" : signal,
+					value: result.value,
+				});
 			})
 			.catch((error: unknown) => {
 				if (!disposed && generation === epoch)
@@ -91,31 +115,60 @@ export function TelemetryFeature(props: {
 	});
 	const traces = createMemo(() => {
 		const store = new TraceStore();
-		const value = payload();
-		if (surface() === "traces" && value && !Array.isArray(value))
-			store.setSummaryPage(value as TraceSummaryPage);
-		if (["tree", "span"].includes(surface()) && Array.isArray(value))
-			store.setTraceSpans(value as SpanData[]);
+		const response = payload();
+		if (
+			response?.signal === "traces" &&
+			response.value &&
+			!Array.isArray(response.value)
+		)
+			store.setSummaryPage(response.value as TraceSummaryPage);
+		if (response?.signal === "tree" && Array.isArray(response.value))
+			store.setTraceSpans(response.value as SpanData[]);
+		store.applyFilter(query());
 		return store;
 	});
-	const logs = createMemo(
-		() =>
-			new LogStore(Array.isArray(payload()) ? (payload() as LogData[]) : []),
-	);
-	const metrics = createMemo(
-		() =>
-			new MetricStore(
-				Array.isArray(payload()) ? (payload() as MetricData[]) : [],
-			),
-	);
+	const logs = createMemo(() => {
+		const response = payload();
+		const store = new LogStore(
+			response?.signal === "logs" && Array.isArray(response.value)
+				? (response.value as LogData[])
+				: [],
+		);
+		store.setFilter(query());
+		return store;
+	});
+	const metrics = createMemo(() => {
+		const response = payload();
+		const store = new MetricStore(
+			response?.signal === "metrics" && Array.isArray(response.value)
+				? (response.value as MetricData[])
+				: [],
+		);
+		store.setFilter(query());
+		return store;
+	});
 	const topology = createMemo(() => {
 		const store = new TopologyStore();
-		store.load(Array.isArray(payload()) ? (payload() as SpanData[]) : []);
+		const response = payload();
+		store.load(
+			response?.signal === "spans" && Array.isArray(response.value)
+				? (response.value as SpanData[])
+				: [],
+		);
 		return store;
 	});
-	const roots = createMemo(() => traces().getSpanTree(trace()));
+	const roots = createMemo(() => {
+		const choices = expansion();
+		const clone = (nodes: TreeNode[]): TreeNode[] =>
+			nodes.map((node) => ({
+				...node,
+				expanded:
+					choices[`${node.span.traceId}:${node.span.spanId}`] ?? node.expanded,
+				children: clone(node.children),
+			}));
+		return clone(traces().getSpanTree(trace()));
+	});
 	const flat = () => {
-		expanded();
 		const entries: TreeNode[] = [];
 		const visit = (nodes: TreeNode[]) => {
 			for (const node of nodes) {
@@ -126,6 +179,19 @@ export function TelemetryFeature(props: {
 		visit(roots());
 		return entries;
 	};
+	const toggle = (node: TreeNode) =>
+		setExpansion((previous) => ({
+			...previous,
+			[`${node.span.traceId}:${node.span.spanId}`]: !node.expanded,
+		}));
+	let observedRevision = props.client.state?.telemetryRevision;
+	const unsubscribe = props.client.onChange(() => {
+		const next = props.client.state?.telemetryRevision;
+		if (props.client.stateFresh && next !== observedRevision) {
+			observedRevision = next;
+			refresh((n) => n + 1);
+		}
+	});
 	const open = () => {
 		switch (surface()) {
 			case "traces": {
@@ -153,6 +219,7 @@ export function TelemetryFeature(props: {
 				break;
 			}
 			case "logs":
+				setSelectedLog(logs().getLogs()[index()]);
 				setSurface("log-detail");
 				break;
 			case "topology": {
@@ -184,7 +251,22 @@ export function TelemetryFeature(props: {
 				name: "telemetry.key",
 				run: ({ event }) => {
 					if (event.ctrl || event.meta || event.option) return false;
+					if (searching()) {
+						const key = event.name.toLowerCase();
+						if (key === "escape" || key === "enter" || key === "return")
+							setSearching(false);
+						else if (key === "backspace")
+							setQuery((value) => value.slice(0, -1));
+						else if (event.sequence?.length === 1 && event.sequence >= " ")
+							setQuery((value) => (value + event.sequence).slice(0, 256));
+						else return false;
+						setIndex(0);
+						return true;
+					}
 					switch (event.name.toLowerCase()) {
+						case "/":
+							setSearching(true);
+							break;
 						case "j":
 						case "down":
 							setIndex(Math.min(Math.max(0, count() - 1), index() + 1));
@@ -199,10 +281,7 @@ export function TelemetryFeature(props: {
 							break;
 						case "space": {
 							const node = flat()[index()];
-							if (node) {
-								node.expanded = !node.expanded;
-								setExpanded((n) => n + 1);
-							}
+							if (node) toggle(node);
 							break;
 						}
 						case "r":
@@ -238,6 +317,10 @@ export function TelemetryFeature(props: {
 			},
 		],
 		bindings: [
+			..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?.,:_-"
+				.split("")
+				.map((key) => (key === " " ? "space" : key)),
+			"backspace",
 			"j",
 			"k",
 			"down",
@@ -262,6 +345,7 @@ export function TelemetryFeature(props: {
 					{ key: "Space", action: "Expand/collapse span", short: "expand" },
 					{ key: "[/]", action: "Previous/next trace page", short: "page" },
 					{ key: "r", action: "Reload telemetry", short: "reload" },
+					{ key: "/", action: "Search loaded records", short: "search" },
 					{ key: "Esc", action: "Back", standard: true },
 				],
 			},
@@ -270,6 +354,7 @@ export function TelemetryFeature(props: {
 	onCleanup(() => {
 		disposed = true;
 		epoch++;
+		unsubscribe();
 		unregister();
 		props.catalog([]);
 	});
@@ -297,8 +382,8 @@ export function TelemetryFeature(props: {
 					summaries={() => traces().getTraceSummaries()}
 					selectedIndex={index}
 					onSelect={setIndex}
-					searchMode={() => false}
-					searchQuery={() => ""}
+					searchMode={searching}
+					searchQuery={query}
 					resultCount={() => count()}
 					page={page}
 					totalPages={() => traces().totalPages_}
@@ -310,11 +395,21 @@ export function TelemetryFeature(props: {
 					roots={roots}
 					selectedIndex={index}
 					onSelectIndex={setIndex}
-					onSelect={() => {}}
-					onToggle={(node) => {
-						node.expanded = !node.expanded;
-						setExpanded((n) => n + 1);
+					onSelect={(path) => {
+						let nodes = roots();
+						let selected: TreeNode | undefined;
+						for (const part of path) {
+							selected = nodes[part];
+							nodes = selected?.children ?? [];
+						}
+						if (selected) {
+							const position = flat().findIndex(
+								(node) => node.span.spanId === selected?.span.spanId,
+							);
+							if (position >= 0) setIndex(position);
+						}
 					}}
+					onToggle={toggle}
 				/>
 			</Show>
 			<Show when={surface() === "span" && span()}>
@@ -345,14 +440,15 @@ export function TelemetryFeature(props: {
 					onSelectIndex={setIndex}
 					onOpen={(position) => {
 						setIndex(position);
+						setSelectedLog(logs().getLogs()[position]);
 						setSurface("log-detail");
 					}}
 				/>
 			</Show>
 			<Show when={surface() === "log-detail"}>
 				<LogDetailView
-					store={logs()}
-					index={index()}
+					store={detailLogs()}
+					index={0}
 					onTraceLink={(id) => {
 						setTrace(id);
 						navigate("tree");

@@ -256,6 +256,8 @@ function assertCurrentTraceSchema(db: Database, file: string): void {
 export class TraceDb {
 	private db: Database;
 	private readonly ingesting = new Set<string>();
+	private closing = false;
+	private readonly watchReads = new Set<Promise<void>>();
 	private ingestStmt: Statement;
 	private ingestMetricStmt: Statement;
 	private ingestLogStmt: Statement;
@@ -758,9 +760,14 @@ export class TraceDb {
 		onNew: (changeId: string, spans: SpanData[]) => void,
 	): () => void {
 		const timer = setInterval(() => {
-			void this.ingestRepository(repoRoot, onNew).catch((error) =>
-				console.error("watchWorkspaces error:", error),
-			);
+			if (this.closing) return;
+			const pending = this.ingestRepository(repoRoot, onNew).catch(() => {
+				// No source paths or telemetry bodies in background diagnostics.
+				if (!this.closing)
+					console.error("Telemetry workspace read unavailable");
+			});
+			this.watchReads.add(pending);
+			void pending.finally(() => this.watchReads.delete(pending));
 		}, WORKSPACE_WATCH_MS);
 		return () => clearInterval(timer);
 	}
@@ -777,6 +784,7 @@ export class TraceDb {
 		if (!existsSync(workflowDir)) return;
 		const entries = readdirSync(workflowDir, { withFileTypes: true });
 		for (const entry of entries) {
+			if (this.closing) return;
 			if (!entry.isDirectory()) continue;
 			if (this.ingesting.has(entry.name)) continue;
 			const source = workspaceTraceSource(join(workflowDir, entry.name));
@@ -861,10 +869,12 @@ export class TraceDb {
 		return spans;
 	}
 
-	close() {
+	async close() {
+		this.closing = true;
 		for (const unwatch of this.watchedRepos.values()) unwatch();
 		this.watchedRepos.clear();
 		this.listeners.clear();
+		await Promise.all([...this.watchReads]);
 		this.db.close();
 	}
 }

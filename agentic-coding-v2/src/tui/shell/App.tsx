@@ -154,7 +154,7 @@ const PAGE_DESCRIPTIONS: Partial<Record<Page, string>> = {
 	providers: "Authenticated source hosts and their repositories",
 	profiles: "Agent profiles and the models they bundle",
 	skills: "Loaded skill instructions and their files",
-	observability: "Native operation journals: http, query, waits, references",
+	observability: "Traces, metrics, logs and service topology",
 	schedules: "Recurring native skill runs and their occurrences",
 	wiki: "Repository knowledge notes",
 	settings: "Application settings, agent profiles and appearance",
@@ -2497,8 +2497,11 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			contentFocused() &&
 			!helpOpen() &&
 			!paletteOpen() &&
-			((current().page === "environments" &&
-				keymap.getData?.("textEntry.active") !== true) ||
+			(["home", "wiki", "schedules", "observability"].includes(
+				current().page,
+			) ||
+				(current().page === "environments" &&
+					keymap.getData?.("textEntry.active") !== true) ||
 				(current().page === "settings" &&
 					!settingsEditing() &&
 					!settingsThemeOpen())),
@@ -4821,6 +4824,8 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 							(current().page === "schedules" &&
 								schedulesCatalog().length > 0) ||
 							(current().page === "home" && homeCatalog().length > 0) ||
+							(current().page === "observability" &&
+								telemetryCatalog().length > 0) ||
 							(current().page === "environments" && environmentModal())) &&
 						!paletteOpen()
 							? []
@@ -4869,6 +4874,13 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 						!paletteOpen() &&
 						!settingsThemeOpen()
 							? settingsCatalog()
+									.flatMap((section) => section.keybinds)
+									.filter((binding) => !binding.standard)
+							: []),
+						...(current().page === "observability" &&
+						contentFocused() &&
+						!paletteOpen()
+							? telemetryCatalog()
 									.flatMap((section) => section.keybinds)
 									.filter((binding) => !binding.standard)
 							: []),

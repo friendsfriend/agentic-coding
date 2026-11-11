@@ -673,3 +673,35 @@ operator environment functional tests pass.
   registration, live change subscriptions, complete v1 filters/search/keymaps,
   footer integration and additional multi-signal security/boundary tests remain.
   No real apps, providers, telemetry collectors or user configuration were used.
+
+## Observability follow-up: live state, search and guarded maintenance
+
+- Native state subscriptions now carry an optional validated telemetry revision.
+  Ingestion advances it and the observability feature refreshes on changes using
+  the existing client subscription; there is no extra per-view polling timer.
+- Segregated payloads by signal so navigating between traces, metrics and logs
+  cannot interpret one record shape as another. Detail reads map back to their
+  signal; span expansion is reactive and retained by span identity. Opening a
+  log captures its identity/content so incoming records cannot silently replace
+  the log being read. Workspace-tagged spans retain v1 change-id grouping.
+- `/` edits a bounded query over loaded trace summaries, metrics and logs;
+  Enter/Escape leaves entry, Backspace edits. Trace search is explicitly over
+  the loaded page, not an invented global search. Observability publishes its
+  footer and help catalog, and prompt-free pages route `?` to help outside their
+  higher-priority input handlers.
+- Oversized telemetry gateway reads now return a bounded refusal rather than
+  disconnecting the socket. HTTP queries reject unknown/repeated parameters,
+  empty identities and invalid bounds; private reads return no-store headers.
+- `telemetry.manage` adds direct authenticated prune (1–3650 days) and
+  scan/watch/unwatch for canonical configured repository roots only. Watch is
+  idempotent and watchers are stopped on runtime shutdown; in-flight scans and
+  watcher reads are joined before SQLite closes. These maintenance boundaries
+  are implemented; their final v1 UI controls remain to be wired.
+- Expanded the synthetic public-boundary test to cover multi-signal reads,
+  change delivery, query refusals, oversized-read connection survival, foreign
+  workspace refusal, watch/unwatch idempotence and retention. 12/12 focused
+  tests pass including the existing owner/run-fenced environment telemetry
+  regressions. Unfiltered type-check, zero-diagnostic lint and TUI bundle pass.
+- Still open: gRPC/protobuf packaging, configured receiver start/stop controls,
+  final retention/workspace UI, full v1 filter/sort modals and visual acceptance.
+  This is progress toward parity, not a parity/archive claim.

@@ -25,6 +25,8 @@ const list = (value: unknown): Data[] => {
 };
 export function snapshot(value: unknown): Snapshot {
 	const data = record(value);
+	if (data.telemetryRevision !== undefined && !integer(data.telemetryRevision))
+		throw new Error("Invalid telemetry revision");
 	for (const key of ["tasks", "reviews", "schedules", "profiles", "topics"])
 		list(data[key]);
 	record(data.environments);

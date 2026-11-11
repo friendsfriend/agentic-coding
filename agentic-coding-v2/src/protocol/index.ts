@@ -25,6 +25,7 @@ export type Session = {
 	writable: boolean;
 };
 export type Snapshot = {
+	telemetryRevision?: number;
 	tasks: Data[];
 	reviews: Data[];
 	schedules: Data[];
@@ -225,6 +226,12 @@ export type EnvironmentAction = {
 	replicas?: number;
 };
 export type Methods = {
+	"telemetry.manage": {
+		input:
+			| { operation: "prune"; days: number }
+			| { operation: "scan" | "watch" | "unwatch"; repository: string };
+		output: { count: number };
+	};
 	"telemetry.read": {
 		input: {
 			signal: "traces" | "spans" | "metrics" | "logs" | "workspaces";
@@ -572,6 +579,7 @@ export const methods: Method[] = [
 	"schedule.create",
 	"schedule.state",
 	"telemetry.read",
+	"telemetry.manage",
 	"environment.inspect",
 	"environment.preview",
 	"environment.apply",

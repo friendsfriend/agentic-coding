@@ -55,6 +55,9 @@ import { Wiki } from "./wiki.ts";
 const nativeTaskId = (id: number) => id as TaskId;
 export class Runtime {
 	private telemetryService?: Telemetry;
+	get telemetryRevision() {
+		return this.telemetryService?.revision ?? 0;
+	}
 	get telemetry(): Telemetry {
 		this.telemetryService ??= new Telemetry(
 			join(this.config.stateDir, "telemetry"),
@@ -431,7 +434,7 @@ export class Runtime {
 	async close() {
 		this.closed = true;
 		this.logAnalysis.close();
-		this.telemetryService?.close();
+		await this.telemetryService?.close();
 		this.telemetryService = undefined;
 		await this.standalone.close();
 		while (this.reconciling) await Bun.sleep(10);

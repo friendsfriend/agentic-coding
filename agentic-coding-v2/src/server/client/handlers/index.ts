@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { text } from "../../../config.ts";
 import {
@@ -66,6 +67,37 @@ export async function dispatch(
 	{ method, input }: Request,
 ): Promise<unknown> {
 	switch (method) {
+		case "telemetry.manage": {
+			const operation = input.operation;
+			if (operation === "prune") {
+				fields(input, ["operation", "days"]);
+				const days = integer(input.days);
+				if (days < 1 || days > 3650)
+					throw new Refusal("Retention must be between 1 and 3650 days");
+				return { count: app.telemetry.prune(days) };
+			}
+			fields(input, ["operation", "repository"]);
+			if (
+				operation !== "scan" &&
+				operation !== "watch" &&
+				operation !== "unwatch"
+			)
+				throw new Refusal("Unknown telemetry operation");
+			const repository = realpathSync(
+				text(input.repository, "telemetry repository", 4096),
+			);
+			if (
+				!app.config.repositories.some(
+					(root) => realpathSync(root) === repository,
+				)
+			)
+				throw new Refusal("Telemetry repository is not authorized");
+			if (operation === "scan")
+				return { count: await app.telemetry.scan(repository) };
+			if (operation === "watch") app.telemetry.watch(repository);
+			else app.telemetry.unwatch(repository);
+			return { count: 0 };
+		}
 		case "telemetry.read": {
 			fields(input, ["signal", "page", "perPage", "changeId", "limit"]);
 			const signal = text(input.signal, "telemetry signal", 16);
@@ -84,7 +116,14 @@ export async function dispatch(
 				);
 			const response = await app.telemetry.route(new Request(url), url);
 			if (!response?.ok) throw new Refusal("Invalid telemetry query");
-			return { value: await response.json() };
+			const value: unknown = await response.json();
+			// Refuse oversized reads without killing an otherwise healthy
+			// gateway connection. Never silently clip a trace/span record.
+			if (Buffer.byteLength(JSON.stringify(value)) > 900_000)
+				throw new Refusal(
+					"Telemetry read exceeds the client budget; narrow the trace or page size",
+				);
+			return { value };
 		}
 		case "viewpoints.read":
 			fields(input, []);
