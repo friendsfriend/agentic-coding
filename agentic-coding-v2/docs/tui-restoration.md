@@ -600,3 +600,51 @@ operator environment functional tests pass.
   stale revisions, traversal-shaped ids, the 32000-byte bound and updates);
   TUI bundles. No renderer/mount/snapshot/navigation tests and no real runs.
   Visual parity remains manual; Step 5 and full runnable parity stay open.
+
+## Progress: v1 Schedules views, embedded agent terminals and Home
+
+- Schedules are v1 `SchedulesView`/`ScheduleDetails` interaction again
+  (`src/tui/features/resources/SchedulesView.tsx`): a list (`j/k`, Enter to
+  open details, `n` for a new schedule, `p` pause/resume, `d` + confirm to
+  delete, `f` reserved for the shell filter, Esc back), a detail pane with the
+  native invocation, timing, last error and the newest occurrences, and a
+  form/list editor whose keys are v1's (h/l panes, j/k fields/choices, Space
+  selects, `e`/Enter entry, Tab between fields, `F2`/Ctrl+Enter saves, Esc
+  leaves or cancels) with a bounded textarea for long inputs. The page
+  publishes its live footer/`?` catalog and hosts no conversation prompt.
+- Two native operator boundaries carry the editor: `schedule.create`
+  (`{id, invocation, timing, lateGraceMs}`) and `schedule.state`
+  (`{id, revision, state}`), both frame-validated and revision-fenced, on top
+  of the existing `schedule.delete`. The developer's authenticated form save
+  is the approval (the orchestrator's `schedule_schedule` tool keeps its human
+  review), occurrences still admit ordinary native tasks with their own policy
+  and reviews, and a delete removes future timing only. `ResourcePanel` and the
+  generic resource-preference path no longer serve the schedules page.
+- OpenCode and Pi are the v1 embedded terminals again
+  (`src/tui/features/agents/{terminal-agent-process,embedded-terminal,EmbeddedAgentView}.ts`):
+  a real PTY (`Bun.Terminal` + `EmbeddedTerminalRenderable`), mounted on first
+  visit and kept mounted while hidden so scrollback and a running turn survive
+  navigation, with v1's theme handshake and exit/error surface. The terminal
+  owns the keyboard: the `v2.shell` layer yields while it has focus and a small
+  `v2.agentTerminals` layer keeps only Ctrl+Q, F1 and Ctrl+S as host escape
+  hatches. Those pages host no conversation prompt.
+- Home is v1's destination list again (`src/tui/features/home/HomeView.tsx`):
+  cards for every shell destination (j/k, `g`, Enter opens), no title row and
+  no keybind hints in the body; the shell default page is Home. The native
+  standalone inventory is still read for the Pi/OpenCode model-thinking picker
+  and `/standalone` commands, but it no longer has a list page of its own —
+  where that list should live is an open decision.
+- Fixed a typed seam the earlier commits shipped: the wiki and schedule
+  textareas read `plainText` from their own ref instead of a non-existent
+  event field, and the `wikiCatalog`/`schedulesCatalog`/`homeCatalog` signals
+  are declared, so unfiltered `bun run type-check` and `bun run lint` are clean
+  again. Functional test added: `test/schedules.test.ts` (create admits no task
+  until due, invalid timing and unknown fields are refused, pause/resume/delete
+  are revision-fenced). Full suite: 630 pass, 6 fail (the 5 pre-existing
+  baselines plus the timing-sensitive Compose health test).
+- Open: v1's Observability is a whole subsystem v2 does not have (v1 ports an
+  OTLP/prometheus/statsd/datadog/zipkin receiver set, a SQLite telemetry store
+  and 9 trace/metric/log/topology views, ~5-6k lines). Restoring those views
+  needs a native telemetry source decision first; the current v2 page shows the
+  native operation journals (http, query, waits, references) and does not
+  pretend to be telemetry it never received.

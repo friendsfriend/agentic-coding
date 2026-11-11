@@ -34,7 +34,7 @@ export type View = {
 	resourcePreferences?: UiResourcePreferences;
 };
 export function view(
-	page: Page = "orchestrator",
+	page: Page = "home",
 	resource: string | null = null,
 ): View {
 	return {
