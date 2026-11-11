@@ -427,6 +427,13 @@ export async function dispatch(
 				"direction",
 				"page",
 				"perPage",
+				"name",
+				"type",
+				"username",
+				"token",
+				"provider",
+				"query",
+				"url",
 			]);
 			return app.providerWorkbench.run(
 				operation as WorkbenchOperation,

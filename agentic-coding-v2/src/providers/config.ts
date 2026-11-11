@@ -1,3 +1,5 @@
+import { lstatSync, readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
 import { object, text } from "../config.ts";
 
 export type ProviderType = "github" | "gitlab";
@@ -7,13 +9,18 @@ export type ProviderConfig = {
 	baseUrl: string;
 	username: string;
 	tokenRef: string;
+	/** CONFIG_DIR/.env: reference target store (v1 kept provider secrets there). */
+	envFile?: string;
 };
 export function defaultBaseUrl(type: ProviderType): string {
 	return type === "github" ? "https://api.github.com" : "https://gitlab.com";
 }
 /** Named providers from config. Tokens are env-var references resolved at call
  * time; nothing secret is stored or echoed. */
-export function readProviders(value: unknown): ProviderConfig[] {
+export function readProviders(
+	value: unknown,
+	envFile?: string,
+): ProviderConfig[] {
 	if (value === undefined) return [];
 	if (!Array.isArray(value)) throw new Error("providers must be an array");
 	return value.map((raw) => {
@@ -51,6 +58,7 @@ export function readProviders(value: unknown): ProviderConfig[] {
 				entry.tokenRef === undefined
 					? ""
 					: text(entry.tokenRef, "provider token reference", 128),
+			...(envFile ? { envFile } : {}),
 		};
 	});
 }
@@ -65,7 +73,21 @@ export function findProvider(
 /** Token materialized only for the outbound call. Empty means tokenless. */
 export function providerToken(provider: ProviderConfig): string {
 	if (!provider.tokenRef) return "";
-	return process.env[provider.tokenRef] ?? "";
+	const explicit = process.env[provider.tokenRef];
+	if (explicit) return explicit;
+	return provider.envFile
+		? (readSecrets(provider.envFile)[provider.tokenRef] ?? "")
+		: "";
+}
+/** The bounded private `.env` a provider reference may resolve from. */
+export function readSecrets(file: string): Record<string, string> {
+	try {
+		const stat = lstatSync(file);
+		if (!stat.isFile() || stat.size > 65536) return {};
+		return parseEnv(readFileSync(file, "utf8")) as Record<string, string>;
+	} catch {
+		return {};
+	}
 }
 export function providerProjection(provider: ProviderConfig): {
 	name: string;

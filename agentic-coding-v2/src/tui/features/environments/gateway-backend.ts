@@ -962,7 +962,41 @@ export class GatewayBackend implements DevEnvBackend {
 					values: (args[1] ?? {}) as Data,
 				}).then(() => undefined);
 			case "getProviders":
-				return this.client.call("providers.read", {});
+				return this.registry("providers");
+			case "getProvider":
+				return this.registry("provider", { name: arg(0) });
+			case "createProvider": {
+				const request = (args[0] ?? {}) as Record<string, unknown>;
+				return this.registry("create-provider", {
+					name: request.name,
+					type: request.type,
+					username: request.username ?? "",
+					token: request.token ?? "",
+				});
+			}
+			case "updateProvider": {
+				const updates = (args[1] ?? {}) as Record<string, unknown>;
+				return this.registry("update-provider", {
+					name: arg(0),
+					...(typeof updates.username === "string"
+						? { username: updates.username }
+						: {}),
+					...(typeof updates.token === "string" && updates.token
+						? { token: updates.token }
+						: {}),
+				});
+			}
+			case "deleteProvider":
+				return this.registry("delete-provider", { name: arg(0) }).then(
+					() => undefined,
+				);
+			case "searchRepos":
+				return this.registry("search-repos", {
+					provider: arg(0),
+					query: arg(1),
+				});
+			case "getRepoBranches":
+				return this.registry("repo-branches", { url: arg(0) });
 			// Restored v1 provider workbench: issues, change requests and CI of
 			// the provider serving each app's origin remote.
 			case "getChangeRequests":
@@ -1229,6 +1263,12 @@ export class GatewayBackend implements DevEnvBackend {
 		}
 	}
 
+	private registry(operation: string, input: Record<string, unknown> = {}) {
+		return this.client.call("providers.workbench", {
+			operation,
+			...input,
+		}) as Promise<never>;
+	}
 	private workbench(
 		operation: string,
 		app: string,

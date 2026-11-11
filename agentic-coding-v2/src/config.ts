@@ -174,7 +174,7 @@ export function loadConfig(
 		profiles,
 		orchestratorProfile,
 		repositories,
-		providers: readProviders(data.providers),
+		providers: readProviders(data.providers, path.join(configDir, ".env")),
 		skills,
 		stateDir,
 		configDir,

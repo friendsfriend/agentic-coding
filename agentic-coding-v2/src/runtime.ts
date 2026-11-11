@@ -89,6 +89,7 @@ export class Runtime {
 			config,
 			this.environments,
 			this.repositoryGit,
+			this.settings,
 		);
 		this.clusterOperator = new ClusterOperator(
 			config,

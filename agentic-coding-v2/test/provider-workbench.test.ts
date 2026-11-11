@@ -11,6 +11,7 @@ import { createFixtures, eventually } from "./fixtures/runtime.ts";
 const { fixture, cleanup } = createFixtures();
 afterEach(() => {
 	delete process.env.WORKBENCH_TOKEN;
+	seen.length = 0;
 	return cleanup();
 });
 
@@ -64,6 +65,17 @@ const stub = Bun.serve({
 			body: await request.text(),
 		});
 		const base = "/api/v4/projects/group/api";
+		if (route === "/api/v4/projects" && url.searchParams.get("search"))
+			return Response.json([
+				{
+					name: "api",
+					path_with_namespace: "group/api",
+					http_url_to_repo: `http://127.0.0.1:${url.port}/group/api.git`,
+					default_branch: "develop",
+				},
+			]);
+		if (route === `${base}/repository/branches`)
+			return Response.json([{ name: "develop" }, { name: "main" }]);
 		if (route === `${base}/merge_requests` && request.method === "GET")
 			return Response.json(
 				url.searchParams.get("source_branch") === "feature/login"
@@ -238,6 +250,120 @@ test("restored v1 change requests, issues and CI act on the provider serving the
 		delete process.env.WORKBENCH_TOKEN;
 		await expect(client.getIssues("api", "all", "gitlab")).rejects.toThrow(
 			'no token configured for provider "gl"',
+		);
+	} finally {
+		connection.close();
+		await host.stop();
+	}
+}, 20000);
+
+test("restored v1 Providers view and add-repository flow keep typed tokens out of config and resolve them from the private .env", async () => {
+	const { app, config } = await fixture(false, (config) => {
+		fs.mkdirSync(config.configDir);
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify({
+				version: 1,
+				projects: [
+					{
+						id: "api",
+						kind: "app",
+						repository: config.repositories[0],
+						targets: [],
+					},
+				],
+			}),
+		);
+	});
+	const repository = config.repositories[0] ?? "";
+	const remote = `http://127.0.0.1:${stub.port}/group/api.git`;
+	await git(repository, ["remote", "add", "origin", remote]);
+	const host = serve(app),
+		connection = new ClientConnection(host.client),
+		client = new DevEnvClient(new GatewayBackend(connection, () => {}));
+	const configFile = path.join(config.configDir, "config.json"),
+		envFile = path.join(config.configDir, ".env");
+	try {
+		connection.connect();
+		await eventually(
+			async () => connection.state,
+			(state) => state !== null,
+		);
+		expect(await client.getProviders()).toEqual([]);
+		expect(
+			await client.createProvider({
+				name: "gl",
+				type: "gitlab",
+				username: "dev",
+				token: "typed-'secret",
+			}),
+		).toEqual({ name: "gl", type: "gitlab", username: "dev", has_token: true });
+		const stored = fs.readFileSync(configFile, "utf8");
+		expect(stored).not.toContain("typed-");
+		expect(JSON.parse(stored).providers).toEqual([
+			{
+				name: "gl",
+				type: "gitlab",
+				// v1 GitLab providers had no URL: the host comes from the apps.
+				baseUrl: `http://127.0.0.1:${stub.port}`,
+				username: "dev",
+				tokenRef: "DEVENV_PROVIDER_GL_TOKEN",
+			},
+		]);
+		expect(fs.statSync(envFile).mode & 0o777).toBe(0o600);
+		expect((await client.getApps())[0]).toMatchObject({
+			provider: "gl",
+			sourceType: "gitlab",
+		});
+		expect(await client.searchRepos("gl", "api")).toEqual([
+			{
+				name: "api",
+				fullPath: "group/api",
+				url: remote,
+				defaultBranch: "develop",
+			},
+		]);
+		expect(await client.getRepoBranches(remote)).toEqual(["develop", "main"]);
+		expect(seen.map((entry) => entry.token)).toEqual([
+			"typed-'secret",
+			"typed-'secret",
+		]);
+		await expect(
+			client.createProvider({
+				name: "gl",
+				type: "gitlab",
+				username: "",
+				token: "",
+			}),
+		).rejects.toThrow('Provider "gl" already exists');
+		expect(await client.updateProvider("gl", { username: "dev2" })).toEqual({
+			name: "gl",
+			type: "gitlab",
+			username: "dev2",
+			has_token: true,
+		});
+		// A `${VAR}` entry is a reference: nothing is written to .env.
+		expect(
+			await client.createProvider({
+				name: "gh",
+				type: "github",
+				username: "",
+				token: ["${", "UNSET_PROVIDER_REFERENCE", "}"].join(""),
+			}),
+		).toEqual({
+			name: "gh",
+			type: "github",
+			username: "",
+			has_token: false,
+			missing_vars: ["UNSET_PROVIDER_REFERENCE"],
+		});
+		await client.deleteProvider("gl");
+		expect(fs.readFileSync(envFile, "utf8")).toBe("");
+		expect(
+			(await client.getProviders()).map((provider) => provider.name),
+		).toEqual(["gh"]);
+		await expect(client.getRepoBranches(remote)).rejects.toThrow(
+			"No configured provider serves 127.0.0.1",
 		);
 	} finally {
 		connection.close();

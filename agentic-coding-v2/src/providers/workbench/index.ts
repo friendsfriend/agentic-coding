@@ -1,13 +1,20 @@
+import fs from "node:fs";
+import path from "node:path";
+import { parseEnv } from "node:util";
 import { type Config, text } from "../../config.ts";
 import type { Environments } from "../../environment/manager.ts";
 import type { RepositoryGit } from "../../environment/repository-git.ts";
 import { git } from "../../git.ts";
 import { boundedFetch, maskSecrets } from "../../http/admission.ts";
 import { Refusal } from "../../server/refusal.ts";
+import type { Settings } from "../../settings.ts";
 import {
+	defaultBaseUrl,
 	type ProviderConfig,
 	type ProviderType,
 	providerToken,
+	readProviders,
+	readSecrets,
 } from "../config.ts";
 import { GitHubChangeRequests } from "./github-changerequest.ts";
 import { extractRepoInfo, GitHubClient } from "./github-client.ts";
@@ -23,6 +30,10 @@ const maxResponseBytes = 900_000;
 
 export const workbenchReads = [
 	"identity",
+	"providers",
+	"provider",
+	"search-repos",
+	"repo-branches",
 	"changes",
 	"change",
 	"change-files",
@@ -56,7 +67,25 @@ export const workbenchWrites = [
 	"comment-issue",
 	"retry-job",
 	"cancel-job",
+	"create-provider",
+	"update-provider",
+	"delete-provider",
 ] as const;
+/** Operations on the provider registry itself (no application). */
+const registryOperations = new Set([
+	"providers",
+	"provider",
+	"search-repos",
+	"repo-branches",
+	"create-provider",
+	"update-provider",
+	"delete-provider",
+]);
+/** v1's generated credential variable for a provider name. */
+const credentialKey = (name: string) =>
+	`DEVENV_PROVIDER_${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_TOKEN`;
+const reference = (value: string) =>
+	/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value.trim())?.[1];
 export type WorkbenchOperation =
 	| (typeof workbenchReads)[number]
 	| (typeof workbenchWrites)[number];
@@ -145,6 +174,7 @@ export class ProviderWorkbench {
 		private config: Config,
 		private environments: Environments,
 		private repositoryGit: RepositoryGit,
+		private settings: Settings,
 		private fetchImpl: typeof fetch = fetch,
 	) {}
 	/** Wraps fetch so v1's classes get bounded bodies, an HTTPS-only target
@@ -166,9 +196,13 @@ export class ProviderWorkbench {
 					onTooLarge: "truncate",
 				},
 			);
+			const forwarded = new Headers(headers);
+			// The body is already decoded and possibly truncated.
+			forwarded.delete("content-encoding");
+			forwarded.delete("content-length");
 			return new Response(status === 204 || status === 304 ? null : body, {
 				status,
-				headers,
+				headers: forwarded,
 			});
 		}) as typeof fetch;
 	}
@@ -269,6 +303,8 @@ export class ProviderWorkbench {
 	}
 	async run(operation: WorkbenchOperation, input: Record<string, unknown>) {
 		if (operation === "identity") return this.identities();
+		if (registryOperations.has(operation))
+			return this.registry(operation, input);
 		const resolved = await this.resolve(input.app);
 		let value: unknown;
 		try {
@@ -290,6 +326,322 @@ export class ProviderWorkbench {
 				"Provider response exceeds the gateway frame budget; open it in the provider",
 			);
 		return JSON.parse(serialized) as unknown;
+	}
+	/** v1 provider rows: never a token, only whether its reference resolves. */
+	private row(provider: ProviderConfig) {
+		const hasToken = providerToken(provider) !== "";
+		return {
+			name: provider.name,
+			type: provider.type,
+			username: provider.username,
+			has_token: hasToken,
+			...(provider.tokenRef && !hasToken
+				? { missing_vars: [provider.tokenRef] }
+				: {}),
+		};
+	}
+	private named(value: unknown) {
+		const name = text(value, "provider name", 64);
+		const provider = this.config.providers.find((item) => item.name === name);
+		if (!provider) throw new Refusal(`Provider "${name}" not found`);
+		return provider;
+	}
+	/** GitLab providers had no URL in v1 (the host came from the apps); v2
+	 * derives it from the configured projects' origin remotes. */
+	private async gitlabBase() {
+		const counts = new Map<string, number>();
+		for (const project of this.environments.projects) {
+			if (project.kind === "infrastructure") continue;
+			const remote = await git(project.repository, [
+				"remote",
+				"get-url",
+				"origin",
+			]).catch(() => "");
+			const value = remote.trim();
+			const host = origin(value).replace(/^ssh\./, "");
+			if (
+				!host ||
+				host === "github.com" ||
+				providerFor(this.config.providers, host)
+			)
+				continue;
+			// An http(s) remote names the API origin (port included); SSH remotes
+			// map to the HTTPS host.
+			const base = /^https?:\/\//.test(value)
+				? new URL(value).origin
+				: `https://${host}`;
+			counts.set(base, (counts.get(base) ?? 0) + 1);
+		}
+		return (
+			[...counts].sort((a, b) => b[1] - a[1])[0]?.[0] ??
+			defaultBaseUrl("gitlab")
+		);
+	}
+	/** Store a typed token the v1 way: in the owner-only CONFIG_DIR/.env under
+	 * v1's generated variable; config.json only ever holds the reference. A
+	 * `${VAR}` entry is taken as a reference and nothing is written. */
+	private storeToken(name: string, token: string) {
+		const named = reference(token);
+		if (named) return named;
+		if (/[\0\r\n]/.test(token) || token.length > 4096)
+			throw new Refusal("Token must be one line");
+		const key = credentialKey(name);
+		this.writeSecrets((secrets) => ({ ...secrets, [key]: token }));
+		return key;
+	}
+	private writeSecrets(
+		change: (secrets: Record<string, string>) => Record<string, string>,
+	) {
+		const file = path.join(this.config.configDir, ".env");
+		if (fs.existsSync(file)) {
+			const stat = fs.lstatSync(file);
+			if (!stat.isFile() || stat.nlink !== 1 || stat.size > 65536)
+				throw new Refusal(
+					"CONFIG_DIR/.env must be a bounded regular file; edit it manually",
+				);
+			// Only plain one-line entries are rewritten; anything else would be
+			// reflowed lossily.
+			if (
+				fs
+					.readFileSync(file, "utf8")
+					.split("\n")
+					.some(
+						(line) =>
+							line.trim() !== "" &&
+							!line.trim().startsWith("#") &&
+							!/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line),
+					)
+			)
+				throw new Refusal(
+					"CONFIG_DIR/.env has multi-line values; edit it manually",
+				);
+		}
+		const next = change(readSecrets(file));
+		// v2 reads `.env` with node:util parseEnv: write the first quoting that
+		// parses back to exactly this value.
+		const quote = (value: string) => {
+			for (const mark of ["'", "`", '"']) {
+				const line = `${mark}${value}${mark}`;
+				if (parseEnv(`K=${line}`).K === value) return line;
+			}
+			throw new Refusal("Token cannot be stored in .env exactly");
+		};
+		const lines = fs.existsSync(file)
+			? fs.readFileSync(file, "utf8").replace(/\n$/, "").split("\n")
+			: [];
+		const seen = new Set<string>();
+		const kept = lines.flatMap((line) => {
+			const key = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(
+				line,
+			)?.[1];
+			if (!key) return [line];
+			if (!Object.hasOwn(next, key)) return [];
+			seen.add(key);
+			return [`${key}=${quote(next[key] ?? "")}`];
+		});
+		for (const [key, value] of Object.entries(next))
+			if (!seen.has(key)) kept.push(`${key}=${quote(value)}`);
+		fs.mkdirSync(this.config.configDir, { recursive: true, mode: 0o700 });
+		const temp = `${file}.${crypto.randomUUID()}.tmp`;
+		try {
+			fs.writeFileSync(temp, kept.length ? `${kept.join("\n")}\n` : "", {
+				mode: 0o600,
+				flag: "wx",
+			});
+			fs.renameSync(temp, file);
+		} finally {
+			fs.rmSync(temp, { force: true });
+		}
+	}
+	/** Persist the registry (revision-bound, whole document validated) and
+	 * apply it to the running host so the views see it at once, as in v1. */
+	private saveProviders(
+		change: (
+			providers: ReturnType<Settings["read"]>["settings"]["providers"],
+		) => ReturnType<Settings["read"]>["settings"]["providers"],
+	) {
+		const saved = this.settings.updateProviders(change);
+		const live = readProviders(saved, path.join(this.config.configDir, ".env"));
+		this.config.providers.splice(0, this.config.providers.length, ...live);
+	}
+	private async registry(operation: string, input: Record<string, unknown>) {
+		try {
+			return await this.registryOperation(operation, input);
+		} catch (error) {
+			if (error instanceof Refusal) throw error;
+			const tokens = this.config.providers.map(providerToken);
+			if (typeof input.token === "string") tokens.push(input.token);
+			throw new Refusal(
+				maskSecrets(
+					String(error instanceof Error ? error.message : error),
+					tokens.filter(Boolean),
+				).slice(0, 600),
+			);
+		}
+	}
+	private async registryOperation(
+		operation: string,
+		input: Record<string, unknown>,
+	) {
+		switch (operation) {
+			case "providers":
+				return this.config.providers.map((provider) => this.row(provider));
+			case "provider":
+				return this.row(this.named(input.name));
+			case "create-provider": {
+				const name = text(input.name, "provider name", 64);
+				const type = text(input.type, "provider type", 16);
+				if (type !== "github" && type !== "gitlab")
+					throw new Refusal("Unsupported provider type");
+				if (this.config.providers.some((item) => item.name === name))
+					throw new Refusal(`Provider "${name}" already exists`);
+				const username =
+					typeof input.username === "string" ? input.username.trim() : "";
+				const token = typeof input.token === "string" ? input.token : "";
+				const baseUrl =
+					type === "github"
+						? defaultBaseUrl("github")
+						: await this.gitlabBase();
+				// Validate before any secret is written.
+				readProviders([{ name, type, baseUrl }]);
+				const tokenRef = token ? this.storeToken(name, token) : "";
+				this.saveProviders((providers) => [
+					...providers,
+					{
+						name,
+						type,
+						baseUrl,
+						...(username ? { username } : {}),
+						...(tokenRef ? { tokenRef } : {}),
+					},
+				]);
+				return this.row(this.named(name));
+			}
+			case "update-provider": {
+				const current = this.named(input.name);
+				const token = typeof input.token === "string" ? input.token : "";
+				const tokenRef = token
+					? this.storeToken(current.name, token)
+					: current.tokenRef;
+				this.saveProviders((providers) =>
+					providers.map((item) => {
+						if (item.name !== current.name) return item;
+						const username =
+							typeof input.username === "string"
+								? input.username.trim()
+								: (item.username ?? "");
+						const { username: _old, tokenRef: _ref, ...rest } = item;
+						return {
+							...rest,
+							...(username ? { username } : {}),
+							...(tokenRef ? { tokenRef } : {}),
+						};
+					}),
+				);
+				return this.row(this.named(current.name));
+			}
+			case "delete-provider": {
+				const current = this.named(input.name);
+				this.saveProviders((providers) =>
+					providers.filter((item) => item.name !== current.name),
+				);
+				// Only v1's generated variable is ours to remove.
+				if (current.tokenRef === credentialKey(current.name))
+					this.writeSecrets((secrets) => {
+						const { [current.tokenRef]: _removed, ...rest } = secrets;
+						return rest;
+					});
+				return { success: true };
+			}
+			case "search-repos": {
+				const provider = this.named(input.provider);
+				const query = text(input.query, "search query", 256);
+				const token = providerToken(provider);
+				if (!token)
+					throw new Refusal(
+						`no token configured for provider "${provider.name}"`,
+					);
+				const fetchFn = this.fetcher(provider);
+				const results =
+					provider.type === "github"
+						? await new GitHubClient({
+								token,
+								username: provider.username,
+								baseUrl: provider.baseUrl,
+								fetch: fetchFn,
+							}).search(query, 20)
+						: await new GitLabClient({
+								baseUrl: provider.baseUrl,
+								token,
+								username: provider.username,
+								fetch: fetchFn,
+							}).searchProjects(query, 20);
+				return maskJson(
+					results.map((result) => ({
+						name: result.name,
+						fullPath: result.fullPath,
+						url: result.httpUrl,
+						defaultBranch: result.defaultBranch,
+					})),
+					token,
+				);
+			}
+			case "repo-branches":
+				return this.branches(text(input.url, "repository URL", 2048));
+			default:
+				throw new Refusal("Unsupported provider workbench operation");
+		}
+	}
+	/** v1 ran `git ls-remote --heads` with a Basic credential header on the
+	 * command line; v2 reads the branches from the serving provider's API so no
+	 * credential reaches a process argument. */
+	private async branches(url: string) {
+		const host = origin(url);
+		const provider = providerFor(this.config.providers, host);
+		if (!provider)
+			throw new Refusal(`No configured provider serves ${host || "this URL"}`);
+		const token = providerToken(provider);
+		if (!token)
+			throw new Refusal(`no token configured for provider "${provider.name}"`);
+		const fetchFn = this.fetcher(provider);
+		const parsed = parserUrl(url, provider);
+		const names: string[] = [];
+		for (let page = 1; page <= 10; page++) {
+			let response: Response;
+			if (provider.type === "github") {
+				const repo = extractRepoInfo(parsed);
+				response = await fetchFn(
+					`${provider.baseUrl}/repos/${repo.owner}/${repo.repo}/branches?per_page=100&page=${page}`,
+					{
+						headers: {
+							Authorization: `Bearer ${token}`,
+							Accept: "application/vnd.github+json",
+						},
+					},
+				);
+			} else {
+				const info = extractProjectInfo(parsed);
+				response = await fetchFn(
+					`${provider.baseUrl}/api/v4/projects/${encodeURIComponent(`${info.namespace}/${info.project}`)}/repository/branches?per_page=100&page=${page}`,
+					{ headers: { "PRIVATE-TOKEN": token } },
+				);
+			}
+			if (response.status !== 200)
+				throw new Refusal(
+					`Provider refused the branch listing (status ${response.status})`,
+				);
+			const batch = (await response.json()) as unknown;
+			if (!Array.isArray(batch)) break;
+			for (const branch of batch)
+				if (
+					typeof branch === "object" &&
+					branch !== null &&
+					typeof (branch as { name?: unknown }).name === "string"
+				)
+					names.push((branch as { name: string }).name);
+			if (batch.length < 100) break;
+		}
+		return maskJson(names, token);
 	}
 	private number(value: unknown, name: string) {
 		if (!Number.isSafeInteger(value) || Number(value) < 1)
@@ -537,6 +889,14 @@ export class ProviderWorkbench {
 				throw new Refusal("Unsupported provider workbench operation");
 		}
 	}
+}
+
+function maskJson<T>(value: T, token: string): T {
+	return JSON.parse(
+		JSON.stringify(value, (_key, item: unknown) =>
+			typeof item === "string" ? maskSecrets(item, [token]) : item,
+		),
+	) as T;
 }
 
 const testPatterns = {

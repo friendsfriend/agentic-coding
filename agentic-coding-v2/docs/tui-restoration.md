@@ -351,3 +351,45 @@ operator environment functional tests pass.
 - Not yet mapped: provider CRUD (`createProvider`/`updateProvider`/
   `deleteProvider`/`getProvider`) and `searchRepos`/`getRepoBranches` for
   "add repository". These belong to the settings/provider-config step.
+
+## Providers view and add-repository flow
+
+- The v1 Providers view (list, add, edit, delete) and the add-repository modal
+  (provider → search → branch) now run through `providers.workbench` registry
+  operations: `providers`, `provider`, `create-provider`, `update-provider`,
+  `delete-provider`, `search-repos` and `repo-branches`.
+- Rows use the v1 shape `{name, type, username, has_token, missing_vars?}` and
+  never carry a token.
+- Tokens stay reference-only in `config.json`:
+  - A token typed in the v1 connect modal is stored the v1 way, in the
+    owner-only `CONFIG_DIR/.env` (mode 0600, atomic rename) under v1's
+    generated `DEVENV_PROVIDER_<NAME>_TOKEN`. `config.json` gets only that
+    `tokenRef`.
+  - A `${VAR}` entry is taken as a reference and nothing is written.
+  - Delete removes only the generated variable.
+  - Provider references resolve from the process environment first, then from
+    `CONFIG_DIR/.env` (bounded, regular file).
+  - A `.env` that is not a bounded regular file, or that has multi-line
+    entries, is refused rather than reflowed.
+- `config.json` edits go through `Settings.updateProviders`: bound to the
+  revision read, whole document re-validated, atomic, with the edit lock. The
+  running host's provider list is updated in place, so the views and workbench
+  see the change at once, as in v1.
+- v1 GitLab providers had no URL (search took the host from the apps). v2
+  derives a new GitLab provider's base URL from the most common GitLab
+  origin among configured projects (`ssh.` stripped, port kept for http
+  remotes), falling back to gitlab.com.
+- Branch listing: v1 ran `git ls-remote --heads` with a Basic credential in a
+  `-c http.extraheader` argument. v2 lists branches through the serving
+  provider's API (paged, at most 1000), so no credential reaches a process
+  argument.
+- Test: "restored v1 Providers view and add-repository flow…" in
+  `test/provider-workbench.test.ts` covers:
+  - create with the token kept out of `config.json`;
+  - `.env` mode 0600 and the reference shape;
+  - the app's provider identity;
+  - search and branch listing with the `.env`-resolved token;
+  - the duplicate refusal and the username update;
+  - a `${VAR}` reference reported as missing;
+  - delete removing the generated secret;
+  - the no-provider refusal.

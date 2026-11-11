@@ -277,6 +277,31 @@ export class Settings {
 			approval !== `approve:${candidate.view.digest}`
 		)
 			throw new Error("Exact unexpired settings confirmation required");
+		const receipt = this.write(candidate.view.baseRevision, candidate.bytes);
+		if (typeof id === "string") this.candidates.delete(id);
+		return receipt;
+	}
+	/** The restored v1 Providers view edits only the `providers` key: the
+	 * developer's direct TUI action is the approval, the write stays bound to the
+	 * revision it read and the whole document is still validated. */
+	updateProviders(
+		change: (
+			providers: SettingsDefinition["providers"],
+		) => SettingsDefinition["providers"],
+	) {
+		const stored = this.stored();
+		const current = this.read().settings;
+		const next = normalize({
+			...current,
+			providers: change(current.providers.map((entry) => ({ ...entry }))),
+		});
+		const bytes = `${JSON.stringify({ ...stored.data, providers: next.providers }, null, 2)}\n`;
+		if (Buffer.byteLength(bytes) > maximum)
+			throw new Error("Configuration file oversized");
+		this.write(stored.revision, bytes);
+		return next.providers;
+	}
+	private write(baseRevision: string, bytes: string) {
 		const file = this.file();
 		mkdirSync(this.root, { recursive: true, mode: 0o700 });
 		const lock = path.join(this.root, ".config.edit.lock");
@@ -284,21 +309,20 @@ export class Settings {
 		const lockIdentity = fstatSync(lockFd);
 		let temp: string | null = null;
 		try {
-			if (this.stored().revision !== candidate.view.baseRevision)
+			if (this.stored().revision !== baseRevision)
 				throw new Error("Stale settings revision");
 			temp = path.join(this.root, `.config-${crypto.randomUUID()}.tmp`);
 			const fd = openSync(temp, "wx", 0o600);
 			try {
-				writeFileSync(fd, candidate.bytes);
+				writeFileSync(fd, bytes);
 				fsyncSync(fd);
 			} finally {
 				closeSync(fd);
 			}
-			if (this.stored().revision !== candidate.view.baseRevision)
+			if (this.stored().revision !== baseRevision)
 				throw new Error("Stale settings revision");
 			renameSync(temp, file);
 			temp = null;
-			if (typeof id === "string") this.candidates.delete(id);
 			const dir = openSync(this.root, constants.O_RDONLY);
 			try {
 				fsyncSync(dir);
@@ -306,7 +330,7 @@ export class Settings {
 				closeSync(dir);
 			}
 			return {
-				revision: digest(candidate.bytes),
+				revision: digest(bytes),
 				restartRequired: true as const,
 			};
 		} finally {
