@@ -14,6 +14,11 @@ import type {
 	EnvironmentIntention,
 } from "../../../protocol/environment-workbench.ts";
 import type { Data, Request } from "../../../protocol/index.ts";
+import {
+	type WorkbenchOperation,
+	workbenchReads,
+	workbenchWrites,
+} from "../../../providers/workbench/index.ts";
 import type { Runtime } from "../../../runtime.ts";
 import {
 	readViewpoints,
@@ -395,6 +400,39 @@ export async function dispatch(
 				text(input.id, "candidate identity", 80),
 				text(input.approval, "exact approval", 80),
 			);
+		case "providers.workbench": {
+			// The developer's own direct TUI action (confirm dialog / key press)
+			// is the approval; agents and HTTP keep providers.preview/apply.
+			const operation = text(input.operation, "provider operation", 32);
+			if (
+				!(workbenchReads as readonly string[]).includes(operation) &&
+				!(workbenchWrites as readonly string[]).includes(operation)
+			)
+				throw new Error("Unsupported provider workbench operation");
+			fields(input, [
+				"operation",
+				"app",
+				"number",
+				"thread",
+				"body",
+				"position",
+				"resolved",
+				"labels",
+				"assignee",
+				"reason",
+				"scope",
+				"state",
+				"search",
+				"sort",
+				"direction",
+				"page",
+				"perPage",
+			]);
+			return app.providerWorkbench.run(
+				operation as WorkbenchOperation,
+				input,
+			) as Promise<never>;
+		}
 		case "providers.read":
 			fields(input, []);
 			return app.environments.providers.list();

@@ -418,6 +418,11 @@ export type Methods = {
 		output: ProviderActionReceipt;
 	};
 	"providers.read": { input: Data; output: ProviderSummary[] };
+	/** Restored v1 provider workbench (direct developer actions). */
+	"providers.workbench": {
+		input: { operation: string; app?: string } & Data;
+		output: unknown;
+	};
 	"providers.inspect": { input: ProviderQuery; output: ProviderInspection };
 } & StandaloneMethods;
 export type Method = keyof Methods;
@@ -502,6 +507,7 @@ export const methods: Method[] = [
 	"providers.apply",
 	"providers.read",
 	"providers.inspect",
+	"providers.workbench",
 ];
 export function record(value: unknown): Data {
 	if (!value || typeof value !== "object" || Array.isArray(value))

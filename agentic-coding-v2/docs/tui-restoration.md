@@ -297,3 +297,57 @@ operator environment functional tests pass.
   receive the server's variables; create, duplicate refusal and escape
   refusals; link and delete keeping the source; history dedupe/order; folder
   delete.
+
+## Provider workbench: v1 change requests, issues and CI
+
+- The v1 GitLab/GitHub mapping layer was copied and adapted (not imported)
+  into `src/providers/workbench/`, from v1 `src/server/integrations`:
+  `gitlab-*`, `github-*`, `changerequest`, `issues`, `provider-time` and
+  `search-result`. The TUI therefore gets v1's exact DTOs: pagination, merge
+  status, approvals, pipelines, diff lines with line codes, discussions, test
+  summaries and linked issues/CRs.
+- `ProviderWorkbench` (`index.ts`) maps each application to the configured
+  provider serving its `origin` remote. This replaces v1's per-app `provider`
+  field. GitHub `api.github.com` serves `github.com`; a GitLab host also serves
+  `ssh.<host>`. The remote is read from the active worktree.
+  `identity` reports `{provider, sourceType}` per app, so the table shows v1's
+  provider glyphs.
+- Gateway method `providers.workbench`:
+  - Reads: changes/change/files/versions/discussions/linked issues, issues and
+    issue detail/comments/linked CRs/references, labels, collaborators, jobs,
+    tests and job logs (tail-bounded).
+  - Writes: comment (with diff position), approve/unapprove/toggle, rebase,
+    reply/resolve discussion, close/reopen issue, labels, assign/unassign,
+    issue comment, retry/cancel job.
+  - These are the developer's direct TUI actions: the v1 confirm dialog or key
+    press is the approval. Agents and HTTP keep the exact-digest
+    `providers.preview/apply` path.
+- Fences:
+  - Tokens are resolved from `tokenRef` per call.
+  - Every request must stay on the provider's configured origin (HTTPS except
+    loopback).
+  - Redirects are never followed with credentials. GitHub's signed log URL is
+    fetched without them, HTTPS only and bounded.
+  - Responses are bounded (4 MB upstream, 900 KB serialized, under the 1 MB
+    frame budget).
+  - Every string is token-masked.
+  - Provider diagnostics reach the TUI as masked `Refusal` text, as in v1.
+  - A missing token answers v1's `no token configured for provider "<name>"`.
+- v1 behaviors kept:
+  - "current" change requests need a feature branch, otherwise the list is
+    empty.
+  - GitLab "current" targets `develop`.
+  - Lists skip per-item detail reads when paging.
+  - `default_branch` falls back to the main checkout's branch.
+  - Rebase and resolve are GitLab-only.
+  - The CR detail fetch is GitHub-only.
+- `streamJobLogs` (v1 had no server route) polls the bounded trace every 2 s
+  and emits only new lines. The log modal's 1 s poll stays as in v1.
+- Functional gateway test (`test/provider-workbench.test.ts`) with a loopback
+  GitLab stub. It covers identity, the feature-branch rule, list mapping, issue
+  label/close/comment writes, approve, jobs, token-masked job logs, retry,
+  provider diagnostic pass-through, the exact outbound write sequence, and the
+  missing-token refusal.
+- Not yet mapped: provider CRUD (`createProvider`/`updateProvider`/
+  `deleteProvider`/`getProvider`) and `searchRepos`/`getRepoBranches` for
+  "add repository". These belong to the settings/provider-config step.

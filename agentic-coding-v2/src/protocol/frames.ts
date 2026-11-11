@@ -687,6 +687,11 @@ export function result<M extends Method>(
 		// aggregate to this budget, so anything larger cannot be what it sent.
 		if (typeof value !== "string" || value.length > 64000)
 			throw new Error("Invalid environment log text");
+	} else if (method === "providers.workbench") {
+		// Provider-supplied v1 shapes (lists, records, text); the server bounds
+		// the serialized size below the frame budget.
+		if (value !== null && !["string", "object"].includes(typeof value))
+			throw new Error("Invalid provider workbench value");
 	} else if (method !== "providers.read") {
 		const data = record(value);
 		const expected =

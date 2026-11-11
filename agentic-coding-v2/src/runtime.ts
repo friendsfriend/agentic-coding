@@ -29,6 +29,7 @@ import { EnvironmentWorkbench } from "./environment/workbench.ts";
 import { createOrchestrator, orchestratorPrompt } from "./orchestrator.ts";
 import { projectState } from "./projection.ts";
 import { ProviderActions } from "./provider-actions.ts";
+import { ProviderWorkbench } from "./providers/workbench/index.ts";
 import { Scheduler, type ScheduleSlot } from "./scheduler.ts";
 import { Refusal } from "./server/refusal.ts";
 import { Settings } from "./settings.ts";
@@ -66,6 +67,7 @@ export class Runtime {
 	readonly repositoryGit: RepositoryGit;
 	readonly clusterOperator: ClusterOperator;
 	readonly tasks: TaskCollection;
+	readonly providerWorkbench: ProviderWorkbench;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
@@ -83,6 +85,11 @@ export class Runtime {
 			() => this.harness,
 		);
 		this.tasks = new TaskCollection(config, () => this.harness);
+		this.providerWorkbench = new ProviderWorkbench(
+			config,
+			this.environments,
+			this.repositoryGit,
+		);
 		this.clusterOperator = new ClusterOperator(
 			config,
 			this.environments,

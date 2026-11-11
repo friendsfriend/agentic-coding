@@ -140,6 +140,11 @@ type GitRow = {
 export class GatewayBackend implements DevEnvBackend {
 	/** Last native Git observation per app, refreshed with every status read. */
 	private git = new Map<string, GitRow>();
+	/** Provider serving each app's origin remote (v1 `provider`/`sourceType`). */
+	private identities: Record<
+		string,
+		{ provider?: string; sourceType?: string }
+	> = {};
 	/** Output already published per native run, for incremental action events. */
 	private published = new Map<string, number>();
 	private announced = new Map<string, ActionRunStatus>();
@@ -184,6 +189,13 @@ export class GatewayBackend implements DevEnvBackend {
 		} catch {
 			// Git status is decoration; the table keeps its last observation.
 		}
+		try {
+			this.identities = (await this.client.call("providers.workbench", {
+				operation: "identity",
+			})) as typeof this.identities;
+		} catch {
+			// Provider identity is decoration too.
+		}
 	}
 	private gitCall(operation: string, app: string, branch?: string) {
 		return this.client
@@ -216,6 +228,14 @@ export class GatewayBackend implements DevEnvBackend {
 				? { mainWorktreeBranch: git.mainWorktreeBranch }
 				: {}),
 			appType: project.kind === "library" ? "LIB" : "APP",
+			...(this.identities[project.id]?.provider
+				? {
+						provider: this.identities[project.id]?.provider,
+						sourceType: this.identities[project.id]?.sourceType as
+							| "github"
+							| "gitlab",
+					}
+				: {}),
 			containerBaseName: project.id,
 			...(runtimeStatus ? { runtimeStatus } : {}),
 			status: runtimeStatus?.state ?? "stopped",
@@ -942,7 +962,134 @@ export class GatewayBackend implements DevEnvBackend {
 					values: (args[1] ?? {}) as Data,
 				}).then(() => undefined);
 			case "getProviders":
-				return Promise.resolve([]);
+				return this.client.call("providers.read", {});
+			// Restored v1 provider workbench: issues, change requests and CI of
+			// the provider serving each app's origin remote.
+			case "getChangeRequests":
+				return this.workbench("changes", arg(0), {
+					state: arg(1) || "opened",
+					scope: args[2] === "all" ? "all" : "current",
+					page: args[4] ?? 1,
+					perPage: args[5] ?? 50,
+					...(args[6] ? { search: arg(6) } : {}),
+					...(args[7] ? { sort: arg(7) } : {}),
+					...(args[8] ? { direction: arg(8) } : {}),
+					...(Array.isArray(args[9]) ? { labels: args[9] } : {}),
+				});
+			case "getChangeRequest":
+				return this.workbench("change", arg(0), { number: args[1] });
+			case "getChangeRequestChanges":
+				return this.workbench("change-files", arg(0), { number: args[1] });
+			case "getCRVersions":
+				return this.workbench("change-versions", arg(0), { number: args[1] });
+			case "getCRDiscussions":
+				return this.workbench("discussions", arg(0), { number: args[1] });
+			case "getCRLinkedIssues":
+				return this.workbench("change-issues", arg(0), { number: args[1] });
+			case "createCRComment":
+				return this.workbench("comment-change", arg(0), {
+					number: args[1],
+					body: arg(2),
+					...(args[3] ? { position: args[3] as Data } : {}),
+				});
+			case "approveChangeRequest":
+				return this.workbench("approve-change", arg(0), {
+					number: args[1],
+				}).then(() => undefined);
+			case "unapproveChangeRequest":
+				return this.workbench("unapprove-change", arg(0), {
+					number: args[1],
+				}).then(() => undefined);
+			case "toggleCRApproval":
+				return this.workbench("toggle-approval", arg(0), {
+					number: args[1],
+				}).then(() => undefined);
+			case "rebaseCR":
+				return this.workbench("rebase-change", arg(0), {
+					number: args[1],
+				}).then(() => undefined);
+			case "replyToDiscussion":
+				return this.workbench("reply-discussion", arg(0), {
+					number: args[1],
+					thread: arg(2),
+					body: arg(3),
+				});
+			case "resolveDiscussion":
+				return this.workbench("resolve-discussion", arg(0), {
+					number: args[1],
+					thread: arg(2),
+					resolved: args[3] === "resolve",
+				});
+			case "getIssues":
+				return this.workbench("issues", arg(0), {
+					scope: arg(1) || "all",
+					page: args[3] ?? 1,
+					perPage: args[4] ?? 50,
+					...(args[5] ? { search: arg(5) } : {}),
+					...(args[6] ? { state: arg(6) } : {}),
+					...(args[7] ? { sort: arg(7) } : {}),
+					...(args[8] ? { direction: arg(8) } : {}),
+					...(Array.isArray(args[9]) ? { labels: args[9] } : {}),
+				});
+			case "getIssue":
+				return this.workbench("issue", arg(0), { number: args[1] });
+			case "getIssueComments":
+				return this.workbench("issue-comments", arg(0), { number: args[1] });
+			case "getIssueLinkedCRs":
+				return this.workbench("issue-changes", arg(0), { number: args[1] });
+			case "getIssueReferencedIssues":
+				return this.workbench("issue-references", arg(0), {
+					number: args[1],
+				});
+			case "getRepoLabels":
+				return this.workbench("labels", arg(0));
+			case "getRepoCollaborators":
+				return this.workbench("collaborators", arg(0));
+			case "closeIssue":
+				return this.workbench("close-issue", arg(0), {
+					number: args[1],
+					...(args[3] ? { reason: arg(3) } : {}),
+				});
+			case "reopenIssue":
+				return this.workbench("reopen-issue", arg(0), { number: args[1] });
+			case "setIssueLabels":
+				return this.workbench("set-issue-labels", arg(0), {
+					number: args[1],
+					labels: (args[3] ?? []) as Data,
+				});
+			case "setIssueAssignee":
+				return this.workbench("assign-issue", arg(0), {
+					number: args[1],
+					assignee: arg(3),
+				});
+			case "removeIssueAssignee":
+				return this.workbench("unassign-issue", arg(0), { number: args[1] });
+			case "addIssueComment":
+				return this.workbench("comment-issue", arg(0), {
+					number: args[1],
+					body: arg(3),
+				});
+			case "getPipelineJobs":
+				return this.workbench("jobs", arg(0), { number: args[1] });
+			case "getTestSummary":
+				return this.workbench("tests", arg(0), { number: args[1] });
+			case "getJobLogs":
+				return this.workbench("job-logs", arg(0), { number: args[1] });
+			case "streamJobLogs":
+				return this.streamJobLogs(
+					arg(0),
+					Number(args[1]),
+					args[2] as AbortSignal,
+					args[3] as (line: string) => void,
+				);
+			case "retryJob":
+				return this.workbench("retry-job", arg(0), {
+					number: args[1],
+				}).then(() => undefined);
+			case "cancelJob":
+				return this.workbench("cancel-job", arg(0), {
+					number: args[1],
+				}).then(() => undefined);
 			case "getStages":
 				return Promise.resolve({ configDir: "", stages: [], excluded: [] });
 			case "getAppSlots":
@@ -1082,6 +1229,41 @@ export class GatewayBackend implements DevEnvBackend {
 		}
 	}
 
+	private workbench(
+		operation: string,
+		app: string,
+		input: Record<string, unknown> = {},
+	) {
+		return this.client.call("providers.workbench", {
+			operation,
+			app,
+			...input,
+		}) as Promise<never>;
+	}
+	/** v1 streamed GitLab job traces; v2 polls the bounded trace every 2 s and
+	 * emits only new lines until aborted. */
+	private async streamJobLogs(
+		app: string,
+		job: number,
+		signal: AbortSignal,
+		onLine: (line: string) => void,
+	) {
+		let seen = 0;
+		while (!signal.aborted) {
+			try {
+				const text = (await this.workbench("job-logs", app, {
+					number: job,
+				})) as string;
+				const lines = text.split("\n");
+				if (lines.length < seen) seen = 0;
+				for (const line of lines.slice(seen)) onLine(line);
+				seen = lines.length;
+			} catch {
+				// The polling fallback in log-effects keeps the modal current.
+			}
+			await new Promise((resolve) => setTimeout(resolve, 2000));
+		}
+	}
 	/** Surface a refusal the way v1 did: one error dialog. */
 	report(title: string, error: unknown) {
 		this.showError(
