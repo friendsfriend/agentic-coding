@@ -356,3 +356,134 @@ test("direct operator settings save is revision-bound, private and does not bypa
 		await app.close();
 	}
 });
+
+test("native profile list/form mutations preserve other settings, fence editor revisions and refuse referenced deletion", async () => {
+	const { app, config } = await fixture();
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	const provider = config.profiles[0]?.provider;
+	const running = structuredClone(config.profiles);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.state,
+			(state) => state !== null,
+		);
+		const catalog = await client.call("settings.models", {});
+		expect(catalog).toEqual(
+			[`${provider}/original`, `${provider}/replacement`].sort(),
+		);
+		const initial = await client.call("settings.read", {});
+		const created = await client.call("settings.profile", {
+			baseRevision: initial.revision,
+			operation: "save",
+			name: "reviewer",
+			profile: {
+				model: `${provider}/replacement`,
+				thinking: "high",
+				description: "Synthetic reviewer",
+			},
+		});
+		expect(created.settings.profiles.reviewer?.model).toBe(
+			`${provider}/replacement`,
+		);
+		expect(created.settings.repositories).toEqual(
+			initial.settings.repositories,
+		);
+		expect(created.settings.providers).toEqual(initial.settings.providers);
+		expect(created.settings.orchestratorProfile).toBe("test");
+		expect(config.profiles).toEqual(running);
+		expect(created.restartRequired).toBe(true);
+		await expect(
+			client.call("settings.profile", {
+				baseRevision: initial.revision,
+				operation: "delete",
+				name: "reviewer",
+			}),
+		).rejects.toThrow("Settings changed on disk");
+		await expect(
+			client.call("settings.profile", {
+				baseRevision: created.revision,
+				operation: "delete",
+				name: "test",
+			}),
+		).rejects.toThrow("referenced by orchestratorProfile");
+		await expect(
+			client.call("settings.profile", {
+				baseRevision: created.revision,
+				operation: "save",
+				name: "renamed-root",
+				originalName: "test",
+				profile: initial.settings.profiles.test,
+			}),
+		).rejects.toThrow("referenced by orchestratorProfile");
+		await expect(
+			client.call("settings.profile", {
+				baseRevision: created.revision,
+				operation: "save",
+				name: "reviewer",
+				profile: {
+					model: `${provider}/original`,
+					thinking: "off",
+					description: "",
+				},
+			}),
+		).rejects.toThrow("already exists");
+		const edited = await client.call("settings.profile", {
+			baseRevision: created.revision,
+			operation: "save",
+			name: "reviewer",
+			originalName: "reviewer",
+			profile: {
+				model: `${provider}/original`,
+				thinking: "low",
+				description: "Edited",
+			},
+		});
+		expect(edited.settings.profiles.reviewer?.thinking).toBe("low");
+		const renamed = await client.call("settings.profile", {
+			baseRevision: edited.revision,
+			operation: "save",
+			name: "audit",
+			originalName: "reviewer",
+			profile: edited.settings.profiles.reviewer,
+		});
+		expect(Object.hasOwn(renamed.settings.profiles, "reviewer")).toBe(false);
+		expect(renamed.settings.profiles.audit?.description).toBe("Edited");
+		await expect(
+			client.call("settings.profile", {
+				baseRevision: renamed.revision,
+				operation: "save",
+				name: "invalid-runtime",
+				profile: {
+					model: `${provider}/original`,
+					thinking: "max",
+					description: "",
+				},
+			}),
+		).rejects.toThrow("Native operation refused");
+		const removed = await client.call("settings.profile", {
+			baseRevision: renamed.revision,
+			operation: "delete",
+			name: "audit",
+		});
+		expect(removed.settings.profiles).toEqual(initial.settings.profiles);
+		expect(config.profiles).toEqual(running);
+		const observed = await client.call("settings.read", {});
+		expect(observed).toEqual(removed);
+		const file = path.join(config.configDir, "config.json");
+		expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+		await expect(
+			client.call("settings.profile", {
+				baseRevision: removed.revision,
+				operation: "delete",
+				name: "missing",
+			}),
+		).rejects.toThrow("no longer exists");
+		expect(digest(fs.readFileSync(file))).toBe(removed.revision);
+	} finally {
+		client.close();
+		await host.stop();
+		await app.close();
+	}
+});

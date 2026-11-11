@@ -528,3 +528,39 @@ operator environment functional tests pass.
   settings/client-gateway functional tests passed; the TUI bundles. No renderer,
   mount, navigation or snapshot tests were introduced. Visual parity remains
   developer-verified. Step 5 and runnable parity are not complete.
+
+## Progress: native model-profile list and form
+
+- Settings → Model profiles now uses the v1 Agent Presets profile list/form
+  interaction, copied and adapted into `AgentProfilesView`: sorted Card rows,
+  `+`/`=` to add, Enter to edit, `d` with the original confirmation modal to
+  delete; h/l focus panes, j/k move fields/choices, Space selects, e edits text,
+  Tab moves fields, Enter validates and saves, Escape finishes editing/cancels.
+  Rendering uses the copied shared v1 Form/ScrollableList/Card primitives.
+  The shell footer and help consume the active profile-view catalog instead of
+  advertising JSON-editor or command-prefill controls. `?` opens shell help on
+  Settings outside text entry.
+- `settings.models` reads authenticated configured pi-ai model availability
+  without refreshing providers, invoking a completion or spawning a CLI. The
+  form offers that list and retains an existing model not in the list; it falls
+  back to free text when the list is unavailable. Model ids are bounded strings;
+  no credential or auth payload crosses the gateway.
+- `settings.profile` creates/edits/renames/deletes only one native profile using
+  the editor's observed disk revision. Duplicate names, missing originals and
+  deleting/renaming the Orchestrator-referenced profile are refused. All native
+  validation and atomic private-file fences remain; running profiles/sessions
+  stay pinned. There are deliberately no legacy presets, classifiers, runtime
+  selectors or delegation. Settings' obsolete whole-draft profile form was
+  removed rather than kept as a second editor.
+- A Settings refresh now preserves a dirty draft's original revision instead of
+  silently rebasing it after a scoped profile edit or external disk change.
+  Discard explicitly re-reads the server; failed/uncertain profile saves retain
+  the draft and never replay. Leaving/reopening the profile form captures a new
+  revision explicitly.
+- Verification: unfiltered type-check and lint clean, 11/11 settings/client
+  gateway functional tests passed, and the TUI bundles. The added test covers
+  catalog reads, create/edit/rename/delete, stale editors, duplicate names,
+  native thinking validation, referenced-profile protection, private file mode
+  and unchanged running authority. No renderer/mount/snapshot/navigation tests
+  or real provider/cluster/engine runs. Visual parity is still manual; Step 5
+  and full runnable parity remain open.

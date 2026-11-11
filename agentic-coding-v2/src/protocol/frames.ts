@@ -512,7 +512,17 @@ export function result<M extends Method>(
 			)
 				throw new Error("Invalid skill instructions");
 		}
-	} else if (method === "settings.read") {
+	} else if (method === "settings.models") {
+		if (
+			!Array.isArray(value) ||
+			value.length > 2000 ||
+			!value.every(
+				(model) =>
+					typeof model === "string" && model.length > 0 && model.length <= 512,
+			)
+		)
+			throw new Error("Invalid configured model catalog");
+	} else if (method === "settings.read" || method === "settings.profile") {
 		const data = record(value),
 			settings = record(data.settings);
 		if (

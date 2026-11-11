@@ -259,6 +259,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		Array<{ title: string; keybinds: Array<{ key: string; action: string }> }>
 	>([]);
 	const [environmentModal, setEnvironmentModal] = createSignal(false);
+	const [settingsCatalog, setSettingsCatalog] = createSignal<
+		import("../ui/index.ts").KeybindSection[]
+	>([]);
 	// Existing helpOpen guards are shell interaction fences, including the two
 	// higher-priority local dialogs. Actual help rendering uses helpRequested.
 	const helpOpen = () =>
@@ -1489,12 +1492,32 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			setRefreshRevision((value) => value + 1);
 		}
 	};
-	const resetSettings = () => {
-		const document = settingsDocument();
-		if (!document || settingsSaving() || settingsError()) return;
+	const resetSettings = async () => {
+		if (settingsSaving() || status() !== "connected") return;
+		const draft = settingsDraft(),
+			epoch = settingsEpoch;
+		setSettingsSaving(true);
 		setSettingsEditing(false);
 		setSettingsCandidate(null);
-		setSettingsDraft(JSON.stringify(document.settings, null, 2));
+		try {
+			const document = await client.call("settings.read", {});
+			if (
+				epoch !== settingsEpoch ||
+				status() !== "connected" ||
+				settingsDraft() !== draft
+			)
+				return;
+			setSettingsDocument(document);
+			setSettingsDraft(JSON.stringify(document.settings, null, 2));
+			setSettingsError(null);
+		} catch (error) {
+			reportError(
+				error instanceof Error ? error.message : String(error),
+				"Settings",
+			);
+		} finally {
+			setSettingsSaving(false);
+		}
 	};
 	createEffect(() => {
 		const selectedPage = page(),
@@ -1522,9 +1545,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 			.call("settings.read", {})
 			.then((document) => {
 				if (epoch !== settingsEpoch || status() !== "connected") return;
-				setSettingsDocument(document);
-				if (!settingsDraft())
+				const baseline = settingsDocument(),
+					draft = settingsDraft();
+				const dirty =
+					baseline &&
+					draft &&
+					draft !== JSON.stringify(baseline.settings, null, 2);
+				// A refresh must not silently rebase a dirty draft onto a newer
+				// revision (including a scoped profile edit). Keep its original fence.
+				if (!dirty || baseline.revision === document.revision)
+					setSettingsDocument(document);
+				if (!dirty)
 					setSettingsDraft(JSON.stringify(document.settings, null, 2));
+				else if (baseline.revision !== document.revision)
+					setNotice(
+						"Settings changed on disk. Discard edits to reload before saving this draft.",
+					);
 				setSettingsError(null);
 			})
 			.catch((error: Error) => {
@@ -2458,17 +2494,20 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		),
 	});
 	onCleanup(unregister);
-	// v1: `?` is host-owned and opens the shared help over the environment page
-	// (which has no prompt to catch it), unless the environment is taking text.
+	// v1: prompt-free form/list pages route `?` to shell help except during
+	// text entry. Their own higher-priority confirmation layers keep their keys.
 	const unregisterEnvironmentHelp = keymap.registerLayer({
 		id: "v2.environment-help",
 		priority: 20,
 		enabled: () =>
-			current().page === "environments" &&
 			contentFocused() &&
 			!helpOpen() &&
 			!paletteOpen() &&
-			keymap.getData?.("textEntry.active") !== true,
+			((current().page === "environments" &&
+				keymap.getData?.("textEntry.active") !== true) ||
+				(current().page === "settings" &&
+					!settingsEditing() &&
+					!settingsThemeOpen())),
 		commands: layerCommands([
 			{
 				id: "environment.help",
@@ -4525,6 +4564,21 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								</Show>
 								<Show when={current().page === "settings"}>
 									<SettingsPanel
+										client={client}
+										interactive={() =>
+											contentFocused() &&
+											!helpOpen() &&
+											!paletteOpen() &&
+											!busy() &&
+											!settingsThemeOpen()
+										}
+										changed={() => setRefreshRevision((value) => value + 1)}
+										notify={(message, error) =>
+											error
+												? reportError(message, "Model profiles")
+												: setNotice(message)
+										}
+										catalog={setSettingsCatalog}
 										fresh={snapshotFresh()}
 										document={settingsDocument()}
 										error={settingsError()}
@@ -4546,7 +4600,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										saving={settingsSaving()}
 										connected={status() === "connected"}
 										save={() => void saveSettings()}
-										reset={resetSettings}
+										reset={() => void resetSettings()}
 										openTheme={() => {
 											setSettingsEditing(true);
 											setSettingsThemeOpen(true);
@@ -4937,6 +4991,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				<StatusBar
 					keybinds={[
 						...((settingsThemeOpen() ||
+							(current().page === "settings" && settingsCatalog().length > 0) ||
 							(current().page === "environments" && environmentModal())) &&
 						!paletteOpen()
 							? []
@@ -4950,7 +5005,9 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 													? breadcrumbKeybinds
 													: actionKeybinds),
 												...(pageFocusEnabled() ? pageFocusKeybinds : []),
-												...(menuKeysActive() && current().page === "settings"
+												...(menuKeysActive() &&
+												current().page === "settings" &&
+												!settingsCatalog().length
 													? menuKeybinds
 													: []),
 												...(isTranscript() && !crumbActive()
@@ -4977,6 +5034,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 										...binding,
 										key: keyLabel(binding.key),
 									}))),
+						...(current().page === "settings" &&
+						contentFocused() &&
+						!paletteOpen() &&
+						!settingsThemeOpen()
+							? settingsCatalog()
+									.flatMap((section) => section.keybinds)
+									.filter((binding) => !binding.standard)
+							: []),
 						// The environment's own labels are already v1 display labels.
 						...(current().page === "environments" &&
 						contentFocused() &&
@@ -5001,6 +5066,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					<HelpOverlay
 						close={() => setHelpOpen(false)}
 						sections={[
+							...(current().page === "settings" ? settingsCatalog() : []),
 							...(current().page === "environments"
 								? environmentCatalog()
 								: []),

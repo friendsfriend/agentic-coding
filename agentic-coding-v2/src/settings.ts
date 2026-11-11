@@ -21,6 +21,7 @@ import type {
 	SettingsDocument,
 } from "./protocol/index.ts";
 import { readProviders } from "./providers/config.ts";
+import { Refusal } from "./server/refusal.ts";
 
 const maximum = 262144;
 function canonical(dir: string): string {
@@ -243,6 +244,61 @@ export class Settings {
 			),
 			restartRequired: true,
 		};
+	}
+	/** v1's per-profile editor writes only profiles, never an old whole-form
+	 * draft. References are native-only; a pinned running session is unchanged. */
+	profile(input: {
+		baseRevision: string;
+		operation: "save" | "delete";
+		name: string;
+		originalName?: string;
+		profile?: SettingsDefinition["profiles"][string];
+	}): SettingsDocument {
+		const current = this.read();
+		if (input.baseRevision !== current.revision)
+			throw new Refusal(
+				"Settings changed on disk; reload before saving this profile",
+			);
+		const settings = structuredClone(current.settings);
+		const name = input.name;
+		if (!name || name.length > 128 || /\s/.test(name))
+			throw new Refusal(
+				"Profile name must be 1–128 characters without whitespace",
+			);
+		const original = input.originalName;
+		if (original !== undefined && !Object.hasOwn(settings.profiles, original))
+			throw new Refusal("The profile no longer exists; reload before editing");
+		if (input.operation === "delete") {
+			if (original !== undefined || input.profile !== undefined)
+				throw new Refusal(
+					"Delete accepts only the observed profile name and revision",
+				);
+			if (!Object.hasOwn(settings.profiles, name))
+				throw new Refusal(
+					"The profile no longer exists; reload before deleting",
+				);
+			if (settings.orchestratorProfile === name)
+				throw new Refusal("Cannot delete: referenced by orchestratorProfile");
+			delete settings.profiles[name];
+		} else if (input.operation === "save") {
+			if (name !== original && Object.hasOwn(settings.profiles, name))
+				throw new Refusal("A profile with that name already exists");
+			if (
+				original &&
+				original !== name &&
+				settings.orchestratorProfile === original
+			)
+				throw new Refusal("Cannot rename: referenced by orchestratorProfile");
+			if (input.profile === undefined)
+				throw new Refusal("A profile definition is required");
+			settings.profiles = Object.fromEntries([
+				...Object.entries(settings.profiles).filter(([id]) => id !== original),
+				[name, input.profile],
+			]);
+		} else throw new Refusal("Unknown profile operation");
+		const next = normalize(settings);
+		const receipt = this.save(current.revision, next);
+		return { ...receipt, settings: next };
 	}
 	/** A direct operator save is its own confirmation. Keep normalization, the
 	 * disk revision fence and the atomic private-file writer shared with apply;

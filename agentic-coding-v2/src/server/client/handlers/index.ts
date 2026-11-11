@@ -13,7 +13,11 @@ import type {
 	EnvironmentInspection,
 	EnvironmentIntention,
 } from "../../../protocol/environment-workbench.ts";
-import type { Data, Request } from "../../../protocol/index.ts";
+import type {
+	Data,
+	Request,
+	SettingsDefinition,
+} from "../../../protocol/index.ts";
 import {
 	type WorkbenchOperation,
 	workbenchReads,
@@ -416,6 +420,46 @@ export async function dispatch(
 		case "settings.read":
 			fields(input, []);
 			return app.settings.read();
+		case "settings.models": {
+			fields(input, []);
+			// Auth/configuration checks only: no refresh, completion or CLI spawn.
+			const models = await app.models.getAvailable();
+			return [
+				...new Set(models.map((model) => `${model.provider}/${model.id}`)),
+			]
+				.filter((model) => model.length <= 512)
+				.sort()
+				.slice(0, 2000);
+		}
+		case "settings.profile":
+			fields(input, [
+				"baseRevision",
+				"operation",
+				"name",
+				"originalName",
+				"profile",
+			]);
+			if (input.operation !== "save" && input.operation !== "delete")
+				throw new Refusal("Unknown profile operation");
+			return app.settings.profile({
+				baseRevision: text(input.baseRevision, "settings revision", 64),
+				operation: input.operation,
+				name: text(input.name, "profile name", 128),
+				...(input.originalName === undefined
+					? {}
+					: {
+							originalName: text(
+								input.originalName,
+								"original profile name",
+								128,
+							),
+						}),
+				...(input.profile === undefined
+					? {}
+					: {
+							profile: input.profile as SettingsDefinition["profiles"][string],
+						}),
+			});
 		case "settings.save":
 			// The developer activated Save in the authenticated TUI. Automated
 			// callers keep the explicit preview/apply approval path.

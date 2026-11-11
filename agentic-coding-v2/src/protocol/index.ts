@@ -420,6 +420,17 @@ export type Methods = {
 		output: SkillDocument;
 	};
 	"settings.read": { input: Data; output: SettingsDocument };
+	"settings.models": { input: Data; output: string[] };
+	"settings.profile": {
+		input: {
+			baseRevision: string;
+			operation: "save" | "delete";
+			name: string;
+			originalName?: string;
+			profile?: SettingsDefinition["profiles"][string];
+		};
+		output: SettingsDocument;
+	};
 	"settings.save": {
 		input: { baseRevision: string; settings: SettingsDefinition };
 		output: { revision: string; restartRequired: true };
@@ -532,6 +543,8 @@ export const methods: Method[] = [
 	"skills.read",
 	"skill.read",
 	"settings.read",
+	"settings.models",
+	"settings.profile",
 	"settings.save",
 	"settings.preview",
 	"settings.apply",

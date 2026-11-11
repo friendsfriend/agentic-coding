@@ -14,6 +14,7 @@ import {
 	Switch,
 } from "solid-js";
 import type { Data, SettingsDocument } from "../../../protocol/index.ts";
+import type { ClientConnection } from "../../client/connection.ts";
 import {
 	type CardEntry,
 	CardList,
@@ -28,28 +29,29 @@ import {
 import { useTerminalDimensions } from "../../presentation/hooks/useTerminalDimensions.ts";
 import { uiColors } from "../../presentation/theme/colors";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
+import type { KeybindSection } from "../../ui/index.ts";
 import { LocalJsonEditor } from "../../ui/LocalJsonEditor.tsx";
 import { type MenuKey, useMenuKeys } from "../../ui/menuKeys.ts";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { getActiveThemeName } from "../../ui/theme/theme.ts";
+import { AgentProfilesView } from "./AgentProfilesView.tsx";
 import { SettingsSectionView } from "./SettingsSectionView.tsx";
 
-type Section = "orchestrator" | "profiles" | "repositories" | "providers";
+type Section = "orchestrator" | "repositories" | "providers";
 type Level =
 	| { kind: "menu" }
 	| { kind: "appearance" }
+	| { kind: "profiles" }
 	| { kind: "list"; section: Section }
 	| { kind: "form"; section: Section; index: number }
 	| { kind: "advanced" };
 
 const SECTION_LABELS: Record<Section, string> = {
 	orchestrator: "Orchestrator",
-	profiles: "Model profiles",
 	repositories: "Repositories",
 	providers: "Providers",
 };
-const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 const object = (value: unknown): Data =>
 	value && typeof value === "object" && !Array.isArray(value)
@@ -60,6 +62,11 @@ const text = (value: unknown): string =>
 const shown = (value: unknown) => text(value) || "—";
 
 export function SettingsPanel(props: {
+	client: ClientConnection;
+	interactive: () => boolean;
+	changed: () => void;
+	notify: (message: string, error?: boolean) => void;
+	catalog: (catalog: KeybindSection[]) => void;
 	document: SettingsDocument | null;
 	error: string | null;
 	draft: string;
@@ -142,9 +149,9 @@ export function SettingsPanel(props: {
 		},
 		{
 			id: "profiles",
-			title: SECTION_LABELS.profiles,
+			title: "Model profiles",
 			detail: `${profileIds().length} profiles · model and thinking level per role`,
-			open: () => openList("profiles"),
+			open: () => setLevel({ kind: "profiles" }),
 		},
 		{
 			id: "repositories",
@@ -203,19 +210,6 @@ export function SettingsPanel(props: {
 						value: shown(parsed()?.orchestratorProfile),
 					},
 				];
-			case "profiles":
-				return [
-					...profileIds().map((id) => {
-						const profile = object(profiles()[id]);
-						return {
-							id,
-							title: id,
-							detail: text(profile.description) || "No description",
-							value: `${shown(profile.model)} · ${shown(profile.thinking)}`,
-						};
-					}),
-					{ id: "+", title: "+ Add profile", accent: uiColors.success },
-				];
 			case "repositories":
 				return [
 					...list("repositories").map((path, index) => ({
@@ -241,18 +235,6 @@ export function SettingsPanel(props: {
 		}
 	};
 	const add = (section: Section): number => {
-		if (section === "profiles") {
-			let id = "new-profile",
-				index = 1;
-			while (Object.hasOwn(profiles(), id)) id = `new-profile-${index++}`;
-			mutate((draft) => {
-				draft.profiles = {
-					...object(draft.profiles),
-					[id]: { model: "", thinking: "off", description: "" },
-				};
-			});
-			return profileIds().length - 1;
-		}
 		if (section === "repositories") {
 			mutate((draft) => {
 				draft.repositories = [
@@ -292,35 +274,6 @@ export function SettingsPanel(props: {
 						kind: "select",
 						options: profileIds(),
 						hint: "Names one of the model profiles",
-					},
-				];
-			case "profiles":
-				return [
-					{ key: "name", label: "Name", kind: "text", maxLength: 128 },
-					{
-						key: "model",
-						label: "Model",
-						kind: "text",
-						maxLength: 256,
-						hint: "provider/model as the provider names it",
-					},
-					{
-						key: "thinking",
-						label: "Thinking",
-						kind: "select",
-						options: THINKING,
-					},
-					{
-						key: "description",
-						label: "Description",
-						kind: "text",
-						maxLength: 2048,
-					},
-					{
-						key: "remove",
-						label: "Remove profile",
-						kind: "action",
-						tone: "warning",
 					},
 				];
 			case "repositories":
@@ -375,16 +328,6 @@ export function SettingsPanel(props: {
 		switch (section) {
 			case "orchestrator":
 				return { orchestratorProfile: text(parsed()?.orchestratorProfile) };
-			case "profiles": {
-				const id = profileIds()[index] ?? "";
-				const profile = object(profiles()[id]);
-				return {
-					name: id,
-					model: text(profile.model),
-					thinking: text(profile.thinking),
-					description: text(profile.description),
-				};
-			}
 			case "repositories":
 				return { path: text(list("repositories")[index]) };
 			case "providers": {
@@ -410,27 +353,6 @@ export function SettingsPanel(props: {
 				draft.orchestratorProfile = value;
 				return;
 			}
-			if (section === "profiles") {
-				const current = object(draft.profiles);
-				const id = Object.keys(current)[index];
-				if (id === undefined) return;
-				if (key === "name") {
-					// Rename in place so the list position (the form's cursor) holds.
-					if (!value || (value !== id && Object.hasOwn(current, value))) return;
-					draft.profiles = Object.fromEntries(
-						Object.entries(current).map(([name, entry]) => [
-							name === id ? value : name,
-							entry,
-						]),
-					);
-					if (draft.orchestratorProfile === id)
-						draft.orchestratorProfile = value;
-					return;
-				}
-				current[id] = { ...object(current[id]), [key]: value };
-				draft.profiles = current;
-				return;
-			}
 			if (section === "repositories") {
 				if (
 					Array.isArray(draft.repositories) &&
@@ -449,13 +371,7 @@ export function SettingsPanel(props: {
 		});
 	const remove = (section: Section, index: number) => {
 		mutate((draft) => {
-			if (section === "profiles") {
-				const id = Object.keys(object(draft.profiles))[index];
-				if (id !== undefined) delete object(draft.profiles)[id];
-			} else if (
-				section === "repositories" &&
-				Array.isArray(draft.repositories)
-			)
+			if (section === "repositories" && Array.isArray(draft.repositories))
 				draft.repositories.splice(index, 1);
 			else if (section === "providers" && Array.isArray(draft.providers))
 				draft.providers.splice(index, 1);
@@ -470,6 +386,7 @@ export function SettingsPanel(props: {
 		Math.max(0, Math.min(value, Math.max(0, length - 1)));
 	const key = (input: MenuKey): boolean | undefined => {
 		const current = level();
+		if (current.kind === "profiles") return false;
 		const step = input === "up" ? -1 : input === "down" ? 1 : 0;
 		if (current.kind === "menu") {
 			const entries = menuEntries();
@@ -532,7 +449,10 @@ export function SettingsPanel(props: {
 		if (input === "back" || input === "left") setPane("field");
 		else if (input === "open" && writable()) props.edit(true);
 	};
-	useMenuKeys({ active: () => props.keys() && !props.editing, key });
+	useMenuKeys({
+		active: () => level().kind !== "profiles" && props.keys() && !props.editing,
+		key,
+	});
 	// Leaving the text editor (Enter, Escape or a focus change) returns the form
 	// cursor to the field list, as the original form did.
 	createEffect(
@@ -555,6 +475,7 @@ export function SettingsPanel(props: {
 		if (current.kind === "menu") return "";
 		if (current.kind === "advanced") return "Advanced";
 		if (current.kind === "appearance") return "Appearance";
+		if (current.kind === "profiles") return "Model profiles";
 		const section = SECTION_LABELS[current.section];
 		if (current.kind === "list") return section;
 		return `${section} › ${listEntries(current.section)[current.index]?.title ?? ""}`;
@@ -589,6 +510,18 @@ export function SettingsPanel(props: {
 			</Show>
 			<Show when={props.document}>
 				<Switch>
+					<Match when={level().kind === "profiles"}>
+						<AgentProfilesView
+							client={props.client}
+							active={props.interactive}
+							connected={props.connected}
+							edit={props.edit}
+							back={() => setLevel({ kind: "menu" })}
+							changed={props.changed}
+							notify={props.notify}
+							catalog={props.catalog}
+						/>
+					</Match>
 					<Match when={level().kind === "appearance"}>
 						<SettingsSectionView
 							items={[
