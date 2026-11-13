@@ -62,17 +62,57 @@ export const PAGE_LOCATIONS: ReadonlyArray<{
 	},
 ];
 
+/** The Observability page's own views, as v1 published them: a view is a
+ * location, so the picker can jump straight to traces or topology instead of
+ * only to the feature's front page. The surface names are the feature's own. */
+export const OBSERVABILITY_LOCATIONS: ReadonlyArray<{
+	resource: string;
+	label: string;
+	description: string;
+}> = [
+	{
+		resource: "traces",
+		label: "Traces",
+		description: "Distributed traces, their spans and timings",
+	},
+	{
+		resource: "metrics",
+		label: "Metrics",
+		description: "Metric streams, their statistics and history",
+	},
+	{
+		resource: "logs",
+		label: "Logs",
+		description: "Log records with severity, body and correlation",
+	},
+	{
+		resource: "topology",
+		label: "Service topology",
+		description: "Services, their callers and their dependencies",
+	},
+];
+
 /** Every page as a destination. Sessions are reached from the sidebar, not
  * here, because a session identity is runtime state rather than a location. */
 export function locationEntries(): LocationEntry[] {
-	return PAGE_LOCATIONS.map((entry) => ({
-		id: entry.page,
-		label: entry.label,
-		description: entry.description,
-		group: "Destinations",
-		page: entry.page,
-		resource: null,
-	}));
+	return [
+		...PAGE_LOCATIONS.map((entry) => ({
+			id: entry.page,
+			label: entry.label,
+			description: entry.description,
+			group: "Destinations",
+			page: entry.page,
+			resource: null,
+		})),
+		...OBSERVABILITY_LOCATIONS.map((entry) => ({
+			id: `observability/${entry.resource}`,
+			label: entry.label,
+			description: entry.description,
+			group: "Observability",
+			page: "observability" as Page,
+			resource: entry.resource,
+		})),
+	];
 }
 
 /** Filtered, bounded picker rows for one search query. `every` keeps the

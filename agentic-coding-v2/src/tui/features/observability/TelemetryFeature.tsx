@@ -47,6 +47,10 @@ import { TraceTreeView } from "./views/TraceTreeView.tsx";
 // replace the selected trace. No database or workspace files are opened here.
 export function TelemetryFeature(props: {
 	client: ClientConnection;
+	/** The view's resource. A location names one of this feature's own views
+	 * (v1 published them as destinations), so a jump opens that view instead of
+	 * the front page; an unset or unknown value leaves the current view alone. */
+	resource?: string | null;
 	active: () => boolean;
 	catalog: (sections: KeybindSection[]) => void;
 	notify: (message: string) => void;
@@ -163,6 +167,22 @@ export function TelemetryFeature(props: {
 			if (!disposed && generation === linkEpoch) setResolvingTrace(false);
 		}
 	};
+	// A published location names a list view; it never smuggles a filter or a
+	// selection, so arriving this way is identical to choosing the view by key.
+	// A sentinel, not the initial value: a jump that mounts the feature must
+	// open the named view, and only a *change* may override the developer's
+	// own navigation afterwards.
+	let appliedResource = "\u0000";
+	createEffect(() => {
+		const next = props.resource ?? "";
+		if (next === appliedResource) return;
+		appliedResource = next;
+		if (!["traces", "metrics", "logs", "topology"].includes(next)) return;
+		setTrace("");
+		setMetric({ name: "", service: "", id: "" });
+		setService(undefined);
+		navigate(next);
+	});
 	createEffect(() => {
 		if (!props.active()) {
 			filterEpoch++;

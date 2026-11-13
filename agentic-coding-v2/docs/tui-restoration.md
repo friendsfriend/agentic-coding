@@ -1391,3 +1391,34 @@ operator environment functional tests pass.
   Solid-enabled build, diff whitespace checks and the gateway/client suite. The
   picker was not opened in a real terminal; visual/runtime acceptance remains
   user-owned and full restoration parity stays open and unarchived.
+
+## Observability views are locations (v1 parity)
+
+- v1 routed each observability view separately (`OBSERVABILITY_VIEWS`), so its
+  picker could jump straight to metrics or topology. v2 addressed only the page,
+  so every jump landed on the feature's front page. `src/tui/shell/locations.ts`
+  now publishes the four views (traces, metrics, logs, topology) as their own
+  grouped destinations, and the feature honours them.
+- The handoff is a *location*, not a command: the shell already carries
+  `View.resource`, so the picker calls `go("observability", "logs")` exactly like
+  a row jump anywhere else, and `TelemetryFeature` takes an optional `resource`.
+  A sentinel — not the initial value — records what it applied, so a jump that
+  mounts the feature opens the named view while an unchanged value never fights
+  the developer's own navigation inside the feature. An unknown value is ignored
+  rather than guessed at.
+- Arriving this way is identical to choosing the view by key: `navigate()` clears
+  the filter, the modal, the search flag, the selection and the trace/metric/
+  service identity, and then performs the same bounded read. No filter, sort or
+  selection can be smuggled through a location.
+- `/view observability traces|metrics|logs|topology` addresses the same views
+  from the prompt (it refuses an unknown view by listing them, and `/view
+  observability` alone still opens the page), and the picker marks the view the
+  shell currently holds as `· current`.
+- Not claimed: v1 *also* listed loaded resources (recent traces, metric streams,
+  topology services) in this picker. v2 reads one bounded page per surface and
+  keeps no standing cache across surfaces, so those entries would need a
+  deliberate cache in the feature; that remains open and is not implied by this
+  change. Verification: unfiltered type-check, zero-diagnostic lint (809 files),
+  official build, gateway + telemetry-port suites (27 tests) and diff whitespace
+  checks. No real terminal run here, so visual acceptance stays user-owned and
+  full restoration parity stays open and unarchived.

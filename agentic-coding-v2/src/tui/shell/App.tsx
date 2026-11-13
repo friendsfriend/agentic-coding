@@ -132,7 +132,7 @@ import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
-import { PAGE_LOCATIONS } from "./locations.ts";
+import { OBSERVABILITY_LOCATIONS, PAGE_LOCATIONS } from "./locations.ts";
 import { Navigation, type Page, type View, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
 
@@ -149,6 +149,7 @@ const PAGE_DESCRIPTIONS: Partial<Record<Page, string>> = Object.fromEntries(
 const help = [
 	"Plain input: send to the selected native conversation",
 	"/help · /view tasks|environments|providers|schedules",
+	"/view observability traces|metrics|logs|topology",
 	"/session ID · /back · /forward · /reconnect",
 	"/view skills · /skill SKILL_ID@DIGEST (loaded instructions only)",
 	"/models · /model [PROFILE] · /thinking · choose supplied model/thinking profile bundles",
@@ -2797,10 +2798,22 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					queueMicrotask(() => setHelpOpen(true));
 					clear();
 				} else if (command === "view") {
-					const page = pages.find(([page]) => page === args)?.[0];
+					// An observability view is its own location (v1 routed them
+					// separately), so the command addresses one view, not the page only.
+					const [name, view = ""] = args.split(/\s+/),
+						page = pages.find(([page]) => page === name)?.[0];
 					if (!page) throw new Error("Unknown feature view");
+					const resource =
+						page === "observability" &&
+						OBSERVABILITY_LOCATIONS.some((entry) => entry.resource === view)
+							? view
+							: null;
+					if (page === "observability" && view && !resource)
+						throw new Error(
+							"Use /view observability traces|metrics|logs|topology",
+						);
 					clear();
-					go(page);
+					go(page, resource);
 				} else if (command === "mode") {
 					if (!["opencode", "pi", "pi-durable", "orchestrator"].includes(args))
 						throw new Error("Unknown native mode");
@@ -4429,6 +4442,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 								<Show when={current().page === "observability"}>
 									<TelemetryFeature
 										client={client}
+										resource={current().resource}
 										active={() =>
 											contentFocused() && !helpOpen() && !paletteOpen()
 										}
