@@ -197,7 +197,7 @@ export class MetricCollectors {
 					`prometheus-loopback:${port}`,
 				);
 				if (!controller.signal.aborted && !this.closed) {
-					this.ingest(metrics);
+					if (metrics.length) this.ingest(metrics);
 					state.lastError = null;
 				}
 			} catch {

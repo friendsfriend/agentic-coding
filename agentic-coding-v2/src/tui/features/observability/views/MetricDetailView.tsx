@@ -104,8 +104,10 @@ export function MetricDetailView(props: {
 									maxCount() > 0
 										? Math.max(1, Math.round((count() / maxCount()) * 3))
 										: 1;
-								const label = () =>
-									latest()?.explicitBounds?.[index]?.toFixed(0) ?? "";
+								const label = () => {
+									const bound = latest()?.explicitBounds?.[index];
+									return bound === undefined ? "+Inf" : String(bound);
+								};
 								return (
 									<box
 										style={{

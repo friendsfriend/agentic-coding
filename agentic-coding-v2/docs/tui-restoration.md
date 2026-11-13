@@ -1113,3 +1113,46 @@ operator environment functional tests pass.
   build and diff whitespace checks. No real exporters, apps, configuration or
   previous indexed observations were changed. This is not whole-suite or visual
   acceptance; full restoration parity remains open and unarchived.
+
+## Observability follow-up: finite classic Prometheus exposition and histograms
+
+- Replaced comma/equal splitting and prefix-only sample matching with full classic
+  text parsing. Quoted labels preserve commas, equals, braces, escaped quotes,
+  backslashes/newlines, empty values and __proto__ names without prototype-backed
+  dictionaries. HELP escapes and empty HELP text are retained per family; duplicate
+  descriptors/series/labels and malformed lines refuse instead of silently skip.
+- Explicit signed-range-compatible nonnegative millisecond timestamps become exact
+  integer nanoseconds. Untimed samples share one integer scrape observation time;
+  unknown process/window start is represented by zero, not an invented start time.
+  Metadata-only families do not create phantom empty metric rows.
+- Classic histogram bucket/sum/count samples bind to their declared family and
+  labelled timestamp. Complete, consistently timed groups produce native histogram
+  points with value=sum, finite explicit bounds and disjoint per-bucket counts
+  derived from cumulative upper-bound counts. Count precision, monotonicity,
+  duplicate bounds, the implicit +Inf bucket and count agreement are checked.
+  Incomplete/inconsistent groups refuse rather than fabricate an aggregate.
+- Original cumulative bucket/count/sum component samples remain inspectable;
+  summary quantiles remain labelled gauges with their original count/sum streams.
+  Family/type/component and cumulative temporality are retained as provenance.
+  No rates, process-start timestamps, units or summary percentile aggregates are
+  inferred from names. Equivalent explicit-time retransmissions replace the same
+  native coordinates rather than duplicating history.
+- Histogram bound labels no longer round fractional boundaries to integers, and
+  the implicit final bucket displays +Inf rather than a blank label. The controls
+  explicitly disclose finite classic text support and the remaining format gaps.
+- Non-finite samples are valid Prometheus values but are not yet representable by
+  the finite-only native metric model. This slice refuses the entire affected
+  scrape with an observable sanitized error; it does not silently drop NaN/Inf or
+  pretend those exporters are fully supported. OpenMetrics directives/exemplars
+  and native histograms likewise remain unsupported. Non-finite representation
+  remains a follow-up protocol/model gap, not an archived acceptance item.
+- Added one synthetic owned HTTP-scraper/native-boundary scenario proving escaped
+  labels, timestamps, family metadata, raw and projected histogram counts, summary
+  fields, empty HELP, retransmission correction and malformed/unsupported scrape
+  atomicity. No parser/helper, renderer, mount or snapshot tests were introduced.
+  Empty successful scrapes no longer bump the data revision by ingesting nothing.
+- Verification: 26 focused telemetry/gateway tests pass (672 assertions), plus
+  unfiltered type-check, zero-diagnostic lint (806 files), official Solid-enabled
+  build and diff whitespace checks. No real exporter, app, configuration or old
+  indexed observation was changed. Whole-suite, real-exporter and visual/runtime
+  acceptance remain outstanding; full restoration parity is open and unarchived.

@@ -2358,3 +2358,223 @@ test("owned StatsD preserves repeated observations, count sampling and distribut
 		await host.stop();
 	}
 });
+
+test("owned Prometheus scrapes preserve classic labels/timestamps and project cumulative histograms without partial malformed writes", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const original = String.raw`# HELP temperature Help \\ path\nsecond line
+# TYPE temperature gauge
+temperature{path="a,b=c}",quoted="say \"hi\"",slash="C:\\tmp",empty="",__proto__="safe",line="first\nsecond"} +1.25e1 1790000000123
+# HELP requests_total Requests.
+# TYPE requests_total counter
+requests_total{} 7 1790000000123
+# HELP latency_seconds Duration.
+# TYPE latency_seconds histogram
+latency_seconds_bucket{route="/x",le="0.5"} 5 1790000000123
+latency_seconds_bucket{route="/x",le="0.1"} 2 1790000000123
+latency_seconds_bucket{route="/x",le="+Inf"} 7 1790000000123
+latency_seconds_sum{route="/x"} 2.5 1790000000123
+latency_seconds_count{route="/x"} 7 1790000000123
+# HELP work_seconds Work.
+# TYPE work_seconds summary
+work_seconds{quantile="0.5"} .2 1790000000123
+work_seconds{quantile="0.9"} .9 1790000000123
+work_seconds_sum 3 1790000000123
+work_seconds_count 5 1790000000123
+# HELP metadata_only No samples.
+# TYPE metadata_only histogram
+# HELP empty_help
+# TYPE empty_help untyped
+empty_help 0
+`;
+	let body = original;
+	const target = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: () =>
+			new Response(body, {
+				headers: { "content-type": "text/plain; version=0.0.4" },
+			}),
+	});
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		let states = await client.call("telemetry.collector.read", {});
+		const start = async () => {
+			states = await client.call("telemetry.collector.start", {
+				kind: "prometheus",
+				revision: states.prometheus.revision,
+				port: target.port ?? 0,
+			});
+		};
+		const stop = async () => {
+			states = await client.call("telemetry.collector.stop", {
+				kind: "prometheus",
+				revision: states.prometheus.revision,
+			});
+		};
+		const read = async () =>
+			(await client.call("telemetry.read", { signal: "metrics" }))
+				.value as MetricData[];
+		await start();
+		await eventually(read, (metrics) =>
+			metrics.some((metric) => metric.name === "latency_seconds"),
+		);
+		const metrics = await read();
+		expect(metrics).toHaveLength(10);
+		expect(metrics.some((metric) => metric.name === "metadata_only")).toBe(
+			false,
+		);
+		const temperature = metrics.find((metric) => metric.name === "temperature");
+		expect(temperature).toMatchObject({
+			type: "gauge",
+			description: "Help \\ path\nsecond line",
+			dataPoints: [
+				{
+					startTimeUnixNano: "0",
+					timeUnixNano: "1790000000123000000",
+					value: 12.5,
+				},
+			],
+		});
+		expect(temperature?.dataPoints[0]?.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "path", value: "a,b=c}" },
+				{ key: "quoted", value: 'say "hi"' },
+				{ key: "slash", value: "C:\\tmp" },
+				{ key: "empty", value: "" },
+				{ key: "__proto__", value: "safe" },
+				{ key: "line", value: "first\nsecond" },
+			]),
+		);
+		expect(
+			metrics.find((metric) => metric.name === "requests_total"),
+		).toMatchObject({
+			type: "sum",
+			description: "Requests.",
+			dataPoints: [{ value: 7, attributes: [] }],
+		});
+		const histogram = metrics.find(
+			(metric) => metric.name === "latency_seconds",
+		);
+		expect(histogram).toMatchObject({
+			type: "histogram",
+			description: "Duration.",
+			dataPoints: [
+				{
+					startTimeUnixNano: "0",
+					timeUnixNano: "1790000000123000000",
+					value: 2.5,
+					bucketCounts: [2, 3, 2],
+					explicitBounds: [0.1, 0.5],
+					attributes: [{ key: "route", value: "/x" }],
+				},
+			],
+		});
+		expect(histogram?.resource.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "prometheus.family", value: "latency_seconds" },
+				{ key: "prometheus.type", value: "histogram" },
+				{ key: "prometheus.temporality", value: "cumulative" },
+			]),
+		);
+		const rawBuckets = metrics.find(
+			(metric) => metric.name === "latency_seconds_bucket",
+		);
+		expect(rawBuckets?.type).toBe("sum");
+		expect(
+			rawBuckets?.dataPoints.map((point) => point.value).sort((a, b) => a - b),
+		).toEqual([2, 5, 7]);
+		const summary = metrics.find((metric) => metric.name === "work_seconds");
+		expect(summary?.type).toBe("gauge");
+		expect(
+			summary?.dataPoints.map((point) => point.value).sort((a, b) => a - b),
+		).toEqual([0.2, 0.9]);
+		expect(summary?.resource.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "prometheus.type", value: "summary" },
+				{ key: "prometheus.component", value: "quantile" },
+			]),
+		);
+		expect(
+			metrics.find((metric) => metric.name === "work_seconds_count"),
+		).toMatchObject({
+			type: "sum",
+			description: "Work.",
+			dataPoints: [{ value: 5 }],
+		});
+		const untyped = metrics.find((metric) => metric.name === "empty_help");
+		expect(untyped).toMatchObject({
+			type: "gauge",
+			description: "",
+			dataPoints: [{ startTimeUnixNano: "0", value: 0 }],
+		});
+		expect(
+			BigInt(untyped?.dataPoints[0]?.timeUnixNano ?? "1") % 1_000_000n,
+		).toBe(0n);
+		await stop();
+		body = original
+			.replace('le="0.5"} 5', 'le="0.5"} 6')
+			.replace('le="0.1"} 2', 'le="0.1"} 3')
+			.replace('le="+Inf"} 7', 'le="+Inf"} 8')
+			.replace(
+				'latency_seconds_count{route="/x"} 7',
+				'latency_seconds_count{route="/x"} 8',
+			)
+			.replace(
+				'latency_seconds_sum{route="/x"} 2.5',
+				'latency_seconds_sum{route="/x"} 3.5',
+			);
+		await start();
+		await eventually(
+			read,
+			(items) =>
+				items.find((metric) => metric.name === "latency_seconds")?.dataPoints[0]
+					?.value === 3.5,
+		);
+		const corrected = await read();
+		expect(
+			corrected.find((metric) => metric.name === "latency_seconds")?.dataPoints,
+		).toMatchObject([
+			{ value: 3.5, bucketCounts: [3, 3, 2], explicitBounds: [0.1, 0.5] },
+		]);
+		expect(
+			corrected.find((metric) => metric.name === "latency_seconds")?.dataPoints,
+		).toHaveLength(1);
+		await stop();
+		const malformed = [
+			String.raw`bad{a="bad\q"} 1`,
+			'bad{a="1",a="2"} 1',
+			'same{a="1",b="2"} 1\nsame{b="2",a="1"} 2',
+			original.replace('le="0.5"} 5', 'le="0.5"} 1'),
+			original.replace(
+				'latency_seconds_count{route="/x"} 7',
+				'latency_seconds_count{route="/x"} 8',
+			),
+			"unsupported NaN",
+			"# UNIT unsupported seconds\nunsupported 1",
+			"unsupported 1 # exemplar",
+		];
+		for (const invalid of malformed) {
+			body = `must_not_exist 9\n${invalid}`;
+			await start();
+			await eventually(
+				async () =>
+					(await client.call("telemetry.collector.read", {})).prometheus
+						.lastError,
+				(error) => Boolean(error),
+			);
+			expect(
+				(await client.call("telemetry.collector.read", {})).prometheus
+					.lastError,
+			).toBe("Prometheus scrape failed or payload refused");
+			await stop();
+		}
+		expect(await read()).toEqual(corrected);
+	} finally {
+		client.close();
+		await host.stop();
+		await target.stop(true);
+	}
+});
