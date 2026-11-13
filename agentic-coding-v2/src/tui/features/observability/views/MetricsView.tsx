@@ -116,13 +116,16 @@ export function MetricsView(props: {
 											<box width="40%" flexShrink={0} overflow="hidden">
 												<text fg={uiColors.textMuted}>
 													{stream().serviceName} · {stream().type} ·{" "}
-													{stream().unit || "—"} · {agg().avg.toFixed(2)}
+													{stream().unit || "—"} ·{" "}
+													{agg().avg?.toFixed(2) ?? "—"}
 												</text>
 											</box>
 										</box>
 										<box height={2} width="100%">
 											<AutoscalingSparkline
-												values={stream().dataPoints.map((point) => point.value)}
+												values={stream().dataPoints.map(
+													(point) => point.value ?? Number.NaN,
+												)}
 												color={metricColor(stream().type)}
 												backgroundColor={
 													selected() ? uiColors.bgSurface1 : uiColors.bgMantle

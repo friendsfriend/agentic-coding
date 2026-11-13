@@ -2484,12 +2484,16 @@ empty_help 0
 		);
 		expect(rawBuckets?.type).toBe("sum");
 		expect(
-			rawBuckets?.dataPoints.map((point) => point.value).sort((a, b) => a - b),
+			rawBuckets?.dataPoints
+				.map((point) => point.value)
+				.sort((a, b) => (a ?? 0) - (b ?? 0)),
 		).toEqual([2, 5, 7]);
 		const summary = metrics.find((metric) => metric.name === "work_seconds");
 		expect(summary?.type).toBe("gauge");
 		expect(
-			summary?.dataPoints.map((point) => point.value).sort((a, b) => a - b),
+			summary?.dataPoints
+				.map((point) => point.value)
+				.sort((a, b) => (a ?? 0) - (b ?? 0)),
 		).toEqual([0.2, 0.9]);
 		expect(summary?.resource.attributes).toEqual(
 			expect.arrayContaining([
@@ -2552,7 +2556,7 @@ empty_help 0
 				'latency_seconds_count{route="/x"} 7',
 				'latency_seconds_count{route="/x"} 8',
 			),
-			"unsupported NaN",
+			"unsupported 1e9999",
 			"# UNIT unsupported seconds\nunsupported 1",
 			"unsupported 1 # exemplar",
 		];
@@ -2572,6 +2576,203 @@ empty_help 0
 			await stop();
 		}
 		expect(await read()).toEqual(corrected);
+	} finally {
+		client.close();
+		await host.stop();
+		await target.stop(true);
+	}
+});
+
+test("non-finite Prometheus values survive native/HTTP reads and reopen without zero substitution or poisoned finite statistics", async () => {
+	const initial = await fixture(true);
+	let app = initial.app,
+		host = serve(app),
+		client = new ClientConnection(host.client);
+	const original = `# TYPE all_special gauge
+all_special{slot="nan"} NaN 1790000000000
+all_special{slot="pos"} +Inf 1790000000001
+all_special{slot="neg"} -Inf 1790000000002
+all_special{slot="alias"} Inf 1790000000003
+# TYPE mixed gauge
+mixed{slot="a"} 2 1790000000000
+mixed{slot="b"} 4 1790000000001
+mixed{slot="n"} NaN 1790000000002
+mixed{slot="i"} +Inf 1790000000003
+zero 0 1790000000000
+huge{slot="a"} 1e308 1790000000000
+huge{slot="b"} 1e308 1790000000001
+# TYPE nullable_sum histogram
+nullable_sum_bucket{le="0.5"} 1 1790000000000
+nullable_sum_bucket{le="+Inf"} 2 1790000000000
+nullable_sum_sum NaN 1790000000000
+nullable_sum_count 2 1790000000000
+# TYPE zero_hist histogram
+zero_hist_bucket{le="1"} 0 1790000000000
+zero_hist_bucket{le="+Inf"} 0 1790000000000
+zero_hist_sum 0 1790000000000
+zero_hist_count 0 1790000000000
+# TYPE empty_summary summary
+empty_summary{quantile="0.5"} NaN 1790000000000
+empty_summary_sum 0 1790000000000
+empty_summary_count 0 1790000000000
+`;
+	let body = original,
+		requests = 0;
+	const target = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: () => {
+			requests++;
+			return new Response(body);
+		},
+	});
+	const read = async () =>
+		(await client.call("telemetry.read", { signal: "metrics" }))
+			.value as MetricData[];
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		let states = await client.call("telemetry.collector.read", {});
+		const start = async () => {
+			states = await client.call("telemetry.collector.start", {
+				kind: "prometheus",
+				revision: states.prometheus.revision,
+				port: target.port ?? 0,
+			});
+		};
+		const stop = async () => {
+			states = await client.call("telemetry.collector.stop", {
+				kind: "prometheus",
+				revision: states.prometheus.revision,
+			});
+		};
+		await start();
+		await eventually(read, (metrics) =>
+			metrics.some((metric) => metric.name === "all_special"),
+		);
+		const first = await read();
+		const special = first.find((metric) => metric.name === "all_special");
+		expect(special?.dataPoints).toHaveLength(4);
+		expect(special?.dataPoints.every((point) => point.value === null)).toBe(
+			true,
+		);
+		expect(
+			special?.dataPoints.map((point) => point.nonFiniteValue).sort(),
+		).toEqual(["+Inf", "+Inf", "-Inf", "NaN"]);
+		expect(special?.statistics).toEqual({
+			avg: null,
+			min: null,
+			max: null,
+			count: 4,
+			finiteCount: 0,
+		});
+		expect(first.find((metric) => metric.name === "mixed")?.statistics).toEqual(
+			{ avg: 3, min: 2, max: 4, count: 4, finiteCount: 2 },
+		);
+		expect(first.find((metric) => metric.name === "zero")).toMatchObject({
+			dataPoints: [{ value: 0 }],
+			statistics: { avg: 0, min: 0, max: 0, count: 1, finiteCount: 1 },
+		});
+		expect(first.find((metric) => metric.name === "huge")?.statistics).toEqual({
+			avg: 1e308,
+			min: 1e308,
+			max: 1e308,
+			count: 2,
+			finiteCount: 2,
+		});
+		expect(
+			first.find((metric) => metric.name === "nullable_sum"),
+		).toMatchObject({
+			type: "histogram",
+			dataPoints: [
+				{
+					value: null,
+					nonFiniteValue: "NaN",
+					bucketCounts: [1, 1],
+					explicitBounds: [0.5],
+				},
+			],
+			statistics: { avg: null, min: null, max: null, count: 1, finiteCount: 0 },
+		});
+		expect(first.find((metric) => metric.name === "zero_hist")).toMatchObject({
+			dataPoints: [{ value: 0, bucketCounts: [0, 0] }],
+			statistics: { avg: 0, min: 0, max: 0, count: 1, finiteCount: 1 },
+		});
+		expect(
+			first.find((metric) => metric.name === "empty_summary"),
+		).toMatchObject({
+			type: "gauge",
+			dataPoints: [{ value: null, nonFiniteValue: "NaN" }],
+			statistics: { avg: null, min: null, max: null, count: 1, finiteCount: 0 },
+		});
+		expect(
+			(await client.call("telemetry.collector.read", {})).prometheus.lastError,
+		).toBeNull();
+		const http = await fetch(new URL("/api/telemetry/metrics", host.url), {
+			headers: { authorization: `Bearer ${host.client.token}` },
+		});
+		expect(http.status).toBe(200);
+		expect(await http.json()).toEqual(first);
+		await stop();
+		body = original.replace('slot="nan"} NaN', 'slot="nan"} 6');
+		await start();
+		await eventually(
+			read,
+			(metrics) =>
+				metrics.find((metric) => metric.name === "all_special")?.statistics
+					?.finiteCount === 1,
+		);
+		const corrected = (await read()).find(
+			(metric) => metric.name === "all_special",
+		);
+		expect(corrected?.statistics).toEqual({
+			avg: 6,
+			min: 6,
+			max: 6,
+			count: 4,
+			finiteCount: 1,
+		});
+		const finite = corrected?.dataPoints.find((point) =>
+			point.attributes.some((attribute) => attribute.value === "nan"),
+		);
+		expect(finite?.value).toBe(6);
+		expect(finite?.nonFiniteValue).toBeUndefined();
+		await stop();
+		body = original;
+		await start();
+		await eventually(
+			read,
+			(metrics) =>
+				metrics.find((metric) => metric.name === "all_special")?.statistics
+					?.finiteCount === 0,
+		);
+		const restored = await read();
+		expect(restored).toEqual(first);
+		await stop();
+		body = "valid_prefix 9\nbad null\n";
+		await start();
+		await eventually(
+			async () =>
+				(await client.call("telemetry.collector.read", {})).prometheus
+					.lastError,
+			(error) => Boolean(error),
+		);
+		expect(await read()).toEqual(restored);
+		await stop();
+		const beforeClose = requests;
+		client.close();
+		await host.stop();
+		await app.close();
+		app = await initial.open();
+		host = serve(app);
+		client = new ClientConnection(host.client);
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		expect(await read()).toEqual(restored);
+		expect(
+			(await client.call("telemetry.collector.read", {})).prometheus,
+		).toMatchObject({ status: "stopped", address: null });
+		expect(requests).toBe(beforeClose);
 	} finally {
 		client.close();
 		await host.stop();

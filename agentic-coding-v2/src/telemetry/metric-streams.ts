@@ -1,4 +1,5 @@
 import type { MetricData, MetricDataPoint } from "./contracts.ts";
+import { metricStatistics } from "./metric-statistics.ts";
 
 const attributes = (items: Array<{ key: string; value: string }>) =>
 	[...items].sort(
@@ -43,9 +44,8 @@ export function mergeMetricBatches(batches: MetricData[]): MetricData[] {
 			if (!stream.points.has(coordinate)) stream.points.set(coordinate, point);
 		}
 	}
-	return [...streams.values()].map(({ metric, points }) => ({
-		...metric,
-		dataPoints: [...points.values()].sort((a, b) => {
+	return [...streams.values()].map(({ metric, points }) => {
+		const dataPoints = [...points.values()].sort((a, b) => {
 			const left = BigInt(a.timeUnixNano),
 				right = BigInt(b.timeUnixNano);
 			return left < right
@@ -53,6 +53,11 @@ export function mergeMetricBatches(batches: MetricData[]): MetricData[] {
 				: left > right
 					? 1
 					: pointId(a).localeCompare(pointId(b));
-		}),
-	}));
+		});
+		return {
+			...metric,
+			dataPoints,
+			statistics: metricStatistics({ dataPoints }),
+		};
+	});
 }

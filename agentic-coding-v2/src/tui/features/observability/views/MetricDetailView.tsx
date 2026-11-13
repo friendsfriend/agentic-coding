@@ -57,27 +57,37 @@ export function MetricDetailView(props: {
 				{(current) => (
 					<box height={3} flexDirection="row" paddingLeft={1} paddingRight={1}>
 						<box style={{ width: "25%", flexDirection: "column" }}>
-							<text fg={uiColors.textMuted}>Avg</text>
-							<text fg={uiColors.textPrimary}>{current().avg.toFixed(2)}</text>
+							<text fg={uiColors.textMuted}>Finite avg</text>
+							<text fg={uiColors.textPrimary}>
+								{current().avg?.toFixed(2) ?? "—"}
+							</text>
 						</box>
 						<box style={{ width: "25%", flexDirection: "column" }}>
-							<text fg={uiColors.textMuted}>Min</text>
-							<text fg={uiColors.success}>{current().min.toFixed(2)}</text>
+							<text fg={uiColors.textMuted}>Finite min</text>
+							<text fg={uiColors.success}>
+								{current().min?.toFixed(2) ?? "—"}
+							</text>
 						</box>
 						<box style={{ width: "25%", flexDirection: "column" }}>
-							<text fg={uiColors.textMuted}>Max</text>
-							<text fg={uiColors.error}>{current().max.toFixed(2)}</text>
+							<text fg={uiColors.textMuted}>Finite max</text>
+							<text fg={uiColors.error}>
+								{current().max?.toFixed(2) ?? "—"}
+							</text>
 						</box>
 						<box style={{ width: "25%", flexDirection: "column" }}>
-							<text fg={uiColors.textMuted}>Data points</text>
-							<text fg={uiColors.textPrimary}>{current().count}</text>
+							<text fg={uiColors.textMuted}>Finite / total</text>
+							<text fg={uiColors.textPrimary}>
+								{current().finiteCount} / {current().count}
+							</text>
 						</box>
 					</box>
 				)}
 			</Show>
 			<box height={3} paddingLeft={1} paddingRight={1}>
 				<AutoscalingSparkline
-					values={stream()?.dataPoints.map((dp) => dp.value) ?? []}
+					values={
+						stream()?.dataPoints.map((dp) => dp.value ?? Number.NaN) ?? []
+					}
 				/>
 			</box>
 
@@ -101,9 +111,9 @@ export function MetricDetailView(props: {
 						<Index each={buckets()}>
 							{(count, index) => {
 								const barHeight = () =>
-									maxCount() > 0
+									maxCount() > 0 && count() > 0
 										? Math.max(1, Math.round((count() / maxCount()) * 3))
-										: 1;
+										: 0;
 								const label = () => {
 									const bound = latest()?.explicitBounds?.[index];
 									return bound === undefined ? "+Inf" : String(bound);
@@ -212,7 +222,11 @@ export function MetricDetailView(props: {
 									style={{ width: 12, flexShrink: 0 }}
 									justifyContent="flex-end"
 								>
-									<text fg={uiColors.textPrimary}>{dp().value.toFixed(2)}</text>
+									<text fg={uiColors.textPrimary}>
+										{dp().value?.toFixed(2) ??
+											dp().nonFiniteValue ??
+											"unavailable"}
+									</text>
 								</box>
 								<box style={{ flexGrow: 1, minWidth: 0 }} overflow="hidden">
 									<text fg={uiColors.textMuted}>

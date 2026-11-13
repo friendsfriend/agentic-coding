@@ -1,4 +1,4 @@
-import type { MetricData, MetricDataPoint } from "../contracts.ts";
+import type { MetricData, MetricDataPoint, MetricValue } from "../contracts.ts";
 
 type Labels = Array<{ key: string; value: string }>;
 type Kind = "counter" | "gauge" | "histogram" | "summary" | "untyped";
@@ -11,7 +11,7 @@ interface Family {
 interface Sample {
 	name: string;
 	labels: Labels;
-	value: number;
+	measurement: MetricValue;
 	time: string;
 }
 interface Histogram {
@@ -20,7 +20,7 @@ interface Histogram {
 	time: string;
 	buckets: Array<{ bound: number; count: number }>;
 	count?: number;
-	sum?: number;
+	sum?: MetricValue;
 }
 const numberToken = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const sorted = (labels: Labels) =>
@@ -33,6 +33,13 @@ function numeric(value: string): number {
 	const number = Number(value);
 	if (!Number.isFinite(number)) invalid();
 	return number;
+}
+function measurement(value: string): MetricValue {
+	if (value === "NaN") return { value: null, nonFiniteValue: "NaN" };
+	if (value === "+Inf" || value === "Inf")
+		return { value: null, nonFiniteValue: "+Inf" };
+	if (value === "-Inf") return { value: null, nonFiniteValue: "-Inf" };
+	return { value: numeric(value) };
 }
 function decodeEscapes(value: string, quoted: boolean): string {
 	let result = "";
@@ -75,7 +82,8 @@ function timestamp(value: string | undefined, observed: string): string {
 	return nanos.toString();
 }
 
-/** Finite classic 0.0.4 exposition. Refuse unrepresentable/malformed scrapes
+/** Classic 0.0.4 exposition, including explicit non-finite scalar samples.
+ * Refuse unrepresentable/malformed scrapes
  * atomically; do not silently skip samples or pretend to implement OpenMetrics. */
 export function parsePrometheusText(
 	text: string,
@@ -130,7 +138,7 @@ export function parsePrometheusText(
 		samples.push({
 			name: match[1],
 			labels: attributes,
-			value: numeric(match[3]),
+			measurement: measurement(match[3]),
 			time: timestamp(match[4], observed),
 		});
 	}
@@ -206,9 +214,12 @@ export function parsePrometheusText(
 					le?.value === "+Inf" || le?.value === "Inf"
 						? Number.POSITIVE_INFINITY
 						: numeric(le?.value ?? "");
-				histogram.buckets.push({ bound, count: sample.value });
-			} else if (component === "count") histogram.count = sample.value;
-			else histogram.sum = sample.value;
+				if (sample.measurement.value === null) invalid();
+				histogram.buckets.push({ bound, count: sample.measurement.value });
+			} else if (component === "count") {
+				if (sample.measurement.value === null) invalid();
+				histogram.count = sample.measurement.value;
+			} else histogram.sum = sample.measurement;
 			histograms.set(key, histogram);
 		} else if (family.type === "summary") {
 			if (component === "bucket") invalid();
@@ -232,7 +243,7 @@ export function parsePrometheusText(
 			{
 				startTimeUnixNano: "0",
 				timeUnixNano: sample.time,
-				value: sample.value,
+				...sample.measurement,
 				attributes: sample.labels,
 			},
 		);
@@ -244,7 +255,7 @@ export function parsePrometheusText(
 			sum === undefined ||
 			!Number.isSafeInteger(count) ||
 			count < 0 ||
-			(count === 0 && sum !== 0)
+			(count === 0 && sum.value !== null && sum.value !== 0)
 		)
 			invalid();
 		const buckets = histogram.buckets.sort((a, b) => a.bound - b.bound);
@@ -275,7 +286,7 @@ export function parsePrometheusText(
 		emit(histogram.family, histogram.family, family, "histogram", "histogram", {
 			startTimeUnixNano: "0",
 			timeUnixNano: histogram.time,
-			value: sum,
+			...sum,
 			attributes: histogram.labels,
 			bucketCounts: counts,
 			explicitBounds: bounds,

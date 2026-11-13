@@ -294,8 +294,9 @@ export function TelemetryControls(props: {
 				{collectors()?.statsd.address ?? ""}
 			</text>
 			<text fg={uiColors.textMuted} wrapMode="word">
-				Prometheus supports finite classic text samples and classic histograms.
-				Non-finite samples, native histograms and OpenMetrics are not supported.
+				Prometheus classic text preserves NaN/+Inf/-Inf scalar values. Histogram
+				counts must be finite safe integers. Native histograms and OpenMetrics
+				remain unsupported.
 			</text>
 			<text>
 				Prometheus: {collectors()?.prometheus.status ?? "unavailable"}{" "}

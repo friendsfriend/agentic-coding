@@ -10,16 +10,30 @@ export interface MetricData {
 	type: "gauge" | "sum" | "histogram";
 	dataPoints: MetricDataPoint[];
 	serviceName: string;
+	/** Native read projection; never trusted from an ingested batch. */
+	statistics?: MetricStatistics;
 }
 
-export interface MetricDataPoint {
+/** Statistics cover finite values only; count includes every retained observation. */
+export interface MetricStatistics {
+	avg: number | null;
+	min: number | null;
+	max: number | null;
+	count: number;
+	finiteCount: number;
+}
+export type NonFiniteMetricValue = "NaN" | "+Inf" | "-Inf";
+/** Non-finite measurements remain explicit over JSON; null without a token is invalid. */
+export type MetricValue =
+	| { value: number; nonFiniteValue?: undefined }
+	| { value: null; nonFiniteValue: NonFiniteMetricValue };
+export type MetricDataPoint = MetricValue & {
 	startTimeUnixNano: string;
 	timeUnixNano: string;
-	value: number;
 	bucketCounts?: number[];
 	explicitBounds?: number[];
 	attributes: Array<{ key: string; value: string }>;
-}
+};
 
 export interface LogData {
 	resource: { attributes: Array<{ key: string; value: string }> };

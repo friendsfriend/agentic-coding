@@ -1,4 +1,8 @@
-import type { MetricData } from "../../../../telemetry/contracts.ts";
+import type {
+	MetricData,
+	MetricStatistics,
+} from "../../../../telemetry/contracts.ts";
+import { metricStatistics } from "../../../../telemetry/metric-statistics.ts";
 import { metricStreamId } from "../../../../telemetry/metric-streams.ts";
 
 export type MetricSortKey = "name" | "type" | "service" | "unit";
@@ -68,20 +72,8 @@ export class MetricStore {
 		return matches.length === 1 ? matches[0] : undefined;
 	}
 
-	aggregate(stream: MetricData): {
-		avg: number;
-		min: number;
-		max: number;
-		count: number;
-	} {
-		const values = stream.dataPoints.map((dp) => dp.value);
-		if (!values.length) return { avg: 0, min: 0, max: 0, count: 0 };
-		return {
-			avg: values.reduce((a, b) => a + b, 0) / values.length,
-			min: Math.min(...values),
-			max: Math.max(...values),
-			count: values.length,
-		};
+	aggregate(stream: MetricData): MetricStatistics {
+		return stream.statistics ?? metricStatistics(stream);
 	}
 
 	get filterQuery_(): string {

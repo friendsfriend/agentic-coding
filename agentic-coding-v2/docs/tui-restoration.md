@@ -1156,3 +1156,44 @@ operator environment functional tests pass.
   build and diff whitespace checks. No real exporter, app, configuration or old
   indexed observation was changed. Whole-suite, real-exporter and visual/runtime
   acceptance remain outstanding; full restoration parity is open and unarchived.
+
+## Observability follow-up: JSON-safe non-finite measurements and native statistics
+
+- Supersedes the preceding finite-only Prometheus scalar limitation. Canonical
+  NaN/+Inf/-Inf values (and the Inf alias) are now retained, including empty
+  summary quantiles and non-finite histogram sums with valid finite count/bucket
+  data. Native histograms/OpenMetrics and non-finite histogram counts remain
+  unsupported; other wire adapters retain their existing codec boundaries.
+- The shared point contract distinguishes ordinary numeric values from explicit
+  special measurements: `{value:null, nonFiniteValue:"NaN"|"+Inf"|"-Inf"}`.
+  Bare nulls, invalid tokens, raw non-finite JS numbers and numeric values with
+  contradictory tags are not valid normalized measurements. Nothing silently
+  turns into zero or an unmarked null during JSON serialization.
+- Native merged-history reads now compute read-only `statistics` after latest
+  coordinate corrections. Average/min/max cover finite measurements only;
+  count includes all retained observations and finiteCount reports the finite
+  subset. All-special/empty streams have null statistics, not fabricated zeros.
+  A convex running mean avoids overflow from summing large finite measurements,
+  and the single shared implementation avoids spread/argument-count limits.
+  Ingested or stale statistics are never trusted by the native read projection.
+- The TUI consumes this projection, with the same helper only as its local-data
+  compatibility fallback. Detail labels explicitly identify finite statistics
+  and finite/total counts; special samples display their literal tokens. They
+  occupy gaps in sparklines instead of becoming zeros or disappearing from
+  observation coordinates. Zero histogram buckets no longer paint fake bars.
+- Sample identity still consists of timestamps/labels, not mutable value state.
+  Finite-to-special and special-to-finite corrections replace the same sample,
+  remove stale flags and recompute statistics, without duplicating history.
+- Added one synthetic owned-scraper/authenticated native/HTTP scenario proving
+  JSON-safe tokens, all-special and mixed statistics, real zeros, large finite
+  averages, unknown histogram sums with retained bins, empty summary quantiles,
+  correction in both directions, malformed-null refusal and SQLite reopen. A
+  reopened runtime remains stopped and does not adopt/restart the old collector.
+  The old NaN-refusal case now checks actual numeric overflow instead; NaN
+  acceptance is covered by the new functional round trip, not a helper/UI test.
+- Verification: 27 focused telemetry/gateway tests pass (693 assertions), plus
+  unfiltered type-check, zero-diagnostic lint (807 files), official Solid-enabled
+  build and diff whitespace checks. No real exporter, application, credentials,
+  configuration or old indexed observation was edited. This is not whole-suite,
+  real-exporter or visual/runtime acceptance. Full restoration parity remains
+  open and unarchived; remaining codec/format gaps are not waived.

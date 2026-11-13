@@ -96,7 +96,13 @@ function assertMetrics(metrics: MetricData[]) {
 				(point) =>
 					!validNanos(point.timeUnixNano) ||
 					!validNanos(point.startTimeUnixNano) ||
-					!Number.isFinite(point.value) ||
+					!(
+						(typeof point.value === "number" &&
+							Number.isFinite(point.value) &&
+							point.nonFiniteValue === undefined) ||
+						(point.value === null &&
+							["NaN", "+Inf", "-Inf"].includes(point.nonFiniteValue ?? ""))
+					) ||
 					!validAttributes(point.attributes) ||
 					point.bucketCounts?.some((count) => !Number.isFinite(count)) ||
 					point.explicitBounds?.some((bound) => !Number.isFinite(bound)),
