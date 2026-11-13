@@ -2,6 +2,7 @@ import type {
 	LogData,
 	MetricData,
 	MetricDataPoint,
+	MetricValue,
 	SpanData,
 	SpanEvent,
 } from "../contracts.ts";
@@ -183,7 +184,151 @@ function decodeOtlpTraces(payload: any): SpanData[] {
 	return spans;
 }
 
+/** OTLP bucket counts are uint64 per bucket; the model carries them exactly or
+ * not at all. */
+function histogramCounts(value: unknown): number[] | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (!Array.isArray(value)) throw new Error("Invalid OTLP histogram buckets");
+	const counts = value.map((item: unknown) => protoInt64(item));
+	if (counts.some((count) => count < 0))
+		throw new Error("Invalid OTLP histogram buckets");
+	return counts;
+}
+
+function histogramBounds(value: unknown): number[] | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (!Array.isArray(value)) throw new Error("Invalid OTLP histogram bounds");
+	return value.map((item: unknown) => {
+		const bound = protoDouble(item);
+		if (bound.value === null) throw new Error("Invalid OTLP histogram bounds");
+		return bound.value;
+	});
+}
+
+type UntrustedPoint = {
+	startTimeUnixNano?: unknown;
+	timeUnixNano?: unknown;
+	attributes?: unknown;
+	asDouble?: unknown;
+	asInt?: unknown;
+	sum?: unknown;
+	count?: unknown;
+	bucketCounts?: unknown;
+	explicitBounds?: unknown;
+};
+
+/** One OTLP metric data point. An absent start time is unknown ("0") rather
+ * than a copy of the observation time, and an absent histogram sum is an
+ * explicit `unknown` measurement rather than a fabricated zero. */
+function metricPoint(dp: UntrustedPoint, histogram: boolean): MetricDataPoint {
+	const time = nanos(dp.timeUnixNano);
+	const start =
+		dp.startTimeUnixNano === undefined || dp.startTimeUnixNano === null
+			? "0"
+			: nanos(dp.startTimeUnixNano);
+	if (time === undefined || start === undefined)
+		throw new Error("Invalid OTLP metric time");
+	const attributes = strAttrs(dp.attributes ?? []);
+	if (!histogram)
+		return {
+			startTimeUnixNano: start,
+			timeUnixNano: time,
+			...pointMeasurement(dp),
+			attributes,
+		};
+	const bucketCounts = histogramCounts(dp.bucketCounts);
+	const explicitBounds = histogramBounds(dp.explicitBounds);
+	if (bucketCounts) {
+		const bounds = explicitBounds ?? [];
+		if (bucketCounts.length !== bounds.length + 1)
+			throw new Error("Invalid OTLP histogram buckets");
+		for (let index = 1; index < bounds.length; index++) {
+			const bound = bounds[index];
+			const previous = bounds[index - 1];
+			if (bound === undefined || previous === undefined || bound <= previous)
+				throw new Error("Invalid OTLP histogram bounds");
+		}
+	} else if (explicitBounds) throw new Error("Invalid OTLP histogram buckets");
+	const count =
+		dp.count === undefined || dp.count === null
+			? undefined
+			: protoInt64(dp.count);
+	if (count !== undefined && count < 0)
+		throw new Error("Invalid OTLP histogram count");
+	if (
+		count !== undefined &&
+		bucketCounts &&
+		bucketCounts.reduce((total, current) => total + current, 0) !== count
+	)
+		throw new Error("Invalid OTLP histogram count");
+	const value =
+		dp.sum === undefined || dp.sum === null
+			? ({ value: null, nonFiniteValue: "unknown" } as const)
+			: protoDouble(dp.sum);
+	return {
+		startTimeUnixNano: start,
+		timeUnixNano: time,
+		...value,
+		bucketCounts,
+		explicitBounds,
+		attributes,
+	};
+}
+
 // ---- Metrics ----
+
+/** ProtoJSON double: a JSON number, a numeric string, or one of the spec's
+ * special string tokens. Anything else is a malformed measurement. */
+function protoDouble(value: unknown): MetricValue {
+	if (typeof value === "number") {
+		if (!Number.isFinite(value)) throw new Error("Invalid OTLP metric double");
+		return { value };
+	}
+	if (typeof value === "string") {
+		switch (value) {
+			case "NaN":
+				return { value: null, nonFiniteValue: "NaN" };
+			case "Infinity":
+				return { value: null, nonFiniteValue: "+Inf" };
+			case "-Infinity":
+				return { value: null, nonFiniteValue: "-Inf" };
+		}
+		if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/.test(value))
+			throw new Error("Invalid OTLP metric double");
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed)) throw new Error("Invalid OTLP metric double");
+		return { value: parsed };
+	}
+	throw new Error("Invalid OTLP metric double");
+}
+
+/** ProtoJSON int64: a JSON integer or its decimal string. A value the native
+ * double model cannot carry exactly is refused, never silently rounded. */
+function protoInt64(value: unknown): number {
+	const text =
+		typeof value === "number"
+			? String(value)
+			: typeof value === "string"
+				? value
+				: "";
+	if (!/^-?\d+$/.test(text)) throw new Error("Invalid OTLP metric integer");
+	const parsed = Number(text);
+	if (!Number.isSafeInteger(parsed) || BigInt(text) !== BigInt(parsed))
+		throw new Error("Unrepresentable OTLP metric integer");
+	return parsed;
+}
+
+/** A gauge/sum point carries exactly one of asDouble/asInt; neither is a
+ * missing measurement, not a zero. */
+function pointMeasurement(dp: {
+	asDouble?: unknown;
+	asInt?: unknown;
+}): MetricValue {
+	const hasDouble = dp.asDouble !== undefined && dp.asDouble !== null;
+	const hasInt = dp.asInt !== undefined && dp.asInt !== null;
+	if (hasDouble === hasInt) throw new Error("Invalid OTLP metric point value");
+	return hasDouble ? protoDouble(dp.asDouble) : { value: protoInt64(dp.asInt) };
+}
 
 export // biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, validated field-by-field
 function decodeOtlpMetrics(payload: any): MetricData[] {
@@ -205,16 +350,12 @@ function decodeOtlpMetrics(payload: any): MetricData[] {
 						? "sum"
 						: metric.histogram
 							? "histogram"
-							: "gauge";
+							: undefined;
+				if (!type) throw new Error("Unsupported OTLP metric kind");
 				// biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, validated field-by-field
-				const dataPoints: MetricDataPoint[] = pts.map((dp: any) => ({
-					startTimeUnixNano: dp.startTimeUnixNano ?? dp.timeUnixNano ?? "0",
-					timeUnixNano: dp.timeUnixNano ?? "0",
-					value: Number(dp.asDouble ?? dp.asInt ?? dp.count ?? 0),
-					bucketCounts: dp.bucketCounts?.map(Number),
-					explicitBounds: dp.explicitBounds?.map(Number),
-					attributes: strAttrs(dp.attributes ?? []),
-				}));
+				const dataPoints: MetricDataPoint[] = pts.map((dp: any) =>
+					metricPoint(dp, type === "histogram"),
+				);
 				metrics.push({
 					resource: { attributes: resAttrs },
 					scope: {
@@ -224,7 +365,7 @@ function decodeOtlpMetrics(payload: any): MetricData[] {
 					name: metric.name ?? "",
 					description: metric.description ?? "",
 					unit: metric.unit ?? "",
-					type: type as "gauge" | "sum" | "histogram",
+					type,
 					dataPoints,
 					serviceName,
 				});

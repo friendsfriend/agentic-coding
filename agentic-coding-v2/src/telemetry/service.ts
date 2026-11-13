@@ -8,6 +8,7 @@ import { Refusal } from "../server/refusal.ts";
 import type {
 	LogData,
 	MetricData,
+	MetricDataPoint,
 	SpanData,
 	TelemetryReceiverState,
 } from "./contracts.ts";
@@ -80,6 +81,37 @@ const validAttributes = (value: unknown) =>
 			typeof item.key === "string" &&
 			typeof item.value === "string",
 	);
+function validMeasurement(
+	type: MetricData["type"],
+	point: MetricDataPoint,
+): boolean {
+	if (typeof point.value === "number")
+		return Number.isFinite(point.value) && point.nonFiniteValue === undefined;
+	if (point.value !== null) return false;
+	const special = point.nonFiniteValue;
+	// Only a histogram sum may be unreported by its source; a gauge or sum
+	// sample without a measurement is malformed, never "unknown".
+	if (special === "unknown") return type === "histogram";
+	return special === "NaN" || special === "+Inf" || special === "-Inf";
+}
+
+/** Explicit bucket histograms must stay countable: per-bucket safe counts, one
+ * more bucket than bounds, finite strictly-increasing bounds. */
+function validBuckets(point: MetricDataPoint): boolean {
+	const counts = point.bucketCounts;
+	const bounds = point.explicitBounds;
+	if (!counts) return bounds === undefined;
+	if (bounds === undefined) return counts.length === 1;
+	if (counts.length !== bounds.length + 1) return false;
+	if (counts.some((count) => !Number.isSafeInteger(count) || count < 0))
+		return false;
+	return bounds.every(
+		(bound, index) =>
+			Number.isFinite(bound) &&
+			(index === 0 || bound > (bounds[index - 1] ?? Number.POSITIVE_INFINITY)),
+	);
+}
+
 function assertMetrics(metrics: MetricData[]) {
 	for (const metric of metrics)
 		if (
@@ -96,16 +128,9 @@ function assertMetrics(metrics: MetricData[]) {
 				(point) =>
 					!validNanos(point.timeUnixNano) ||
 					!validNanos(point.startTimeUnixNano) ||
-					!(
-						(typeof point.value === "number" &&
-							Number.isFinite(point.value) &&
-							point.nonFiniteValue === undefined) ||
-						(point.value === null &&
-							["NaN", "+Inf", "-Inf"].includes(point.nonFiniteValue ?? ""))
-					) ||
+					!validMeasurement(metric.type, point) ||
 					!validAttributes(point.attributes) ||
-					point.bucketCounts?.some((count) => !Number.isFinite(count)) ||
-					point.explicitBounds?.some((bound) => !Number.isFinite(bound)),
+					!validBuckets(point),
 			)
 		)
 			throw new Error("Invalid metric record");

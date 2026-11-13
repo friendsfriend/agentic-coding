@@ -2779,3 +2779,305 @@ empty_summary_count 0 1790000000000
 		await target.stop(true);
 	}
 });
+
+test("OTLP JSON metrics keep ProtoJSON special values, exact integers and unknown sums while refusing malformed batches atomically", async () => {
+	const { app } = await fixture(true);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const resource = {
+		attributes: [
+			{ key: "service.name", value: { stringValue: "probe-service" } },
+		],
+	};
+	const base = 1790000000000000000n;
+	const nanos = (offset: number) => String(base + BigInt(offset));
+	const payload = (metrics: unknown[]) => ({
+		resourceMetrics: [
+			{
+				resource,
+				scopeMetrics: [{ scope: { name: "probe", version: "1" }, metrics }],
+			},
+		],
+	});
+	const post = async (value: unknown) =>
+		fetch(new URL("/v1/metrics", host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(value),
+		});
+	const read = async () =>
+		(await client.call("telemetry.read", { signal: "metrics" }))
+			.value as MetricData[];
+	const valid = [
+		{
+			name: "probe.gauge",
+			gauge: {
+				dataPoints: [
+					{ timeUnixNano: nanos(1), asDouble: "NaN" },
+					{ timeUnixNano: nanos(2), asDouble: "Infinity" },
+					{ timeUnixNano: nanos(3), asDouble: "-Infinity" },
+					{ timeUnixNano: nanos(4), asDouble: 2 },
+				],
+			},
+		},
+		{
+			name: "probe.string_double",
+			gauge: { dataPoints: [{ timeUnixNano: nanos(5), asDouble: "1.5" }] },
+		},
+		{
+			name: "probe.int",
+			gauge: {
+				dataPoints: [
+					{ timeUnixNano: nanos(6), asInt: "9007199254740991" },
+					{ timeUnixNano: nanos(7), asInt: "-9007199254740991" },
+				],
+			},
+		},
+		{
+			name: "probe.sum",
+			sum: {
+				dataPoints: [
+					{ startTimeUnixNano: nanos(8), timeUnixNano: nanos(9), asInt: "7" },
+				],
+			},
+		},
+		{
+			name: "probe.hist",
+			histogram: {
+				dataPoints: [
+					{
+						startTimeUnixNano: nanos(10),
+						timeUnixNano: nanos(11),
+						count: "3",
+						bucketCounts: ["1", "2"],
+						explicitBounds: [0.5],
+						sum: "Infinity",
+					},
+				],
+			},
+		},
+		{
+			name: "probe.hist_no_sum",
+			histogram: {
+				dataPoints: [
+					{ timeUnixNano: nanos(12), count: "2", bucketCounts: ["2"] },
+				],
+			},
+		},
+	];
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		expect((await post(payload(valid))).status).toBe(200);
+		await eventually(read, (metrics) => metrics.length === 6);
+		const metrics = await read();
+		const gauge = metrics.find((metric) => metric.name === "probe.gauge");
+		expect(
+			gauge?.dataPoints.map((point) => point.nonFiniteValue ?? point.value),
+		).toEqual(["NaN", "+Inf", "-Inf", 2]);
+		expect(
+			gauge?.dataPoints.every((point) => point.startTimeUnixNano === "0"),
+		).toBe(true);
+		expect(gauge?.statistics).toEqual({
+			avg: 2,
+			min: 2,
+			max: 2,
+			count: 4,
+			finiteCount: 1,
+		});
+		expect(
+			metrics.find((metric) => metric.name === "probe.string_double")
+				?.dataPoints[0]?.value,
+		).toBe(1.5);
+		const ints = metrics.find((metric) => metric.name === "probe.int");
+		expect(ints?.dataPoints.map((point) => point.value)).toEqual([
+			9007199254740991, -9007199254740991,
+		]);
+		expect(ints?.statistics).toEqual({
+			avg: 0,
+			min: -9007199254740991,
+			max: 9007199254740991,
+			count: 2,
+			finiteCount: 2,
+		});
+		expect(metrics.find((metric) => metric.name === "probe.sum")).toMatchObject(
+			{
+				type: "sum",
+				dataPoints: [
+					{ startTimeUnixNano: nanos(8), timeUnixNano: nanos(9), value: 7 },
+				],
+			},
+		);
+		const hist = metrics.find((metric) => metric.name === "probe.hist");
+		expect(hist).toMatchObject({
+			type: "histogram",
+			dataPoints: [
+				{
+					value: null,
+					nonFiniteValue: "+Inf",
+					bucketCounts: [1, 2],
+					explicitBounds: [0.5],
+				},
+			],
+		});
+		expect(hist?.statistics).toEqual({
+			avg: null,
+			min: null,
+			max: null,
+			count: 1,
+			finiteCount: 0,
+		});
+		expect(
+			metrics.find((metric) => metric.name === "probe.hist_no_sum"),
+		).toMatchObject({
+			dataPoints: [
+				{ value: null, nonFiniteValue: "unknown", bucketCounts: [2] },
+			],
+		});
+		const http = await fetch(new URL("/api/telemetry/metrics", host.url), {
+			headers: { authorization: `Bearer ${host.client.token}` },
+		});
+		expect(await http.json()).toEqual(metrics);
+		const revision = client.state?.telemetryRevision ?? 0;
+		const refusal = (metric: unknown) => ({
+			resourceMetrics: [
+				{
+					resource,
+					scopeMetrics: [
+						{
+							metrics: [
+								{
+									name: "probe.valid_first",
+									gauge: {
+										dataPoints: [{ timeUnixNano: nanos(20), asDouble: 1 }],
+									},
+								},
+								metric,
+							],
+						},
+					],
+				},
+			],
+		});
+		const invalid = [
+			{
+				name: "probe.missing_value",
+				gauge: { dataPoints: [{ timeUnixNano: nanos(21) }] },
+			},
+			{
+				name: "probe.both_values",
+				gauge: {
+					dataPoints: [{ timeUnixNano: nanos(22), asDouble: 1, asInt: "1" }],
+				},
+			},
+			{
+				name: "probe.fractional_int",
+				gauge: { dataPoints: [{ timeUnixNano: nanos(23), asInt: "1.5" }] },
+			},
+			{
+				name: "probe.unsafe_int",
+				gauge: {
+					dataPoints: [
+						{ timeUnixNano: nanos(24), asInt: "9223372036854775807" },
+					],
+				},
+			},
+			{
+				name: "probe.overflow_double",
+				gauge: { dataPoints: [{ timeUnixNano: nanos(25), asDouble: "1e999" }] },
+			},
+			{
+				name: "probe.garbage_double",
+				gauge: { dataPoints: [{ timeUnixNano: nanos(26), asDouble: "half" }] },
+			},
+			{
+				name: "probe.bad_time",
+				gauge: { dataPoints: [{ timeUnixNano: "-1", asDouble: 1 }] },
+			},
+			{
+				name: "probe.unknown_sum",
+				sum: { dataPoints: [{ timeUnixNano: nanos(27) }] },
+			},
+			{
+				name: "probe.bucket_mismatch",
+				histogram: {
+					dataPoints: [
+						{
+							timeUnixNano: nanos(28),
+							count: "2",
+							bucketCounts: ["1", "1"],
+							explicitBounds: [1, 2],
+						},
+					],
+				},
+			},
+			{
+				name: "probe.bucket_order",
+				histogram: {
+					dataPoints: [
+						{
+							timeUnixNano: nanos(29),
+							count: "2",
+							bucketCounts: ["1", "1", "0"],
+							explicitBounds: [2, 1],
+						},
+					],
+				},
+			},
+			{
+				name: "probe.count_mismatch",
+				histogram: {
+					dataPoints: [
+						{
+							timeUnixNano: nanos(30),
+							count: "3",
+							bucketCounts: ["1", "1"],
+							explicitBounds: [1],
+						},
+					],
+				},
+			},
+			{
+				name: "probe.negative_count",
+				histogram: {
+					dataPoints: [
+						{
+							timeUnixNano: nanos(31),
+							count: "1",
+							bucketCounts: ["-1", "2"],
+							explicitBounds: [1],
+						},
+					],
+				},
+			},
+			{
+				name: "probe.bounds_without_buckets",
+				histogram: {
+					dataPoints: [
+						{ timeUnixNano: nanos(32), count: "0", explicitBounds: [1] },
+					],
+				},
+			},
+			{
+				name: "probe.unsupported_kind",
+				summary: { dataPoints: [{ timeUnixNano: nanos(33), count: "1" }] },
+			},
+		];
+		for (const metric of invalid) {
+			const response = await post(refusal(metric));
+			expect(response.status).toBe(400);
+			expect(await response.text()).not.toContain("probe.valid_first");
+			expect(await read()).toEqual(metrics);
+		}
+		expect(client.state?.telemetryRevision ?? 0).toBe(revision);
+		await host.stop();
+		await app.close();
+		await host.stop();
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});

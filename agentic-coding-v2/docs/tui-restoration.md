@@ -1197,3 +1197,43 @@ operator environment functional tests pass.
   configuration or old indexed observation was edited. This is not whole-suite,
   real-exporter or visual/runtime acceptance. Full restoration parity remains
   open and unarchived; remaining codec/format gaps are not waived.
+
+## Observability follow-up: ProtoJSON OTLP metric decoding
+
+- OTLP HTTP/JSON metric points no longer coerce absent or special measurements
+  to zero. Gauge/sum points must carry exactly one of `asDouble`/`asInt`;
+  neither, both, a fractional or out-of-double-range `asInt`, an overflowing or
+  non-numeric double, a missing/invalid observation time, and an unsupported
+  metric kind (e.g. OTLP `summary`) refuse the whole payload with the existing
+  sanitized 400 and no partial ingestion.
+- ProtoJSON special strings (`"NaN"`, `"Infinity"`, `"-Infinity"`) map to the
+  shared explicit special measurements, and numeric strings are accepted where
+  the spec allows them. Int64 values must be exactly representable by the native
+  double model; a larger integer is refused rather than rounded into a
+  different measurement.
+- An absent `startTimeUnixNano` is now the documented unknown start `"0"`
+  instead of a copy of the observation time, so a gauge no longer claims the
+  measurement began when it was taken. Present start times are validated.
+- Histogram points project the OTLP `sum` (optional in the protocol) rather than
+  the sample `count` into the shared metric value, matching the assembled
+  Prometheus histogram convention. A histogram that reports no sum keeps an
+  explicit `unknown` special measurement — a new token restricted to histograms
+  by record validation — instead of a fabricated zero sum. Bucket counts are
+  validated as non-negative safe integers, one bucket must follow the bounds,
+  bounds must be finite and strictly increasing, and a reported count must equal
+  the bucket total.
+- Record validation now enforces the same rules on every ingestion path, so a
+  malformed normalized metric cannot reach storage through a different receiver.
+- Added one synthetic authenticated OTLP JSON/native/HTTP scenario proving
+  special tokens, exact maximum-safe integers, unknown starts, string doubles,
+  histogram sum projection, unknown sums, finite-only statistics, and fourteen
+  malformed/unsupported batches that are refused atomically with no revision
+  change and no partial write.
+- Remaining gap: OTLP exponential histograms, summaries, exemplars/links and
+  >2^53 integer measurements are still not representable and are refused or
+  absent rather than approximated. Verification: 28 focused telemetry/gateway
+  tests pass (748 assertions), unfiltered type-check, zero-diagnostic lint (807
+  files), official Solid-enabled build and diff whitespace checks. No real
+  exporter, application, credential, configuration or old indexed record was
+  touched; whole-suite, real-exporter and visual/runtime acceptance remain
+  outstanding, so full restoration parity stays open and unarchived.

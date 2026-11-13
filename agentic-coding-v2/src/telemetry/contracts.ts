@@ -23,10 +23,14 @@ export interface MetricStatistics {
 	finiteCount: number;
 }
 export type NonFiniteMetricValue = "NaN" | "+Inf" | "-Inf";
-/** Non-finite measurements remain explicit over JSON; null without a token is invalid. */
+/** A measurement that no finite number expresses. `unknown` means the source
+ * reported the observation without that field (an OTLP histogram sum, which
+ * is optional), never that a value was dropped. */
+export type MetricSpecialValue = "NaN" | "+Inf" | "-Inf" | "unknown";
+/** Special measurements stay explicit over JSON; null without a token is invalid. */
 export type MetricValue =
 	| { value: number; nonFiniteValue?: undefined }
-	| { value: null; nonFiniteValue: NonFiniteMetricValue };
+	| { value: null; nonFiniteValue: MetricSpecialValue };
 export type MetricDataPoint = MetricValue & {
 	startTimeUnixNano: string;
 	timeUnixNano: string;
