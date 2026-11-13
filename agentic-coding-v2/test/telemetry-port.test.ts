@@ -29,7 +29,7 @@ test("v1 telemetry receiver and SQLite reads use the authenticated v2 host and s
 				},
 				scopeSpans: [
 					{
-						scope: { name: "fixture" },
+						scope: { name: "fixture", version: "1" },
 						spans: [
 							{
 								traceId,
@@ -38,7 +38,21 @@ test("v1 telemetry receiver and SQLite reads use the authenticated v2 host and s
 								kind: 2,
 								startTimeUnixNano: "1790000000000000000",
 								endTimeUnixNano: "1790000000100000000",
-								status: { code: 2, message: "synthetic failure" },
+								status: { code: 2, message: "synthetic failure\nsecond line" },
+								events: [
+									{
+										name: "exception",
+										timeUnixNano: "1790000000050000000",
+										attributes: [
+											{
+												key: "exception.stacktrace",
+												value: {
+													stringValue: "SyntheticFailure\n  at synthetic.ts:1",
+												},
+											},
+										],
+									},
+								],
 								attributes: [],
 							},
 						],
@@ -78,7 +92,58 @@ test("v1 telemetry receiver and SQLite reads use the authenticated v2 host and s
 			traceId,
 			spanId,
 			serviceName: "synthetic-service",
+			scope: { name: "fixture", version: "1" },
+			status: { code: 2, message: "synthetic failure\nsecond line" },
+			events: [
+				{
+					name: "exception",
+					timeUnixNano: "1790000000050000000",
+					attributes: [
+						{
+							key: "exception.stacktrace",
+							value: "SyntheticFailure\n  at synthetic.ts:1",
+						},
+					],
+				},
+			],
 		});
+		const original = payload.resourceSpans[0].scopeSpans[0].spans[0];
+		const invalid = await request("/v1/traces", "POST", {
+			resourceSpans: [
+				{
+					scopeSpans: [
+						{
+							spans: [
+								{ ...original, spanId: "a".repeat(16) },
+								{
+									...original,
+									spanId: "b".repeat(16),
+									status: {
+										code: 2,
+										message: { bad: "private-context-marker" },
+									},
+								},
+							],
+						},
+					],
+				},
+			],
+		});
+		expect(invalid.status).toBe(400);
+		expect(await invalid.text()).not.toContain("private-context-marker");
+		expect(
+			(await (await request("/api/telemetry/traces")).json()).items[0]
+				.spanCount,
+		).toBe(1);
+		expect(
+			(
+				await request("/v1/traces", "POST", {
+					resourceSpans: [
+						{ scopeSpans: [{ scope: { name: {} }, spans: [original] }] },
+					],
+				})
+			).status,
+		).toBe(400);
 		expect((await request("/api/telemetry/traces?perPage=100000")).status).toBe(
 			400,
 		);
@@ -89,6 +154,23 @@ test("v1 telemetry receiver and SQLite reads use the authenticated v2 host and s
 		expect((await (await request("/api/telemetry/traces")).json()).total).toBe(
 			1,
 		);
+		const tree = await (
+			await request(`/api/telemetry/tree?changeId=${traceId}`)
+		).json();
+		expect(tree[0].children[0].span).toMatchObject({
+			scope: { name: "fixture", version: "1" },
+			events: [
+				{
+					name: "exception",
+					attributes: [
+						{
+							key: "exception.stacktrace",
+							value: "SyntheticFailure\n  at synthetic.ts:1",
+						},
+					],
+				},
+			],
+		});
 	} finally {
 		await host.stop();
 	}
@@ -1417,6 +1499,120 @@ test("native trace trees preserve v1 grouping and all logical spans while breaki
 		expect(await client.call("state.read", {})).toHaveProperty("sessions");
 		expect(client.status).toBe("connected");
 	} finally {
+		client.close();
+		await host.stop();
+	}
+});
+
+test("standard OTLP protobuf bytes preserve failure status, parent, scope and exception events without using the receiver schema to encode", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const grpc = await import("@grpc/grpc-js");
+	let wire: InstanceType<typeof grpc.Client> | undefined;
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		const running = await client.call("telemetry.receiver.start", {
+			revision: 0,
+			port: 0,
+		});
+		if (!running.address || !running.credentialFile)
+			throw new Error("Missing synthetic receiver references");
+		wire = new grpc.Client(running.address, grpc.credentials.createInsecure());
+		const metadata = new grpc.Metadata();
+		metadata.set(
+			"authorization",
+			`Bearer ${fs.readFileSync(running.credentialFile, "utf8")}`,
+		);
+		// Independently encoded golden bytes, not createTraceServiceClient or a
+		// serializer generated from our .proto. Tags follow the official v1.9.0:
+		// https://github.com/open-telemetry/opentelemetry-proto/blob/v1.9.0/opentelemetry/proto/trace/v1/trace.proto
+		const bytes = Buffer.from(
+			fs
+				.readFileSync(
+					path.join(
+						import.meta.dir,
+						"fixtures/telemetry/otlp-standard-export.hex",
+					),
+					"utf8",
+				)
+				.trim(),
+			"hex",
+		);
+		const connection = wire;
+		await new Promise<void>((resolve, reject) =>
+			connection.makeUnaryRequest(
+				"/opentelemetry.proto.collector.trace.v1.TraceService/Export",
+				(value: Buffer) => value,
+				(value: Buffer) => value,
+				bytes,
+				metadata,
+				{ deadline: Date.now() + 2000 },
+				(error) => (error ? reject(error) : resolve()),
+			),
+		);
+		const expected = {
+			traceId: "11".repeat(16),
+			spanId: "22".repeat(8),
+			parentSpanId: "33".repeat(8),
+			name: "standard OTLP export",
+			kind: 2,
+			scope: { name: "independent-otlp", version: "1.9.0" },
+			startTimeUnixNano: "1790000000000000000",
+			endTimeUnixNano: "1790000000100000000",
+			status: { code: 2, message: "synthetic status\nsecond line" },
+			attributes: [
+				{ key: "service.name", value: "wire-fixture" },
+				{ key: "herdr.change.id", value: "standard-wire" },
+				{ key: "attempt", value: 2 },
+			],
+			events: [
+				{
+					name: "exception",
+					timeUnixNano: "1790000000050000000",
+					attributes: [
+						{ key: "exception.type", value: "SyntheticFailure" },
+						{
+							key: "exception.message",
+							value: "synthetic failure\nsecond line",
+						},
+						{
+							key: "exception.stacktrace",
+							value: "SyntheticFailure\n  at synthetic.ts:1",
+						},
+						{ key: "exception.escaped", value: "true" },
+					],
+				},
+			],
+		};
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "spans",
+					changeId: "standard-wire",
+				})
+			).value,
+		).toMatchObject([expected]);
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "tree",
+					changeId: "standard-wire",
+				})
+			).value,
+		).toMatchObject([{ children: [{ span: expected }] }]);
+		expect(
+			await client.call("telemetry.trace.resolve", {
+				traceId: expected.traceId,
+				spanId: expected.spanId,
+			}),
+		).toMatchObject({ changeId: "standard-wire" });
+		await client.call("telemetry.receiver.stop", {
+			revision: running.revision,
+		});
+	} finally {
+		wire?.close();
 		client.close();
 		await host.stop();
 	}

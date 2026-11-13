@@ -951,3 +951,42 @@ operator environment functional tests pass.
   unfiltered type-check, zero-diagnostic lint, official Solid-enabled build
   and diff whitespace checks. No real apps/configuration were used.
 - Overall visual/runtime parity remains open and unarchived.
+
+## Observability follow-up: standard OTLP wire compatibility and failure details
+
+- Found and corrected a substantive limitation in the earlier gRPC proof: the
+  copied v1 `.proto` used nonstandard Span/Status field numbers, and tests that
+  serialized with that same file proved self-consistency, not standard OTLP
+  exporter compatibility. It also omitted events. Earlier statements about
+  real protobuf round trips must be read with that limitation.
+- Checked the published OpenTelemetry v1.9.0 trace schema directly:
+  https://github.com/open-telemetry/opentelemetry-proto/blob/v1.9.0/opentelemetry/proto/trace/v1/trace.proto
+  The bundled wire-compatible subset now uses parent_span_id=4, name=5,
+  kind=6, start/end timestamps=7/8, attributes=9, events=11, status=15,
+  flags=16 and Status.code=3/message=2, with the corresponding Event fields.
+  It remains TraceService-only; this is not a claim of full links/structured
+  AnyValue fidelity or gRPC metric/log service support.
+- Added a fixed independently encoded standard-wire fixture and sends its raw
+  bytes through grpc.Client.makeUnaryRequest, without loading our .proto to
+  encode. The authenticated boundary verifies exact IDs/parent, scalar types,
+  scope, status, multiline exception messages/stack traces and native tree
+  retention. The ordinary bundled-receiver test also still passes. No legacy
+  nonstandard-wire fallback or implicit listener restart was added.
+- Fixed HTTP/shared decoding to carry the enclosing instrumentation scope into
+  each span. Span metadata/event shapes, scalar attributes, status/kind codes
+  and timestamps are validated before writes; a malformed later record refuses
+  the batch without partially inserting its valid prefix or echoing payloads.
+- Span detail now exposes status messages, exception/event timestamps and
+  wrapped attributes/stack traces, trace/span/parent identity, resource fields
+  and instrumentation scope using the existing shared detail sections. Captured
+  tool/message content keeps its existing wrapped/pretty-JSON presentation.
+- Extended HTTP persistence verification to cover failure events/scope after
+  reopen and atomic malformed metadata refusal. Twenty-two focused native
+  telemetry/gateway tests pass (554 assertions), plus unfiltered type-check,
+  zero-diagnostic lint, official Solid-enabled build and diff whitespace
+  checks. The public schema browser session was closed. No real exporters,
+  apps, credentials or user configuration were used or restarted.
+- Existing running processes require their normal operator-controlled restart
+  to load the corrected bundled schema; no real process was restarted here.
+  Previously omitted fields cannot be reconstructed from old stored data.
+  Overall visual/runtime parity remains open and unarchived.

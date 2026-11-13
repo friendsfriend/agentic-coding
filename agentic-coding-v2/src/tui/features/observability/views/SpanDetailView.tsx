@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core";
-import { Show } from "solid-js";
-import type { TreeNode } from "../../../../telemetry/contracts.ts";
+import { For, Show } from "solid-js";
+import type { SpanData, TreeNode } from "../../../../telemetry/contracts.ts";
 import {
 	HighlightedText,
 	ScrollableContent,
@@ -38,10 +38,73 @@ export function prettyContent(value: unknown): string {
 	}
 }
 
-export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
-	const node = () => props.node();
+function AttributeRows(props: {
+	attributes: () => SpanData["attributes"];
+	wrap?: boolean;
+}) {
 	return (
-		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
+		<For each={props.attributes()}>
+			{(attribute) =>
+				props.wrap || attribute.key.startsWith(CONTENT_PREFIX) ? (
+					<box
+						flexShrink={0}
+						flexDirection="column"
+						paddingLeft={1}
+						paddingRight={1}
+					>
+						<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
+							{title(attribute.key)}
+						</text>
+						<text fg={uiColors.textSecondary} wrapMode="word">
+							{prettyContent(attribute.value)}
+						</text>
+					</box>
+				) : (
+					<box
+						height={1}
+						flexShrink={0}
+						flexDirection="row"
+						paddingLeft={1}
+						paddingRight={1}
+					>
+						<box width={24} flexShrink={0} overflow="hidden">
+							<text fg={uiColors.primary}>{title(attribute.key)}</text>
+						</box>
+						<box flexGrow={1} minWidth={0} overflow="hidden">
+							<text fg={uiColors.textSecondary}>{String(attribute.value)}</text>
+						</box>
+					</box>
+				)
+			}
+		</For>
+	);
+}
+
+export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
+	const node = props.node;
+	const identity = () => {
+		const span = node()?.span;
+		if (!span) return [];
+		return [
+			{ key: "Trace ID", value: span.traceId },
+			{ key: "Span ID", value: span.spanId },
+			{ key: "Parent span ID", value: span.parentSpanId || "(none)" },
+			{
+				key: "Kind",
+				value:
+					[
+						"UNSPECIFIED",
+						"INTERNAL",
+						"SERVER",
+						"CLIENT",
+						"PRODUCER",
+						"CONSUMER",
+					][span.kind] ?? String(span.kind),
+			},
+		];
+	};
+	return (
+		<box width="100%" height="100%" flexDirection="column">
 			<box height={1} flexShrink={0} paddingLeft={1}>
 				<text fg={uiColors.textMuted}>
 					{(() => {
@@ -60,44 +123,83 @@ export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
 					</text>
 				</box>
 			</Show>
-			<SearchHeader>
-				<HighlightedText text="Attributes" highlight="secondary" />
-			</SearchHeader>
 			<ScrollableContent focusable={false}>
-				{(node()?.span.attributes ?? []).map((attribute) =>
-					attribute.key.startsWith(CONTENT_PREFIX) ? (
-						<box
-							flexShrink={0}
-							flexDirection="column"
-							paddingLeft={1}
-							paddingRight={1}
+				<Show when={node()?.span.status.message}>
+					<SearchHeader>
+						<HighlightedText text="Status message" highlight="secondary" />
+					</SearchHeader>
+					<box flexShrink={0} paddingLeft={1} paddingRight={1}>
+						<text
+							fg={
+								node()?.span.status.code === 2
+									? uiColors.error
+									: uiColors.textSecondary
+							}
+							wrapMode="word"
 						>
-							<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
-								{title(attribute.key)}
-							</text>
-							<text fg={uiColors.textSecondary} wrapMode="word">
-								{prettyContent(attribute.value)}
-							</text>
-						</box>
-					) : (
-						<box
-							height={1}
-							flexShrink={0}
-							flexDirection="row"
-							paddingLeft={1}
-							paddingRight={1}
-						>
-							<box style={{ width: 24, flexShrink: 0 }} overflow="hidden">
-								<text fg={uiColors.primary}>{title(attribute.key)}</text>
+							{String(node()?.span.status.message ?? "")}
+						</text>
+					</box>
+				</Show>
+				<SearchHeader>
+					<HighlightedText text="Attributes" highlight="secondary" />
+				</SearchHeader>
+				<AttributeRows attributes={() => node()?.span.attributes ?? []} />
+				<Show when={(node()?.span.events?.length ?? 0) > 0}>
+					<SearchHeader>
+						<HighlightedText text="Events" highlight="secondary" />
+					</SearchHeader>
+					<For each={node()?.span.events ?? []}>
+						{(event) => (
+							<box flexShrink={0} flexDirection="column">
+								<box
+									height={1}
+									flexShrink={0}
+									paddingLeft={1}
+									flexDirection="row"
+								>
+									<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
+										{event.name}
+									</text>
+									<text fg={uiColors.textMuted}>
+										{" "}
+										·{" "}
+										{new Date(
+											Number(BigInt(event.timeUnixNano) / 1_000_000n),
+										).toISOString()}
+									</text>
+								</box>
+								<AttributeRows attributes={() => event.attributes} wrap />
 							</box>
-							<box style={{ flexGrow: 1, minWidth: 0 }} overflow="hidden">
-								<text fg={uiColors.textSecondary}>
-									{String(attribute.value)}
-								</text>
-							</box>
-						</box>
-					),
-				)}
+						)}
+					</For>
+				</Show>
+				<SearchHeader>
+					<HighlightedText text="Identity" highlight="secondary" />
+				</SearchHeader>
+				<AttributeRows attributes={identity} />
+				<Show when={(node()?.span.resource.attributes.length ?? 0) > 0}>
+					<SearchHeader>
+						<HighlightedText text="Resource" highlight="secondary" />
+					</SearchHeader>
+					<AttributeRows
+						attributes={() => node()?.span.resource.attributes ?? []}
+					/>
+				</Show>
+				<Show when={node()?.span.scope.name || node()?.span.scope.version}>
+					<SearchHeader>
+						<HighlightedText
+							text="Instrumentation scope"
+							highlight="secondary"
+						/>
+					</SearchHeader>
+					<AttributeRows
+						attributes={() => [
+							{ key: "Name", value: node()?.span.scope.name ?? "" },
+							{ key: "Version", value: node()?.span.scope.version ?? "" },
+						]}
+					/>
+				</Show>
 			</ScrollableContent>
 		</box>
 	);

@@ -15,8 +15,13 @@ function id(value: unknown, size: number): boolean {
 }
 
 function nanos(value: unknown): string | undefined {
-	if (typeof value === "string" && /^\d+$/.test(value)) return value;
-	if (typeof value === "number" && Number.isInteger(value) && value > 0)
+	if (
+		typeof value === "string" &&
+		/^\d{1,19}$/.test(value) &&
+		BigInt(value) <= 9223372036854775807n
+	)
+		return value;
+	if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
 		return value.toString();
 	return undefined;
 }
@@ -159,6 +164,10 @@ function decodeOtlpTraces(payload: any): SpanData[] {
 			for (const span of scope.spans ?? []) {
 				const normalized = normalizeOtlpSpan({
 					...span,
+					scope: {
+						name: scope.scope?.name ?? "",
+						version: scope.scope?.version ?? "",
+					},
 					attributes: [...resourceAttributes, ...(span.attributes ?? [])],
 					resource: {
 						attributes: resourceAttributes,

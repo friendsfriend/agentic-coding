@@ -29,6 +29,17 @@ const validNanos = (value: unknown) =>
 	/^\d{1,19}$/.test(value) &&
 	BigInt(value) <= 9223372036854775807n;
 const validText = (value: unknown) => typeof value === "string";
+const scalarAttributes = (value: unknown) =>
+	Array.isArray(value) &&
+	value.every(
+		(item) =>
+			item &&
+			typeof item === "object" &&
+			typeof item.key === "string" &&
+			(typeof item.value === "string" ||
+				typeof item.value === "boolean" ||
+				(typeof item.value === "number" && Number.isFinite(item.value))),
+	);
 function assertSpans(spans: SpanData[]) {
 	for (const span of spans)
 		if (
@@ -36,7 +47,27 @@ function assertSpans(spans: SpanData[]) {
 			!validNanos(span.endTimeUnixNano) ||
 			!validText(span.name) ||
 			!validText(span.serviceName) ||
-			!Number.isFinite(span.status.code)
+			!Number.isInteger(span.status.code) ||
+			span.status.code < 0 ||
+			span.status.code > 2 ||
+			!(span.status.message === undefined || validText(span.status.message)) ||
+			!Number.isInteger(span.kind) ||
+			span.kind < 0 ||
+			span.kind > 5 ||
+			!validText(span.scope?.name) ||
+			!validText(span.scope?.version) ||
+			!scalarAttributes(span.attributes) ||
+			!scalarAttributes(span.resource?.attributes) ||
+			!Number.isSafeInteger(span.resource.droppedAttributesCount) ||
+			span.resource.droppedAttributesCount < 0 ||
+			(span.events !== undefined &&
+				(!Array.isArray(span.events) ||
+					span.events.some(
+						(event) =>
+							!validText(event.name) ||
+							!validNanos(event.timeUnixNano) ||
+							!scalarAttributes(event.attributes),
+					)))
 		)
 			throw new Error("Invalid trace record");
 }
