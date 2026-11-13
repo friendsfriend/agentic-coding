@@ -1038,3 +1038,106 @@ test("metric history merges compatible batches chronologically, replaces retrans
 		await host.stop();
 	}
 });
+
+test("trace filter catalogs include receiver-only workspaces beyond a page and refuse incomplete oversized catalogs", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const source = (
+		index: number,
+		changeId = `workspace-${String(index).padStart(4, "0")}`,
+		name = `type-${index}`,
+	) => ({
+		resource: {
+			attributes: [
+				{ key: "herdr.change.id", value: { stringValue: changeId } },
+			],
+		},
+		scopeSpans: [
+			{
+				spans: [
+					{
+						traceId: (index + 1).toString(16).padStart(32, "0"),
+						spanId: (index + 1).toString(16).padStart(16, "0"),
+						name,
+						startTimeUnixNano: "1000000000",
+						endTimeUnixNano: "2000000000",
+					},
+				],
+			},
+		],
+	});
+	const post = async (resourceSpans: ReturnType<typeof source>[]) => {
+		const response = await fetch(new URL("/v1/traces", host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({ resourceSpans }),
+		});
+		expect(response.status).toBe(200);
+	};
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		expect(await client.call("telemetry.filters.read", {})).toEqual({
+			workspaces: [],
+			spanTypes: [],
+		});
+		const first = Array.from({ length: 65 }, (_, index) => source(index));
+		first[0] = source(0, undefined, "type,one\nnext");
+		await post(first);
+		await post([source(100, "workspace-0000", "type,one\nnext")]);
+		const page = (await client.call("telemetry.read", { signal: "traces" }))
+			.value;
+		expect(page).toMatchObject({ total: 65, perPage: 50 });
+		const catalog = await client.call("telemetry.filters.read", {});
+		expect(catalog.workspaces).toHaveLength(65);
+		expect(catalog.spanTypes).toHaveLength(65);
+		expect(catalog.workspaces).toContainEqual({
+			changeId: "workspace-0064",
+			spanCount: 1,
+		});
+		expect(catalog.workspaces).toContainEqual({
+			changeId: "workspace-0000",
+			spanCount: 2,
+		});
+		expect(catalog.spanTypes).toContain("type,one\nnext");
+		// None of these HTTP-ingested groups depend on a workspace_files row.
+		expect(
+			(await client.call("telemetry.read", { signal: "workspaces" })).value,
+		).toEqual([]);
+		await post(
+			Array.from({ length: 936 }, (_, offset) =>
+				source(65 + offset, undefined, "shared-type"),
+			),
+		);
+		await expect(client.call("telemetry.filters.read", {})).rejects.toThrow(
+			"1000 options",
+		);
+		expect(catalog.workspaces).toHaveLength(65);
+		expect(
+			(await client.call("telemetry.read", { signal: "traces", perPage: 1 }))
+				.value,
+		).toMatchObject({ total: 1001 });
+		await client.call("telemetry.manage", { operation: "prune", days: 1 });
+		expect(await client.call("telemetry.filters.read", {})).toEqual({
+			workspaces: [],
+			spanTypes: [],
+		});
+		await post(
+			Array.from({ length: 1001 }, (_, index) =>
+				source(index, "single-workspace"),
+			),
+		);
+		await expect(client.call("telemetry.filters.read", {})).rejects.toThrow(
+			"1000 options",
+		);
+		expect(await client.call("state.read", {})).toHaveProperty("sessions");
+		expect(client.status).toBe("connected");
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});

@@ -2,6 +2,7 @@ import type {
 	MetricCollectorKind,
 	MetricCollectorSnapshot,
 	TelemetryReceiverState,
+	TraceFilterCatalog,
 } from "../telemetry/contracts.ts";
 // Wire-only types. No Runtime, storage, renderer or model-provider dependencies.
 export const protocolVersion = 1;
@@ -231,6 +232,10 @@ export type EnvironmentAction = {
 	replicas?: number;
 };
 export type Methods = {
+	"telemetry.filters.read": {
+		input: Record<string, never>;
+		output: TraceFilterCatalog;
+	};
 	"telemetry.trace.resolve": {
 		input: { traceId: string; spanId?: string };
 		output: { changeId: string; traceId: string; spanId: string | null } | null;
@@ -611,6 +616,7 @@ export const methods: Method[] = [
 	"schedule.delete",
 	"schedule.create",
 	"schedule.state",
+	"telemetry.filters.read",
 	"telemetry.trace.resolve",
 	"telemetry.read",
 	"telemetry.manage",

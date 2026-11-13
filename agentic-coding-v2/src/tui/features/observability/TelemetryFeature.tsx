@@ -84,6 +84,9 @@ export function TelemetryFeature(props: {
 	const [statusIndex, setStatusIndex] = createSignal(0);
 	const [workspaceIndex, setWorkspaceIndex] = createSignal(0);
 	const [spanTypeIndex, setSpanTypeIndex] = createSignal(0);
+	const [filterSpanTypes, setFilterSpanTypes] = createSignal<string[]>([]);
+	const [filterCatalogReady, setFilterCatalogReady] = createSignal(false);
+	let filterEpoch = 0;
 	const [knownWorkspaces, setKnownWorkspaces] = createSignal<
 		{ changeId: string; spanCount: number }[]
 	>([]);
@@ -112,6 +115,7 @@ export function TelemetryFeature(props: {
 	const [resolvingTrace, setResolvingTrace] = createSignal(false);
 	let disposed = false;
 	const navigate = (next: string) => {
+		filterEpoch++;
 		linkEpoch++;
 		setResolvingTrace(false);
 		setIndex(0);
@@ -160,6 +164,8 @@ export function TelemetryFeature(props: {
 	};
 	createEffect(() => {
 		if (!props.active()) {
+			filterEpoch++;
+			setModal(undefined);
 			linkEpoch++;
 			setResolvingTrace(false);
 		}
@@ -348,6 +354,9 @@ export function TelemetryFeature(props: {
 		}
 	};
 	const openFilter = () => {
+		const generation = ++filterEpoch;
+		setFilterCatalogReady(false);
+		setFilterSpanTypes([...traces().spanTypes_]);
 		setCriterion(0);
 		setFilterPane("criteria");
 		setStatusIndex(
@@ -374,39 +383,41 @@ export function TelemetryFeature(props: {
 		);
 		setModal("filter");
 		void props.client
-			.call("telemetry.read", { signal: "workspaces" })
-			.then((result) => {
-				if (disposed || modal() !== "filter" || !Array.isArray(result.value))
+			.call("telemetry.filters.read", {})
+			.then((catalog) => {
+				if (disposed || generation !== filterEpoch || modal() !== "filter")
 					return;
-				const merged = new Map(loaded.map((item) => [item.changeId, item]));
-				for (const row of result.value) {
-					if (
-						row &&
-						typeof row === "object" &&
-						typeof row.changeId === "string" &&
-						typeof row.spanCount === "number"
-					)
-						merged.set(row.changeId, {
-							changeId: row.changeId,
-							spanCount: row.spanCount,
-						});
-				}
-				const items = [...merged.values()];
+				const items = [...catalog.workspaces];
+				const selectedWorkspace = workspace();
+				if (
+					selectedWorkspace &&
+					!items.some((item) => item.changeId === selectedWorkspace)
+				)
+					items.push({ changeId: selectedWorkspace, spanCount: 0 });
+				const types = [...catalog.spanTypes];
+				const selectedType = spanTypeFilter();
+				if (selectedType !== "all" && !types.includes(selectedType))
+					types.push(selectedType);
 				setKnownWorkspaces(items);
+				setFilterSpanTypes(types);
 				setWorkspaceIndex(
 					Math.max(
 						0,
-						items.findIndex((item) => item.changeId === workspace()) + 1,
+						items.findIndex((item) => item.changeId === selectedWorkspace) + 1,
 					),
 				);
+				setSpanTypeIndex(Math.max(0, ["all", ...types].indexOf(selectedType)));
+				setFilterCatalogReady(true);
 			})
 			.catch((error: unknown) => {
-				if (!disposed && modal() === "filter")
-					props.notify(
-						error instanceof Error
-							? error.message
-							: "Workspace list unavailable",
-					);
+				if (disposed || generation !== filterEpoch || modal() !== "filter")
+					return;
+				setModal(undefined);
+				props.notify(
+					error instanceof Error
+						? error.message
+						: "Trace filter catalog unavailable",
+				);
 			});
 	};
 	const handleModal = (key: string, shifted: boolean) => {
@@ -454,6 +465,7 @@ export function TelemetryFeature(props: {
 			} else return false;
 			return true;
 		}
+		if (!filterCatalogReady()) return true;
 		if (key === "h" || key === "left") setFilterPane("criteria");
 		else if (key === "l" || key === "right") setFilterPane("values");
 		else if (key === "x") {
@@ -481,12 +493,12 @@ export function TelemetryFeature(props: {
 				);
 			else
 				setSpanTypeIndex((value) =>
-					Math.max(0, Math.min(traces().spanTypes_.length, value + delta)),
+					Math.max(0, Math.min(filterSpanTypes().length, value + delta)),
 				);
 		} else if (key === "enter" || key === "return") {
 			setStatusFilter(statusOptions[statusIndex()]?.value ?? "all");
 			setSpanTypeFilter(
-				["all", ...traces().spanTypes_][spanTypeIndex()] ?? "all",
+				["all", ...filterSpanTypes()][spanTypeIndex()] ?? "all",
 			);
 			setWorkspace(
 				workspaceIndex() === 0
@@ -725,9 +737,13 @@ export function TelemetryFeature(props: {
 					workspaceIndex={workspaceIndex}
 					spanTypeIndex={spanTypeIndex}
 					workspaces={knownWorkspaces}
-					spanTypes={() => traces().spanTypes_}
-					onSelectParameter={setCriterion}
+					spanTypes={filterSpanTypes}
+					loading={() => !filterCatalogReady()}
+					onSelectParameter={(index) => {
+						if (filterCatalogReady()) setCriterion(index);
+					}}
 					onSelectValue={(index) => {
+						if (!filterCatalogReady()) return;
 						if (criterion() === 0) setStatusIndex(index);
 						else if (criterion() === 1) setWorkspaceIndex(index);
 						else setSpanTypeIndex(index);

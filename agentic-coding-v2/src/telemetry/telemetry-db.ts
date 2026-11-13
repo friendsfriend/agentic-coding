@@ -20,6 +20,7 @@ import {
 	RECENT_SPAN_LIMIT,
 	type SpanData,
 	TRACE_PAGE_SIZE,
+	type TraceFilterCatalog,
 	type TraceSummaryPage,
 	type TraceSummaryRow,
 } from "./contracts.ts";
@@ -756,6 +757,25 @@ export class TraceDb {
 		return rows.map((r) => JSON.parse(r.log) as LogData);
 	}
 
+	/** A catalog spans retained receiver/file data, not just the loaded page
+	 * or workspace-file inventory. Refuse an incomplete option set explicitly. */
+	traceFilterCatalog(): TraceFilterCatalog {
+		return this.db.transaction(() => {
+			const workspaces = this.db
+				.query(
+					"SELECT change_id AS changeId, COUNT(*) AS spanCount FROM traces GROUP BY change_id ORDER BY change_id LIMIT 1001",
+				)
+				.all() as TraceFilterCatalog["workspaces"];
+			const names = this.db
+				.query(
+					"SELECT DISTINCT name FROM traces WHERE name IS NOT NULL AND name<>'' ORDER BY name LIMIT 1001",
+				)
+				.all() as Array<{ name: string }>;
+			if (workspaces.length > 1000 || names.length > 1000)
+				throw new Error("Trace filter catalog exceeds 1000 options");
+			return { workspaces, spanTypes: names.map((row) => row.name) };
+		})();
+	}
 	/** Wire identities are not workspace IDs. Bound the candidate set and let
 	 * the authenticated caller refuse ambiguity rather than choose a row. */
 	traceWorkspaces(traceId: string, spanId?: string): string[] {

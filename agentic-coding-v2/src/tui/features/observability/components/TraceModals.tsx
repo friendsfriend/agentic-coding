@@ -55,6 +55,7 @@ export function FilterModal(props: {
 	spanTypeIndex: () => number;
 	workspaces: () => Workspace[];
 	spanTypes: () => string[];
+	loading?: () => boolean;
 	/** Pointer: a tap selects a criterion row. */
 	onSelectParameter?: (index: number) => void;
 	/** Pointer: a tap selects a value row; a tap on the selected row applies it. */
@@ -101,7 +102,7 @@ export function FilterModal(props: {
 		<SharedFilterModal
 			// The shell marks the row under the cursor; its value is applied on Enter.
 			mark="cursor"
-			parameterHeading="Criteria"
+			parameterHeading={props.loading?.() ? "Loading catalog…" : "Criteria"}
 			focusedPane={props.pane() === "criteria" ? "parameter" : "value"}
 			selectedParameterIndex={props.criterion()}
 			selectedValueIndex={

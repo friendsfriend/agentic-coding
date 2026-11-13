@@ -111,6 +111,11 @@ export interface TraceSummaryRow {
 	spanNames: string[];
 }
 
+export interface TraceFilterCatalog {
+	workspaces: Array<{ changeId: string; spanCount: number }>;
+	spanTypes: string[];
+}
+
 /** One page of trace rows plus the total the filter matches. */
 export interface TraceSummaryPage {
 	items: TraceSummaryRow[];

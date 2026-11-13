@@ -25,6 +25,7 @@ import {
 	workbenchWrites,
 } from "../../../providers/workbench/index.ts";
 import type { Runtime } from "../../../runtime.ts";
+import type { TraceFilterCatalog } from "../../../telemetry/contracts.ts";
 import {
 	readViewpoints,
 	removeViewpoint,
@@ -129,6 +130,20 @@ export async function dispatch(
 			if (operation === "watch") app.telemetry.watch(repository);
 			else app.telemetry.unwatch(repository);
 			return { count: 0 };
+		}
+		case "telemetry.filters.read": {
+			fields(input, []);
+			let catalog: TraceFilterCatalog;
+			try {
+				catalog = app.telemetry.db.traceFilterCatalog();
+			} catch {
+				throw new Refusal(
+					"Trace filter catalog unavailable or exceeds 1000 options",
+				);
+			}
+			if (Buffer.byteLength(JSON.stringify(catalog)) > 900_000)
+				throw new Refusal("Trace filter catalog exceeds the client budget");
+			return catalog;
 		}
 		case "telemetry.trace.resolve": {
 			fields(input, ["traceId", "spanId"]);

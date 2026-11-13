@@ -707,6 +707,26 @@ export function result<M extends Method>(
 		// the serialized size below the frame budget.
 		if (value !== null && !["string", "object"].includes(typeof value))
 			throw new Error("Invalid provider workbench value");
+	} else if (method === "telemetry.filters.read") {
+		const data = record(value);
+		if (
+			!Array.isArray(data.workspaces) ||
+			data.workspaces.length > 1000 ||
+			!Array.isArray(data.spanTypes) ||
+			data.spanTypes.length > 1000 ||
+			data.spanTypes.some((name) => typeof name !== "string" || !name)
+		)
+			throw new Error("Invalid trace filter catalog");
+		for (const row of data.workspaces) {
+			const workspace = record(row);
+			if (
+				typeof workspace.changeId !== "string" ||
+				!workspace.changeId ||
+				workspace.changeId.length > 256 ||
+				!integer(workspace.spanCount, 1)
+			)
+				throw new Error("Invalid trace filter workspace");
+		}
 	} else if (method === "telemetry.trace.resolve") {
 		if (value !== null) {
 			const data = record(value);

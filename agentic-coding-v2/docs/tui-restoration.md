@@ -864,3 +864,33 @@ operator environment functional tests pass.
   lint, official Solid-enabled build and diff whitespace checks. No real
   applications, credentials, providers or user configuration were used.
 - Overall visual/runtime parity remains open and unarchived.
+
+## Observability follow-up: complete bounded filter choices
+
+- Added authenticated read-only `telemetry.filters.read`, backed by one SQLite
+  read transaction over retained traces. Its workspace counts and distinct
+  span names include HTTP/gRPC-ingested data, not only workspace-file metadata
+  or the currently loaded 50-row page. Names containing commas/newlines remain
+  exact array values rather than delimiter-split strings.
+- The catalog refuses more than 1000 workspace or span-type options and refuses
+  an over-budget serialized response. It never silently claims a truncated
+  option set is complete. These refusals leave the gateway usable and do not
+  change telemetry or native task/run authority.
+- The v1 filter modal now waits for that catalog before accepting edits or
+  apply. The shared criterion heading visibly reports loading; Escape still
+  cancels. Once loaded, choices stay frozen for that dialog so incoming traces
+  cannot shift draft indices. Reopened/navigated-away dialogs reject stale
+  responses. A previously applied choice that was pruned stays explicit with
+  zero retained spans rather than silently becoming the all-workspaces choice.
+- Catalog failure closes the pending dialog with a notification, without
+  applying a partial draft. Existing v1 status/span filtering remains over the
+  loaded trace page; this is complete bounded option discovery, not a claim
+  that a new global status/span query engine was added.
+- One synthetic authenticated-boundary scenario covers 65 receiver-only
+  workspaces beyond a 50-row page, exact counts, special-character span names,
+  empty file inventory, immutable returned observations, both 1000-option
+  limits, recovery after retention pruning and connection survival. Nineteen
+  focused telemetry/gateway tests pass (315 assertions), plus unfiltered
+  type-check, zero-diagnostic lint, official Solid-enabled build and diff
+  whitespace checks. No real apps or user configuration were used.
+- Overall visual/runtime parity remains open and unarchived.
