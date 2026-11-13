@@ -74,7 +74,8 @@ export interface ServiceNode {
  * shape, with its attributes normalized the way a span's are. */
 export interface SpanEvent {
 	name: string;
-	timeUnixNano: string;
+	/** Absent when the source reported no event time; never the span's start. */
+	timeUnixNano?: string;
 	attributes: Array<{ key: string; value: string }>;
 }
 

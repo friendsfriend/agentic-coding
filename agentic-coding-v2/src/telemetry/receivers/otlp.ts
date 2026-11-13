@@ -27,54 +27,138 @@ function nanos(value: unknown): string | undefined {
 	return undefined;
 }
 
-type OtlpAttributeValue = {
-	stringValue?: unknown;
-	boolValue?: unknown;
-	intValue?: unknown;
-	doubleValue?: unknown;
-};
+const anyValueDepth = 8;
 
-function attrValue(
-	item: OtlpAttributeValue | undefined,
-): string | number | boolean | undefined {
-	if (typeof item?.stringValue === "string") return item.stringValue;
-	if (typeof item?.boolValue === "boolean") return item.boolValue;
-	if (item?.intValue !== undefined) return Number(item.intValue);
-	return typeof item?.doubleValue === "number" ? item.doubleValue : undefined;
+/** One OTLP AnyValue in its native form: a scalar, an exact int64 as its own
+ * decimal text (never rounded through a double), a special double as the token
+ * the source wrote, bytes as their base64 payload, or a bounded recursive
+ * array/kvlist structure. An unknown shape is refused, not stringified. */
+function anyValue(value: unknown, depth = 0): unknown {
+	if (value === undefined || value === null) return "";
+	if (typeof value !== "object") throw new Error("Invalid OTLP AnyValue");
+	if (depth > anyValueDepth) throw new Error("Invalid OTLP AnyValue depth");
+	const any = value as Record<string, unknown>;
+	if (typeof any.stringValue === "string") return any.stringValue;
+	if (typeof any.boolValue === "boolean") return any.boolValue;
+	if (any.intValue !== undefined) {
+		if (typeof any.intValue === "number" && Number.isSafeInteger(any.intValue))
+			return any.intValue;
+		if (typeof any.intValue === "string" && /^-?\d+$/.test(any.intValue)) {
+			const parsed = Number(any.intValue);
+			return Number.isSafeInteger(parsed) ? parsed : any.intValue;
+		}
+		throw new Error("Invalid OTLP AnyValue integer");
+	}
+	if (any.doubleValue !== undefined) {
+		const double = protoDouble(any.doubleValue);
+		return double.value ?? String(any.doubleValue);
+	}
+	if (typeof any.bytesValue === "string") return any.bytesValue;
+	if (any.arrayValue !== undefined) {
+		const items = (any.arrayValue as { values?: unknown }).values ?? [];
+		if (!Array.isArray(items)) throw new Error("Invalid OTLP AnyValue array");
+		return items.map((item: unknown) => anyValue(item, depth + 1));
+	}
+	if (any.kvlistValue !== undefined) {
+		const items = (any.kvlistValue as { values?: unknown }).values ?? [];
+		if (!Array.isArray(items)) throw new Error("Invalid OTLP AnyValue list");
+		const entries: Record<string, unknown> = Object.create(null);
+		for (const item of items) {
+			const entry = item as { key?: unknown; value?: unknown } | null;
+			if (typeof entry?.key !== "string")
+				throw new Error("Invalid OTLP AnyValue list entry");
+			entries[entry.key] = anyValue(entry.value, depth + 1);
+		}
+		return entries;
+	}
+	throw new Error("Unsupported OTLP AnyValue");
 }
 
-function normAttrs(
+/** An attribute value the records carry: a scalar, or the JSON text of a
+ * structured value so a k/v list is readable instead of silently empty. */
+function attributeValue(value: unknown): string | number | boolean {
+	if (value === undefined) throw new Error("Invalid OTLP attribute");
+	const decoded = anyValue(value);
+	return typeof decoded === "string" ||
+		typeof decoded === "number" ||
+		typeof decoded === "boolean"
+		? decoded
+		: JSON.stringify(decoded);
+}
+
+/** Attributes in the OTLP list shape (and the legacy map shape), keeping their
+ * order. A named key is required: an attribute without one identifies nothing. */
+function attributeEntries(
 	attrs: unknown,
 ): Array<{ key: string; value: string | number | boolean }> {
+	if (attrs === undefined || attrs === null) return [];
 	if (Array.isArray(attrs))
-		return attrs.map((a) => ({
-			key: String(a.key ?? ""),
-			value: attrValue(a.value) ?? "",
-		}));
-	if (attrs && typeof attrs === "object")
-		return Object.entries(attrs as Record<string, unknown>).map(([k, v]) => ({
-			key: k,
-			value:
-				typeof v === "string" || typeof v === "number" || typeof v === "boolean"
-					? v
-					: String(v),
-		}));
-	return [];
+		return attrs.map((item) => {
+			const entry = item as { key?: unknown; value?: unknown } | null;
+			if (typeof entry?.key !== "string" || !entry.key)
+				throw new Error("Invalid OTLP attribute key");
+			return { key: entry.key, value: attributeValue(entry.value) };
+		});
+	if (typeof attrs === "object")
+		return Object.entries(attrs as Record<string, unknown>).map(
+			([key, value]) => {
+				if (!key) throw new Error("Invalid OTLP attribute key");
+				return {
+					key,
+					value:
+						value !== null &&
+						typeof value === "object" &&
+						!("stringValue" in value) === false
+							? attributeValue(value)
+							: typeof value === "string" ||
+									typeof value === "number" ||
+									typeof value === "boolean"
+								? value
+								: String(JSON.stringify(value)),
+				};
+			},
+		);
+	throw new Error("Invalid OTLP attributes");
 }
 
 function strAttrs(attrs: unknown): Array<{ key: string; value: string }> {
-	if (Array.isArray(attrs))
-		return attrs.map((a) => ({
-			key: String(a.key ?? ""),
-			value: String(attrValue(a.value) ?? ""),
-		}));
-	if (attrs && typeof attrs === "object")
-		return Object.entries(attrs as Record<string, unknown>).map(([k, v]) => ({
-			key: k,
-			value: String(v),
-		}));
-	return [];
+	return attributeEntries(attrs).map(({ key, value }) => ({
+		key,
+		value: typeof value === "string" ? value : String(value),
+	}));
 }
+
+const statusNames = ["UNSET", "OK", "ERROR"];
+const spanKindNames = [
+	"UNSPECIFIED",
+	"INTERNAL",
+	"SERVER",
+	"CLIENT",
+	"PRODUCER",
+	"CONSUMER",
+];
+
+/** A ProtoJSON enum arrives as its number or its name; anything outside the
+ * declared set is a malformed record, never a silent default. */
+function enumNumber(
+	value: unknown,
+	names: string[],
+	prefix: string,
+	label: string,
+): number {
+	const index =
+		typeof value === "string"
+			? names.indexOf(
+					value.startsWith(prefix) ? value.slice(prefix.length) : value,
+				)
+			: Number(value);
+	if (!Number.isInteger(index) || index < 0 || index >= names.length)
+		throw new Error(`Invalid OTLP ${label}`);
+	return index;
+}
+
+const spanKind = (value: unknown) =>
+	enumNumber(value, spanKindNames, "SPAN_KIND_", "span kind");
 
 // ---- Spans ----
 
@@ -91,15 +175,40 @@ function normalizeOtlpSpan(raw: any): SpanData | undefined {
 		!endTimeUnixNano
 	)
 		return undefined;
-	const status =
-		typeof raw.status === "object" && raw.status !== null
-			? {
-					code: Number(raw.status.code ?? 0),
-					message: raw.status.message ?? undefined,
-				}
-			: { code: raw.status === "ERROR" ? 2 : 0 };
-	const attributes = normAttrs(raw.attributes ?? []);
-	const resourceAttributes = normAttrs(raw.resource?.attributes ?? []);
+	// An absent status is the protocol default (unset); a present one must be a
+	// declared code and a textual message.
+	const status = (() => {
+		if (raw.status === undefined || raw.status === null) return { code: 0 };
+		if (typeof raw.status !== "object") {
+			return {
+				code: enumNumber(
+					raw.status,
+					statusNames,
+					"STATUS_CODE_",
+					"status code",
+				),
+			};
+		}
+		const code =
+			raw.status.code === undefined || raw.status.code === null
+				? 0
+				: enumNumber(
+						raw.status.code,
+						statusNames,
+						"STATUS_CODE_",
+						"status code",
+					);
+		const message = raw.status.message;
+		if (
+			message !== undefined &&
+			message !== null &&
+			typeof message !== "string"
+		)
+			throw new Error("Invalid OTLP status message");
+		return message ? { code, message } : { code };
+	})();
+	const attributes = attributeEntries(raw.attributes);
+	const resourceAttributes = attributeEntries(raw.resource?.attributes);
 	// Exceptions and log points arrive as span events. They are kept (bounded to
 	// their name, time and normalized attributes) because they are usually the
 	// reason a span failed, and dropping them would leave a status code as the
@@ -115,14 +224,18 @@ function normalizeOtlpSpan(raw: any): SpanData | undefined {
 						name: string;
 						timeUnixNano?: unknown;
 						attributes?: unknown;
-					}) => ({
-						name: event.name,
-						timeUnixNano: nanos(event.timeUnixNano) ?? startTimeUnixNano,
-						attributes: normAttrs(event.attributes ?? []).map((attribute) => ({
-							key: attribute.key,
-							value: String(attribute.value),
-						})),
-					}),
+					}) => {
+						// A missing event time stays unknown; the span's own start is not
+						// the moment the event happened.
+						const happened = nanos(event.timeUnixNano);
+						if (event.timeUnixNano !== undefined && happened === undefined)
+							throw new Error("Invalid OTLP event time");
+						return {
+							name: event.name,
+							timeUnixNano: happened,
+							attributes: strAttrs(event.attributes),
+						};
+					},
 				)
 		: [];
 	const serviceName = String(
@@ -143,11 +256,14 @@ function normalizeOtlpSpan(raw: any): SpanData | undefined {
 		attributes,
 		resource: {
 			attributes: resourceAttributes,
-			droppedAttributesCount: Number(raw.resource?.droppedAttributesCount ?? 0),
+			droppedAttributesCount:
+				raw.resource?.droppedAttributesCount === undefined
+					? 0
+					: protoInt64(raw.resource.droppedAttributesCount),
 		},
 		scope: { name: raw.scope?.name ?? "", version: raw.scope?.version ?? "" },
 		serviceName,
-		kind: Number(raw.kind ?? 0),
+		kind: raw.kind === undefined || raw.kind === null ? 0 : spanKind(raw.kind),
 		...(events.length > 0 ? { events } : {}),
 	};
 }
@@ -430,54 +546,10 @@ function severity(log: { severityText?: unknown; severityNumber?: unknown }) {
 	return index === undefined ? "" : (severityNames[index] ?? "");
 }
 
-const anyValueDepth = 8;
-
-/** One OTLP AnyValue as text: the scalar itself, or a JSON rendering of its
- * structure. An int64 keeps the exact decimal the source reported, and an
- * unknown AnyValue shape is refused rather than stringified into noise. */
-function anyValueText(value: unknown, depth = 0): unknown {
-	if (value === undefined || value === null) return "";
-	if (typeof value !== "object") throw new Error("Invalid OTLP AnyValue");
-	if (depth > anyValueDepth) throw new Error("Invalid OTLP AnyValue depth");
-	const any = value as Record<string, unknown>;
-	if (typeof any.stringValue === "string") return any.stringValue;
-	if (typeof any.boolValue === "boolean") return any.boolValue;
-	if (any.intValue !== undefined) {
-		if (typeof any.intValue === "number" && Number.isSafeInteger(any.intValue))
-			return any.intValue;
-		if (typeof any.intValue === "string" && /^-?\d+$/.test(any.intValue))
-			return any.intValue;
-		throw new Error("Invalid OTLP AnyValue integer");
-	}
-	if (any.doubleValue !== undefined) {
-		const double = protoDouble(any.doubleValue);
-		// A special value keeps the token the source actually wrote.
-		return double.value ?? String(any.doubleValue);
-	}
-	if (typeof any.bytesValue === "string") return any.bytesValue;
-	if (any.arrayValue !== undefined) {
-		const items = (any.arrayValue as { values?: unknown }).values ?? [];
-		if (!Array.isArray(items)) throw new Error("Invalid OTLP AnyValue array");
-		return items.map((item: unknown) => anyValueText(item, depth + 1));
-	}
-	if (any.kvlistValue !== undefined) {
-		const items = (any.kvlistValue as { values?: unknown }).values ?? [];
-		if (!Array.isArray(items)) throw new Error("Invalid OTLP AnyValue list");
-		const entries: Record<string, unknown> = Object.create(null);
-		for (const item of items) {
-			const entry = item as { key?: unknown; value?: unknown };
-			if (typeof entry?.key !== "string")
-				throw new Error("Invalid OTLP AnyValue list entry");
-			entries[entry.key] = anyValueText(entry.value, depth + 1);
-		}
-		return entries;
-	}
-	throw new Error("Unsupported OTLP AnyValue");
-}
-
+/** A log body as text: the scalar itself or the JSON of a structured body. */
 function logBody(value: unknown): string {
-	const text = anyValueText(value);
-	return typeof text === "string" ? text : JSON.stringify(text);
+	const body = anyValue(value);
+	return typeof body === "string" ? body : JSON.stringify(body);
 }
 
 /** A correlation id is used as-is or not at all: 32/16 lowercase hex, and an

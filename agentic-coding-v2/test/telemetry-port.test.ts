@@ -3219,7 +3219,7 @@ test("OTLP log records keep source severity, structured bodies and validated cor
 			"-Infinity",
 			"1820000000000000123",
 			"AAEC",
-			'["a","2",false]',
+			'["a",2,false]',
 			"empty correlation",
 			"named level",
 			"no level",
@@ -3228,7 +3228,7 @@ test("OTLP log records keep source severity, structured bodies and validated cor
 			"text wins",
 			"true",
 			"unset correlation",
-			'{"k":"v","n":"3"}',
+			'{"k":"v","n":3}',
 		]);
 		expect(byBody.get("text body")).toBe("WARN");
 		expect(byBody.get("numeric level")).toBe("INFO2");
@@ -3313,6 +3313,192 @@ test("OTLP log records keep source severity, structured bodies and validated cor
 		expect(
 			await client.call("telemetry.trace.resolve", { traceId }),
 		).toBeNull();
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});
+
+test("OTLP span attributes, enums and event times decode exactly without invented values", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const traceId = "b".repeat(32),
+		spanId = "c".repeat(16);
+	const base = "1790000000000000000";
+	const resource = {
+		attributes: [
+			{ key: "service.name", value: { stringValue: "attr-service" } },
+			{ key: "host.name", value: { stringValue: "h1" } },
+		],
+		droppedAttributesCount: "3",
+	};
+	const span = (over: Record<string, unknown>) => ({
+		traceId,
+		spanId,
+		name: "probe-span",
+		kind: 2,
+		startTimeUnixNano: base,
+		endTimeUnixNano: "1790000000100000000",
+		...over,
+	});
+	const payload = (spans: unknown[], res: unknown = resource) => ({
+		resourceSpans: [
+			{ resource: res, scopeSpans: [{ scope: { name: "probe" }, spans }] },
+		],
+	});
+	const post = (value: unknown) =>
+		fetch(new URL("/v1/traces", host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(value),
+		});
+	const read = async () =>
+		(
+			await client.call("telemetry.read", {
+				signal: "spans",
+				changeId: traceId,
+			})
+		).value as SpanData[];
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		const accepted = await post(
+			payload([
+				span({
+					attributes: [
+						{ key: "str", value: { stringValue: "v" } },
+						{ key: "int", value: { intValue: "42" } },
+						{ key: "big", value: { intValue: "9223372036854775807" } },
+						{ key: "flag", value: { boolValue: false } },
+						{ key: "double", value: { doubleValue: 1.5 } },
+						{ key: "special", value: { doubleValue: "-Infinity" } },
+						{ key: "bytes", value: { bytesValue: "AAEC" } },
+						{
+							key: "list",
+							value: {
+								arrayValue: {
+									values: [{ stringValue: "a" }, { intValue: "2" }],
+								},
+							},
+						},
+						{
+							key: "map",
+							value: {
+								kvlistValue: {
+									values: [{ key: "n", value: { intValue: "7" } }],
+								},
+							},
+						},
+					],
+					status: { code: "STATUS_CODE_ERROR", message: "boom" },
+					events: [
+						{
+							name: "no-time",
+							attributes: [
+								{
+									key: "k",
+									value: {
+										kvlistValue: {
+											values: [{ key: "x", value: { boolValue: true } }],
+										},
+									},
+								},
+							],
+						},
+						{
+							name: "timed",
+							timeUnixNano: "1790000000050000000",
+							attributes: [
+								{ key: "big", value: { intValue: "9223372036854775807" } },
+							],
+						},
+					],
+				}),
+			]),
+		);
+		expect(accepted.status).toBe(200);
+		await eventually(read, (spans) => spans.length === 1);
+		const [stored] = await read();
+		expect(stored?.status).toEqual({ code: 2, message: "boom" });
+		expect(stored?.kind).toBe(2);
+		expect(stored?.resource.droppedAttributesCount).toBe(3);
+		expect(stored?.serviceName).toBe("attr-service");
+		expect(stored?.attributes).toEqual([
+			{ key: "service.name", value: "attr-service" },
+			{ key: "host.name", value: "h1" },
+			{ key: "str", value: "v" },
+			{ key: "int", value: 42 },
+			{ key: "big", value: "9223372036854775807" },
+			{ key: "flag", value: false },
+			{ key: "double", value: 1.5 },
+			{ key: "special", value: "-Infinity" },
+			{ key: "bytes", value: "AAEC" },
+			{ key: "list", value: '["a",2]' },
+			{ key: "map", value: '{"n":7}' },
+		]);
+		expect(stored?.resource.attributes).toEqual([
+			{ key: "service.name", value: "attr-service" },
+			{ key: "host.name", value: "h1" },
+		]);
+		expect(stored?.events).toEqual([
+			{ name: "no-time", attributes: [{ key: "k", value: '{"x":true}' }] },
+			{
+				name: "timed",
+				timeUnixNano: "1790000000050000000",
+				attributes: [{ key: "big", value: "9223372036854775807" }],
+			},
+		]);
+		const revision = client.state?.telemetryRevision ?? 0;
+		const invalid = [
+			{ attributes: [{ value: { stringValue: "x" } }] },
+			{ attributes: [{ key: "", value: { stringValue: "x" } }] },
+			{ attributes: [{ key: "k" }] },
+			{ attributes: [{ key: "k", value: { unknownValue: 1 } }] },
+			{ attributes: { k: { stringValue: "x" }, bad: { unknownValue: 1 } } },
+			{ status: { code: "STATUS_CODE_BOGUS" } },
+			{ status: { code: 9 } },
+			{ status: { message: { bad: "boom" } } },
+			{ kind: 9 },
+			{ kind: "SPAN_KIND_BOGUS" },
+			{ events: [{ name: "bad-time", timeUnixNano: "-1", attributes: [] }] },
+			{
+				events: [
+					{
+						name: "bad-attr",
+						attributes: [{ key: "k", value: { intValue: "1e3" } }],
+					},
+				],
+			},
+			{
+				events: [
+					{
+						name: "bad-event-attr",
+						attributes: [{ key: "k", value: "plain" }],
+					},
+				],
+			},
+		];
+		for (const over of invalid) {
+			const response = await post(
+				payload([span({ spanId: "d".repeat(16), ...over })]),
+			);
+			expect(response.status).toBe(400);
+			expect(await response.text()).not.toContain("probe-span");
+			expect((await read()).length).toBe(1);
+		}
+		const badResource = await post(
+			payload([span({ spanId: "e".repeat(16) })], {
+				attributes: [],
+				droppedAttributesCount: "1.5",
+			}),
+		);
+		expect(badResource.status).toBe(400);
+		expect((await read()).length).toBe(1);
+		expect(client.state?.telemetryRevision ?? 0).toBe(revision);
 	} finally {
 		client.close();
 		await host.stop();

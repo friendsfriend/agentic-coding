@@ -66,7 +66,10 @@ function assertSpans(spans: SpanData[]) {
 					span.events.some(
 						(event) =>
 							!validText(event.name) ||
-							!validNanos(event.timeUnixNano) ||
+							!(
+								event.timeUnixNano === undefined ||
+								validNanos(event.timeUnixNano)
+							) ||
 							!scalarAttributes(event.attributes),
 					)))
 		)

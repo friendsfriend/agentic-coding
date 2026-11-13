@@ -170,13 +170,15 @@ export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
 									<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
 										{event.name}
 									</text>
-									<text fg={uiColors.textMuted}>
-										{" "}
-										·{" "}
-										{new Date(
-											Number(BigInt(event.timeUnixNano) / 1_000_000n),
-										).toISOString()}
-									</text>
+									<Show when={event.timeUnixNano}>
+										<text fg={uiColors.textMuted}>
+											{" "}
+											·{" "}
+											{new Date(
+												Number(BigInt(event.timeUnixNano ?? "0") / 1_000_000n),
+											).toISOString()}
+										</text>
+									</Show>
 								</box>
 								<AttributeRows attributes={() => event.attributes} wrap />
 							</box>

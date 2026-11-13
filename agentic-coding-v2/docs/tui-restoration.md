@@ -1279,3 +1279,40 @@ operator environment functional tests pass.
   credential, configuration or old indexed record was touched; whole-suite,
   real-exporter and visual/runtime acceptance remain outstanding, so full
   restoration parity stays open and unarchived.
+
+## Observability follow-up: OTLP attribute values, span enums and event times
+
+- One AnyValue decoder now serves span, resource, event, log, metric-point and
+  log/metric-resource attributes instead of a second per-call-site coercion.
+  Scalars stay typed; an int64 that a double cannot carry exactly is reported as
+  the source's own decimal text rather than a rounded number; a special double
+  keeps the token the source wrote; bytes stay base64; a bounded nested
+  array/kvlist becomes JSON text instead of the previous silent empty string.
+  A record with no attribute key, an empty key, a missing value, a non-integer
+  `intValue`, an over-deep structure or an unknown AnyValue shape refuses the
+  payload. The legacy map-shaped attribute object is still accepted and decoded
+  by the same rules; any other attribute shape is refused rather than ignored.
+- Span kind and status code accept both the ProtoJSON number and the enum name
+  (`SPAN_KIND_SERVER`, `STATUS_CODE_ERROR`), and an out-of-range or unknown value
+  is refused. Previously any non-object status other than the literal `"ERROR"`
+  silently became unset, and a bogus enum name became `NaN`. A status message
+  must be text. `droppedAttributesCount` is validated as an exact int64 instead
+  of being coerced through `Number`.
+- A span event no longer inherits the span's start time when the source reported
+  no event time: `SpanEvent.timeUnixNano` is optional, validation accepts its
+  absence, the detail view omits the timestamp row, and a present but invalid
+  time refuses the payload. An exception event therefore can no longer claim it
+  happened at the span's start.
+- Added one synthetic authenticated OTLP JSON/native scenario covering typed,
+  exact-int64, special-double, bytes, array and kvlist values on span, resource
+  and event attributes, enum-name kind/status, exact dropped count, an event
+  without a reported time, thirteen malformed shapes refused atomically with no
+  partial write, and no revision change.
+- Remaining gaps: OTLP exponential histograms, summaries, exemplars and links
+  stay unsupported, and >2^53 integers stay textual. Verification: 30 focused
+  telemetry/gateway tests pass (842 assertions), unfiltered type-check,
+  zero-diagnostic lint (807 files), official Solid-enabled build and diff
+  whitespace checks. No real exporter, application, credential, configuration or
+  old indexed record was touched; whole-suite, real-exporter and visual/runtime
+  acceptance remain outstanding, so full restoration parity stays open and
+  unarchived.
