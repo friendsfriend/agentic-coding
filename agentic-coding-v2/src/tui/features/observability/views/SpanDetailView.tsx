@@ -24,6 +24,13 @@ const title = (key: string) =>
 /** Captured session content: rendered wrapped, not as one clipped row, because
  * the whole point of the capture is reading the prompt, command or output. */
 const CONTENT_PREFIX = "herdr.content.";
+// Some exporters supply error metadata without an actual timed exception event.
+const FAILURE_CONTENT_KEYS = new Set([
+	"error.stack",
+	"error.msg",
+	"exception.stacktrace",
+	"exception.message",
+]);
 
 /** JSON payloads (tool arguments and results) are indented so a command and
  * its output stay readable; plain text is shown as captured. */
@@ -45,7 +52,9 @@ function AttributeRows(props: {
 	return (
 		<For each={props.attributes()}>
 			{(attribute) =>
-				props.wrap || attribute.key.startsWith(CONTENT_PREFIX) ? (
+				props.wrap ||
+				attribute.key.startsWith(CONTENT_PREFIX) ||
+				FAILURE_CONTENT_KEYS.has(attribute.key) ? (
 					<box
 						flexShrink={0}
 						flexDirection="column"

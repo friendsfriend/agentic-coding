@@ -3,6 +3,7 @@ import {
 	normalizeDatadogLogs,
 	normalizeDatadogSeries,
 	normalizeDatadogSpans,
+	parseDatadogJson,
 } from "./datadog.ts";
 import { decodeOtlpLogs, decodeOtlpMetrics, decodeOtlpTraces } from "./otlp.ts";
 import { scrapePrometheus } from "./prometheus.ts";
@@ -183,7 +184,7 @@ async function handleDatadogTraces(
 	router: SignalRouter,
 ): Promise<Response> {
 	try {
-		const spans = normalizeDatadogSpans(JSON.parse(await body(request)));
+		const spans = normalizeDatadogSpans(parseDatadogJson(await body(request)));
 		router.pushTraces(spans);
 		return Response.json({});
 	} catch {
@@ -209,7 +210,7 @@ async function handleDatadogLogs(
 	router: SignalRouter,
 ): Promise<Response> {
 	try {
-		const logs = normalizeDatadogLogs(JSON.parse(await body(request)));
+		const logs = normalizeDatadogLogs(parseDatadogJson(await body(request)));
 		router.pushLogs(logs);
 		return Response.json({});
 	} catch {

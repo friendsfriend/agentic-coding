@@ -990,3 +990,39 @@ operator environment functional tests pass.
   to load the corrected bundled schema; no real process was restarted here.
   Previously omitted fields cannot be reconstructed from old stored data.
   Overall visual/runtime parity remains open and unarchived.
+
+## Observability follow-up: Datadog/Zipkin trace normalization
+
+- Corrected the copied Datadog JSON adapter's units: trace `start` and `duration`
+  are already nanoseconds, not microseconds. End times are added with BigInt,
+  without a floating-point addition or an extra factor of 1,000.
+- Datadog trace/log HTTP JSON parsing preserves unsafe-sized integer literals
+  from Bun's JSON reviver source context before number rounding. Decimal uint64
+  identities become canonical hexadecimal span/trace IDs; `_dd.p.tid` supplies
+  the optional 128-bit trace high word. Decimal strings are also exact. Unsafe
+  already-rounded numbers supplied programmatically are refused, not guessed;
+  the parser does not silently fall back to rounded identities without source
+  context. These remain JSON adapters, not full Datadog Agent/MessagePack support.
+- Nested/flat Datadog log correlation fields now match native retained trace
+  identities. Zero/absent correlation remains an unlinked log, not a rejected
+  record. Millisecond log timestamps use integer multiplication, including epoch
+  zero; the ordinary `error`/`fatal` severities are recognized.
+- Actual Datadog `error.msg`, `error.type` and `error.stack` metadata is retained,
+  with `error.msg` used for status text. Failure message/stack attribute keys
+  render wrapped in the existing span detail. No exception timestamp/event is
+  fabricated from Datadog metadata that supplies no such timestamp.
+- Zipkin 64-bit trace IDs are zero-extended to the native 128-bit form; hexadecimal
+  IDs are validated/canonicalized without changing parent identity. Microsecond
+  timestamp/duration arithmetic is integral, explicit span kinds are preserved,
+  and supplied annotations become events with their real timestamps.
+- Added one synthetic authenticated HTTP/native-boundary scenario covering raw
+  uint64 JSON integer tokens (including their low bits), 128-bit/decimal log
+  correlation, unlinked logs, exact timing, native tree parentage, Zipkin kinds
+  and annotations, cross-service topology and atomic malformed-batch refusal.
+  Non-array Datadog batch members are refused rather than silently skipped.
+- Verification: 23 focused telemetry/gateway tests pass (583 assertions), plus
+  unfiltered type-check, zero-diagnostic lint, official Solid-enabled build and
+  diff whitespace checks. No real exporters, applications, credentials or
+  configuration were touched. No old indexed records were rewritten. Full
+  visual/runtime parity remains open and unarchived; this was not a whole-suite
+  run or real Datadog Agent acceptance.

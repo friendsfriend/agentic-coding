@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { serve } from "../src/server/index.ts";
-import type { SpanData } from "../src/telemetry/contracts.ts";
+import type { LogData, SpanData } from "../src/telemetry/contracts.ts";
 import { createTraceServiceClient } from "../src/telemetry/receivers/otlp-grpc-proto.ts";
 import { ClientConnection } from "../src/tui/client/connection.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
@@ -1613,6 +1613,329 @@ test("standard OTLP protobuf bytes preserve failure status, parent, scope and ex
 		});
 	} finally {
 		wire?.close();
+		client.close();
+		await host.stop();
+	}
+});
+
+test("Datadog uint64 JSON and Zipkin 64-bit traces retain exact timing, native parents and correlated failure logs", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const post = (route: string, payload: unknown) =>
+		fetch(new URL(route, host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: typeof payload === "string" ? payload : JSON.stringify(payload),
+		});
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		const meta = {
+			"herdr.change.id": "datadog-fixture",
+			"_dd.p.tid": "0123456789ABCDEF",
+		};
+		const ddRoot = {
+			trace_id: "18446744073709551615",
+			span_id: "18446744073709551614",
+			parent_id: 0,
+			name: "dd root",
+			service: "dd-front",
+			start: "1790000000000000123",
+			duration: 100,
+			meta,
+		};
+		const ddChild = {
+			...ddRoot,
+			span_id: "18446744073709551613",
+			parent_id: "18446744073709551614",
+			name: "dd child",
+			service: "dd-worker",
+			duration: 987654321,
+			error: 1,
+			meta: {
+				...meta,
+				"error.type": "SyntheticFailure",
+				"error.msg": "trace operation failed\nextra",
+				"error.stack": "SyntheticFailure\n  at synthetic.ts:2",
+			},
+		};
+		// Actual uint64 JSON integer literals, not already-rounded JS numbers.
+		const wire = JSON.stringify([[ddRoot, ddChild]]).replace(
+			/"(1844674407370955161[345]|1790000000000000123)"/g,
+			"$1",
+		);
+		expect((await post("/v0.4/traces", wire)).status).toBe(200);
+		const ddTraceId = "0123456789abcdefffffffffffffffff";
+		const ddExpected = {
+			traceId: ddTraceId,
+			spanId: "fffffffffffffffd",
+			parentSpanId: "fffffffffffffffe",
+			startTimeUnixNano: "1790000000000000123",
+			endTimeUnixNano: "1790000000987654444",
+			status: { code: 2, message: "trace operation failed\nextra" },
+			attributes: [
+				{ key: "herdr.change.id", value: "datadog-fixture" },
+				{ key: "_dd.p.tid", value: "0123456789ABCDEF" },
+				{ key: "error.type", value: "SyntheticFailure" },
+				{ key: "error.msg", value: "trace operation failed\nextra" },
+				{ key: "error.stack", value: "SyntheticFailure\n  at synthetic.ts:2" },
+			],
+		};
+		const ddSpans = (
+			await client.call("telemetry.read", {
+				signal: "spans",
+				changeId: "datadog-fixture",
+			})
+		).value;
+		expect(ddSpans).toHaveLength(2);
+		expect(ddSpans).toContainEqual(expect.objectContaining(ddExpected));
+		// Datadog error metadata has no event timestamp: do not invent one.
+		expect(
+			(ddSpans as SpanData[]).find((span) => span.spanId === ddExpected.spanId)
+				?.events,
+		).toBeUndefined();
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "tree",
+					changeId: "datadog-fixture",
+				})
+			).value,
+		).toMatchObject([
+			{
+				children: [
+					{
+						span: { spanId: "fffffffffffffffe" },
+						children: [{ span: ddExpected }],
+					},
+				],
+			},
+		]);
+		expect(
+			(
+				await post(
+					"/api/v2/logs",
+					JSON.stringify([
+						{
+							message: "dd failure",
+							status: "error",
+							timestamp: 1790000000123,
+							dd: { trace_id: ddTraceId, span_id: ddChild.span_id },
+						},
+					]).replace(`"${ddChild.span_id}"`, ddChild.span_id),
+				)
+			).status,
+		).toBe(200);
+		expect(
+			(
+				await post("/v0.3/traces", [
+					[
+						{
+							...ddRoot,
+							trace_id: 42,
+							span_id: 43,
+							parent_id: 0,
+							start: 1790000000000,
+							duration: 1,
+							meta: { "herdr.change.id": "dd-decimal" },
+						},
+					],
+				])
+			).status,
+		).toBe(200);
+		expect(
+			(
+				await post("/api/v2/logs", [
+					{
+						message: "decimal correlation",
+						timestamp: 0,
+						"dd.trace_id": "42",
+						"dd.span_id": "43",
+					},
+					{
+						message: "unlinked numeric",
+						timestamp: 0,
+						dd: { trace_id: 0, span_id: "0000000000000000" },
+					},
+					{
+						message: "unlinked hex",
+						timestamp: 0,
+						dd: { trace_id: "0".repeat(32), span_id: null },
+					},
+				])
+			).status,
+		).toBe(200);
+		const logs = (await client.call("telemetry.read", { signal: "logs" }))
+			.value as LogData[];
+		for (const body of ["unlinked numeric", "unlinked hex"]) {
+			const record = logs.find((item) => item.body === body);
+			expect(record).toMatchObject({ body, timeUnixNano: "0" });
+			expect(record?.traceId).toBeUndefined();
+			expect(record?.spanId).toBeUndefined();
+		}
+		expect(logs).toContainEqual(
+			expect.objectContaining({
+				body: "dd failure",
+				severity: "ERROR",
+				timeUnixNano: "1790000000123000000",
+				traceId: ddTraceId,
+				spanId: "fffffffffffffffd",
+			}),
+		);
+		expect(logs).toContainEqual(
+			expect.objectContaining({
+				body: "decimal correlation",
+				timeUnixNano: "0",
+				traceId: "0000000000000000000000000000002a",
+				spanId: "000000000000002b",
+			}),
+		);
+		expect(
+			await client.call("telemetry.trace.resolve", {
+				traceId: ddTraceId,
+				spanId: "fffffffffffffffd",
+			}),
+		).toMatchObject({ changeId: "datadog-fixture" });
+		expect(
+			await client.call("telemetry.trace.resolve", {
+				traceId: "0000000000000000000000000000002a",
+				spanId: "000000000000002b",
+			}),
+		).toMatchObject({ changeId: "dd-decimal" });
+		const refused = await post("/v0.4/traces", [
+			[
+				{ ...ddRoot, span_id: 44 },
+				{
+					...ddRoot,
+					trace_id: "18446744073709551616",
+					name: "private-rejected-marker",
+				},
+			],
+		]);
+		expect(refused.status).toBe(400);
+		expect(await refused.text()).not.toContain("private-rejected-marker");
+		expect(
+			(
+				await post("/v0.4/traces", [
+					[{ ...ddRoot, span_id: 45 }],
+					{ unexpected: true },
+				])
+			).status,
+		).toBe(400);
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "spans",
+					changeId: "datadog-fixture",
+				})
+			).value,
+		).toHaveLength(2);
+		expect(
+			(
+				await post(
+					"/v0.4/traces",
+					`[[{"trace_id":9e30,"span_id":1,"start":1,"name":"bad","service":"synthetic"}]]`,
+				)
+			).status,
+		).toBe(400);
+		const zipRoot = {
+			traceId: "ABCDEF0123456789",
+			id: "0123456789ABCDEF",
+			name: "zip root",
+			kind: "CLIENT",
+			timestamp: 1790000000000000,
+			duration: 123,
+			localEndpoint: { serviceName: "zip-front" },
+			tags: { "herdr.change.id": "zipkin-fixture" },
+		};
+		const zipChild = {
+			...zipRoot,
+			id: "fedcba9876543210",
+			parentId: zipRoot.id,
+			name: "zip child",
+			kind: "SERVER",
+			duration: 321,
+			localEndpoint: { serviceName: "zip-worker" },
+			tags: { ...zipRoot.tags, error: "zipkin failure" },
+			annotations: [{ timestamp: 1790000000000100, value: "request.error" }],
+		};
+		expect((await post("/api/v2/spans", [zipRoot, zipChild])).status).toBe(200);
+		const zipTraceId = "0000000000000000abcdef0123456789";
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "tree",
+					changeId: "zipkin-fixture",
+				})
+			).value,
+		).toMatchObject([
+			{
+				children: [
+					{
+						span: {
+							traceId: zipTraceId,
+							spanId: "0123456789abcdef",
+							kind: 3,
+							startTimeUnixNano: "1790000000000000000",
+							endTimeUnixNano: "1790000000000123000",
+						},
+						children: [
+							{
+								span: {
+									traceId: zipTraceId,
+									parentSpanId: "0123456789abcdef",
+									kind: 2,
+									endTimeUnixNano: "1790000000000321000",
+									status: { code: 2, message: "zipkin failure" },
+									events: [
+										{
+											name: "request.error",
+											timeUnixNano: "1790000000000100000",
+											attributes: [],
+										},
+									],
+								},
+							},
+						],
+					},
+				],
+			},
+		]);
+		expect(
+			await client.call("telemetry.trace.resolve", {
+				traceId: zipTraceId,
+				spanId: zipChild.id,
+			}),
+		).toMatchObject({ changeId: "zipkin-fixture" });
+		expect(
+			(
+				await post("/api/v2/spans", [
+					{ ...zipRoot, id: "a".repeat(16) },
+					{ ...zipChild, traceId: "bad" },
+				])
+			).status,
+		).toBe(400);
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "spans",
+					changeId: "zipkin-fixture",
+				})
+			).value,
+		).toHaveLength(2);
+		const graph = (await client.call("telemetry.read", { signal: "topology" }))
+			.value;
+		expect(graph).toMatchObject({
+			edges: [
+				{ source: "dd-front", target: "dd-worker", spanCount: 1 },
+				{ source: "zip-front", target: "zip-worker", spanCount: 1 },
+			],
+		});
+	} finally {
 		client.close();
 		await host.stop();
 	}
