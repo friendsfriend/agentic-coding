@@ -634,6 +634,8 @@ export function TelemetryFeature(props: {
 							if (surface() === "traces") {
 								setWorkspace(undefined);
 								setPage(1);
+								setIndex(0);
+								props.notify("All workspaces");
 								break;
 							}
 							return false;

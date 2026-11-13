@@ -1340,3 +1340,33 @@ operator environment functional tests pass.
   synthetic/unit/integration verification only: it does not establish visual
   TUI, real-exporter, real-provider or real-cluster acceptance, and full
   restoration parity stays open and unarchived.
+
+## Shell parity: the v1 location picker (Ctrl+P)
+
+- Restored the v1 destination jump list that v2 lacked entirely: `Ctrl+P` opens
+  a read-only picker over the shell's pages, `j/k`/arrows/`PgUp`/`PgDn`/`g` move,
+  `/` starts a query, printable keys filter, `Enter` jumps and `Esc` or `Ctrl+P`
+  closes. The current destination is marked, and the list windows the selection
+  instead of growing past the modal.
+- One catalog now drives the Home listing, the picker and the page-name lookup
+  (`src/tui/shell/locations.ts`), so the label and description of a destination
+  cannot drift between surfaces — the same single-catalog rule v1 documented.
+  The previous duplicate `pages`/`PAGE_DESCRIPTIONS` tables in the shell are
+  gone; `Object.fromEntries` keeps their lookup shape.
+- Selecting a row calls the shell's own navigation (`go(page, resource)`), so
+  back/forward history, breadcrumbs, focus and the workspace layout behave
+  exactly as a sidebar jump. The picker prepares no prompt text, dispatches no
+  gateway method and writes no configuration; it is fenced like the other local
+  dialogs through the shell's modal guard.
+- `Ctrl+P` was unbound in v2 (`Ctrl+K` opens the command-suggestion palette), so
+  no existing binding moved. The key is advertised in the shared Shell keybind
+  catalog, which is what the footer and help overlay project.
+- Remaining gap, stated rather than implied: v1 also listed *loaded in-memory
+  resources* in this picker (recent traces, metric streams, topology services).
+  Those live inside each feature's own store in v2, so only page destinations are
+  offered here; resource-level entries need a per-feature published catalog and
+  are the follow-up. Verification: unfiltered type-check, zero-diagnostic lint
+  (809 files), official Solid-enabled build and diff whitespace checks pass, and
+  the gateway/tui client suite stays green. The picker was not opened in a real
+  terminal here — visual/runtime acceptance stays user-owned, so full
+  restoration parity remains open and unarchived.

@@ -55,6 +55,12 @@ export const shellKeybinds: Keybind[] = [
 		short: "help",
 	},
 	{
+		key: "ctrl+p",
+		cmd: "shell.locations",
+		action: "Jump to a destination",
+		short: "locations",
+	},
+	{
 		key: "ctrl+k",
 		cmd: "shell.palette",
 		action: "Search command suggestions (prepare only)",

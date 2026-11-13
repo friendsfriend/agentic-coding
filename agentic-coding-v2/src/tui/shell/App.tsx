@@ -124,6 +124,7 @@ import {
 	transcriptViewportKeybinds,
 } from "../ui/keybinds.ts";
 import { type LocalChoice, LocalChoiceContext } from "../ui/LocalChoice.ts";
+import { LocationPicker } from "../ui/LocationPicker.tsx";
 import { MessageDialog } from "../ui/MessageDialog.tsx";
 import { menuKeybinds } from "../ui/menuKeys.ts";
 import { createNotifications, type LocalNotice } from "../ui/notifications.ts";
@@ -131,34 +132,20 @@ import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
+import { PAGE_LOCATIONS } from "./locations.ts";
 import { Navigation, type Page, type View, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
 
-const pages: [Page, string][] = [
-	["home", "Home"],
-	["tasks", "Tasks & reviews"],
-	["environments", "Environments"],
-	["providers", "Providers"],
-	["profiles", "Profiles & models"],
-	["skills", "Skills"],
-	["observability", "Observability"],
-	["schedules", "Schedules"],
-	["wiki", "Wiki"],
-	["settings", "Settings"],
-];
-// One line per destination, shown on Home (v1 described every destination).
-const PAGE_DESCRIPTIONS: Partial<Record<Page, string>> = {
-	home: "Destinations",
-	tasks: "Admitted native tasks, their reviews and evidence",
-	environments: "Run, build and inspect native application environments",
-	providers: "Authenticated source hosts and their repositories",
-	profiles: "Agent profiles and the models they bundle",
-	skills: "Loaded skill instructions and their files",
-	observability: "Traces, metrics, logs and service topology",
-	schedules: "Recurring native skill runs and their occurrences",
-	wiki: "Repository knowledge notes",
-	settings: "Application settings, agent profiles and appearance",
-};
+// One catalog drives the Home listing, the location picker and the page-name
+// lookup, so a destination cannot exist in one surface only (v1 shared its
+// catalog the same way).
+const pages: [Page, string][] = PAGE_LOCATIONS.map(({ page, label }) => [
+	page,
+	label,
+]);
+const PAGE_DESCRIPTIONS: Partial<Record<Page, string>> = Object.fromEntries(
+	PAGE_LOCATIONS.map(({ page, description }) => [page, description]),
+);
 const help = [
 	"Plain input: send to the selected native conversation",
 	"/help · /view tasks|environments|providers|schedules",
@@ -255,6 +242,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[settingsThemeOpen, setSettingsThemeOpen] = createSignal(false),
 		[helpRequested, setHelpOpen] = createSignal(false),
 		[paletteOpen, setPaletteOpen] = createSignal(false),
+		[locationRequested, setLocationOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
 	const [messageDialog, setMessageDialog] = createSignal<LocalNotice | null>(
 		null,
@@ -289,6 +277,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	// higher-priority local dialogs. Actual help rendering uses helpRequested.
 	const helpOpen = () =>
 		helpRequested() ||
+		locationRequested() ||
 		messageDialog() !== null ||
 		quitConfirmation() ||
 		usageWindow() !== null;
@@ -2310,6 +2299,15 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				id: "shell.help",
 				name: "Show keybinding/command help",
 				run: () => queueMicrotask(() => setHelpOpen((value) => !value)),
+			},
+			{
+				id: "shell.locations",
+				name: "Jump to a destination",
+				run: () => {
+					if (settingsEditing() || settingsThemeOpen()) return;
+					remember();
+					setLocationOpen((value) => !value);
+				},
 			},
 			{
 				id: "shell.palette",
@@ -4914,6 +4912,18 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					dismiss={notifications.clear}
 					interactive={() => !helpOpen() && !paletteOpen()}
 				/>
+				<Show
+					when={locationRequested() && !messageDialog() && !quitConfirmation()}
+				>
+					<LocationPicker
+						close={() => setLocationOpen(false)}
+						current={() => ({
+							page: current().page,
+							resource: current().resource,
+						})}
+						open={(entry) => go(entry.page, entry.resource)}
+					/>
+				</Show>
 				<Show when={helpRequested() && !messageDialog() && !quitConfirmation()}>
 					<HelpOverlay
 						close={() => setHelpOpen(false)}
