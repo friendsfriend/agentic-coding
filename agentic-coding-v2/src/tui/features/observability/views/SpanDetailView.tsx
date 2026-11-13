@@ -1,4 +1,5 @@
 import { TextAttributes } from "@opentui/core";
+import { Show } from "solid-js";
 import type { TreeNode } from "../../../../telemetry/contracts.ts";
 import {
 	HighlightedText,
@@ -51,6 +52,14 @@ export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
 					})()}
 				</text>
 			</box>
+			<Show when={node()?.relation}>
+				<box flexShrink={0} paddingLeft={1} paddingRight={1}>
+					<text fg={uiColors.warning} wrapMode="word">
+						Tree edge break: {node()?.relation}. Displayed as a root; original
+						parent {node()?.span.parentSpanId || "(none)"} is retained.
+					</text>
+				</box>
+			</Show>
 			<SearchHeader>
 				<HighlightedText text="Attributes" highlight="secondary" />
 			</SearchHeader>

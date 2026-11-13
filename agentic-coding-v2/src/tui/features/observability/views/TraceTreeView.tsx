@@ -271,7 +271,11 @@ export function TraceTreeView(props: {
 														/>
 													</box>
 													<HighlightedText
-														text={node().span.name}
+														text={
+															node().relation
+																? `${node().span.name} [${node().relation}]`
+																: node().span.name
+														}
 														highlight={selected() ? "highlight" : "secondary"}
 														attributes={selected() ? TextAttributes.BOLD : 0}
 													/>

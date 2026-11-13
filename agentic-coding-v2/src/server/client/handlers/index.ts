@@ -174,6 +174,7 @@ export async function dispatch(
 					"logs",
 					"workspaces",
 					"topology",
+					"tree",
 				].includes(signal)
 			)
 				throw new Refusal("Unknown telemetry signal");

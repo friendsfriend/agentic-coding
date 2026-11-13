@@ -81,6 +81,8 @@ export interface SpanData {
 }
 
 export interface TreeNode {
+	/** A display-only edge break. Original parent IDs are never rewritten. */
+	relation?: "cycle" | "depth-limit";
 	span: SpanData;
 	depth: number;
 	expanded: boolean;

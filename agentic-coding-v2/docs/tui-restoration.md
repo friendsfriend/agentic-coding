@@ -920,3 +920,34 @@ operator environment functional tests pass.
   Solid-enabled build and diff whitespace checks. No real apps or user
   configuration were used.
 - Whole-application visual/runtime parity remains open and unarchived.
+
+## Observability follow-up: native, cycle-safe trace trees
+
+- Moved the copied v1 workflow/phase/category/role grouping into a pure native
+  telemetry projection. The TUI now reads `telemetry.read {signal:"tree",
+  changeId}` (and matching authenticated HTTP tree output) rather than deriving
+  an unrestricted recursive parent graph from raw spans in the shell.
+  Local/demo TraceStore compatibility uses the same grouping implementation.
+- Parent and role-claim identities now include wire trace ID as well as span
+  ID. Latest observations of an exact identity win before grouping, so a
+  correction cannot occupy two roles/phases or duplicate a logical span.
+  Group-node identities include their first member's complete wire identity.
+- Forest construction is iterative. Cycles/self-parenting promote one marked
+  root without changing the stored parentSpanId. Chains beyond 64 levels per
+  segment are promoted into marked segments instead of being dropped. All
+  retained logical spans remain inspectable; normal v1 grouping and expansion
+  defaults stay intact. The tree row/detail visibly explain cycle/depth edge
+  breaks, and pointer selection matches full trace/span identity.
+- Tree reads require an explicit workspace identity and retain existing read
+  and frame budgets. The TUI binds payloads to that identity so a pending read
+  cannot briefly show another selected workspace's old tree. No task/lease
+  authority, source mutation or manual database operation is involved.
+- One authenticated synthetic scenario covers colliding IDs, duplicate
+  corrections, cycles/self-parenting, missing parents, a 200-span chain,
+  role-claim collisions, all 209 logical spans retained from 210 stored
+  observations, unchanged original parents, phase/category/role grouping,
+  matching HTTP/native output and invalid-query connection survival.
+  Twenty-one focused telemetry/gateway tests pass (546 assertions), plus
+  unfiltered type-check, zero-diagnostic lint, official Solid-enabled build
+  and diff whitespace checks. No real apps/configuration were used.
+- Overall visual/runtime parity remains open and unarchived.

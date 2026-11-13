@@ -1243,3 +1243,181 @@ test("native topology scopes parent IDs to their trace, counts calls and replace
 		await host.stop();
 	}
 });
+
+test("native trace trees preserve v1 grouping and all logical spans while breaking cycles and bounded-depth parent chains", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const span = (
+		trace: string,
+		id: number,
+		parent = 0,
+		name = "operation",
+		role = "",
+	) => ({
+		traceId: trace.repeat(32),
+		spanId: id.toString(16).padStart(16, "0"),
+		parentSpanId: parent ? parent.toString(16).padStart(16, "0") : "",
+		name,
+		startTimeUnixNano: "1790000000000000000",
+		endTimeUnixNano: "1790000000100000000",
+		status: { code: 2 },
+		attributes: role
+			? [{ key: "herdr.role", value: { stringValue: role } }]
+			: [],
+	});
+	const post = async (changeId: string, spans: ReturnType<typeof span>[]) => {
+		const response = await fetch(new URL("/v1/traces", host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({
+				resourceSpans: [
+					{
+						resource: {
+							attributes: [
+								{ key: "herdr.change.id", value: { stringValue: changeId } },
+							],
+						},
+						scopeSpans: [{ spans }],
+					},
+				],
+			}),
+		});
+		expect(response.status).toBe(200);
+	};
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		const input = [
+			...Array.from({ length: 200 }, (_, index) => span("a", index + 1, index)),
+			span("b", 1),
+			span("b", 2, 1),
+			span("b", 3),
+			span("c", 1, 2),
+			span("c", 2, 1),
+			span("d", 1, 1),
+			span("e", 1, 999),
+			span("f", 1, 0, "agent.operation", "reader"),
+			span("9", 1),
+		];
+		await post("tree-fixture", input);
+		const corrected = span("b", 3, 3, "corrected");
+		corrected.status.code = 0;
+		await post("tree-fixture", [corrected]);
+		const roots = (
+			await client.call("telemetry.read", {
+				signal: "tree",
+				changeId: "tree-fixture",
+			})
+		).value as import("../src/telemetry/contracts.ts").TreeNode[];
+		const nodes = [...roots];
+		for (let index = 0; index < nodes.length; index++)
+			nodes.push(...nodes[index].children);
+		const actual = nodes.filter(
+			(node) => !node.span.spanId.startsWith("virtual-"),
+		);
+		expect(actual).toHaveLength(209);
+		expect(
+			new Set(
+				actual.map((node) =>
+					JSON.stringify([node.span.traceId, node.span.spanId]),
+				),
+			).size,
+		).toBe(209);
+		expect(Math.max(...nodes.map((node) => node.depth))).toBeLessThanOrEqual(
+			70,
+		);
+		expect(
+			actual.filter((node) => node.relation === "depth-limit"),
+		).toHaveLength(3);
+		expect(actual.filter((node) => node.relation === "cycle")).toHaveLength(3);
+		for (const node of actual)
+			for (const child of node.children)
+				expect(child.span.traceId).toBe(node.span.traceId);
+		const replacement = actual.find(
+			(node) =>
+				node.span.traceId === "b".repeat(32) && node.span.name === "corrected",
+		);
+		expect(replacement).toMatchObject({
+			relation: "cycle",
+			span: { parentSpanId: "0000000000000003", status: { code: 0 } },
+		});
+		expect(
+			actual.find(
+				(node) =>
+					node.span.traceId === "b".repeat(32) &&
+					node.span.spanId === "0000000000000001",
+			)?.children,
+		).toMatchObject([
+			{ span: { traceId: "b".repeat(32), spanId: "0000000000000002" } },
+		]);
+		expect(actual.some((node) => node.span.traceId === "9".repeat(32))).toBe(
+			true,
+		);
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "spans",
+					changeId: "tree-fixture",
+				})
+			).value,
+		).toHaveLength(210);
+		const response = await fetch(
+			new URL("/api/telemetry/tree?changeId=tree-fixture", host.url),
+			{ headers: { authorization: `Bearer ${host.client.token}` } },
+		);
+		expect(await response.json()).toEqual(roots);
+		const phased = [
+			span("8", 1, 0, "runtime.tool", "reader"),
+			span("8", 2, 1, "git.status"),
+			span("8", 3, 0, "runtime.usage"),
+		];
+		phased.forEach((item, index) => {
+			item.attributes.push({
+				key: "herdr.step.id",
+				value: { stringValue: index === 2 ? "phase-two" : "phase-one" },
+			});
+		});
+		await post("phased-fixture", phased);
+		const grouped = (
+			await client.call("telemetry.read", {
+				signal: "tree",
+				changeId: "phased-fixture",
+			})
+		).value as import("../src/telemetry/contracts.ts").TreeNode[];
+		const groups = [...grouped];
+		for (let index = 0; index < groups.length; index++)
+			groups.push(...groups[index].children);
+		const labels = groups.map((node) => node.span.name);
+		for (const label of [
+			"phase-one",
+			"phase-two",
+			"agent",
+			"git operation",
+			"reader",
+		])
+			expect(labels).toContain(label);
+		expect(
+			groups.filter((node) => !node.span.spanId.startsWith("virtual-")),
+		).toHaveLength(3);
+		expect(
+			(
+				await client.call("telemetry.read", {
+					signal: "tree",
+					changeId: "not-retained",
+				})
+			).value,
+		).toEqual([]);
+		await expect(
+			client.call("telemetry.read", { signal: "tree" }),
+		).rejects.toThrow("query");
+		expect(await client.call("state.read", {})).toHaveProperty("sessions");
+		expect(client.status).toBe("connected");
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});

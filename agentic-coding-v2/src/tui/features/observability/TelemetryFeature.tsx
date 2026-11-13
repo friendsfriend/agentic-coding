@@ -11,7 +11,6 @@ import type {
 	LogData,
 	MetricData,
 	ServiceGraph,
-	SpanData,
 	TraceSummaryPage,
 	TreeNode,
 } from "../../../telemetry/contracts.ts";
@@ -59,6 +58,7 @@ export function TelemetryFeature(props: {
 	const [loading, setLoading] = createSignal(false);
 	const [payload, setPayload] = createSignal<{
 		signal: string;
+		identity?: string;
 		value: unknown;
 	}>();
 	const [queries, setQueries] = createSignal<Record<string, string>>({});
@@ -186,17 +186,17 @@ export function TelemetryFeature(props: {
 		const signal = ["topology", "service-detail"].includes(current)
 			? "topology"
 			: ["tree", "span"].includes(current)
-				? "spans"
+				? "tree"
 				: current === "metric-detail"
 					? "metrics"
 					: current === "log-detail"
 						? "logs"
 						: current;
-		if (!["traces", "spans", "metrics", "logs", "topology"].includes(signal))
+		if (!["traces", "tree", "metrics", "logs", "topology"].includes(signal))
 			return;
 		void props.client
 			.call("telemetry.read", {
-				signal: signal as "traces" | "spans" | "metrics" | "logs" | "topology",
+				signal: signal as "traces" | "tree" | "metrics" | "logs" | "topology",
 				...(current === "traces"
 					? {
 							page: currentPage,
@@ -213,6 +213,9 @@ export function TelemetryFeature(props: {
 				setPayload({
 					signal: current === "tree" || current === "span" ? "tree" : signal,
 					value: result.value,
+					...(["tree", "span"].includes(current)
+						? { identity: selectedTrace }
+						: {}),
 				});
 			})
 			.catch((error: unknown) => {
@@ -234,8 +237,6 @@ export function TelemetryFeature(props: {
 			!Array.isArray(response.value)
 		)
 			store.setSummaryPage(response.value as TraceSummaryPage);
-		if (response?.signal === "tree" && Array.isArray(response.value))
-			store.setTraceSpans(response.value as SpanData[]);
 		store.applyFilter(query());
 		store.setStatusFilter(statusFilter());
 		store.setSpanTypeFilter(spanTypeFilter());
@@ -283,7 +284,14 @@ export function TelemetryFeature(props: {
 					choices[`${node.span.traceId}:${node.span.spanId}`] ?? node.expanded,
 				children: clone(node.children),
 			}));
-		return clone(traces().getSpanTree(trace()));
+		const response = payload();
+		return clone(
+			response?.signal === "tree" &&
+				response.identity === trace() &&
+				Array.isArray(response.value)
+				? (response.value as TreeNode[])
+				: [],
+		);
 	});
 	const flat = () => {
 		const entries: TreeNode[] = [];
@@ -824,7 +832,9 @@ export function TelemetryFeature(props: {
 						}
 						if (selected) {
 							const position = flat().findIndex(
-								(node) => node.span.spanId === selected?.span.spanId,
+								(node) =>
+									node.span.traceId === selected?.span.traceId &&
+									node.span.spanId === selected?.span.spanId,
 							);
 							if (position >= 0) setIndex(position);
 						}

@@ -278,7 +278,8 @@ export type Methods = {
 				| "metrics"
 				| "logs"
 				| "workspaces"
-				| "topology";
+				| "topology"
+				| "tree";
 			page?: number;
 			perPage?: number;
 			changeId?: string;

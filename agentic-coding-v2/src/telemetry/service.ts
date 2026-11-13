@@ -19,6 +19,7 @@ import {
 } from "./receivers/otlp-grpc.ts";
 import { serviceGraph } from "./service-graph.ts";
 import { TraceDb } from "./telemetry-db.ts";
+import { buildTraceTree } from "./trace-tree.ts";
 
 // Receiver records are untrusted even when the exporter is authenticated.
 // Reject invalid/overflowing timestamps and non-renderable scalar fields before
@@ -269,17 +270,24 @@ export class Telemetry {
 		const query = url.searchParams;
 		const allowed = url.pathname.endsWith("/traces")
 			? ["page", "perPage", "changeId"]
-			: url.pathname.endsWith("/spans")
-				? ["limit", "changeId"]
-				: url.pathname.endsWith("/metrics") || url.pathname.endsWith("/logs")
-					? ["changeId"]
-					: [];
+			: url.pathname.endsWith("/tree")
+				? ["changeId"]
+				: url.pathname.endsWith("/spans")
+					? ["limit", "changeId"]
+					: url.pathname.endsWith("/metrics") || url.pathname.endsWith("/logs")
+						? ["changeId"]
+						: [];
 		for (const key of query.keys())
 			if (!allowed.includes(key) || query.getAll(key).length !== 1)
 				return Response.json(
 					{ error: "Unknown or repeated telemetry query" },
 					{ status: 400 },
 				);
+		if (url.pathname === "/api/telemetry/tree" && !query.has("changeId"))
+			return Response.json(
+				{ error: "Trace identity required" },
+				{ status: 400 },
+			);
 		if (
 			query.has("changeId") &&
 			(!query.get("changeId") || (query.get("changeId")?.length ?? 0) > 256)
@@ -318,6 +326,11 @@ export class Telemetry {
 				case "/api/telemetry/logs":
 					result = this.db.loadLogs(query.get("changeId") ?? undefined);
 					break;
+				case "/api/telemetry/tree": {
+					const changeId = query.get("changeId") ?? "";
+					result = buildTraceTree(this.db.loadSpans(changeId), changeId);
+					break;
+				}
 				case "/api/telemetry/topology":
 					result = serviceGraph(this.db.graphSpans());
 					break;
