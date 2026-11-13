@@ -1071,3 +1071,45 @@ operator environment functional tests pass.
   previously indexed records were not rewritten or retroactively corrected.
   This is not whole-suite, cloud-intake or visual acceptance. Full restoration
   parity remains open and unarchived.
+
+## Observability follow-up: owned StatsD observation semantics
+
+- Replaced prefix-only StatsD parsing with full-line validation. Numeric c/g/ms/h/d
+  observations, one valid sample rate and one tag list are supported; unknown or
+  duplicate extensions, invalid rates and malformed values refuse a supported-size
+  datagram as a whole. A valid prefix is never committed when a later line fails.
+  Empty datagrams neither create observations nor clear a preceding refusal.
+- Counter deltas are sums and use inverse-sample-rate adjustment, with the rate
+  retained explicitly as provenance. Absolute unsampled gauges remain gauges.
+  Timer/histogram/distribution values remain unaggregated gauge observations,
+  with original kind and sampling rate retained, and timers carry ms units.
+  No fake histogram buckets, population counts or percentile aggregates are
+  invented. The detail description/resource sections expose these semantics.
+- Tags preserve the entire value after the first colon, empty values, standalone
+  tags and literal __proto__ keys without prototype-backed dictionaries. Series
+  grouping uses structured identities including kind, rate and canonical labels
+  rather than delimiter-concatenated names that could collide or mix types.
+- StatsD has no exporter timestamps. Each listener now owns a wall-anchored
+  monotonic observation clock so repeated samples inside/across datagrams do
+  not overwrite one another at the same millisecond coordinate. These are
+  explicitly collector-observed timestamps, not wire timestamps or a claim of
+  nanosecond wall-clock accuracy; the clock state ends with its owned listener.
+- Stateful relative/sampled gauges, sets, packed values and origin extensions
+  remain explicitly unsupported rather than being misrepresented as absolute
+  scalar observations. The controls disclose the supported subset alongside
+  the existing unauthenticated/loopback-only warning. This is not a full StatsD
+  daemon or DogStatsD aggregation implementation.
+- Removed unused unowned startStatsDListener/startPrometheusScraper exports and
+  the unbounded generic Prometheus fetch helper. Only the explicit runtime-owned
+  loopback collectors remain: existing caps, revision fences, redirect/proxy
+  refusals and joined shutdown are unchanged. No new automatic listener, remote
+  target discovery, source identity adoption or native task authority was added.
+- Added one synthetic real-UDP/native-boundary scenario proving repeated samples,
+  counter sampling, raw timer/distribution values, distinct kinds, safe complete
+  labels, per-packet atomicity, sanitized observable refusals and joined stop.
+  The existing dual-collector socket/redirect/size/shutdown scenario still passes.
+- Verification: 25 focused telemetry/gateway tests pass (646 assertions), plus
+  unfiltered type-check, zero-diagnostic lint (806 files), official Solid-enabled
+  build and diff whitespace checks. No real exporters, apps, configuration or
+  previous indexed observations were changed. This is not whole-suite or visual
+  acceptance; full restoration parity remains open and unarchived.

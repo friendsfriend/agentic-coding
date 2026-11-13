@@ -284,6 +284,11 @@ export function TelemetryControls(props: {
 				StatsD is unauthenticated UDP: explicit loopback-only opt-in, not a
 				trusted identity.
 			</text>
+			<text fg={uiColors.textMuted} wrapMode="word">
+				StatsD supports numeric c/g/ms/h/d observations: sampling-adjusted
+				counts, absolute unsampled gauges, and raw timer/distribution values.
+				Sets, relative gauges, packed values and origin extensions are refused.
+			</text>
 			<text>
 				StatsD: {collectors()?.statsd.status ?? "unavailable"}{" "}
 				{collectors()?.statsd.address ?? ""}

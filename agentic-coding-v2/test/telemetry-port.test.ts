@@ -2186,3 +2186,175 @@ test("Datadog v1/v2 metric series preserve decimal timestamps, colon labels and 
 		await host.stop();
 	}
 });
+
+test("owned StatsD preserves repeated observations, count sampling and distribution provenance while refusing whole malformed packets", async () => {
+	const { createSocket } = await import("node:dgram");
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const udp = createSocket("udp4");
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		let states = await client.call("telemetry.collector.read", {});
+		states = await client.call("telemetry.collector.start", {
+			kind: "statsd",
+			revision: states.statsd.revision,
+			port: 0,
+		});
+		const port = Number(new URL(states.statsd.address ?? "").port);
+		const send = (packet: string) =>
+			new Promise<void>((resolve, reject) =>
+				udp.send(packet, port, "127.0.0.1", (error) =>
+					error ? reject(error) : resolve(),
+				),
+			);
+		const read = async () =>
+			(await client.call("telemetry.read", { signal: "metrics" }))
+				.value as MetricData[];
+		const tags =
+			"route:https://example.invalid:8443/path,flag,empty:,__proto__:safe";
+		await send(
+			[
+				`statsd.fixture:3|c|@0.5|#${tags}`,
+				`statsd.fixture:4|c|#${tags}|@0.5`,
+				`statsd.fixture:10|g|#${tags}`,
+				`statsd.fixture:7.5|ms|@0.25|#${tags}`,
+				`statsd.fixture:11|h|#${tags}`,
+				`statsd.fixture:12|d|#${tags}`,
+			].join("\n"),
+		);
+		await eventually(read, (metrics) => metrics.length === 5);
+		const metrics = await read();
+		const counter = metrics.find((metric) => metric.type === "sum");
+		expect(counter).toMatchObject({
+			name: "statsd.fixture",
+			serviceName: "statsd-loopback",
+			type: "sum",
+			unit: "",
+		});
+		expect(counter?.dataPoints.map((point) => point.value)).toEqual([6, 8]);
+		expect(
+			new Set(counter?.dataPoints.map((point) => point.timeUnixNano)).size,
+		).toBe(2);
+		expect(counter?.resource.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "statsd.type", value: "c" },
+				{ key: "statsd.sample_rate", value: "0.5" },
+				{ key: "statsd.timestamp.source", value: "collector-observed" },
+			]),
+		);
+		expect(counter?.dataPoints[0]?.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "route", value: "https://example.invalid:8443/path" },
+				{ key: "flag", value: "true" },
+				{ key: "empty", value: "" },
+				{ key: "__proto__", value: "safe" },
+			]),
+		);
+		const timer = metrics.find((metric) => metric.unit === "ms");
+		expect(timer).toMatchObject({
+			type: "gauge",
+			dataPoints: [{ value: 7.5 }],
+		});
+		expect(timer?.resource.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "statsd.type", value: "ms" },
+				{ key: "statsd.sample_rate", value: "0.25" },
+			]),
+		);
+		expect(
+			metrics
+				.filter((metric) => metric.type === "gauge")
+				.map((metric) => metric.dataPoints[0]?.value)
+				.sort((a, b) => (a ?? 0) - (b ?? 0)),
+		).toEqual([7.5, 10, 11, 12]);
+		expect(
+			metrics.every((metric) =>
+				metric.dataPoints.every((point) => point.bucketCounts === undefined),
+			),
+		).toBe(true);
+		expect(
+			new Set(
+				metrics.map(
+					(metric) =>
+						metric.resource.attributes.find(
+							(attribute) => attribute.key === "statsd.type",
+						)?.value,
+				),
+			).size,
+		).toBe(5);
+		await send(`statsd.fixture:1|c|@0.5|#${tags}`);
+		await eventually(
+			read,
+			(items) =>
+				items.find((metric) => metric.type === "sum")?.dataPoints.length === 3,
+		);
+		const repeated = (await read()).find((metric) => metric.type === "sum");
+		expect(repeated?.dataPoints.map((point) => point.value)).toEqual([6, 8, 2]);
+		expect(
+			new Set(repeated?.dataPoints.map((point) => point.timeUnixNano)).size,
+		).toBe(3);
+		const malformed = [
+			"bad:1|c|@0",
+			"bad:1|c|@2",
+			"bad:1|c|@0.5|@0.25",
+			"bad:1|c|private-rejected-marker",
+			"bad:1|g|@0.5",
+			"bad:+1|g",
+			"bad:-1|g",
+			"bad:member|s",
+			"bad:1:2|ms",
+			"bad:1e308|c|@1e-308",
+		];
+		for (const [index, line] of malformed.entries()) {
+			// A processed valid marker clears the preceding refusal before this send.
+			await send(`statsd.barrier:${index}|g`);
+			await eventually(
+				read,
+				(items) =>
+					items
+						.find((metric) => metric.name === "statsd.barrier")
+						?.dataPoints.at(-1)?.value === index,
+			);
+			expect(
+				(await client.call("telemetry.collector.read", {})).statsd.lastError,
+			).toBeNull();
+			await send(`statsd.must_not_exist:9|c\n${line}`);
+			await eventually(
+				async () =>
+					(await client.call("telemetry.collector.read", {})).statsd.lastError,
+				(error) => Boolean(error),
+			);
+			expect(
+				(await client.call("telemetry.collector.read", {})).statsd.lastError,
+			).toBe("Invalid StatsD datagram refused");
+		}
+		const after = await read();
+		expect(
+			after.some(
+				(metric) =>
+					metric.name === "statsd.must_not_exist" || metric.name === "bad",
+			),
+		).toBe(false);
+		expect(
+			after
+				.find((metric) => metric.type === "sum")
+				?.dataPoints.map((point) => point.value),
+		).toEqual([6, 8, 2]);
+		expect(
+			after.find((metric) => metric.name === "statsd.barrier")?.dataPoints,
+		).toHaveLength(malformed.length);
+		const stopped = await client.call("telemetry.collector.stop", {
+			kind: "statsd",
+			revision: states.statsd.revision,
+		});
+		expect(stopped.statsd).toMatchObject({ status: "stopped", address: null });
+	} finally {
+		try {
+			udp.close();
+		} catch {}
+		client.close();
+		await host.stop();
+	}
+});

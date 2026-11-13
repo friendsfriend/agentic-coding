@@ -89,6 +89,16 @@ export class MetricCollectors {
 	private async startStatsD(port: number): Promise<Owned> {
 		const socket = createSocket("udp4");
 		const state = this.states.statsd;
+		// StatsD has no wire timestamps. Anchor a monotonic observation clock
+		// to wall time, owned by this listener, without millisecond collisions.
+		const epoch = BigInt(Date.now()) * 1_000_000n,
+			origin = process.hrtime.bigint();
+		let last = epoch;
+		const observedAt = () => {
+			const now = epoch + process.hrtime.bigint() - origin;
+			last = now > last ? now : last + 1n;
+			return last.toString();
+		};
 		let stopped = false,
 			windowStart = 0,
 			received = 0;
@@ -109,7 +119,12 @@ export class MetricCollectors {
 			try {
 				const lines = data.toString("utf8").split(/\r?\n/);
 				if (lines.length > 128) return;
-				const metrics = normalizeStatsDMetrics(lines, "statsd-loopback");
+				const metrics = normalizeStatsDMetrics(
+					lines,
+					"statsd-loopback",
+					observedAt,
+				);
+				if (!metrics.length) return;
 				this.ingest(metrics);
 				state.lastError = null;
 			} catch {

@@ -1,10 +1,5 @@
 import type { MetricData, MetricDataPoint } from "../contracts.ts";
 
-export interface PromTarget {
-	host: string;
-	port: number;
-}
-
 /**
  * Parse Prometheus text exposition format into MetricData objects.
  * Supports gauge, counter, histogram, and summary.
@@ -114,17 +109,4 @@ export function parsePrometheusText(
 			serviceName: source,
 		};
 	});
-}
-
-/**
- * Scrape a Prometheus endpoint and parse metrics.
- */
-export async function scrapePrometheus(
-	target: PromTarget,
-): Promise<MetricData[]> {
-	const url = `http://${target.host}:${target.port}/metrics`;
-	const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-	if (!res.ok) throw new Error(`scrape failed: ${res.status}`);
-	const text = await res.text();
-	return parsePrometheusText(text, `${target.host}:${target.port}`);
 }

@@ -6,8 +6,6 @@ import {
 } from "./datadog.ts";
 import { decodeDatadogSeries } from "./datadog-series.ts";
 import { decodeOtlpLogs, decodeOtlpMetrics, decodeOtlpTraces } from "./otlp.ts";
-import { scrapePrometheus } from "./prometheus.ts";
-import { normalizeStatsDMetrics } from "./statsd.ts";
 import { normalizeZipkinSpans } from "./zipkin.ts";
 
 export interface SignalRouter {
@@ -219,69 +217,4 @@ async function handleDatadogLogs(
 	} catch {
 		return errorResponse(400, "Invalid telemetry payload");
 	}
-}
-
-// ---- Prometheus scrape (timer-based, not HTTP-triggered) ----
-
-export function startPrometheusScraper(
-	targets: Array<{ host: string; port: number }>,
-	intervalMs: number,
-	router: SignalRouter,
-): () => void {
-	let running = true;
-	async function scrape() {
-		if (!running) return;
-		for (const target of targets) {
-			try {
-				const metrics = await scrapePrometheus(target);
-				router.pushMetrics(metrics);
-			} catch {
-				/* log and retry */
-			}
-		}
-	}
-	scrape(); // immediate first scrape
-	const timer = setInterval(scrape, intervalMs);
-	return () => {
-		running = false;
-		clearInterval(timer);
-	};
-}
-
-// ---- StatsD UDP listener (start/stop) ----
-
-export function startStatsDListener(
-	port: number,
-	source: string,
-	router: SignalRouter,
-): { stop: () => void } {
-	// Bun UDP listener
-	let udp: { close(): void } | undefined;
-	Bun.udpSocket({
-		hostname: "0.0.0.0",
-		port,
-		socket: {
-			data: (_socket, buffer) => {
-				const lines = new TextDecoder()
-					.decode(buffer)
-					.split("\n")
-					.filter((line) => line.trim());
-				const metrics = normalizeStatsDMetrics(lines, source);
-				if (metrics.length) router.pushMetrics(metrics);
-			},
-		},
-	})
-		.then((socket) => {
-			udp = socket;
-		})
-		.catch((error) =>
-			console.warn(`StatsD listener unavailable: ${error.message}`),
-		);
-	return {
-		stop: () => {
-			try {
-				udp?.close();
-			} catch {}
-		},
-	};
 }
