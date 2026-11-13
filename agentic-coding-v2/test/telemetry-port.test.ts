@@ -332,7 +332,12 @@ test("native telemetry reads retain multi-signal data, publish changes and refus
 							resource,
 							scopeLogs: [
 								{
-									logRecords: [{ body: { stringValue: "x".repeat(910_000) } }],
+									logRecords: [
+										{
+											timeUnixNano: "1790000000000000000",
+											body: { stringValue: "x".repeat(910_000) },
+										},
+									],
 								},
 							],
 						},
@@ -3076,6 +3081,238 @@ test("OTLP JSON metrics keep ProtoJSON special values, exact integers and unknow
 		await host.stop();
 		await app.close();
 		await host.stop();
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});
+
+test("OTLP log records keep source severity, structured bodies and validated correlation without inventing levels", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const resource = {
+		attributes: [
+			{ key: "service.name", value: { stringValue: "log-service" } },
+		],
+	};
+	const nanos = "1790000000000000000";
+	const traceId = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+	const payload = (records: unknown[]) => ({
+		resourceLogs: [
+			{
+				resource,
+				scopeLogs: [{ scope: { name: "probe" }, logRecords: records }],
+			},
+		],
+	});
+	const post = (value: unknown) =>
+		fetch(new URL("/v1/logs", host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(value),
+		});
+	const read = async () =>
+		(await client.call("telemetry.read", { signal: "logs" }))
+			.value as LogData[];
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		expect(
+			(
+				await post(
+					payload([
+						{
+							timeUnixNano: nanos,
+							severityText: "WARN",
+							body: { stringValue: "text body" },
+						},
+						{
+							timeUnixNano: nanos,
+							severityNumber: 10,
+							body: { stringValue: "numeric level" },
+						},
+						{
+							timeUnixNano: nanos,
+							severityNumber: "SEVERITY_NUMBER_FATAL2",
+							body: { stringValue: "named level" },
+						},
+						{ timeUnixNano: nanos, body: { stringValue: "no level" } },
+						{
+							timeUnixNano: nanos,
+							severityText: "ERROR",
+							severityNumber: 1,
+							body: { stringValue: "text wins" },
+						},
+						{
+							observedTimeUnixNano: nanos,
+							severityText: "INFO",
+							body: { boolValue: true },
+						},
+						{
+							timeUnixNano: nanos,
+							severityText: "INFO",
+							body: { intValue: "1820000000000000123" },
+						},
+						{
+							timeUnixNano: nanos,
+							severityText: "INFO",
+							body: { doubleValue: "-Infinity" },
+						},
+						{
+							timeUnixNano: nanos,
+							severityText: "INFO",
+							body: {
+								arrayValue: {
+									values: [
+										{ stringValue: "a" },
+										{ intValue: "2" },
+										{ boolValue: false },
+									],
+								},
+							},
+						},
+						{
+							timeUnixNano: nanos,
+							severityText: "INFO",
+							body: {
+								kvlistValue: {
+									values: [
+										{ key: "k", value: { stringValue: "v" } },
+										{ key: "n", value: { intValue: "3" } },
+									],
+								},
+							},
+						},
+						{
+							timeUnixNano: nanos,
+							severityText: "INFO",
+							body: { bytesValue: "AAEC" },
+							traceId: traceId.toUpperCase(),
+							spanId: "00112233445566AA",
+						},
+						{
+							timeUnixNano: nanos,
+							severityText: "INFO",
+							traceId: "0".repeat(32),
+							spanId: "0".repeat(16),
+							body: { stringValue: "unset correlation" },
+						},
+						{
+							timeUnixNano: nanos,
+							severityText: "INFO",
+							traceId: "",
+							spanId: "",
+							body: { stringValue: "empty correlation" },
+						},
+					]),
+				)
+			).status,
+		).toBe(200);
+		await eventually(read, (logs) => logs.length === 13);
+		const logs = await read();
+		const byBody = new Map(logs.map((log) => [log.body, log.severity]));
+		expect([...byBody.keys()].sort()).toEqual([
+			"-Infinity",
+			"1820000000000000123",
+			"AAEC",
+			'["a","2",false]',
+			"empty correlation",
+			"named level",
+			"no level",
+			"numeric level",
+			"text body",
+			"text wins",
+			"true",
+			"unset correlation",
+			'{"k":"v","n":"3"}',
+		]);
+		expect(byBody.get("text body")).toBe("WARN");
+		expect(byBody.get("numeric level")).toBe("INFO2");
+		expect(byBody.get("named level")).toBe("FATAL2");
+		expect(byBody.get("no level")).toBe("");
+		expect(byBody.get("text wins")).toBe("ERROR");
+		const correlated = logs.find((log) => log.body === "AAEC");
+		expect(correlated).toMatchObject({ traceId, spanId: "00112233445566aa" });
+		expect(
+			logs.find((log) => log.body === "unset correlation")?.traceId,
+		).toBeUndefined();
+		expect(
+			logs.find((log) => log.body === "unset correlation")?.spanId,
+		).toBeUndefined();
+		expect(
+			logs.find((log) => log.body === "empty correlation")?.traceId,
+		).toBeUndefined();
+		const observed = logs.find((log) => log.body === "true");
+		expect(observed?.timeUnixNano).toBe(nanos);
+		const revision = client.state?.telemetryRevision ?? 0;
+		const invalid = [
+			{ severityText: "INFO", body: { stringValue: "no time" } },
+			{
+				timeUnixNano: "-5",
+				severityText: "INFO",
+				body: { stringValue: "bad time" },
+			},
+			{
+				timeUnixNano: nanos,
+				severityText: "INFO",
+				body: { stringValue: "bad severity" },
+				severityNumber: 99,
+			},
+			{
+				timeUnixNano: nanos,
+				body: { stringValue: "bad trace" },
+				traceId: "abc",
+			},
+			{
+				timeUnixNano: nanos,
+				body: { stringValue: "non hex" },
+				traceId: "z".repeat(32),
+			},
+			{
+				timeUnixNano: nanos,
+				body: { stringValue: "bad span" },
+				spanId: "0011",
+			},
+			{
+				timeUnixNano: nanos,
+				body: { unknownValue: {} },
+			},
+			{
+				timeUnixNano: nanos,
+				body: { arrayValue: { values: "no" } },
+			},
+			{
+				timeUnixNano: nanos,
+				body: { kvlistValue: { values: [{ value: { stringValue: "x" } }] } },
+			},
+			{
+				timeUnixNano: nanos,
+				body: { intValue: "1.5" },
+			},
+		];
+		for (const record of invalid) {
+			const response = await post(
+				payload([
+					{
+						timeUnixNano: nanos,
+						severityText: "INFO",
+						body: { stringValue: "valid first" },
+					},
+					record,
+				]),
+			);
+			expect(response.status).toBe(400);
+			expect(await response.text()).not.toContain("valid first");
+			expect(await read()).toEqual(logs);
+		}
+		expect(client.state?.telemetryRevision ?? 0).toBe(revision);
+		expect(
+			await client.call("telemetry.trace.resolve", { traceId }),
+		).toBeNull();
 	} finally {
 		client.close();
 		await host.stop();

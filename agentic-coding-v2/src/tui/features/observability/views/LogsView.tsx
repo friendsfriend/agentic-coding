@@ -59,7 +59,7 @@ export function LogsView(props: {
 									fg={severityColor(log.severity)}
 									attributes={TextAttributes.BOLD}
 								>
-									{log.severity.padEnd(5)}
+									{(log.severity || "—").padEnd(5)}
 								</text>
 							</box>
 							<box width={20} flexShrink={0}>

@@ -26,7 +26,7 @@ export function LogDetailView(props: {
 		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
 			<box height={1} flexShrink={0} paddingLeft={1}>
 				<text fg={uiColors.textMuted}>
-					{log()?.severity ?? "UNKNOWN"} · {log()?.serviceName} ·{" "}
+					{log()?.severity || "UNSPECIFIED"} · {log()?.serviceName} ·{" "}
 					{log()?.timeUnixNano
 						? new Date(
 								Number(BigInt(log()?.timeUnixNano) / 1_000_000n),

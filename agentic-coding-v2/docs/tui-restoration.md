@@ -1237,3 +1237,45 @@ operator environment functional tests pass.
   exporter, application, credential, configuration or old indexed record was
   touched; whole-suite, real-exporter and visual/runtime acceptance remain
   outstanding, so full restoration parity stays open and unarchived.
+
+## Observability follow-up: truthful OTLP log records
+
+- An absent OTLP severity is no longer reported as `INFO`. `severityText` wins
+  when it has content; otherwise the OTel `severityNumber` (numeric or its
+  ProtoJSON enum name) maps to that number's own name, so 10 is shown as
+  `INFO2` rather than rounded to `INFO`. A number outside the OTel range is
+  refused even when a text is present, because the record contradicts itself.
+  This is a deliberate truthfulness divergence from v1, which displayed every
+  unset severity as `INFO`: the log list renders `—` and the detail header
+  `UNSPECIFIED`, while the stored record keeps the empty severity.
+- The log severity filter treats an unspecified level as unknown rather than as
+  the least severe one. A minimum-severity filter narrows only records whose
+  source stated a level, so unknown records are never silently hidden.
+- Log bodies decode the OTLP AnyValue instead of dumping the raw wrapper: string,
+  bool, exact int64 (the source's own decimal, never rounded through a double),
+  double (a special value keeps the token the source wrote), bytes as its base64
+  payload, and bounded recursive array/kvlist structures as JSON. An unknown or
+  malformed AnyValue, a non-integer `intValue`, a non-list array/list value, or
+  a list entry without a key refuses the payload rather than printing noise.
+- Log correlation ids are used exactly or not at all: 32/16 lowercase hex, an
+  empty string and the protocol's all-zero "unset" id become absent correlation,
+  and any other shape refuses the payload so a query can never match a trace the
+  record never named.
+- `timeUnixNano` is validated and falls back only to the record's own
+  `observedTimeUnixNano`. A record with neither is refused: it would otherwise
+  sort at the epoch and be pruned as ancient, which silently loses the
+  observation instead of reporting that it cannot be placed in time.
+- Added one synthetic authenticated OTLP JSON/native scenario covering text,
+  numeric and named severities, an unset severity, text-over-number precedence,
+  observed-time fallback, scalar/structured bodies, exact int64 text, special
+  double text, correlation normalization and unset ids, plus ten malformed
+  records refused atomically with no partial write and no revision change. The
+  oversized-body case of the earlier multi-signal test now carries a timestamp.
+- Remaining gaps: OTLP span/log attributes still stringify non-scalar
+  `AnyValue`s, and OTLP exponential histograms/summaries/exemplars remain
+  unsupported. Verification: 29 focused telemetry/gateway tests pass (792
+  assertions), unfiltered type-check, zero-diagnostic lint (807 files), official
+  Solid-enabled build and diff whitespace checks. No real exporter, application,
+  credential, configuration or old indexed record was touched; whole-suite,
+  real-exporter and visual/runtime acceptance remain outstanding, so full
+  restoration parity stays open and unarchived.

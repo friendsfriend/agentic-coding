@@ -139,7 +139,10 @@ export class LogStore {
 		const min = minSeverity ? (severityOrder[minSeverity] ?? 0) : 0;
 		this.filtered = this.logs
 			.filter((log) => {
-				if (min > 0 && (severityOrder[log.severity] ?? 0) < min) return false;
+				// A record whose source reported no severity is unknown, not the least
+				// severe level: a minimum filter never hides it silently.
+				const order = severityOrder[log.severity];
+				if (min > 0 && order !== undefined && order < min) return false;
 				if (!q) return true;
 				return (
 					log.body.toLowerCase().includes(q) ||

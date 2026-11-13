@@ -377,6 +377,123 @@ function decodeOtlpMetrics(payload: any): MetricData[] {
 
 // ---- Logs ----
 
+/** The OTel severity number names, index 0 being "SEVERITY_NUMBER_UNSPECIFIED".
+ * A numeric severity is shown by its own OTel name ("INFO2" for 10), so nothing
+ * is rounded to a neighbouring level it does not have. */
+const severityNames = [
+	"",
+	"TRACE",
+	"TRACE2",
+	"TRACE3",
+	"TRACE4",
+	"DEBUG",
+	"DEBUG2",
+	"DEBUG3",
+	"DEBUG4",
+	"INFO",
+	"INFO2",
+	"INFO3",
+	"INFO4",
+	"WARN",
+	"WARN2",
+	"WARN3",
+	"WARN4",
+	"ERROR",
+	"ERROR2",
+	"ERROR3",
+	"ERROR4",
+	"FATAL",
+	"FATAL2",
+	"FATAL3",
+	"FATAL4",
+];
+
+/** ProtoJSON enums arrive as their name or their number; an absent or
+ * unspecified severity stays absent instead of becoming a default level. */
+function severity(log: { severityText?: unknown; severityNumber?: unknown }) {
+	const raw = log.severityNumber;
+	let index: number | undefined;
+	if (raw !== undefined && raw !== null) {
+		index =
+			typeof raw === "number"
+				? raw
+				: typeof raw === "string"
+					? raw.startsWith("SEVERITY_NUMBER_")
+						? severityNames.indexOf(raw.slice("SEVERITY_NUMBER_".length))
+						: Number(raw)
+					: Number.NaN;
+		if (!Number.isInteger(index) || index < 0 || index >= severityNames.length)
+			throw new Error("Invalid OTLP severity number");
+	}
+	if (typeof log.severityText === "string" && log.severityText.trim())
+		return log.severityText;
+	return index === undefined ? "" : (severityNames[index] ?? "");
+}
+
+const anyValueDepth = 8;
+
+/** One OTLP AnyValue as text: the scalar itself, or a JSON rendering of its
+ * structure. An int64 keeps the exact decimal the source reported, and an
+ * unknown AnyValue shape is refused rather than stringified into noise. */
+function anyValueText(value: unknown, depth = 0): unknown {
+	if (value === undefined || value === null) return "";
+	if (typeof value !== "object") throw new Error("Invalid OTLP AnyValue");
+	if (depth > anyValueDepth) throw new Error("Invalid OTLP AnyValue depth");
+	const any = value as Record<string, unknown>;
+	if (typeof any.stringValue === "string") return any.stringValue;
+	if (typeof any.boolValue === "boolean") return any.boolValue;
+	if (any.intValue !== undefined) {
+		if (typeof any.intValue === "number" && Number.isSafeInteger(any.intValue))
+			return any.intValue;
+		if (typeof any.intValue === "string" && /^-?\d+$/.test(any.intValue))
+			return any.intValue;
+		throw new Error("Invalid OTLP AnyValue integer");
+	}
+	if (any.doubleValue !== undefined) {
+		const double = protoDouble(any.doubleValue);
+		// A special value keeps the token the source actually wrote.
+		return double.value ?? String(any.doubleValue);
+	}
+	if (typeof any.bytesValue === "string") return any.bytesValue;
+	if (any.arrayValue !== undefined) {
+		const items = (any.arrayValue as { values?: unknown }).values ?? [];
+		if (!Array.isArray(items)) throw new Error("Invalid OTLP AnyValue array");
+		return items.map((item: unknown) => anyValueText(item, depth + 1));
+	}
+	if (any.kvlistValue !== undefined) {
+		const items = (any.kvlistValue as { values?: unknown }).values ?? [];
+		if (!Array.isArray(items)) throw new Error("Invalid OTLP AnyValue list");
+		const entries: Record<string, unknown> = Object.create(null);
+		for (const item of items) {
+			const entry = item as { key?: unknown; value?: unknown };
+			if (typeof entry?.key !== "string")
+				throw new Error("Invalid OTLP AnyValue list entry");
+			entries[entry.key] = anyValueText(entry.value, depth + 1);
+		}
+		return entries;
+	}
+	throw new Error("Unsupported OTLP AnyValue");
+}
+
+function logBody(value: unknown): string {
+	const text = anyValueText(value);
+	return typeof text === "string" ? text : JSON.stringify(text);
+}
+
+/** A correlation id is used as-is or not at all: 32/16 lowercase hex, and an
+ * all-zero id is the protocol's "unset" rather than a trace a query can match. */
+function correlation(value: unknown, size: number): string | undefined {
+	if (value === undefined || value === null || value === "") return undefined;
+	if (
+		typeof value !== "string" ||
+		value.length !== size ||
+		!/^[0-9a-f]+$/i.test(value)
+	)
+		throw new Error("Invalid OTLP correlation id");
+	const lower = value.toLowerCase();
+	return /^0+$/.test(lower) ? undefined : lower;
+}
+
 export // biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, validated field-by-field
 function decodeOtlpLogs(payload: any): LogData[] {
 	const logs: LogData[] = [];
@@ -386,21 +503,22 @@ function decodeOtlpLogs(payload: any): LogData[] {
 			resAttrs.find((a) => a.key === "service.name")?.value ?? "unknown";
 		for (const scope of resource.scopeLogs ?? []) {
 			for (const log of scope.logRecords ?? []) {
+				// A record the source could not place in time would sort at the epoch and
+				// be pruned as ancient, so its own observed time is the only fallback.
+				const time = nanos(log.timeUnixNano ?? log.observedTimeUnixNano);
+				if (time === undefined) throw new Error("Invalid OTLP log time");
 				logs.push({
 					resource: { attributes: resAttrs },
 					scope: {
 						name: scope.scope?.name ?? "",
 						version: scope.scope?.version ?? "",
 					},
-					timeUnixNano: log.timeUnixNano ?? "0",
-					severity: log.severityText ?? "INFO",
-					body:
-						typeof log.body?.stringValue === "string"
-							? log.body.stringValue
-							: JSON.stringify(log.body ?? ""),
+					timeUnixNano: time,
+					severity: severity(log),
+					body: logBody(log.body),
 					attributes: strAttrs(log.attributes ?? []),
-					traceId: log.traceId ? String(log.traceId).toLowerCase() : undefined,
-					spanId: log.spanId ? String(log.spanId).toLowerCase() : undefined,
+					traceId: correlation(log.traceId, 32),
+					spanId: correlation(log.spanId, 16),
 					serviceName,
 				});
 			}
