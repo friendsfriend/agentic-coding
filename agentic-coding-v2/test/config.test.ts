@@ -40,6 +40,7 @@ test("standalone application embeds system skills and discovers user skills only
 	expect(config.skills.map((skill) => skill.id).sort()).toEqual([
 		"code",
 		"research",
+		"wiki-comment",
 	]);
 	const standalone = path.join(root, "standalone");
 	const build = await Bun.build({

@@ -1316,3 +1316,27 @@ operator environment functional tests pass.
   old indexed record was touched; whole-suite, real-exporter and visual/runtime
   acceptance remain outstanding, so full restoration parity stays open and
   unarchived.
+
+## Verification baseline: whole suite green again
+
+- Ran the complete suite unfiltered (113 files, 656 tests, 5800 assertions,
+  ~504 s) and fixed the three stale expectations it exposed. No product source
+  changed in this slice: the code was already right and the tests had drifted.
+- `test/config.test.ts` still expected only the `code`/`research` system skills;
+  the `wiki-comment` read-only system skill has been part of config loading since
+  the wiki restoration, so the expectation now lists it.
+- `test/cli.test.ts` spawned the disposable host with piped stdout. The CLI
+  defaults to the OpenTUI client and refuses to start it without an interactive
+  terminal, so the host now starts with its documented `--headless` mode, which
+  is what a scripted, non-TTY boot means.
+- `test/providers-extended.test.ts` stubbed three upstream writes with the wrong
+  verb and lacked the authenticated-user read: GitLab issue updates and
+  discussion resolution are `PUT`, GitHub review dismissal is `PUT`, and
+  GitHub unapproval verifies the configured user through `GET /user`. The stub
+  now answers those exact requests (an unstubbed verb stayed a visible 500
+  rather than being silently accepted).
+- Result: 656 pass, 0 fail, unfiltered type-check, zero-diagnostic lint (807
+  files), official Solid-enabled build and diff whitespace checks. This is
+  synthetic/unit/integration verification only: it does not establish visual
+  TUI, real-exporter, real-provider or real-cluster acceptance, and full
+  restoration parity stays open and unarchived.

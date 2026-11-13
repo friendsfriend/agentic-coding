@@ -46,7 +46,7 @@ const stub = Bun.serve({
 		if (path === "/repos/o/r/pulls/7/reviews")
 			return json([{ id: 21, state: "APPROVED", user: { login: "u" } }]);
 		if (
-			request.method === "POST" &&
+			request.method === "PUT" &&
 			path === "/repos/o/r/pulls/7/reviews/21/dismissals"
 		)
 			return json({ id: 21, state: "DISMISSED" });
@@ -76,10 +76,18 @@ const stub = Bun.serve({
 		)
 			return json({ id: 5, body: "noted" });
 		if (
-			request.method === "POST" &&
+			request.method === "PUT" &&
 			path === "/projects/o/r/merge_requests/7/discussions/d1"
 		)
 			return json({ id: "d1", resolved: true });
+		if (request.method === "PUT" && path === "/projects/o/r/issues/3")
+			return json({ id: 3, labels: ["bug"], assignees: [] });
+		if (path === "/user") return json({ login: "u" });
+		if (
+			request.method === "POST" &&
+			path === "/projects/o/r/merge_requests/7/unapprove"
+		)
+			return json({ id: 7, title: "unapprove" });
 		if (request.method === "POST" && path === "/projects/o/r/issues/3")
 			return json({ id: 3, labels: ["bug"], assignees: [] });
 		if (path === "/projects/o/r/jobs/5/trace")

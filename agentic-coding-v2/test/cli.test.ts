@@ -44,6 +44,8 @@ test("isolated CLI boots with separate config/state, authenticates its API, excl
 				stateDir,
 				"--port",
 				"0",
+				// Piped stdout is not a terminal: the disposable host runs headless.
+				"--headless",
 			],
 			{
 				cwd: root,
