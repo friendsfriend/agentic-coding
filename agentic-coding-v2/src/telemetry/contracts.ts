@@ -33,6 +33,16 @@ export interface LogData {
 	serviceName: string;
 }
 
+export interface ServiceEdge {
+	source: string;
+	target: string;
+	spanCount: number;
+}
+export interface ServiceGraph {
+	services: ServiceNode[];
+	edges: ServiceEdge[];
+}
+
 export interface ServiceNode {
 	id: string;
 	parentIds: string[];

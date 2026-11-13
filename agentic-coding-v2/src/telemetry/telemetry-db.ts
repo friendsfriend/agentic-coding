@@ -590,7 +590,7 @@ export class TraceDb {
 	recentSpans(limit = RECENT_SPAN_LIMIT): SpanData[] {
 		const rows = this.db
 			.query(
-				`SELECT span FROM traces WHERE start_nanos IS NOT NULL ORDER BY start_nanos DESC LIMIT $limit`,
+				`SELECT span FROM traces WHERE start_nanos IS NOT NULL ORDER BY start_nanos DESC, id DESC LIMIT $limit`,
 			)
 			.all({
 				$limit: Math.max(1, Math.min(limit, MAX_TELEMETRY_SPANS)),
@@ -598,6 +598,16 @@ export class TraceDb {
 		return rows.reverse().map((row) => JSON.parse(row.span) as SpanData);
 	}
 
+	/** Bounded ingestion-order graph observations. Later corrections of a wire
+	 * identity must win even if their event timestamps changed. */
+	graphSpans(): SpanData[] {
+		const rows = this.db
+			.query(
+				`SELECT span FROM traces ORDER BY id DESC LIMIT ${RECENT_SPAN_LIMIT}`,
+			)
+			.all() as Array<{ span: string }>;
+		return rows.reverse().map((row) => JSON.parse(row.span) as SpanData);
+	}
 	/** Paged trace-list read (the `TelemetryDb` surface). */
 	async fetchTracePage(options: {
 		page: number;

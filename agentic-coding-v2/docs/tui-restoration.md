@@ -894,3 +894,29 @@ operator environment functional tests pass.
   type-check, zero-diagnostic lint, official Solid-enabled build and diff
   whitespace checks. No real apps or user configuration were used.
 - Overall visual/runtime parity remains open and unarchived.
+
+## Observability follow-up: trace-scoped native topology
+
+- Audited the copied topology model: its parent lookup used span ID alone,
+  although a span ID is unique only within its wire trace. Two unrelated
+  traces reusing an ID could create false cross-service dependencies.
+- Added a shared, native-owned service-graph projection and authenticated
+  `telemetry.read {signal:"topology"}` / HTTP topology read. Parent correlation
+  now requires the same trace ID, missing parents stay unlinked, and actual
+  cross-service calls contribute to edge counts instead of a fixed count of
+  one. Same-service spans contribute statistics without a self-edge.
+- Repeated/corrected observations of the same wire trace/span identity count
+  once; latest ingestion wins, including changed event timestamps. The graph
+  explicitly uses the latest 3000 ingested observations, a bounded window, not
+  an unbounded whole-history query. Raw span reads remain available unchanged.
+- The original TUI topology layout/interaction store now consumes that same
+  projection for its graph/list/service details. Pure service cycles remain
+  visible. No new renderer, environment run or task/lease authority was added.
+- One synthetic authenticated-boundary scenario covers reused span IDs across
+  traces, repeated calls, corrected status/duration and event time, missing
+  parents, cycles, matching HTTP/native graph output, invalid queries and
+  connection survival. Twenty focused telemetry/gateway tests pass (325
+  assertions), plus unfiltered type-check, zero-diagnostic lint, official
+  Solid-enabled build and diff whitespace checks. No real apps or user
+  configuration were used.
+- Whole-application visual/runtime parity remains open and unarchived.

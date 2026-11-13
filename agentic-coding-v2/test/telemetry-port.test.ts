@@ -1141,3 +1141,105 @@ test("trace filter catalogs include receiver-only workspaces beyond a page and r
 		await host.stop();
 	}
 });
+
+test("native topology scopes parent IDs to their trace, counts calls and replaces corrected span observations", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const span = (
+		trace: string,
+		id: number,
+		service: string,
+		parent = 0,
+		duration = 10,
+		error = false,
+	) => ({
+		resource: {
+			attributes: [{ key: "service.name", value: { stringValue: service } }],
+		},
+		scopeSpans: [
+			{
+				spans: [
+					{
+						traceId: trace.repeat(32),
+						spanId: id.toString(16).padStart(16, "0"),
+						parentSpanId: parent ? parent.toString(16).padStart(16, "0") : "",
+						name: `operation-${service}`,
+						startTimeUnixNano: "1790000000000000000",
+						endTimeUnixNano: (
+							1790000000000000000n +
+							BigInt(duration) * 1_000_000n
+						).toString(),
+						status: { code: error ? 2 : 0 },
+					},
+				],
+			},
+		],
+	});
+	const post = async (resourceSpans: ReturnType<typeof span>[]) => {
+		const response = await fetch(new URL("/v1/traces", host.url), {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${host.client.token}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({ resourceSpans }),
+		});
+		expect(response.status).toBe(200);
+	};
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		expect(
+			(await client.call("telemetry.read", { signal: "topology" })).value,
+		).toEqual({ services: [], edges: [] });
+		await post([
+			span("a", 1, "frontend-a"),
+			span("a", 2, "store-a", 1, 10, true),
+			span("a", 3, "store-a", 1, 20),
+			span("b", 1, "frontend-b"),
+			span("b", 2, "store-b", 1),
+			span("c", 2, "orphan", 1),
+			span("d", 4, "cycle-x", 5),
+			span("d", 5, "cycle-y", 4),
+		]);
+		const corrected = span("a", 2, "store-a", 1, 12);
+		// A correction may also change its event time. Ingest order, not a
+		// chronology sort, decides which observation owns the wire identity.
+		corrected.scopeSpans[0].spans[0].startTimeUnixNano = "1780000000000000000";
+		corrected.scopeSpans[0].spans[0].endTimeUnixNano = "1780000000012000000";
+		await post([corrected]);
+		const graph = (await client.call("telemetry.read", { signal: "topology" }))
+			.value as import("../src/telemetry/contracts.ts").ServiceGraph;
+		expect(graph.edges).toEqual([
+			{ source: "cycle-x", target: "cycle-y", spanCount: 1 },
+			{ source: "cycle-y", target: "cycle-x", spanCount: 1 },
+			{ source: "frontend-a", target: "store-a", spanCount: 2 },
+			{ source: "frontend-b", target: "store-b", spanCount: 1 },
+		]);
+		expect(
+			graph.services.find((service) => service.id === "store-a"),
+		).toMatchObject({
+			parentIds: ["frontend-a"],
+			childIds: [],
+			spanCount: 2,
+			errorCount: 0,
+			avgDurationMs: 16,
+		});
+		expect(
+			graph.services.find((service) => service.id === "orphan"),
+		).toMatchObject({ parentIds: [], childIds: [], spanCount: 1 });
+		const response = await fetch(new URL("/api/telemetry/topology", host.url), {
+			headers: { authorization: `Bearer ${host.client.token}` },
+		});
+		expect(await response.json()).toEqual(graph);
+		await expect(
+			client.call("telemetry.read", { signal: "topology", limit: 1 }),
+		).rejects.toThrow("query");
+		expect(await client.call("state.read", {})).toHaveProperty("sessions");
+		expect(client.status).toBe("connected");
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});

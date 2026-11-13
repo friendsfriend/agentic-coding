@@ -167,7 +167,14 @@ export async function dispatch(
 			fields(input, ["signal", "page", "perPage", "changeId", "limit"]);
 			const signal = text(input.signal, "telemetry signal", 16);
 			if (
-				!["traces", "spans", "metrics", "logs", "workspaces"].includes(signal)
+				![
+					"traces",
+					"spans",
+					"metrics",
+					"logs",
+					"workspaces",
+					"topology",
+				].includes(signal)
 			)
 				throw new Refusal("Unknown telemetry signal");
 			const url = new URL(`http://127.0.0.1/api/telemetry/${signal}`);

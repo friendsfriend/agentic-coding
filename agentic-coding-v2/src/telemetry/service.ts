@@ -17,6 +17,7 @@ import {
 	type OwnedGrpcReceiver,
 	startOtlpGrpcReceiver,
 } from "./receivers/otlp-grpc.ts";
+import { serviceGraph } from "./service-graph.ts";
 import { TraceDb } from "./telemetry-db.ts";
 
 // Receiver records are untrusted even when the exporter is authenticated.
@@ -316,6 +317,9 @@ export class Telemetry {
 					break;
 				case "/api/telemetry/logs":
 					result = this.db.loadLogs(query.get("changeId") ?? undefined);
+					break;
+				case "/api/telemetry/topology":
+					result = serviceGraph(this.db.graphSpans());
 					break;
 				case "/api/telemetry/workspaces":
 					result = this.db.getWorkspaces();

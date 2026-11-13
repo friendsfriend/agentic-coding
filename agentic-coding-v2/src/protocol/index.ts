@@ -272,7 +272,13 @@ export type Methods = {
 	};
 	"telemetry.read": {
 		input: {
-			signal: "traces" | "spans" | "metrics" | "logs" | "workspaces";
+			signal:
+				| "traces"
+				| "spans"
+				| "metrics"
+				| "logs"
+				| "workspaces"
+				| "topology";
 			page?: number;
 			perPage?: number;
 			changeId?: string;

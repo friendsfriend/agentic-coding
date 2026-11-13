@@ -10,6 +10,7 @@ import {
 import type {
 	LogData,
 	MetricData,
+	ServiceGraph,
 	SpanData,
 	TraceSummaryPage,
 	TreeNode,
@@ -182,19 +183,20 @@ export function TelemetryFeature(props: {
 			return;
 		}
 		setLoading(true);
-		const signal = ["tree", "span", "topology", "service-detail"].includes(
-			current,
-		)
-			? "spans"
-			: current === "metric-detail"
-				? "metrics"
-				: current === "log-detail"
-					? "logs"
-					: current;
-		if (!["traces", "spans", "metrics", "logs"].includes(signal)) return;
+		const signal = ["topology", "service-detail"].includes(current)
+			? "topology"
+			: ["tree", "span"].includes(current)
+				? "spans"
+				: current === "metric-detail"
+					? "metrics"
+					: current === "log-detail"
+						? "logs"
+						: current;
+		if (!["traces", "spans", "metrics", "logs", "topology"].includes(signal))
+			return;
 		void props.client
 			.call("telemetry.read", {
-				signal: signal as "traces" | "spans" | "metrics" | "logs",
+				signal: signal as "traces" | "spans" | "metrics" | "logs" | "topology",
 				...(current === "traces"
 					? {
 							page: currentPage,
@@ -263,11 +265,13 @@ export function TelemetryFeature(props: {
 	const topology = createMemo(() => {
 		const store = new TopologyStore();
 		const response = payload();
-		store.load(
-			response?.signal === "spans" && Array.isArray(response.value)
-				? (response.value as SpanData[])
-				: [],
-		);
+		if (
+			response?.signal === "topology" &&
+			response.value &&
+			typeof response.value === "object" &&
+			!Array.isArray(response.value)
+		)
+			store.setGraph(response.value as ServiceGraph);
 		return store;
 	});
 	const roots = createMemo(() => {
