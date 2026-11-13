@@ -129,11 +129,60 @@ export function MetricDetailView(props: {
 				</box>
 			</Show>
 
-			{/* Data point table */}
-			<SearchHeader>
-				<HighlightedText text="Data points" highlight="secondary" />
-			</SearchHeader>
 			<ScrollableContent focusable={false}>
+				<Show when={stream()?.description}>
+					<SearchHeader>
+						<HighlightedText text="Description" highlight="secondary" />
+					</SearchHeader>
+					<box flexShrink={0} paddingLeft={1} paddingRight={1}>
+						<text fg={uiColors.textSecondary} wrapMode="word">
+							{stream()?.description}
+						</text>
+					</box>
+				</Show>
+				<Show when={(stream()?.resource.attributes.length ?? 0) > 0}>
+					<SearchHeader>
+						<HighlightedText text="Resource" highlight="secondary" />
+					</SearchHeader>
+					<For each={stream()?.resource.attributes ?? []}>
+						{(attribute) => (
+							<box
+								flexShrink={0}
+								flexDirection="row"
+								paddingLeft={1}
+								paddingRight={1}
+							>
+								<box width={24} flexShrink={0}>
+									<text fg={uiColors.primary} wrapMode="word">
+										{attribute.key}
+									</text>
+								</box>
+								<box flexGrow={1} minWidth={0}>
+									<text fg={uiColors.textSecondary} wrapMode="word">
+										{attribute.value}
+									</text>
+								</box>
+							</box>
+						)}
+					</For>
+				</Show>
+				<Show when={stream()?.scope.name || stream()?.scope.version}>
+					<SearchHeader>
+						<HighlightedText
+							text="Instrumentation scope"
+							highlight="secondary"
+						/>
+					</SearchHeader>
+					<box flexShrink={0} paddingLeft={1} paddingRight={1}>
+						<text fg={uiColors.textSecondary} wrapMode="word">
+							{stream()?.scope.name || "(unspecified)"}
+							{stream()?.scope.version ? `@${stream()?.scope.version}` : ""}
+						</text>
+					</box>
+				</Show>
+				<SearchHeader>
+					<HighlightedText text="Data points" highlight="secondary" />
+				</SearchHeader>
 				<For each={points()}>
 					{(slot, index) => {
 						const dp = slot.value;

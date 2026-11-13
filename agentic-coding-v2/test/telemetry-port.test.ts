@@ -2,7 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { serve } from "../src/server/index.ts";
-import type { LogData, SpanData } from "../src/telemetry/contracts.ts";
+import type {
+	LogData,
+	MetricData,
+	SpanData,
+} from "../src/telemetry/contracts.ts";
 import { createTraceServiceClient } from "../src/telemetry/receivers/otlp-grpc-proto.ts";
 import { ClientConnection } from "../src/tui/client/connection.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
@@ -1935,6 +1939,248 @@ test("Datadog uint64 JSON and Zipkin 64-bit traces retain exact timing, native p
 				{ source: "zip-front", target: "zip-worker", spanCount: 1 },
 			],
 		});
+	} finally {
+		client.close();
+		await host.stop();
+	}
+});
+
+test("Datadog v1/v2 metric series preserve decimal timestamps, colon labels and distinct source/type identities", async () => {
+	const { app } = await fixture(false);
+	const host = serve(app);
+	const client = new ClientConnection(host.client);
+	const headers = {
+		authorization: `Bearer ${host.client.token}`,
+		"content-type": "application/json",
+	};
+	const post = (route: string, payload: unknown) =>
+		fetch(new URL(route, host.url), {
+			method: "POST",
+			headers,
+			body: typeof payload === "string" ? payload : JSON.stringify(payload),
+		});
+	try {
+		client.connect();
+		await eventually(async () => client.stateFresh, Boolean);
+		const base = {
+			metric: "synthetic.requests",
+			host: "source-a",
+			type: "rate",
+			unit: "request",
+			interval: 10,
+			source_type_name: "synthetic",
+			tags: [
+				"service:checkout",
+				"env:test",
+				"endpoint:https://example.invalid:8443/path",
+				"flag",
+				"empty:",
+				"literal=a=b",
+			],
+		};
+		const v1 = {
+			series: [
+				{
+					...base,
+					points: [
+						["precise-seconds", 2.5],
+						["epoch-nanosecond", 3],
+						[1790000001, 4],
+					],
+				},
+				{ ...base, type: "gauge", points: [[1790000001, 99]] },
+				{ ...base, type: "count", points: [[1790000001, 7]] },
+			],
+		};
+		const wire = JSON.stringify(v1)
+			.replace('"precise-seconds"', "1790000000.123456789")
+			.replace('"epoch-nanosecond"', "1e-9");
+		expect((await post("/api/v1/series", wire)).status).toBe(200);
+		const common = {
+			metric: base.metric,
+			unit: base.unit,
+			interval: 10,
+			source_type_name: base.source_type_name,
+			tags: [...base.tags].reverse(),
+			resources: [{ type: "host", name: "source-a" }],
+		};
+		const rate = {
+			...common,
+			type: 2,
+			points: [
+				{ timestamp: 1790000001, value: 5 },
+				{ timestamp: 1790000002, value: 6 },
+			],
+		};
+		expect(
+			(
+				await post("/api/v2/series", {
+					series: [
+						rate,
+						{
+							...common,
+							type: 1,
+							points: [{ timestamp: 1790000001, value: 8 }],
+						},
+						{
+							...common,
+							type: 3,
+							resources: [
+								{ type: "host", name: "source-b" },
+								{ type: "container", name: "synthetic-container" },
+							],
+							points: [{ timestamp: 1790000001, value: 88 }],
+						},
+						{
+							metric: "synthetic.untyped",
+							type: 0,
+							interval: 0,
+							points: [{ timestamp: 0, value: 0 }],
+						},
+					],
+				})
+			).status,
+		).toBe(200);
+		const metrics = (await client.call("telemetry.read", { signal: "metrics" }))
+			.value as MetricData[];
+		expect(metrics).toHaveLength(5);
+		const observedRate = metrics.find((metric) =>
+			metric.resource.attributes.some(
+				(attr) => attr.key === "datadog.metric.type" && attr.value === "rate",
+			),
+		);
+		expect(observedRate).toMatchObject({
+			name: base.metric,
+			unit: "request",
+			type: "gauge",
+			serviceName: "checkout",
+			scope: { name: "datadog", version: "" },
+		});
+		expect(observedRate?.resource.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "host.name", value: "source-a" },
+				{ key: "datadog.metric.type", value: "rate" },
+				{ key: "datadog.interval", value: "10" },
+				{ key: "datadog.source_type_name", value: "synthetic" },
+			]),
+		);
+		expect(
+			observedRate?.dataPoints.map((point) => [
+				point.timeUnixNano,
+				point.value,
+			]),
+		).toEqual([
+			["1", 3],
+			["1790000000123456789", 2.5],
+			["1790000001000000000", 5],
+			["1790000002000000000", 6],
+		]);
+		for (const point of observedRate?.dataPoints ?? [])
+			expect(point.attributes).toEqual(
+				expect.arrayContaining([
+					{ key: "service", value: "checkout" },
+					{ key: "env", value: "test" },
+					{ key: "endpoint", value: "https://example.invalid:8443/path" },
+					{ key: "flag", value: "true" },
+					{ key: "empty", value: "" },
+					{ key: "literal=a=b", value: "true" },
+				]),
+			);
+		const count = metrics.find((metric) => metric.type === "sum");
+		expect(count).toMatchObject({
+			unit: "request",
+			dataPoints: [{ value: 8 }],
+		});
+		expect(count?.resource.attributes).toEqual(
+			expect.arrayContaining([{ key: "datadog.metric.type", value: "count" }]),
+		);
+		expect(
+			metrics
+				.filter((metric) =>
+					metric.resource.attributes.some(
+						(attr) =>
+							attr.key === "datadog.metric.type" && attr.value === "gauge",
+					),
+				)
+				.map((metric) => metric.dataPoints[0]?.value)
+				.sort((a, b) => (a ?? 0) - (b ?? 0)),
+		).toEqual([88, 99]);
+		const otherHost = metrics.find(
+			(metric) => metric.dataPoints[0]?.value === 88,
+		);
+		expect(otherHost?.serviceName).toBe("checkout");
+		expect(otherHost?.resource.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "host.name", value: "source-b" },
+				{ key: "datadog.resource.container", value: "synthetic-container" },
+			]),
+		);
+		const untyped = metrics.find(
+			(metric) => metric.name === "synthetic.untyped",
+		);
+		expect(untyped).toMatchObject({
+			type: "gauge",
+			unit: "",
+			serviceName: "datadog",
+			dataPoints: [{ timeUnixNano: "0", value: 0 }],
+		});
+		expect(untyped?.resource.attributes).toEqual(
+			expect.arrayContaining([
+				{ key: "datadog.metric.type", value: "unspecified" },
+				{ key: "datadog.interval", value: "0" },
+			]),
+		);
+		const refused = await post("/api/v2/series", {
+			series: [
+				{ ...rate, points: [{ timestamp: 1790000003, value: 10 }] },
+				{
+					...rate,
+					points: [{ timestamp: 1790000004, value: "private-rejected-marker" }],
+				},
+			],
+		});
+		expect(refused.status).toBe(400);
+		expect(await refused.text()).not.toContain("private-rejected-marker");
+		expect((await post("/api/v1/series", { series: [rate] })).status).toBe(400);
+		expect(
+			(
+				await post("/api/v2/series", {
+					series: [{ ...common, type: 3, points: [[1790000001, 1]] }],
+				})
+			).status,
+		).toBe(400);
+		expect(
+			(
+				await post("/api/v1/series", {
+					series: [{ ...base, points: [[1e-10, 1]] }],
+				})
+			).status,
+		).toBe(400);
+		expect(
+			(
+				await post("/api/v2/series", {
+					series: [{ ...rate, points: [{ timestamp: 1.5, value: 1 }] }],
+				})
+			).status,
+		).toBe(400);
+		expect(
+			(await post("/api/v2/series", { series: [{ ...rate, type: 4 }] })).status,
+		).toBe(400);
+		expect(
+			(
+				await post("/api/v1/series", {
+					series: [{ ...base, tags: [123, 456], points: [[1790000001, 1]] }],
+				})
+			).status,
+		).toBe(400);
+		expect(
+			(await client.call("telemetry.read", { signal: "metrics" })).value,
+		).toEqual(metrics);
+		expect(
+			await (
+				await fetch(new URL("/api/telemetry/metrics", host.url), { headers })
+			).json(),
+		).toEqual(metrics);
 	} finally {
 		client.close();
 		await host.stop();

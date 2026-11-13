@@ -1,9 +1,4 @@
-import type {
-	LogData,
-	MetricData,
-	MetricDataPoint,
-	SpanData,
-} from "../contracts.ts";
+import type { LogData, SpanData } from "../contracts.ts";
 
 // Preserve uint64 integer tokens before JSON number rounding. Bun supplies the
 // reviver source context; absent that capability, unsafe identities are refused.
@@ -145,45 +140,6 @@ function normalizeDatadogSpan(raw: DDTraceSpan): SpanData {
 		serviceName: raw.service,
 		kind: 2,
 	};
-}
-
-// ---- Datadog Series Metrics -> MetricData ----
-
-interface DDSeriesPayload {
-	series?: Array<{
-		metric: string;
-		type?: string;
-		points?: Array<[number, number]>;
-		tags?: string[];
-		host?: string;
-		source_type_name?: string;
-	}>;
-}
-
-export function normalizeDatadogSeries(body: unknown): MetricData[] {
-	const payload = body as DDSeriesPayload;
-	if (!payload?.series) throw new Error("expected series array");
-	return payload.series.map((s) => {
-		const points: MetricDataPoint[] = (s.points ?? []).map(([ts, val]) => ({
-			startTimeUnixNano: BigInt(ts * 1_000_000_000).toString(),
-			timeUnixNano: BigInt(ts * 1_000_000_000).toString(),
-			value: val,
-			attributes: (s.tags ?? []).map((t) => {
-				const [k, v] = t.split("=", 2);
-				return { key: k ?? t, value: v ?? "true" };
-			}),
-		}));
-		return {
-			resource: { attributes: [] },
-			scope: { name: "datadog", version: "" },
-			name: s.metric,
-			description: "",
-			unit: "",
-			type: s.type === "rate" || s.type === "count" ? "sum" : "gauge",
-			dataPoints: points,
-			serviceName: s.host ?? "datadog",
-		};
-	});
 }
 
 // ---- Datadog Logs -> LogData ----

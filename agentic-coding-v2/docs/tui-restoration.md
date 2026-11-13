@@ -1026,3 +1026,48 @@ operator environment functional tests pass.
   configuration were touched. No old indexed records were rewritten. Full
   visual/runtime parity remains open and unarchived; this was not a whole-suite
   run or real Datadog Agent acceptance.
+
+## Observability follow-up: Datadog metric API versions and provenance
+
+- Replaced the shared v1-only tuple decoder with explicit v1 tuple-point and v2
+  object-point decoding selected by the authenticated endpoint. Checked the
+  public Datadog Go client's v2 MetricIntakeType (0 unspecified, 1 count, 2 rate,
+  3 gauge), MetricPoint (int64-second timestamp/double value) and MetricSeries
+  fields rather than guessing the numeric enum or treating v2 as an alias:
+  https://github.com/DataDog/datadog-api-client-go/blob/master/api/datadogV2/model_metric_intake_type.go
+  https://github.com/DataDog/datadog-api-client-go/blob/master/api/datadogV2/model_metric_point.go
+  https://github.com/DataDog/datadog-api-client-go/blob/master/api/datadogV2/model_metric_series.go
+- V1 fractional second tokens retain their decimal source through Bun's JSON
+  reviver before number rounding. Decimal/exponent seconds are converted with
+  integer arithmetic; sub-nanosecond precision and values outside the native
+  timestamp range refuse rather than truncate. V2 timestamps must represent
+  whole seconds. Unsupported runtimes without source context refuse unsafe or
+  fractional numeric timestamp input instead of silently rounding it.
+- Tags split on the first colon, retaining subsequent colons, empty values and
+  standalone tags. Unit, host/resource identities, source type, declared metric
+  kind and interval survive normalization. A unique service tag supplies the
+  display service, otherwise a unique host or the explicit datadog fallback is
+  used; conflicting service tags refuse rather than guess.
+- Count samples are sums; rate observations remain gauges, not fabricated
+  cumulative counters. The declared Datadog kind and interval are retained in
+  resource identity, so rates cannot collapse into ordinary gauges or differently
+  sampled sources. Equivalent v1/v2 sources still share coherent history and
+  canonical point labels permit retransmission corrections across both APIs.
+  Unspecified v2 observations retain that declared kind explicitly.
+- Metric detail now exposes description, resource and instrumentation scope in
+  existing shared scrollable sections alongside the unchanged charts/sample
+  table. This makes source/type/interval provenance inspectable rather than
+  hiding it behind otherwise similar stream rows.
+- Added one synthetic authenticated HTTP/native-boundary scenario proving
+  nanosecond-precise v1 timestamps, v2 object points, all v2 type codes, labelled
+  corrections, rate/gauge/count and host isolation, units, resource identity,
+  native/HTTP projection parity, and atomic malformed-batch refusal. Wrong API
+  point shapes, nonfinite/mistyped data, unsupported type codes and timestamps
+  that cannot be represented faithfully are refused without partial writes.
+- Verification: 24 focused telemetry/gateway tests pass (610 assertions), plus
+  unfiltered type-check, zero-diagnostic lint (806 files), official Solid-enabled
+  build and diff whitespace checks. The public reference browser was closed.
+  No real metrics were submitted, no real app/configuration was changed, and
+  previously indexed records were not rewritten or retroactively corrected.
+  This is not whole-suite, cloud-intake or visual acceptance. Full restoration
+  parity remains open and unarchived.

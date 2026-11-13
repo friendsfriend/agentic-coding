@@ -1,10 +1,10 @@
 import type { LogData, MetricData, SpanData } from "../contracts.ts";
 import {
 	normalizeDatadogLogs,
-	normalizeDatadogSeries,
 	normalizeDatadogSpans,
 	parseDatadogJson,
 } from "./datadog.ts";
+import { decodeDatadogSeries } from "./datadog-series.ts";
 import { decodeOtlpLogs, decodeOtlpMetrics, decodeOtlpTraces } from "./otlp.ts";
 import { scrapePrometheus } from "./prometheus.ts";
 import { normalizeStatsDMetrics } from "./statsd.ts";
@@ -197,7 +197,10 @@ async function handleDatadogSeries(
 	router: SignalRouter,
 ): Promise<Response> {
 	try {
-		const metrics = normalizeDatadogSeries(JSON.parse(await body(request)));
+		const metrics = decodeDatadogSeries(
+			await body(request),
+			new URL(request.url).pathname === "/api/v2/series" ? "v2" : "v1",
+		);
 		router.pushMetrics(metrics);
 		return Response.json({});
 	} catch {
