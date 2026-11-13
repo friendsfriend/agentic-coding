@@ -243,6 +243,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[helpRequested, setHelpOpen] = createSignal(false),
 		[paletteOpen, setPaletteOpen] = createSignal(false),
 		[locationRequested, setLocationOpen] = createSignal(false),
+		[themeRequested, setThemeOpen] = createSignal(false),
 		[busy, setBusy] = createSignal(false);
 	const [messageDialog, setMessageDialog] = createSignal<LocalNotice | null>(
 		null,
@@ -278,6 +279,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 	const helpOpen = () =>
 		helpRequested() ||
 		locationRequested() ||
+		themeRequested() ||
 		messageDialog() !== null ||
 		quitConfirmation() ||
 		usageWindow() !== null;
@@ -2299,6 +2301,19 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				id: "shell.help",
 				name: "Show keybinding/command help",
 				run: () => queueMicrotask(() => setHelpOpen((value) => !value)),
+			},
+			{
+				id: "shell.theme",
+				// v1 advertised the theme picker on every page; the Settings page keeps
+				// its own binding, and text entry always keeps the key it types.
+				name: "Theme picker",
+				run: () => {
+					// A focused prompt owns every printable key, `T` included, and the
+					// Settings page keeps its own anchored picker.
+					if (prompt?.focused || current().page === "settings") return;
+					if (settingsEditing() || settingsThemeOpen()) return;
+					setThemeOpen((value) => !value);
+				},
 			},
 			{
 				id: "shell.locations",

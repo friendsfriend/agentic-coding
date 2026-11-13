@@ -1370,3 +1370,24 @@ operator environment functional tests pass.
   the gateway/tui client suite stays green. The picker was not opened in a real
   terminal here — visual/runtime acceptance stays user-owned, so full
   restoration parity remains open and unarchived.
+
+## Shell parity: the global theme picker (T)
+
+- v1 advertised the theme picker on every page (`T`, Actions); v2 offered it only
+  from the Settings page. `T` (`shift+t`) now opens the same shared picker from
+  any page and applies/persists the chosen theme through the existing local
+  preferences adapter — no gateway call, no configuration beyond the theme name
+  v1 already wrote.
+- The key defers to text entry: a focused prompt owns every printable key, so `T`
+  does nothing there, and the Settings page keeps its own explicitly anchored
+  picker (its higher-priority layer answers first and this binding skips that
+  page) so two dialogs can never open at once. The picker is part of the shell's
+  modal fence, and Escape/Enter keep the shared picker's own behaviour.
+- The key is advertised through the shared Shell keybind catalog, so the footer
+  and help overlay project it exactly like the location picker.
+- Also recorded here: the observability `w` key now resets the selection and
+  reports "All workspaces", matching v1's own notice on that key.
+- Verification: unfiltered type-check, zero-diagnostic lint (809 files), official
+  Solid-enabled build, diff whitespace checks and the gateway/client suite. The
+  picker was not opened in a real terminal; visual/runtime acceptance remains
+  user-owned and full restoration parity stays open and unarchived.

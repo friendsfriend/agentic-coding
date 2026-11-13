@@ -55,6 +55,12 @@ export const shellKeybinds: Keybind[] = [
 		short: "help",
 	},
 	{
+		key: "shift+t",
+		cmd: "shell.theme",
+		action: "Theme picker",
+		short: "theme",
+	},
+	{
 		key: "ctrl+p",
 		cmd: "shell.locations",
 		action: "Jump to a destination",
