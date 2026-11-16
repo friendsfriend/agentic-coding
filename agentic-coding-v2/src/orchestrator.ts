@@ -70,7 +70,10 @@ export function createOrchestrator(
 					"Start a skill-backed background agent task. Explicit topic and profile required; reuse a stable requestId for the same intended invocation. Optional baseRef selects a local commit/ref (default HEAD), pinned at admission; relatedTo is provenance, not a transfer of uncommitted work.",
 				parameters: invocationSchema,
 				replay: "safe",
-				execute: async (args) => toolResult(await app.startTask(args)),
+				execute: async (args, api) =>
+					toolResult(
+						await app.startTask(args, null, Number(api.conversationId)),
+					),
 			}),
 			defineTool({
 				name: "environment_action",

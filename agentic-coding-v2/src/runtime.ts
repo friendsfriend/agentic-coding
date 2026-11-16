@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
+	type AgentChange,
 	type Conversation,
 	type ConversationId,
 	configure,
@@ -9,6 +10,7 @@ import {
 	Harness,
 	type Storage,
 	type TaskId,
+	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { TaskAdmission } from "./admission.ts";
@@ -30,6 +32,7 @@ import {
 } from "./environment/tools.ts";
 import { EnvironmentWorkbench } from "./environment/workbench.ts";
 import { createOrchestrator, orchestratorPrompt } from "./orchestrator.ts";
+import { Orchestrators } from "./orchestrators.ts";
 import { projectState } from "./projection.ts";
 import { ProviderActions } from "./provider-actions.ts";
 import { ProviderWorkbench } from "./providers/workbench/index.ts";
@@ -66,11 +69,19 @@ export class Runtime {
 	}
 	private engine: Harness | null = null;
 	private root: Conversation | null = null;
+	/** The orchestrator agent the root and every created orchestrator share: the
+	 * same extensions, tools and instructions, differing only in directory. */
+	private orchestrator: {
+		extensions: readonly unknown[];
+		tools: readonly ToolRegistration[];
+		instructions: string;
+	} | null = null;
 	private timer: Scheduler | null = null;
 	private admission: TaskAdmission | null = null;
 	private reconciling = false;
 	private closed = false;
 	readonly standalone: Standalone;
+	readonly orchestrators: Orchestrators;
 	readonly wiki: Wiki;
 	readonly providerActions: ProviderActions;
 	readonly settings: Settings;
@@ -89,6 +100,7 @@ export class Runtime {
 		readonly models: Models,
 	) {
 		this.standalone = new Standalone(this);
+		this.orchestrators = new Orchestrators(this);
 		this.wiki = new Wiki(this);
 		this.providerActions = new ProviderActions(this);
 		this.settings = new Settings(config);
@@ -132,6 +144,26 @@ export class Runtime {
 		if (!this.root) throw new Error("Orchestrator not initialized");
 		return this.root;
 	}
+	/** The agent change for one orchestrator conversation: configured exactly
+	 * like the root, working in `cwd` (the root works in the default checkout). */
+	orchestratorAgent(cwd: string | null): AgentChange {
+		if (!this.orchestrator)
+			throw new Error("Orchestrator agent is not initialized");
+		const profile = this.config.profiles.find(
+			(item) => item.id === this.config.orchestratorProfile,
+		);
+		return {
+			model: profile
+				? { provider: profile.provider, modelId: profile.modelId }
+				: null,
+			thinkingLevel: profile?.thinking ?? null,
+			extensions: this.orchestrator.extensions as AgentChange["extensions"],
+			tools: this.orchestrator.tools,
+			instructions: this.orchestrator.instructions,
+			cwd,
+			modelTools: null,
+		};
+	}
 	get scheduler(): Scheduler {
 		if (!this.timer) throw new Error("Scheduler not initialized");
 		return this.timer;
@@ -174,29 +206,22 @@ export class Runtime {
 		);
 		try {
 			await app.environments.initialize(app.harness);
-			const profile = config.profiles.find(
-				(item) => item.id === config.orchestratorProfile,
-			);
+			// One orchestrator agent, shared by the root and every created
+			// orchestrator: they differ only in the directory they work in.
+			app.orchestrator = {
+				extensions: [orchestrator, environmentTools],
+				tools: [
+					...(orchestrator.tools ?? []),
+					...(environmentTools.tools ?? []).filter((tool) =>
+						environmentInspectionTools.has(tool.name),
+					),
+				],
+				instructions: `${orchestratorPrompt}\nInspect env_list before proposing environment operations. Use env_discover with an explicit configured repository for read-only root manifest hints; these are not trusted or validated target definitions and grant no edit, import or execution authority. Use environment_action for direct Run/Build/Test controls without an agent/model profile. Workspace-write skill tasks may also use their own environment tools. Both require exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
+			};
 			app.root = await app.harness.root(context);
 			// root's creation options do not update a previously persisted conversation.
 			await app.home.commit(
-				(tx) =>
-					configure(tx, app.home.id, {
-						model: profile
-							? { provider: profile.provider, modelId: profile.modelId }
-							: null,
-						thinkingLevel: profile?.thinking ?? null,
-						extensions: [orchestrator, environmentTools],
-						tools: [
-							...(orchestrator.tools ?? []),
-							...(environmentTools.tools ?? []).filter((tool) =>
-								environmentInspectionTools.has(tool.name),
-							),
-						],
-						instructions: `${orchestratorPrompt}\nInspect env_list before proposing environment operations. Use env_discover with an explicit configured repository for read-only root manifest hints; these are not trusted or validated target definitions and grant no edit, import or execution authority. Use environment_action for direct Run/Build/Test controls without an agent/model profile. Workspace-write skill tasks may also use their own environment tools. Both require exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
-						cwd: null,
-						modelTools: null,
-					}),
+				(tx) => configure(tx, app.home.id, app.orchestratorAgent(null)),
 				context,
 			);
 			app.admission = new TaskAdmission(
@@ -226,10 +251,16 @@ export class Runtime {
 		if (!this.admission) throw new Error("Runtime is not accepting work");
 		return this.admission.validate(invocation);
 	}
-	async startTask(invocation: Invocation, slot: ScheduleSlot | null = null) {
+	async startTask(
+		invocation: Invocation,
+		slot: ScheduleSlot | null = null,
+		/** The orchestrator that asked for the task; schedules stay runtime-owned
+		 * and therefore root-owned. */
+		orchestrator?: number,
+	) {
 		if (this.closed || !this.admission)
 			throw new Error("Runtime is not accepting work");
-		return this.admission.start(invocation, slot);
+		return this.admission.start(invocation, slot, orchestrator);
 	}
 	/** `interactive` is set only by the authenticated TUI gateway: a direct
 	 * developer action there is its own approval. */

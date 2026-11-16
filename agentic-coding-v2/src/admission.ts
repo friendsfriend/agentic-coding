@@ -77,6 +77,8 @@ export class TaskAdmission {
 	async start(
 		invocation: Invocation,
 		slot: ScheduleSlot | null = null,
+		/** The orchestrator conversation that asked for this task. */
+		orchestrator?: number,
 	): Promise<number> {
 		const occurrence = slot ? `${slot.scheduleId}:${slot.due}` : null;
 		const fingerprint = invocationFingerprint(invocation, occurrence);
@@ -120,6 +122,7 @@ export class TaskAdmission {
 			});
 			const info: TaskInfo = {
 				id: Number(created),
+				...(orchestrator !== undefined ? { orchestrator } : {}),
 				baseCommit: input.baseCommit,
 				policy: input.policy,
 				topicId: invocation.topicId,

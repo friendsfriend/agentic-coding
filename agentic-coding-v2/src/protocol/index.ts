@@ -1,9 +1,12 @@
+import type { OrchestratorInfo } from "../state.ts";
 import type {
 	MetricCollectorKind,
 	MetricCollectorSnapshot,
 	TelemetryReceiverState,
 	TraceFilterCatalog,
 } from "../telemetry/contracts.ts";
+
+export type { OrchestratorInfo };
 // Wire-only types. No Runtime, storage, renderer or model-provider dependencies.
 export const protocolVersion = 1;
 export const clientPath = "/api/client";
@@ -306,6 +309,15 @@ export type Methods = {
 		output: { removed: true };
 	};
 	"state.read": { input: Data; output: Snapshot };
+	/** Orchestrator conversations (root plus created siblings). */
+	"orchestrator.read": {
+		input: Data;
+		output: { orchestrators: OrchestratorInfo[] };
+	};
+	"orchestrator.create": {
+		input: { path: string; title?: string };
+		output: OrchestratorInfo;
+	};
 	"state.subscribe": { input: Data; output: { subscribed: true } };
 	"session.context": { input: { id: number }; output: SessionContext };
 	"session.read": { input: { id: number }; output: Transcript };
@@ -600,6 +612,8 @@ export const methods: Method[] = [
 	"viewpoints.save",
 	"viewpoints.remove",
 	"state.read",
+	"orchestrator.read",
+	"orchestrator.create",
 	"state.subscribe",
 	"session.read",
 	"session.context",

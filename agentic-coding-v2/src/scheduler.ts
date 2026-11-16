@@ -21,6 +21,7 @@ export type ScheduleSlot = {
 export type Admission = (
 	invocation: Invocation,
 	slot?: ScheduleSlot | null,
+	orchestrator?: number,
 ) => Promise<number>;
 
 export async function finishSlot(

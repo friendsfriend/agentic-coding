@@ -1612,3 +1612,44 @@ Two defects the developer reported after the first real run, and the fix for bot
   original complaint the same way: without sidebar focus, `j` `j` `Enter` on the
   start page opened *Environments*, because those keys belonged to the
   destination list. The probe directories were removed afterwards.
+
+## Orchestrator siblings: the backend of the `+` row (A2)
+
+Decisions taken before any UI: an orchestrator is **one conversation**, and the
+root is only the first of them.
+
+- `harness.createConversation({ ownership: { kind: "ownerless" }, agent })`
+  makes a **sibling of the root**, not a child: cancel, cascade and retirement of
+  one orchestrator never reach another. A second harness was rejected — it would
+  duplicate environment, git, telemetry and review authority and collide
+  conversation ids across projections, tasks and evidence.
+- `src/orchestrators.ts` keeps the registry. The root's entry is *synthesized*
+  (`id`, title `Orchestrator`, `config.repositories[0]`, orchestrator profile), so
+  older state needs no migration; created ones live in `Catalog.orchestrators`
+  keyed by conversation identity. `read()` returns the root first, then creation
+  order.
+- A created orchestrator's agent is the **same** agent change as the root's
+  (`Runtime.orchestratorAgent(cwd)`): same extensions, same tools, same
+  instructions, same orchestrator profile — the directory is the only difference.
+  `cwd` is the chosen path, so its shell and file tools work there and nowhere
+  else by default.
+- The path is taken as given: absolute, existing, a directory, symlinks resolved.
+  No worktree, no branch, no clone, no discovery. A refused path creates nothing,
+  which is why the catalog stays at one orchestrator after a refusal.
+- `orchestrator.read` / `orchestrator.create` are the wire methods; `frames.ts`
+  validates an integer identity, a bounded title, an absolute path and the
+  profile, so nothing else can arrive on that response.
+- Sessions: every orchestrator is a top-level session (`parent: null`,
+  `task: null`) *before* its children, so `clientSession` resolves it to its own
+  conversation and the shell's existing tree can show them without a second
+  listing. A task records `orchestrator` at admission — the tool call's own
+  conversation — and a child's `parent` is that orchestrator; tasks admitted
+  before attribution existed, and scheduled or wiki-started tasks, stay with the
+  root.
+
+Verification: `test/orchestrator-sessions.test.ts` (2 tests) creates an
+orchestrator through the authenticated client, reads the catalog back, reads the
+transcript through `session.context`, expects it in `state.read` as a parentless
+session, and expects a relative, missing and non-directory path each to be
+refused with an unchanged catalog. Whole suite and the official build stay green;
+the `+` row, the chooser and the sidebar tree grouping are the next slice.

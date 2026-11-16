@@ -18,15 +18,17 @@ export async function sessionCatalog(
 	snapshot?: Awaited<ReturnType<Runtime["snapshot"]>>,
 ): Promise<Session[]> {
 	const state = snapshot ?? (await app.snapshot());
-	const sessions: Session[] = [
-		{
-			id: Number(app.home.id),
-			parent: null,
-			task: null,
-			title: "Orchestrator",
-			writable: true,
-		},
-	];
+	// Every orchestrator is a top-level session: the reserved root first, then the
+	// ownerless siblings the developer created. A conversation the TUI can talk
+	// to is a session, so no separate listing exists.
+	const orchestrators = await app.orchestrators.read();
+	const sessions: Session[] = orchestrators.map((entry) => ({
+		id: entry.id,
+		parent: null,
+		task: null,
+		title: entry.title,
+		writable: true,
+	}));
 	for (const info of state.tasks) {
 		const task = await app.taskResult(info.id);
 		if (!task) continue;
@@ -36,7 +38,9 @@ export async function sessionCatalog(
 		if (typeof child !== "number") continue;
 		sessions.push({
 			id: child,
-			parent: Number(app.home.id),
+			// A task belongs to the orchestrator that admitted it; tasks admitted
+			// before attribution existed stay with the root.
+			parent: info.orchestrator ?? Number(app.home.id),
 			task: info.id,
 			title: `${info.skill} · ${info.topicId} · #${info.id}`,
 			writable: task.state.status !== "terminal" && !task.abortRequested,
@@ -63,6 +67,8 @@ export async function clientSession(app: Runtime, id: number, writable = true) {
 		throw new Error("Invalid session identity");
 	if (id === Number(app.home.id)) return app.home;
 	const session = (await sessionCatalog(app)).find((item) => item.id === id);
+	if (session && session.parent === null && session.task === null)
+		return app.orchestrators.conversation(id);
 	if (!session || (writable && !session.writable))
 		throw new Error("Session is unavailable or no longer writable");
 	const native = await app.harness.conversation(id as ConversationId, context);

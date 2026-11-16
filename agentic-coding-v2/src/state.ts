@@ -9,6 +9,8 @@ export const Catalog = defineDoc<{
 	reviews: Record<string, string>;
 	attachments: Record<string, string>;
 	schedules: Record<string, string>;
+	/** Orchestrator conversations created after the root, keyed by identity. */
+	orchestrators?: Record<string, string>;
 	/** Permanent identity fences, optional for older native catalogs. */
 	deletedSchedules?: Record<string, boolean>;
 	shellStarts: Record<string, string>;
@@ -30,10 +32,22 @@ export const Catalog = defineDoc<{
 });
 export type Topic = { id: string; title: string; createdAt: number };
 export type ExecutionPolicy = "read-only" | "workspace-write";
+/** One orchestrator: a conversation the developer talks to, with its own
+ * directory. The root is implicit; created ones are recorded in the catalog. */
+export type OrchestratorInfo = {
+	id: number;
+	title: string;
+	/** The absolute directory this orchestrator works in. */
+	path: string;
+	profile: string;
+	createdAt: number;
+};
 export type TaskInfo = {
 	id: number;
 	kind?: "operator-environment";
 	conversationId?: number;
+	/** The orchestrator conversation that admitted this task. */
+	orchestrator?: number;
 	baseCommit?: string;
 	policy: ExecutionPolicy;
 	topicId: string;

@@ -295,6 +295,15 @@ export async function dispatch(
 			fields(input, ["id"]);
 			await app.standalone.abort(text(input.id, "standalone identity", 80));
 			return { aborted: true };
+		case "orchestrator.read":
+			return { orchestrators: await app.orchestrators.read() };
+		case "orchestrator.create": {
+			fields(input, ["path", "title"]);
+			return app.orchestrators.create({
+				path: text(input.path, "orchestrator directory", 4096),
+				...(typeof input.title === "string" ? { title: input.title } : {}),
+			});
+		}
 		case "session.context":
 			fields(input, ["id"]);
 			return readContext(app, integer(input.id));

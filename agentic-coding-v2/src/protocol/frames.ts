@@ -19,6 +19,24 @@ const integer = (value: unknown, minimum = 0) =>
 	Number.isSafeInteger(value) && Number(value) >= minimum;
 const time = (value: unknown) =>
 	typeof value === "number" && Number.isFinite(value) && value >= 0;
+/** One orchestrator: an identity, a title, an absolute directory and the
+ * profile its agent is configured with. No token, URL or path that is not the
+ * working directory travels here. */
+const orchestratorInfo = (value: unknown) => {
+	const data = record(value);
+	if (
+		!integer(data.id, 1) ||
+		typeof data.title !== "string" ||
+		data.title.length > 120 ||
+		typeof data.path !== "string" ||
+		data.path.length > 4096 ||
+		!data.path.startsWith("/") ||
+		typeof data.profile !== "string" ||
+		data.profile.length > 200 ||
+		!time(data.createdAt)
+	)
+		throw new Error("Invalid orchestrator");
+};
 const list = (value: unknown): Data[] => {
 	if (!Array.isArray(value)) throw new Error("Expected a server list");
 	return value.map(record);
@@ -607,7 +625,13 @@ export function result<M extends Method>(
 			throw new Error("Invalid provider inspection");
 		if (Array.isArray(data.value)) list(data.value);
 		else record(data.value);
-	} else if (method === "state.read") snapshot(value);
+	} else if (method === "orchestrator.read") {
+		const data = record(value);
+		if (!Array.isArray(data.orchestrators) || data.orchestrators.length > 64)
+			throw new Error("Invalid orchestrator catalog");
+		data.orchestrators.forEach(orchestratorInfo);
+	} else if (method === "orchestrator.create") orchestratorInfo(value);
+	else if (method === "state.read") snapshot(value);
 	else if (method === "session.read") transcript(value);
 	else if (method === "task.read") {
 		const data = record(value);
