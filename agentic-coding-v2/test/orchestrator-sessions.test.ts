@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { serve } from "../src/server/index.ts";
 import { ClientConnection } from "../src/tui/client/connection.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
@@ -89,3 +90,43 @@ test("orchestrator creation refuses a path the host cannot work in", async () =>
 		await host.stop();
 	}
 }, 60_000);
+
+/** The tree the shell draws: a task's session belongs under the orchestrator
+ * that admitted it, not under the root by assumption. */
+test("a child session nests under the orchestrator that admitted it", async () => {
+	const { app, fake, invocation } = await fixture();
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-child-"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.stateFresh,
+			(fresh) => fresh === true,
+		);
+		const created = await client.call("orchestrator.create", {
+			path: directory,
+			title: "Ledger",
+		});
+		fake.setResponses([fauxAssistantMessage("Observed the checkout")]);
+		const task = await app.startTask(invocation, null, created.id);
+		const snapshot = await eventually(
+			async () => client.call("state.read", {}),
+			(value) => value.sessions.some((session) => session.task === task),
+		);
+		const child = snapshot.sessions.find((session) => session.task === task);
+		expect(child?.parent).toBe(created.id);
+		// The root keeps its own identity and no task child of its own.
+		const root = snapshot.sessions.find((session) => session.parent === null);
+		expect(root?.title).toBe("Orchestrator");
+		expect(
+			snapshot.sessions.some(
+				(session) => session.parent === root?.id && session.task === task,
+			),
+		).toBe(false);
+	} finally {
+		client.close();
+		await host.stop();
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 120_000);

@@ -1653,3 +1653,52 @@ transcript through `session.context`, expects it in `state.read` as a parentless
 session, and expects a relative, missing and non-directory path each to be
 refused with an unchanged catalog. Whole suite and the official build stay green;
 the `+` row, the chooser and the sidebar tree grouping are the next slice.
+
+## The `+` row: a new orchestrator from the navigation tree
+
+The sidebar now *is* the tree A2 describes, and the row that grows it:
+
+```
+⌂ Menu
+󱚞 OpenCode
+π Pi
+∞ Orchestrator          ← the reserved root, from `state.sessions`
+∞ agentic-coding-v2     ← a created orchestrator (its own directory)
+  ▸ task #12            ← child sessions, under the orchestrator that admitted them
++ + New orchestrator
+```
+
+- **Tree, not a list.** `sidebarOptions()` reads `state.sessions` once: every
+  `parent === null` session is a root row (glyph `∞`, `Orchestrator <id>`), and
+  every session whose `parent` is that root follows it (glyph `▸` writable, `·`
+  otherwise, at most 20 per root). No further listing exists, so the shell cannot
+  disagree with the host about who owns a child.
+- **The mark is the row's.** `WorkspaceEntry.glyph` lets the caller name a row it
+  can identify; the panel's own table still marks the fixed destinations.
+- **The cursor still follows routes, not rows.** `workspaceSelected()` maps both
+  transcript pages (`orchestrator` and `session`) to `session:<id>`, so a
+  conversation selected in any way marks exactly one row.
+- **`+` is an action, not a destination.** `orchestrator:new` opens the chooser
+  instead of navigating, and `cycleWorkspace` skips it (and sessions) so cycling
+  visits routes only.
+- **The chooser** (`src/tui/ui/OrchestratorChooser.tsx`) is a `ReadOnlyModalFrame`
+  like the location picker: a path line prefilled with the shell's own `cwd`,
+  editable by typing (`up`/`down` pick a row, `Enter` starts, `Esc` cancels), a
+  custom row that binds the typed path, and a **Configured checkouts** group —
+  `state.environments.projects` filtered to `kind` `app` or `library`,
+  deduplicated by directory and shown as `id` + resolved repository. Nothing is
+  read from disk and nothing is created until the host accepts: the shell sends
+  `orchestrator.create`, refreshes `state.read` only after it answers, then
+  navigates to `session:<id>`; a refusal is reported as it came.
+- **Breadcrumb**: a session without a task is an orchestrator, so it reads
+  `Orchestrator › <title>` instead of the old `Pi Durable › …`, which described a
+  page that no longer exists.
+
+Verified in a real pseudo-terminal at 160 columns against a throwaway config and
+state: `k` wraps to the `+` row, `Enter` opens the chooser with the typed path and
+the configured checkout listed, `Enter` again creates the orchestrator and lands on
+`» Orchestrator › agentic-coding-v2`; after a restart the sidebar shows both roots
+(and the created one survives); `Escape` in the chooser creates nothing. The host
+side of the same flow is `test/orchestrator-sessions.test.ts` (3 tests): creation,
+refusal with an unchanged catalog, and a child session nested under the
+orchestrator that admitted it.

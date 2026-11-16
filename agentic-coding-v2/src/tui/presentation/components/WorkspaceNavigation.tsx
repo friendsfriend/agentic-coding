@@ -31,6 +31,8 @@ export type WorkspaceEntry = {
 	name: string;
 	description: string;
 	value: string;
+	/** The row's own mark; a navigation tree names each kind of row. */
+	glyph?: string;
 	task?: WorkspaceTaskObservation;
 };
 
@@ -261,14 +263,16 @@ export function WorkspaceNavigation(props: {
 		{ stopPropagation: true },
 	);
 	const hover = useHover(toggle.onMouseOut);
-	// One mark per row of the shell's navigation tree.
+	// One mark per row of the shell's navigation tree; the caller names the ones
+	// whose identity it knows (each orchestrator, each child session, `+`).
 	const marks: Readonly<Record<string, string>> = {
 		home: "⌂",
 		opencode: "󱚞",
 		pi: "π",
 		orchestrator: "∞",
 	};
-	const glyph = (value: string) => marks[value] ?? "·";
+	const glyph = (entry: WorkspaceEntry) =>
+		entry.glyph ?? marks[entry.value] ?? "·";
 	const taskPositions = createMemo(
 		() =>
 			new Map(
@@ -317,7 +321,7 @@ export function WorkspaceNavigation(props: {
 						fallback={
 							<PinRow
 								pin={{
-									glyph: glyph(key),
+									glyph: glyph(slot().entry),
 									label: slot().entry.name,
 									meta: slot().entry.description,
 								}}

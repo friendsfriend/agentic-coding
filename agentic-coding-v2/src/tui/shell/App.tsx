@@ -128,6 +128,10 @@ import { LocationPicker } from "../ui/LocationPicker.tsx";
 import { MessageDialog } from "../ui/MessageDialog.tsx";
 import { menuKeybinds } from "../ui/menuKeys.ts";
 import { createNotifications, type LocalNotice } from "../ui/notifications.ts";
+import {
+	type ConfiguredCheckout,
+	OrchestratorChooser,
+} from "../ui/OrchestratorChooser.tsx";
 import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
 import { color } from "../ui/theme/index.ts";
@@ -260,6 +264,8 @@ export function App(props: {
 		[paletteOpen, setPaletteOpen] = createSignal(false),
 		[locationRequested, setLocationOpen] = createSignal(false),
 		[themeRequested, setThemeOpen] = createSignal(false),
+		[orchestratorRequested, setOrchestratorOpen] = createSignal(false),
+		[orchestratorPending, setOrchestratorPending] = createSignal(false),
 		// Locations a mounted feature published (its loaded resources). The shell
 		// owns the copy the picker reads; the feature decides what its current
 		// page can offer and publishes an empty list otherwise.
@@ -302,6 +308,7 @@ export function App(props: {
 		helpRequested() ||
 		locationRequested() ||
 		themeRequested() ||
+		orchestratorRequested() ||
 		messageDialog() !== null ||
 		quitConfirmation() ||
 		usageWindow() !== null;
@@ -3625,11 +3632,14 @@ export function App(props: {
 			const session = state()?.sessions.find(
 				(session) => String(session.id) === selected.resource,
 			);
+			// A session without a task is an orchestrator itself, so its own
+			// breadcrumb names the conversation, not a task that spawned it.
 			return [
 				{
-					page: session?.task == null ? "pi-durable" : "tasks",
+					page: session?.task == null ? "orchestrator" : "tasks",
 					resource: session?.task == null ? null : String(session.task),
-					label: session?.task == null ? "Pi Durable" : `Task #${session.task}`,
+					label:
+						session?.task == null ? "Orchestrator" : `Task #${session.task}`,
 				},
 				{
 					page: selected.page,
@@ -3854,43 +3864,104 @@ export function App(props: {
 		),
 	);
 	// The sidebar is the shell's own navigation tree, nothing else: Menu first,
-	// the two embedded agents, the orchestrator and its child sessions. Every
+	// the two embedded agents, then each orchestrator with its own child
+	// sessions, and finally the row that starts another orchestrator. Every
 	// other surface is reached through Menu, exactly as v1's destination list
 	// worked; tasks, viewpoints and pages no longer pad this list.
 	const sidebarOptions = () => {
-		const children = (state()?.sessions ?? [])
-			.filter((session) => session.parent !== null)
-			.slice(0, 20)
-			.map((session) => ({
-				name: `${session.writable ? "▸" : "·"} ${session.title}`,
-				description: `Session ${session.id}`,
-				value: `session:${session.id}`,
-			}));
+		const sessions = state()?.sessions ?? [];
+		// Roots are the orchestrators; a child is listed under the orchestrator
+		// that admitted it, so the tree shows who owns what.
+		const tree = sessions
+			.filter((session) => session.parent === null)
+			.flatMap((root) => [
+				{
+					name: root.title,
+					description: `Orchestrator ${root.id}`,
+					value: `session:${root.id}`,
+					glyph: "∞",
+				},
+				...sessions
+					.filter((session) => session.parent === root.id)
+					.slice(0, 20)
+					.map((session) => ({
+						name: session.title,
+						description: `Session ${session.id}`,
+						value: `session:${session.id}`,
+						glyph: session.writable ? "▸" : "·",
+					})),
+			]);
 		return [
 			{
 				name: "Menu",
 				description: "All destinations",
 				value: "home",
+				glyph: "⌂",
 			},
 			{
 				name: "OpenCode",
 				description: "Embedded terminal · shares this shell's lifetime",
 				value: "opencode",
+				glyph: "󱚞",
 			},
 			{
 				name: "Pi",
 				description: "Embedded terminal · shares this shell's lifetime",
 				value: "pi",
+				glyph: "π",
 			},
+			...tree,
 			{
-				name: "Orchestrator",
-				description: "Native conversation",
-				value: "orchestrator",
+				name: "+ New orchestrator",
+				description: "Another directory or a configured checkout",
+				value: "orchestrator:new",
+				glyph: "+",
 			},
-			...children,
 		];
 	};
 
+	// The configured checkouts an orchestrator may start in: environment
+	// applications and libraries, never infrastructure, deduplicated by directory
+	// and only as the host reports them — nothing is read from disk here.
+	const configuredCheckouts = (): ConfiguredCheckout[] => {
+		const seen = new Set<string>();
+		return dataList(state()?.environments.projects).flatMap((project) => {
+			const id = typeof project.id === "string" ? project.id : "";
+			const kind = typeof project.kind === "string" ? project.kind : "";
+			const repository =
+				typeof project.repository === "string" ? project.repository : "";
+			if (
+				!id ||
+				!repository ||
+				(kind !== "app" && kind !== "library") ||
+				seen.has(repository)
+			)
+				return [];
+			seen.add(repository);
+			return [{ id, kind, repository }];
+		});
+	};
+	// Creating one is a host decision: the shell navigates only once the host has
+	// answered with the new conversation, and a refusal is reported as it came.
+	const createOrchestrator = async (input: { path: string; title: string }) => {
+		if (orchestratorPending()) return;
+		setOrchestratorPending(true);
+		try {
+			const created = await client.call("orchestrator.create", input);
+			client.state = await client.call("state.read", {});
+			update();
+			setRefreshRevision((value) => value + 1);
+			setOrchestratorOpen(false);
+			go("session", String(created.id));
+		} catch (error) {
+			reportError(
+				error instanceof Error ? error.message : "Command refused",
+				"Orchestrator",
+			);
+		} finally {
+			setOrchestratorPending(false);
+		}
+	};
 	const workspaceInteractive = () =>
 		!paletteOpen() &&
 		!helpOpen() &&
@@ -3899,10 +3970,13 @@ export function App(props: {
 		!busy();
 	const workspaceSelected = () => {
 		const page = current().page;
-		if (page === "session") return `session:${current().resource ?? ""}`;
-		return ["home", "opencode", "pi", "orchestrator"].includes(page)
-			? page
-			: "";
+		// Both transcript pages address a conversation, and the sidebar lists
+		// conversations, so either one marks the row of the session it shows.
+		if (page === "session" || page === "orchestrator") {
+			const id = sessionId();
+			return id === null ? "" : `session:${id}`;
+		}
+		return ["home", "opencode", "pi"].includes(page) ? page : "";
 	};
 	const [sidebarCursor, setSidebarCursor] = createSignal("home");
 	// Only a change of route moves the cursor; a row move never navigates, so it
@@ -3922,15 +3996,19 @@ export function App(props: {
 			!sidebarOptions().some((entry) => entry.value === value)
 		)
 			return;
-		if (value.startsWith("session:")) go("session", value.slice(8));
-		else if (["home", "opencode", "pi", "orchestrator"].includes(value))
-			go(value as Page);
+		if (value === "orchestrator:new") setOrchestratorOpen(true);
+		else if (value.startsWith("session:")) go("session", value.slice(8));
+		else if (["home", "opencode", "pi"].includes(value)) go(value as Page);
 	};
 	const cycleWorkspace = (direction: -1 | 1) => {
 		if (!workspaceInteractive()) return;
 		// Cycle actual routes, not a disclosure toggle or an unrelated saved view.
+		// Sessions are reached inside their orchestrator's group; `+` is an
+		// action, not a route.
 		const entries = sidebarOptions().filter(
-			(entry) => !entry.value.startsWith("session:"),
+			(entry) =>
+				!entry.value.startsWith("session:") &&
+				entry.value !== "orchestrator:new",
 		);
 		if (!entries.length) return;
 		const index = entries.findIndex(
@@ -4997,6 +5075,23 @@ export function App(props: {
 					dismiss={notifications.clear}
 					interactive={() => !helpOpen() && !paletteOpen()}
 				/>
+				<Show
+					when={
+						orchestratorRequested() &&
+						!messageDialog() &&
+						!quitConfirmation() &&
+						!locationRequested() &&
+						!themeRequested()
+					}
+				>
+					<OrchestratorChooser
+						initialPath={process.cwd()}
+						configured={configuredCheckouts}
+						pending={orchestratorPending}
+						create={createOrchestrator}
+						close={() => setOrchestratorOpen(false)}
+					/>
+				</Show>
 				<Show
 					when={locationRequested() && !messageDialog() && !quitConfirmation()}
 				>
