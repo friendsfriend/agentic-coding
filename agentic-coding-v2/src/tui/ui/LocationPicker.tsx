@@ -23,12 +23,18 @@ const CHROME_ROWS = 5;
  * no gateway command, draft or approval state — choosing a row navigates, and
  * nothing is ever prefilled into the prompt. */
 export function LocationPicker(props: {
+	/** Locations a feature published (its loaded resources). The shell owns the
+	 * copy this picker reads. */
+	resources?: () => LocationEntry[];
 	close: () => void;
 	open: (entry: LocationEntry) => void;
 	current: () => { page: string; resource: string | null };
 }) {
 	const dimensions = useTerminalDimensions();
-	const entries = createMemo(() => locationEntries());
+	const entries = createMemo(() => [
+		...locationEntries(),
+		...(props.resources?.() ?? []),
+	]);
 	const [query, setQuery] = createSignal("");
 	const [index, setIndex] = createSignal(0);
 	const [searching, setSearching] = createSignal(false);

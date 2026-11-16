@@ -45,8 +45,23 @@ import { TraceTreeView } from "./views/TraceTreeView.tsx";
 // v1 views and stores, with the native authenticated transport replacing its
 // BackendClient. Each navigation read has an epoch; stale responses never
 // replace the selected trace. No database or workspace files are opened here.
+/** What a feature publishes to the shell's location picker: a jumpable
+ * location of its own, named by the resource the shell will carry. */
+export interface PublishedLocation {
+	id: string;
+	label: string;
+	description: string;
+	group: string;
+	resource: string;
+}
+
 export function TelemetryFeature(props: {
 	client: ClientConnection;
+	/** Publish this feature's own locations (v1 listed loaded traces in the
+	 * picker). The shell holds the copy; the feature publishes exactly what its
+	 * currently loaded page contains and publishes an empty list for every other
+	 * view, so a trace is never offered from a page the developer cannot see. */
+	locations?: (entries: PublishedLocation[]) => void;
 	/** The view's resource. A location names one of this feature's own views
 	 * (v1 published them as destinations), so a jump opens that view instead of
 	 * the front page; an unset or unknown value leaves the current view alone. */
@@ -167,6 +182,28 @@ export function TelemetryFeature(props: {
 			if (!disposed && generation === linkEpoch) setResolvingTrace(false);
 		}
 	};
+	// The loaded page, published as locations. Bounded by the page itself (no
+	// extra read, no standing cache), so the picker offers exactly what the
+	// developer could already open from this list.
+	createEffect(() => {
+		const publish = props.locations;
+		if (!publish) return;
+		const rows = surface() === "traces" ? traces().getTraceSummaries() : [];
+		publish(
+			rows.slice(0, 12).map((row) => ({
+				id: `observability/trace/${row.traceId}`,
+				label: row.rootSpans[0]?.name ?? `Trace ${row.traceId.slice(0, 8)}`,
+				description: [
+					`${row.spanCount} spans`,
+					`${row.durationMs} ms`,
+					...(row.errorCount > 0 ? [`${row.errorCount} errors`] : []),
+					...(row.agents.length > 0 ? [row.agents.join(", ")] : []),
+				].join(" · "),
+				group: "Loaded traces",
+				resource: `trace/${row.traceId}`,
+			})),
+		);
+	});
 	// A published location names a list view; it never smuggles a filter or a
 	// selection, so arriving this way is identical to choosing the view by key.
 	// A sentinel, not the initial value: a jump that mounts the feature must
@@ -177,6 +214,15 @@ export function TelemetryFeature(props: {
 		const next = props.resource ?? "";
 		if (next === appliedResource) return;
 		appliedResource = next;
+		if (next.startsWith("trace/")) {
+			const id = next.slice("trace/".length);
+			if (!id) return;
+			setMetric({ name: "", service: "", id: "" });
+			setService(undefined);
+			setTrace(id);
+			navigate("tree");
+			return;
+		}
 		if (!["traces", "metrics", "logs", "topology"].includes(next)) return;
 		setTrace("");
 		setMetric({ name: "", service: "", id: "" });

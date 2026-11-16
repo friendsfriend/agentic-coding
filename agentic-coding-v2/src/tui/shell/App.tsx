@@ -132,7 +132,11 @@ import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
-import { OBSERVABILITY_LOCATIONS, PAGE_LOCATIONS } from "./locations.ts";
+import {
+	type LocationEntry,
+	OBSERVABILITY_LOCATIONS,
+	PAGE_LOCATIONS,
+} from "./locations.ts";
 import { Navigation, type Page, type View, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
 
@@ -245,6 +249,12 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		[paletteOpen, setPaletteOpen] = createSignal(false),
 		[locationRequested, setLocationOpen] = createSignal(false),
 		[themeRequested, setThemeOpen] = createSignal(false),
+		// Locations a mounted feature published (its loaded resources). The shell
+		// owns the copy the picker reads; the feature decides what its current
+		// page can offer and publishes an empty list otherwise.
+		[resourceLocations, setResourceLocations] = createSignal<LocationEntry[]>(
+			[],
+		),
 		[busy, setBusy] = createSignal(false);
 	const [messageDialog, setMessageDialog] = createSignal<LocalNotice | null>(
 		null,
@@ -4443,6 +4453,14 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 									<TelemetryFeature
 										client={client}
 										resource={current().resource}
+										locations={(entries) =>
+											setResourceLocations(
+												entries.map((entry) => ({
+													...entry,
+													page: "observability" as Page,
+												})),
+											)
+										}
 										active={() =>
 											contentFocused() && !helpOpen() && !paletteOpen()
 										}
@@ -4945,6 +4963,7 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 					when={locationRequested() && !messageDialog() && !quitConfirmation()}
 				>
 					<LocationPicker
+						resources={resourceLocations}
 						close={() => setLocationOpen(false)}
 						current={() => ({
 							page: current().page,

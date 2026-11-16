@@ -1443,3 +1443,27 @@ operator environment functional tests pass.
   build, gateway suite and diff whitespace checks. Still no real terminal run
   here: visual/runtime acceptance remains user-owned and full restoration parity
   stays open and unarchived.
+
+## Loaded traces are picker locations (v1 parity, without a cache)
+
+- v1's picker listed the resources a surface had loaded, so a developer could
+  jump back to a trace from anywhere. v2's observability feature holds one
+  bounded page per surface and keeps no cross-surface cache, so the missing piece
+  was the *handoff*, not the data: a feature may now publish its own locations to
+  the shell, and the shell owns the copy the picker reads.
+- `TelemetryFeature` publishes the traces of the page it currently shows (at most
+  twelve, named by their root span, described by span count, duration, errors and
+  agents) and publishes an **empty** list for every other view. A trace is
+  therefore never offered from a page the developer cannot see, nothing is read
+  to build the list, and no standing cache was introduced to make it work.
+- Choosing one carries `trace/<traceId>` as the view's resource, the same channel
+  the four view locations already use. The feature applies it by setting the
+  trace and opening the tree view, which is exactly what `Enter` on that row does
+  — so a stale entry can only fail where the row itself would fail, with the
+  existing refusal notice rather than an invented trace.
+- The picker treats published entries as one more group ("Loaded traces") and the
+  current-resource marker works for them; search and the window are unchanged.
+- Verification: unfiltered type-check, zero-diagnostic lint (809 files), official
+  build, gateway + telemetry-port suites (27 tests) and diff whitespace checks.
+  No real terminal run here: visual/runtime acceptance remains user-owned, and
+  full restoration parity stays open and unarchived.
