@@ -38,6 +38,16 @@ export class Orchestrators {
 			.sort((left, right) => left.createdAt - right.createdAt);
 	}
 
+	/** The orchestrator a creation request already produced, retired or not. */
+	private async byRequest(requestId: string): Promise<OrchestratorInfo | null> {
+		const doc = await this.app.harness.snapshot(Catalog, context);
+		for (const raw of Object.values(doc?.orchestrators ?? {})) {
+			const entry = decode<OrchestratorInfo>(raw);
+			if (entry.requestId === requestId) return entry;
+		}
+		return null;
+	}
+
 	/** One created orchestrator, retired or not: the fence for update/retire. */
 	private async retained(id: number): Promise<OrchestratorInfo> {
 		const doc = await this.app.harness.snapshot(Catalog, context);
@@ -99,12 +109,39 @@ export class Orchestrators {
 		return conversation;
 	}
 
+	/** One creation at a time, in this process: the authority is single, so a
+	 * double submission must not race two conversations into existence. */
+	private creating: Promise<unknown> = Promise.resolve();
+
 	/** Create one orchestrator: an ownerless conversation configured exactly
-	 * like the root, except that it works in the chosen directory. */
+	 * like the root, except that it works in the chosen directory. A repeated
+	 * `requestId` returns the orchestrator it already created. */
 	async create(input: {
 		path: string;
 		title?: string;
+		requestId?: string;
 	}): Promise<OrchestratorInfo> {
+		const run = this.creating.then(() => this.createOnce(input));
+		this.creating = run.catch(() => undefined);
+		return run;
+	}
+
+	private async createOnce(input: {
+		path: string;
+		title?: string;
+		requestId?: string;
+	}): Promise<OrchestratorInfo> {
+		const requestId = input.requestId
+			? text(input.requestId, "creation identity", 128)
+			: undefined;
+		if (requestId) {
+			const replayed = await this.byRequest(requestId);
+			if (replayed) {
+				if (replayed.retiredAt !== undefined)
+					throw new Error("Orchestrator was created and has been retired");
+				return replayed;
+			}
+		}
 		const target = this.authorize(input.path);
 		const title = text(
 			input.title?.trim() || path.basename(target),
@@ -130,6 +167,7 @@ export class Orchestrators {
 			path: target,
 			profile: this.app.config.orchestratorProfile,
 			createdAt: Date.now(),
+			...(requestId ? { requestId } : {}),
 		};
 		await this.app.home.commit(async (tx) => {
 			const doc = await tx.doc(Catalog);

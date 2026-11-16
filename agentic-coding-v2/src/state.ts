@@ -44,6 +44,9 @@ export type OrchestratorInfo = {
 	/** Set when the developer retires it: still retained natively, no longer
 	 * listed, asked or reported to. */
 	retiredAt?: number;
+	/** The caller's creation identity, so a repeated request returns this same
+	 * orchestrator instead of creating a second one. */
+	requestId?: string;
 };
 export type TaskInfo = {
 	id: number;

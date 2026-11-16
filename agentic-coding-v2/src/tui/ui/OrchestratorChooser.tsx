@@ -28,8 +28,10 @@ export function OrchestratorChooser(props: {
 	/** The shell's own directory: the custom row starts here, editable. */
 	initialPath: string;
 	configured: () => ConfiguredCheckout[];
-	/** The shell reports refusal and navigates on success; this only submits. */
-	create: (input: { path: string; title: string }) => void;
+	/** The shell reports refusal and navigates on success; this only submits.
+	 * The creation identity is stable per target, so a retried submission cannot
+	 * create a second orchestrator for the same intent. */
+	create: (input: { path: string; title: string; requestId: string }) => void;
 	/** A creation is in flight; keys are inert until the host answers. */
 	pending: () => boolean;
 	close: () => void;
@@ -86,10 +88,15 @@ export function OrchestratorChooser(props: {
 		// Typing is about the path, so the custom row is the one Enter acts on.
 		setIndex(0);
 	};
+	// One identity per target: typing changes it, retrying the same target does
+	// not, and the host answers a replay with the orchestrator it already made.
+	let submitted: { key: string; id: string } | null = null;
 	const submit = () => {
 		const choice = rows()[index()];
 		if (!choice || !enabled()) return;
-		props.create(choice);
+		const key = `${choice.path}\u0000${choice.title}`;
+		if (submitted?.key !== key) submitted = { key, id: crypto.randomUUID() };
+		props.create({ ...choice, requestId: submitted.id });
 	};
 	const unregister = useKeymap().registerLayer({
 		id: "v2.orchestratorChooser",

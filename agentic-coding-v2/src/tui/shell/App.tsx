@@ -3896,9 +3896,11 @@ export function App(props: {
 					value: `session:${root.id}`,
 					glyph: "∞",
 				},
+				// Every child is listed: the panel scrolls, and a fixed cap hid
+				// sessions without saying so. Creation order keeps a tree stable
+				// while new work arrives.
 				...sessions
 					.filter((session) => session.parent === root.id)
-					.slice(0, 20)
 					.map((session) => ({
 						name: session.title,
 						description: `Session ${session.id}`,
@@ -4020,7 +4022,11 @@ export function App(props: {
 	};
 	// Creating one is a host decision: the shell navigates only once the host has
 	// answered with the new conversation, and a refusal is reported as it came.
-	const createOrchestrator = async (input: { path: string; title: string }) => {
+	const createOrchestrator = async (input: {
+		path: string;
+		title: string;
+		requestId: string;
+	}) => {
 		if (orchestratorPending()) return;
 		setOrchestratorPending(true);
 		try {

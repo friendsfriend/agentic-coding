@@ -1781,3 +1781,32 @@ terminal on **an isolated tmux socket** (never the developer's default server):
 `r` renames in place, `d` retires and moves to the root, the root row refuses with
 a notice, and both survive a restart. Whole suite green — 115 files, 664 tests,
 5837 assertions, 430 s.
+
+## One creation request, one orchestrator; and no hidden truncation
+
+**Idempotent creation.** `orchestrator.create` now accepts an optional
+`requestId`; the registry stores it on the entry, and a replay returns the
+orchestrator that identity already produced instead of creating a second
+conversation. Creation is also serialised inside the process (`Orchestrators.create`
+queues on one promise), because the authority is single and two submissions in the
+same tick must not race two conversations into existence. A replay whose
+orchestrator has since been retired is refused rather than navigating to a hidden
+conversation. The chooser holds one identity per target — typing a different path
+or picking another checkout makes a new one, retrying the same target keeps it —
+so an ambiguous failure cannot duplicate on the next Enter.
+
+Note for anyone adding a field here: `fields(input, [...])` in the client handler
+rejects unknown keys, so a new input field must be added to that list; the
+idempotency test caught exactly that refusal.
+
+**Every child is listed.** The sidebar capped each orchestrator's children at 20
+with no marker, which silently hid sessions. The cap is gone: the panel already
+scrolls and follows the cursor, and `k`/`j` wrap the whole list.
+
+Tests: `test/orchestrator-sessions.test.ts` is 7 — the new one submits the same
+`requestId` twice concurrently, expects one orchestrator and the same identity
+back, expects a *different* identity for the same intent to be refused by the
+duplicate-directory fence, and expects a replay after retirement to be refused.
+Verified in a real terminal on an isolated tmux socket with 26 orchestrators
+seeded on disk: the tree lists them past the old 20-row limit and `k` scrolls to
+the last one. Whole-suite and build checks below.

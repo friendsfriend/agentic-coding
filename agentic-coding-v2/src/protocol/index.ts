@@ -315,7 +315,7 @@ export type Methods = {
 		output: { orchestrators: OrchestratorInfo[] };
 	};
 	"orchestrator.create": {
-		input: { path: string; title?: string };
+		input: { path: string; title?: string; requestId?: string };
 		output: OrchestratorInfo;
 	};
 	"orchestrator.rename": {

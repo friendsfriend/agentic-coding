@@ -310,3 +310,62 @@ test("an orchestrator can be renamed and retired, and the root cannot", async ()
 		fs.rmSync(directory, { recursive: true, force: true });
 	}
 }, 180_000);
+
+/** A repeated creation request is one orchestrator, not two: the identity the
+ * caller sends is what decides, and a replay never races a second conversation
+ * into existence. */
+test("a repeated creation request returns the orchestrator it already made", async () => {
+	const { app } = await fixture();
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-idem-"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.stateFresh,
+			(fresh) => fresh === true,
+		);
+		const requestId = crypto.randomUUID();
+		const [first, second] = await Promise.all([
+			client.call("orchestrator.create", {
+				path: directory,
+				title: "Once",
+				requestId,
+			}),
+			client.call("orchestrator.create", {
+				path: directory,
+				title: "Once",
+				requestId,
+			}),
+		]);
+		expect(second.id).toBe(first.id);
+		const listed = await client.call("orchestrator.read", {});
+		expect(listed.orchestrators.map((entry) => entry.title)).toEqual([
+			"Orchestrator",
+			"Once",
+		]);
+		// A different identity for the same intent is a second request, and the
+		// duplicate-directory fence still refuses it.
+		await expect(
+			client.call("orchestrator.create", {
+				path: directory,
+				title: "Once",
+				requestId: crypto.randomUUID(),
+			}),
+		).rejects.toThrow("refused");
+		// A replayed request whose orchestrator was retired says so instead of
+		// pretending to create and navigate to a hidden conversation.
+		await client.call("orchestrator.retire", { id: first.id });
+		await expect(
+			client.call("orchestrator.create", {
+				path: directory,
+				title: "Once",
+				requestId,
+			}),
+		).rejects.toThrow("refused");
+	} finally {
+		client.close();
+		await host.stop();
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 120_000);
