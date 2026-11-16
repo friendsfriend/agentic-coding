@@ -3777,6 +3777,9 @@ export function App(props: {
 	});
 	onCleanup(unregisterPageFocus);
 	onCleanup(unregisterBreadcrumbs);
+	// The shell opens with the navigation tree focused: j/k/Enter are the sidebar's
+	// from the first key, and opening a destination hands focus to its content.
+	navigation.current.focus = "sessions";
 	const workspaceFilter = () => current().workspace.filter ?? "active";
 	const workspaceTasks = createMemo(() => {
 		const snapshot = state();

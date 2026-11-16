@@ -71,12 +71,14 @@ export const workspaceNavigationKeybinds: Keybind[] = [
 		action: "Next workspace entry",
 		standard: true,
 	},
-	{
-		key: "enter",
+	// Terminals report Return as either name; a row that only answered one of
+	// them looked like a dead Enter (the Home list already binds both).
+	...["enter", "return"].map((key) => ({
+		key,
 		cmd: "workspace.open",
 		action: "Open workspace entry",
 		short: "open",
-	},
+	})),
 ];
 /** Original workspace pin-row presentation and expanding/permanent geometry,
  * adapted to native navigation entries. Focus/activation never dispatch a task. */
@@ -259,11 +261,12 @@ export function WorkspaceNavigation(props: {
 		{ stopPropagation: true },
 	);
 	const hover = useHover(toggle.onMouseOut);
+	// One mark per row of the shell's navigation tree.
 	const marks: Readonly<Record<string, string>> = {
-		"mode:0": "󱚞",
-		"mode:1": "π",
-		"mode:2": "∞",
-		"mode:3": "⌂",
+		home: "⌂",
+		opencode: "󱚞",
+		pi: "π",
+		orchestrator: "∞",
 	};
 	const glyph = (value: string) => marks[value] ?? "·";
 	const taskPositions = createMemo(

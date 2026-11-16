@@ -175,12 +175,12 @@ export const breadcrumbKeybinds: Keybind[] = [
 		short: "next",
 		standard: key !== "l",
 	})),
-	{
-		key: "enter",
+	...["enter", "return"].map((key) => ({
+		key,
 		cmd: "breadcrumb.open",
 		action: "Open selected structural ancestor",
 		short: "open",
-	},
+	})),
 ];
 export const transcriptViewportKeybinds: Keybind[] = [
 	{

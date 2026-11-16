@@ -43,12 +43,13 @@ export const nativeAgentNavigationKeybinds: Keybind[] = [
 		standard: true,
 	},
 	{ key: "j", cmd: "agents.next", action: "Next native agent", standard: true },
-	{
-		key: "enter",
+	// Both names: a terminal reports Return as either one.
+	...["enter", "return"].map((key) => ({
+		key,
 		cmd: "agents.open",
 		action: "Open native agent transcript",
 		short: "open",
-	},
+	})),
 ];
 /** Native catalog binding for the original agent sidebar. Unknown observation
  * stays unknown; writability is never interpreted as live generation. */

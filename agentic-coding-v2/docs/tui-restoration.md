@@ -1592,3 +1592,23 @@ Two defects the developer reported after the first real run, and the fix for bot
   build, gateway suite and diff whitespace checks. The reported interactions were
   not exercised in a real terminal by this change, so the run remains the
   developer's acceptance.
+
+## The sidebar opens its rows, and it is the surface the shell starts in
+
+- **Enter reached the rows.** The panel bound only `enter`, so a terminal that
+  reports Return under the other name looked like a dead key. The sidebar, the
+  agent sidebar and the breadcrumb catalog now bind both names — the Home list
+  already did, which is why that one worked. Row marks follow the new tree
+  (`⌂` Menu, OpenCode, `π` Pi, `∞` Orchestrator) instead of the retired
+  `mode:<index>` keys.
+- **The shell starts with the navigation tree focused.** It opened on `content`,
+  so the first `j`/`k`/`Enter` went to whatever list the page happened to show —
+  on the start page that is the destination list, which is why keys looked like
+  they moved the wrong thing. Opening a destination hands focus to its content,
+  so typing works the moment a prompt exists.
+- Verified in a pseudo-terminal against an isolated config/state dir (no provider,
+  no credential, no real host): start → `j` → `Enter` opens OpenCode and the
+  embedded agent paints its own screen in the content area. Reproduced the
+  original complaint the same way: without sidebar focus, `j` `j` `Enter` on the
+  start page opened *Environments*, because those keys belonged to the
+  destination list. The probe directories were removed afterwards.
