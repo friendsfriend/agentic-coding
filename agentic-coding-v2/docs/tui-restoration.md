@@ -1530,3 +1530,37 @@ operator environment functional tests pass.
   `--port`, non-TTY) without starting a host. No real tmux window was opened here
   and no real terminal run happened: visual/runtime acceptance remains
   user-owned, and full restoration parity stays open and unarchived.
+
+## Shell parity audit: what is closed, and what is not a gap
+
+A pass over v1's keybind catalogs against the v2 shell, after the location
+picker, the theme picker and the view window landed. This entry records the
+result so the remaining work is stated rather than assumed.
+
+- **Shell chrome: closed.** v1's host keys are `?`, `T`, `Ctrl+P`, `Ctrl+T`,
+  `q`, the diagnostics key and the four panel keys (`Ctrl+S`, `Ctrl+A`, `Ctrl+H`,
+  `Ctrl+L`). v2 answers all of them: `?`, `T` (theme), `Ctrl+P` (locations),
+  `Ctrl+T` (view window), `Ctrl+Q` (quit), `Ctrl+Alt+N` (cached diagnostics),
+  `Ctrl+S` (workspace toggle), `Ctrl+V` (agent sidebar — v1's `Ctrl+A` panel key,
+  renamed because v2 keeps printable keys free), `Ctrl+H`/`Ctrl+L`
+  (previous/next workspace). v1's `Back`/`Forward` and history keys are present
+  too, and `Ctrl+K` keeps the command palette that `Ctrl+P` used to hold.
+- **Sidebars: not a gap.** `f` (cycle active/attention/all) and `e`
+  (expanding/permanent) were already bound twice over — once by
+  `WorkspaceNavigation` for the task sidebar and once by
+  `NativeAgentNavigation` for the agent sidebar — so a candidate change adding
+  them to the shell was reverted after reading the components. Recorded here
+  because the shell's own `/help` line ("f cycles in sidebar") looked like it
+  advertised a key nothing bound; it does not.
+- **Feature-local actions that v2 intentionally does not have** (they belong to
+  v1's workflow dashboard, which v2 replaced with native tasks, reviews and
+  evidence): workflow delete, workflow graph, agent cost breakdown, delegated
+  debug requests, plan/report line navigation, stage flow page, job/schedule
+  creation wizards, and the workflow-window key `n`. Restoring those means
+  restoring the surfaces, not the keys, so they are out of scope for the shell
+  and are not counted as parity regressions.
+- **Verification:** the whole suite now runs unfiltered and green — 114 files,
+  658 tests, 5806 assertions, 425 s — including the new attach-window boundary
+  test, on top of unfiltered type-check, zero-diagnostic lint (810 files), the
+  official build and diff whitespace checks. Visual/runtime acceptance remains
+  user-owned; full restoration parity stays open and unarchived.
