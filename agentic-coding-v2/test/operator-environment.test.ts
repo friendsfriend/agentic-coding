@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
@@ -738,3 +739,70 @@ test("restored v1 log AI panel streams a tool-less analysis of the newest logs f
 		await host.stop();
 	}
 });
+
+/** A direct action records the conversation it was taken from. An operator task
+ * runs without a conversation of its own, so this is provenance — who asked —
+ * not a transcript row: `state.tasks` carries it, sessions never list it. */
+test("a direct action taken from an orchestrator records who asked", async () => {
+	const { app } = await fixture(false, (config) => {
+		config.profiles = [];
+		fs.mkdirSync(config.configDir);
+		fs.writeFileSync(
+			path.join(config.configDir, "environments.json"),
+			JSON.stringify(definitions(config.repositories[0] ?? "")),
+		);
+	});
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-asker-"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.status,
+			(status) => status === "connected",
+		);
+		const created = await client.call("orchestrator.create", {
+			path: directory,
+			title: "Builder",
+		});
+		const { taskId } = await client.call("environment.action", {
+			apps: ["api"],
+			action: "build",
+			target: "build",
+			profile: "fast",
+			requestId: "asking-build",
+			orchestrator: created.id,
+		});
+		await app.harness.waitForTask(taskId as TaskId, context);
+		expect(
+			(await app.snapshot()).tasks.find((task) => task.id === taskId),
+		).toMatchObject({ orchestrator: created.id });
+		// No conversation means no session row, whatever the attribution.
+		const sessions = await client.call("state.read", {});
+		expect(sessions.sessions.some((session) => session.task === taskId)).toBe(
+			false,
+		);
+		// The root's own actions keep their record exactly as before.
+		const asked = await app.startEnvironmentAction(
+			{
+				apps: ["api"],
+				action: "build",
+				target: "build",
+				profile: "fast",
+				requestId: "root-build",
+			},
+			false,
+			Number(app.home.id),
+		);
+		// The root's admission is enough to read the record; a direct action
+		// still waits for exact human review before it executes.
+		expect(
+			(await app.snapshot()).tasks.find((task) => task.id === asked)
+				?.orchestrator,
+		).toBeUndefined();
+	} finally {
+		client.close();
+		await host.stop();
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 120_000);

@@ -112,6 +112,18 @@ export class Orchestrators {
 		return next;
 	}
 
+	/** The fence for "who asked": the root, or an orchestrator that is still
+	 * retained. Root is reported as `undefined` — absence already means the root
+	 * — so an unchanged root request keeps the identity its record was saved
+	 * under. */
+	async attributing(id: number | undefined): Promise<number | undefined> {
+		if (id === undefined || id === Number(this.app.home.id)) return undefined;
+		const entry = await this.retained(id);
+		if (entry.retiredAt !== undefined)
+			throw new Error("Orchestrator is retired");
+		return entry.id;
+	}
+
 	/** The developer's profile choice for one orchestrator. It is stored as an
 	 * override, so it survives restarts and outlives a change of the configured
 	 * default; the conversation is reconfigured with it immediately. */

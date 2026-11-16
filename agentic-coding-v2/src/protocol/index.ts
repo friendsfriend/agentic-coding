@@ -404,7 +404,10 @@ export type Methods = {
 		output: { updated: true };
 	};
 	"environment.action": {
-		input: EnvironmentAction;
+		/** `orchestrator` names the conversation the action was taken from; the
+		 * operator task records it as who asked, and refuses an unknown or
+		 * retired one. */
+		input: EnvironmentAction & { orchestrator?: number };
 		output: { taskId: number };
 	};
 	"environment.stop": {

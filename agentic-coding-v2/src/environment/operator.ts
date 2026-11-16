@@ -43,6 +43,7 @@ export class OperatorEnvironments {
 		request: OperatorAction,
 		interactive = false,
 		checkout?: string,
+		orchestrator?: number,
 	) {
 		if (
 			Object.keys(request).some(
@@ -110,11 +111,15 @@ export class OperatorEnvironments {
 			projects.some((project) => project.repository !== repository)
 		)
 			throw new Error("Environment apps must share one authorized repository");
-		const fingerprint = digest(
-				JSON.stringify(
-					interactive ? { request, interactive, checkout } : request,
-				),
-			),
+		// The asking orchestrator is part of the request identity: the same
+		// requestId from another conversation is a conflict, not a replay. It is
+		// only added when it is not the root, so the identity of every existing
+		// request — including one saved before this field existed — is unchanged.
+		const identity: Record<string, unknown> = interactive
+			? { request, interactive, checkout }
+			: { ...request };
+		if (orchestrator !== undefined) identity.orchestrator = orchestrator;
+		const fingerprint = digest(JSON.stringify(identity)),
 			key = `environment:${request.requestId}`;
 		const previous = (raw: string | undefined) => {
 			if (!raw) return undefined;
@@ -163,6 +168,7 @@ export class OperatorEnvironments {
 				createdAt: Date.now(),
 				...(interactive ? { interactive: true as const } : {}),
 				...(workspace !== repository ? { checkout: workspace } : {}),
+				...(orchestrator !== undefined ? { orchestrator } : {}),
 			};
 			const id = Number(
 				await tx.createTask(this.definition, input, {

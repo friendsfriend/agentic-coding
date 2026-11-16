@@ -270,8 +270,15 @@ export class Runtime {
 	}
 	/** `interactive` is set only by the authenticated TUI gateway: a direct
 	 * developer action there is its own approval. */
-	async startEnvironmentAction(request: OperatorAction, interactive = false) {
+	async startEnvironmentAction(
+		request: OperatorAction,
+		interactive = false,
+		orchestrator?: number,
+	) {
 		if (this.closed) throw new Error("Runtime is closing");
+		// A direct action belongs to the conversation it was taken from, so its
+		// row and its report stay where the developer is.
+		const asking = await this.orchestrators.attributing(orchestrator);
 		return this.operatorEnvironments.start(
 			this.harness,
 			this.home,
@@ -280,6 +287,7 @@ export class Runtime {
 			interactive
 				? await this.repositoryGit.workspaceFor(request.apps)
 				: undefined,
+			asking,
 		);
 	}
 	/** Direct developer stop: exact live revision, operator-owned only. Revokes

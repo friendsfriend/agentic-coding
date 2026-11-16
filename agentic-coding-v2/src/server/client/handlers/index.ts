@@ -504,10 +504,22 @@ export async function dispatch(
 				text(input.id, "candidate", 80),
 				text(input.approval, "exact approval", 80),
 			);
-		case "environment.action":
-			return {
-				taskId: await app.startEnvironmentAction(input as OperatorAction, true),
+		case "environment.action": {
+			// The acting conversation is an annotation, never part of the
+			// environment action the operator task validates.
+			const { orchestrator, ...request } = input as OperatorAction & {
+				orchestrator?: unknown;
 			};
+			return {
+				taskId: await app.startEnvironmentAction(
+					request as OperatorAction,
+					true,
+					orchestrator === undefined || orchestrator === null
+						? undefined
+						: integer(orchestrator),
+				),
+			};
+		}
 		case "environment.stop":
 			fields(input, ["runId", "revision", "requestId"]);
 			return app.stopEnvironmentRun({

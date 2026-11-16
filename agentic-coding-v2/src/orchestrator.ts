@@ -11,7 +11,11 @@ import type { Invocation, TaskInfo } from "./state.ts";
 interface OrchestratorHost {
 	snapshot(): Promise<unknown>;
 	startTask: Admission;
-	startEnvironmentAction(request: OperatorAction): Promise<number>;
+	startEnvironmentAction(
+		request: OperatorAction,
+		interactive: boolean,
+		orchestrator?: number,
+	): Promise<number>;
 	taskResult(id: number): Promise<unknown>;
 	cancel(id: number): Promise<unknown>;
 	validateInvocation(invocation: Invocation): Promise<unknown>;
@@ -106,10 +110,14 @@ export function createOrchestrator(
 				replay: "safe",
 				execute: async (args, api) =>
 					toolResult({
-						taskId: await app.startEnvironmentAction({
-							...args,
-							requestId: `orchestrator-environment-${api.taskId}`,
-						}),
+						taskId: await app.startEnvironmentAction(
+							{
+								...args,
+								requestId: `orchestrator-environment-${api.taskId}`,
+							},
+							false,
+							Number(api.conversationId),
+						),
 						state: "admitted; awaiting preparation and exact human review",
 					}),
 			}),

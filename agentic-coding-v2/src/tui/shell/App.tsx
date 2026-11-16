@@ -3047,10 +3047,12 @@ export function App(props: {
 					await client.call("schedule.delete", revisioned());
 					clear();
 				} else if (["run", "build", "test"].includes(command)) {
+					const asking = actingOrchestrator();
 					const result = await client.call("environment.action", {
 						apps: [identity],
 						action: command as "run" | "build" | "test",
 						...(words[1] ? { target: words[1] } : {}),
+						...(asking === undefined ? {} : { orchestrator: asking }),
 						requestId: crypto.randomUUID(),
 					});
 					clear();
@@ -3968,6 +3970,21 @@ export function App(props: {
 			seen.add(repository);
 			return [{ id, kind, repository }];
 		});
+	};
+	// The conversation a direct action is taken from, when the shell is showing
+	// one: an orchestrator's own page, or the transcript of a task, whose row
+	// names the orchestrator that admitted it. Anywhere else (the environments
+	// page, a list) no conversation is acting, and the root is the asker.
+	const actingOrchestrator = (): number | undefined => {
+		const sessions = state()?.sessions ?? [];
+		const page = current();
+		if (page.page !== "session") return undefined;
+		const id = Number(page.resource);
+		const row = sessions.find((session) => session.id === id);
+		if (!row) return undefined;
+		if (row.task === null)
+			return row.parent === null ? row.id : (row.parent ?? undefined);
+		return row.parent ?? undefined;
 	};
 	// A profile may be chosen for any orchestrator, the root included; renaming
 	// and retiring apply only to the ones this shell created.

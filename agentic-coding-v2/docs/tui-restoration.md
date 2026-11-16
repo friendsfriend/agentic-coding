@@ -1883,3 +1883,44 @@ socket: the picker lists the configured profiles with the current one marked,
 `now slow`, and a restart of the shell still reads `now slow`. Whole suite green
 (115 files, 668 tests, 5860 assertions, 422 s), official build and
 zero-diagnostic lint (815 files) pass.
+
+## A direct environment action says who asked
+
+The last of the three "who asked" gaps. `environment_action` — both the tool an
+orchestrator calls and the TUI's direct Run/Build/Test — admitted its operator
+task with no asker, so an action taken from a created orchestrator was
+indistinguishable from one the root took. The tool dropped `api.conversationId`
+at the call site and `Runtime.startEnvironmentAction` had nowhere to put it.
+
+Now the asker is threaded through and fenced: `Orchestrators.attributing(id)`
+accepts the root or a still-retained orchestrator and refuses an unknown or
+retired one *before* any environment work starts, the client's
+`environment.action` passes the acting conversation, and the tool passes its own.
+
+Two deliberately narrow decisions:
+
+- **The root is stored as absence.** An action from the root records no
+  `orchestrator` field at all, so every existing root request keeps the record
+  and the request identity it was saved under. The asker is part of that
+  identity only when it is not the root, so replaying one `requestId` from
+  another conversation is a conflict ("already used for a different environment
+  action") rather than a silent adoption of the first task.
+- **This is provenance, not navigation.** An operator task runs without a
+  conversation — the skill task sets `TaskInfo.conversationId`, the operator
+  task never does — so it has no transcript row to move; the shell's session
+  catalog never lists it. The attribution lands in `state.tasks`, which is where
+  the question can actually be answered, and it is what a report would use if
+  operator results ever become messages (they are `reported: true` and stay
+  silent by design: the developer watches the action in the environments view).
+
+I had written the test expecting the row to move under the orchestrator and it
+failed with `undefined` — which is how the "no conversation, no row" constraint
+surfaced. The test now asserts both halves: the record carries the asker, the
+session list never carries the task, and a root action leaves the record as it
+was.
+
+Tests: `test/operator-environment.test.ts` gained the attribution test (9 in
+that file) and `test/orchestrator-sessions.test.ts` the fence test (11), which
+refuses an unknown orchestrator with "not retained" and a retired one with
+"retired". Whole suite green — 115 files, 670 tests, 5865 assertions, 464 s —
+with the official build and zero-diagnostic lint (815 files).

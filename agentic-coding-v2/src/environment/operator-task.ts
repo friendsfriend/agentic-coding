@@ -41,6 +41,8 @@ type Input = {
 	/** Server-derived active linked worktree of a direct UI action. */
 	checkout?: string;
 	baseCommit: string;
+	/** The orchestrator the action was taken from; absent means the root. */
+	orchestrator?: number;
 };
 type ActiveCheckpoint<P extends string> = {
 	phase: P;
@@ -81,6 +83,9 @@ export function operatorOwner(
 		relatedTo: null,
 		createdAt: input.createdAt,
 		reported: true,
+		...(input.orchestrator !== undefined
+			? { orchestrator: input.orchestrator }
+			: {}),
 	};
 }
 

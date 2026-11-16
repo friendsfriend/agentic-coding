@@ -570,3 +570,30 @@ test("a profile choice survives a restart while an unchosen one follows the defa
 		fs.rmSync(plainDirectory, { recursive: true, force: true });
 	}
 }, 180_000);
+
+/** Who asked is fenced: a direct environment action may name an orchestrator, but
+ * only one that is still retained, and never a silent no-op. */
+test("a direct environment action refuses an unknown or retired orchestrator", async () => {
+	const { app } = await fixture();
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-asker-"));
+	try {
+		const created = await app.orchestrators.create({
+			path: directory,
+			title: "Asker",
+		});
+		const request = {
+			apps: ["nothing-is-configured"],
+			action: "run" as const,
+			requestId: "asking-1",
+		};
+		await expect(
+			app.startEnvironmentAction(request, false, 987_654),
+		).rejects.toThrow("not retained");
+		await app.orchestrators.retire(created.id);
+		await expect(
+			app.startEnvironmentAction(request, false, created.id),
+		).rejects.toThrow("retired");
+	} finally {
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 120_000);
