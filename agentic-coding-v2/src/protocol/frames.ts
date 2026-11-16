@@ -630,8 +630,16 @@ export function result<M extends Method>(
 		if (!Array.isArray(data.orchestrators) || data.orchestrators.length > 64)
 			throw new Error("Invalid orchestrator catalog");
 		data.orchestrators.forEach(orchestratorInfo);
-	} else if (method === "orchestrator.create") orchestratorInfo(value);
-	else if (method === "state.read") snapshot(value);
+	} else if (
+		method === "orchestrator.create" ||
+		method === "orchestrator.rename"
+	)
+		orchestratorInfo(value);
+	else if (method === "orchestrator.retire") {
+		const data = record(value);
+		if (!integer(data.id, 1) || data.retired !== true)
+			throw new Error("Invalid orchestrator retirement");
+	} else if (method === "state.read") snapshot(value);
 	else if (method === "session.read") transcript(value);
 	else if (method === "task.read") {
 		const data = record(value);

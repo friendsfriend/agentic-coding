@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { serve } from "../src/server/index.ts";
 import { ClientConnection } from "../src/tui/client/connection.ts";
@@ -130,3 +131,182 @@ test("a child session nests under the orchestrator that admitted it", async () =
 		fs.rmSync(directory, { recursive: true, force: true });
 	}
 }, 120_000);
+
+/** Ownership is decided by the conversation, not by a list of identities: every
+ * orchestrator inspects environments as an orchestrator, and a task conversation
+ * still resolves to its own task. */
+test("a created orchestrator is not mistaken for a task owner", async () => {
+	const { app, fake, invocation } = await fixture();
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-owner-"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.stateFresh,
+			(fresh) => fresh === true,
+		);
+		const created = await client.call("orchestrator.create", {
+			path: directory,
+			title: "Owner fence",
+		});
+		// It works in its own directory, which is what the chooser promised.
+		const conversation = await app.orchestrators.conversation(created.id);
+		expect((await conversation.agent(context)).cwd).toBe(
+			fs.realpathSync(directory),
+		);
+		expect(await app.taskOwnerOrNull(created.id as never)).toBeNull();
+		expect(await app.taskOwnerOrNull(Number(app.home.id) as never)).toBeNull();
+
+		fake.setResponses([fauxAssistantMessage("Observed the checkout")]);
+		const task = await app.startTask(invocation);
+		const snapshot = await eventually(
+			async () => client.call("state.read", {}),
+			(value) => value.sessions.some((session) => session.task === task),
+		);
+		const child = snapshot.sessions.find((session) => session.task === task);
+		expect(child).toBeDefined();
+		// A task conversation keeps its owner; the previous fence is unchanged.
+		expect(await app.taskOwnerOrNull(child?.id as never)).not.toBeNull();
+	} finally {
+		client.close();
+		await host.stop();
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 120_000);
+
+/** A completion is a report to whoever asked for the task. It must reach the
+ * admitting orchestrator's transcript and never be re-routed to the root. */
+test("a task completion reaches the orchestrator that admitted it", async () => {
+	const { app, fake, invocation } = await fixture();
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-report-"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	const contains = (transcript: unknown, marker: string) =>
+		JSON.stringify(transcript).includes(marker);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.stateFresh,
+			(fresh) => fresh === true,
+		);
+		const created = await client.call("orchestrator.create", {
+			path: directory,
+			title: "Reporter",
+		});
+		// One response for the task's own generation, one for the orchestrator's
+		// follow-up turn after the completion arrives.
+		fake.setResponses([
+			fauxAssistantMessage("Task finished"),
+			fauxAssistantMessage("Reported to the developer"),
+		]);
+		const task = await app.startTask(invocation, null, created.id);
+		await eventually(
+			async () => (await app.taskResult(task))?.state.status,
+			(status) => status === "terminal",
+		);
+		await app.tick();
+		// The completion text is itself a JSON string inside the entry, so its
+		// quotes are escaped once more by the transcript serialization.
+		const marker = `\\"taskId\\":${task}`;
+		const admitted = await eventually(
+			async () => client.call("session.read", { id: created.id }),
+			(transcript) => contains(transcript, "Task completion"),
+		);
+		expect(contains(admitted, marker)).toBe(true);
+		const root = await client.call("session.read", {
+			id: Number(app.home.id),
+		});
+		expect(contains(root, "Task completion")).toBe(false);
+	} finally {
+		client.close();
+		await host.stop();
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 180_000);
+
+/** Renaming is a catalog decision; retiring takes it out of the tree, out of
+ * the session catalog and out of completion delivery, while the root and the
+ * transcript stay untouched. */
+test("an orchestrator can be renamed and retired, and the root cannot", async () => {
+	const { app, fake, invocation } = await fixture();
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-retire-"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.stateFresh,
+			(fresh) => fresh === true,
+		);
+		const created = await client.call("orchestrator.create", {
+			path: directory,
+			title: "Draft",
+		});
+		const renamed = await client.call("orchestrator.rename", {
+			id: created.id,
+			title: "Ledger",
+		});
+		expect(renamed).toMatchObject({ id: created.id, title: "Ledger" });
+		const listed = await client.call("orchestrator.read", {});
+		expect(listed.orchestrators.map((entry) => entry.title)).toEqual([
+			"Orchestrator",
+			"Ledger",
+		]);
+
+		// A task admitted by it still reports, so retiring must not lose a result.
+		fake.setResponses([
+			fauxAssistantMessage("Task finished"),
+			fauxAssistantMessage("Reported"),
+		]);
+		const task = await app.startTask(invocation, null, created.id);
+		await eventually(
+			async () => (await app.taskResult(task))?.state.status,
+			(status) => status === "terminal",
+		);
+
+		expect(
+			await client.call("orchestrator.retire", { id: created.id }),
+		).toEqual({
+			id: created.id,
+			retired: true,
+		});
+		const after = await client.call("orchestrator.read", {});
+		expect(after.orchestrators.map((entry) => entry.title)).toEqual([
+			"Orchestrator",
+		]);
+		const snapshot = await client.call("state.read", {});
+		expect(snapshot.sessions.some((session) => session.id === created.id)).toBe(
+			false,
+		);
+		// Its transcript is no longer a session the shell can reach.
+		await expect(
+			client.call("session.read", { id: created.id }),
+		).rejects.toThrow("refused");
+		// Retiring twice, and retiring the root, are both refused.
+		await expect(
+			client.call("orchestrator.retire", { id: created.id }),
+		).rejects.toThrow("refused");
+		await expect(
+			client.call("orchestrator.retire", { id: Number(app.home.id) }),
+		).rejects.toThrow("refused");
+		await expect(
+			client.call("orchestrator.rename", {
+				id: Number(app.home.id),
+				title: "Renamed root",
+			}),
+		).rejects.toThrow("refused");
+
+		// The completion falls back to the root rather than disappearing.
+		await app.tick();
+		const root = await eventually(
+			async () => client.call("session.read", { id: Number(app.home.id) }),
+			(transcript) => JSON.stringify(transcript).includes("Task completion"),
+		);
+		expect(JSON.stringify(root)).toContain(`\\"taskId\\":${task}`);
+	} finally {
+		client.close();
+		await host.stop();
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 180_000);

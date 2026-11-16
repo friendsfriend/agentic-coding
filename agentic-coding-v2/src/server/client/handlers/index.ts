@@ -304,6 +304,19 @@ export async function dispatch(
 				...(typeof input.title === "string" ? { title: input.title } : {}),
 			});
 		}
+		case "orchestrator.rename": {
+			fields(input, ["id", "title"]);
+			return app.orchestrators.rename(
+				integer(input.id),
+				text(input.title, "orchestrator title", 120),
+			);
+		}
+		case "orchestrator.retire": {
+			fields(input, ["id"]);
+			const id = integer(input.id);
+			await app.orchestrators.retire(id);
+			return { id, retired: true as const };
+		}
 		case "session.context":
 			fields(input, ["id"]);
 			return readContext(app, integer(input.id));

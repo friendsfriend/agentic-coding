@@ -41,6 +41,9 @@ export type OrchestratorInfo = {
 	path: string;
 	profile: string;
 	createdAt: number;
+	/** Set when the developer retires it: still retained natively, no longer
+	 * listed, asked or reported to. */
+	retiredAt?: number;
 };
 export type TaskInfo = {
 	id: number;

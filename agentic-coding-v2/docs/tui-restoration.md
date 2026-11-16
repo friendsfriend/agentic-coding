@@ -1730,3 +1730,54 @@ which could terminate the developer's sessions. The developer explicitly forbade
 this. Future probes must use a unique dedicated socket (`tmux -L <unique-name>`)
 and clean up only the session they created. Never kill the default tmux server or
 manage unrelated user sessions.
+
+## Who owns a task, who hears about it, and how an orchestrator ends
+
+The audit behind the `+` row, and the two controls the model was missing.
+
+**One catalog, one authority.** The catalog is session-scoped to the root and
+stays there: an orchestrator that admits work records *who asked* in `TaskInfo`,
+but the task, its review, its evidence and its launch fence are written into the
+root's catalog. A per-orchestrator catalog would split task identity and make a
+projection read one orchestrator's tasks and not another's.
+
+**Ownership is decided by the conversation, not by a list.** Environment tools
+resolved their owner with `id === home.id ? null : ownerOf(id)`, so a *created*
+orchestrator was not "home" and `ownerOf` threw — its `env_list`/`env_status`
+could not work. `Runtime.taskOwnerOrNull()` now answers from the conversation's
+own ownership: no owner means an orchestrator (root or created) and therefore no
+task, an owned conversation still resolves to its task, and `ownerOf`'s refusal
+for non-task conversations is unchanged.
+
+**Completions go to whoever asked.** `tick` submitted every terminal task's
+completion to the root, so a task admitted by a created orchestrator reported into
+a conversation that never asked for it. It now submits to the admitting
+orchestrator (`info.orchestrator`) and to the root only when that orchestrator is
+gone — retired or never recorded — because a dropped report is worse than a
+misdirected one.
+
+**Rename and retire.** `orchestrator.rename` changes the title; `orchestrator.retire`
+aborts whatever it is running and marks `retiredAt`. Retiring is *not* deletion:
+the durable API offers none, and its transcript stays on disk. A retired entry
+leaves `orchestrator.read`, the session catalog and the sidebar, stops being asked,
+and its completions fall back to the root. The root itself can be neither renamed
+nor retired, and a second retirement is refused. `frames.ts` validates both
+responses.
+
+**In the shell:** the sidebar forwards `r`/`d` on the selected row
+(`WorkspaceNavigation` reports the row and intent, it never edits an identity), the
+shell refuses any row that is not a created orchestrator with a notice, and
+`OrchestratorDialog` asks for the new title or for explicit `y` retirement. State
+is re-read only after the host answers; if the conversation on screen was the one
+retired, the shell moves to the root. A session without a task also stopped
+rendering as `Orchestrator › Orchestrator`: the root reads as one crumb.
+
+Tests (`test/orchestrator-sessions.test.ts`, now 6): creation and refusal,
+child nesting, a created orchestrator working in its own `cwd` with no task owner
+while a task conversation keeps its owner, a completion landing in the admitting
+orchestrator and not the root, and rename/retire including double-retire, root
+refusals, the disappearing session and the root fallback report. Verified in a real
+terminal on **an isolated tmux socket** (never the developer's default server):
+`r` renames in place, `d` retires and moves to the root, the root row refuses with
+a notice, and both survive a restart. Whole suite green — 115 files, 664 tests,
+5837 assertions, 430 s.

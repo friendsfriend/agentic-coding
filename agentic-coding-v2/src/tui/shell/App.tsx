@@ -132,6 +132,7 @@ import {
 	type ConfiguredCheckout,
 	OrchestratorChooser,
 } from "../ui/OrchestratorChooser.tsx";
+import { OrchestratorDialog } from "../ui/OrchestratorDialog.tsx";
 import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
 import { color } from "../ui/theme/index.ts";
@@ -266,6 +267,11 @@ export function App(props: {
 		[themeRequested, setThemeOpen] = createSignal(false),
 		[orchestratorRequested, setOrchestratorOpen] = createSignal(false),
 		[orchestratorPending, setOrchestratorPending] = createSignal(false),
+		[orchestratorDialog, setOrchestratorDialog] = createSignal<{
+			id: number;
+			title: string;
+			mode: "rename" | "retire";
+		} | null>(null),
 		// Locations a mounted feature published (its loaded resources). The shell
 		// owns the copy the picker reads; the feature decides what its current
 		// page can offer and publishes an empty list otherwise.
@@ -309,6 +315,7 @@ export function App(props: {
 		locationRequested() ||
 		themeRequested() ||
 		orchestratorRequested() ||
+		orchestratorDialog() !== null ||
 		messageDialog() !== null ||
 		quitConfirmation() ||
 		usageWindow() !== null;
@@ -3632,8 +3639,16 @@ export function App(props: {
 			const session = state()?.sessions.find(
 				(session) => String(session.id) === selected.resource,
 			);
-			// A session without a task is an orchestrator itself, so its own
-			// breadcrumb names the conversation, not a task that spawned it.
+			// A session without a task is an orchestrator itself: the root reads as
+			// one crumb, a created one names itself under that name.
+			if (session && session.parent === null)
+				return [
+					{
+						page: selected.page,
+						resource: selected.resource,
+						label: session.title,
+					},
+				];
 			return [
 				{
 					page: session?.task == null ? "orchestrator" : "tasks",
@@ -3941,6 +3956,68 @@ export function App(props: {
 			return [{ id, kind, repository }];
 		});
 	};
+	// Only an orchestrator this shell created may be renamed or retired; the
+	// root is the app's own conversation and keeps its identity.
+	const openOrchestratorAction = (
+		value: string,
+		action: "rename" | "retire",
+	) => {
+		const id = value.startsWith("session:")
+			? Number(value.slice(8))
+			: Number.NaN;
+		const sessions = state()?.sessions ?? [];
+		const session = sessions.find((item) => item.id === id);
+		const root = sessions.find((item) => item.parent === null)?.id;
+		if (
+			!session ||
+			session.parent !== null ||
+			session.task !== null ||
+			session.id === root
+		) {
+			setNotice("Select a created orchestrator row to rename or retire it");
+			return;
+		}
+		setOrchestratorDialog({
+			id: session.id,
+			title: session.title,
+			mode: action,
+		});
+	};
+	// A rename or retirement is a host decision too: state is re-read only after
+	// the host answers, and a retired conversation currently on screen gives way
+	// to the first remaining orchestrator.
+	const applyOrchestratorAction = async (input: {
+		action: "rename" | "retire";
+		id: number;
+		title?: string;
+	}) => {
+		if (orchestratorPending()) return;
+		setOrchestratorPending(true);
+		try {
+			if (input.action === "rename")
+				await client.call("orchestrator.rename", {
+					id: input.id,
+					title: input.title ?? "",
+				});
+			else await client.call("orchestrator.retire", { id: input.id });
+			client.state = await client.call("state.read", {});
+			update();
+			setRefreshRevision((value) => value + 1);
+			setOrchestratorDialog(null);
+			if (!state()?.sessions.some((item) => item.id === sessionId())) {
+				const next = state()?.sessions.find((item) => item.parent === null);
+				if (next) go("session", String(next.id));
+				else go("home");
+			}
+		} catch (error) {
+			reportError(
+				error instanceof Error ? error.message : "Command refused",
+				"Orchestrator",
+			);
+		} finally {
+			setOrchestratorPending(false);
+		}
+	};
 	// Creating one is a host decision: the shell navigates only once the host has
 	// answered with the new conversation, and a refusal is reported as it came.
 	const createOrchestrator = async (input: { path: string; title: string }) => {
@@ -4051,6 +4128,7 @@ export function App(props: {
 			onCursor={setSidebarCursor}
 			active={current().focus === "sessions" && !paletteOpen() && !helpOpen()}
 			entries={sidebarOptions()}
+			onRowAction={openOrchestratorAction}
 			onWidth={setWorkspaceWidth}
 			focus={() => {
 				navigation.current.focus = "sessions";
@@ -5075,6 +5153,22 @@ export function App(props: {
 					dismiss={notifications.clear}
 					interactive={() => !helpOpen() && !paletteOpen()}
 				/>
+				<Show when={orchestratorDialog()}>
+					{(dialog) => (
+						<OrchestratorDialog
+							target={{ id: dialog().id, title: dialog().title }}
+							mode={dialog().mode}
+							pending={orchestratorPending}
+							rename={(input) =>
+								applyOrchestratorAction({ action: "rename", ...input })
+							}
+							retire={(input) =>
+								applyOrchestratorAction({ action: "retire", ...input })
+							}
+							close={() => setOrchestratorDialog(null)}
+						/>
+					)}
+				</Show>
 				<Show
 					when={
 						orchestratorRequested() &&

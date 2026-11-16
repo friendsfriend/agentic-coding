@@ -318,6 +318,14 @@ export type Methods = {
 		input: { path: string; title?: string };
 		output: OrchestratorInfo;
 	};
+	"orchestrator.rename": {
+		input: { id: number; title: string };
+		output: OrchestratorInfo;
+	};
+	"orchestrator.retire": {
+		input: { id: number };
+		output: { id: number; retired: true };
+	};
 	"state.subscribe": { input: Data; output: { subscribed: true } };
 	"session.context": { input: { id: number }; output: SessionContext };
 	"session.read": { input: { id: number }; output: Transcript };
@@ -614,6 +622,8 @@ export const methods: Method[] = [
 	"state.read",
 	"orchestrator.read",
 	"orchestrator.create",
+	"orchestrator.rename",
+	"orchestrator.retire",
 	"state.subscribe",
 	"session.read",
 	"session.context",

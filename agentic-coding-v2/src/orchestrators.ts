@@ -26,11 +26,63 @@ export class Orchestrators {
 	}
 
 	async read(): Promise<OrchestratorInfo[]> {
+		return [this.rootInfo(), ...(await this.created())];
+	}
+
+	/** Created orchestrators that are not retired, in creation order. */
+	private async created(): Promise<OrchestratorInfo[]> {
 		const doc = await this.app.harness.snapshot(Catalog, context);
-		const created = Object.values(doc?.orchestrators ?? {})
+		return Object.values(doc?.orchestrators ?? {})
 			.map((raw) => decode<OrchestratorInfo>(raw))
+			.filter((entry) => entry.retiredAt === undefined)
 			.sort((left, right) => left.createdAt - right.createdAt);
-		return [this.rootInfo(), ...created];
+	}
+
+	/** One created orchestrator, retired or not: the fence for update/retire. */
+	private async retained(id: number): Promise<OrchestratorInfo> {
+		const doc = await this.app.harness.snapshot(Catalog, context);
+		const raw = doc?.orchestrators?.[String(id)];
+		if (!raw) throw new Error("Orchestrator is not retained");
+		return decode<OrchestratorInfo>(raw);
+	}
+
+	async rename(id: number, title: string): Promise<OrchestratorInfo> {
+		const entry = await this.retained(id);
+		if (entry.retiredAt !== undefined)
+			throw new Error("Orchestrator is retired");
+		if (entry.id === Number(this.app.home.id))
+			throw new Error("The root orchestrator keeps its own title");
+		const next = {
+			...entry,
+			title: text(title.trim(), "orchestrator title", 120),
+		};
+		await this.save(next);
+		return next;
+	}
+
+	/** Retire it: abort whatever it is running, keep the transcript on disk and
+	 * stop listing, asking and reporting to it. Deletion is not offered because
+	 * the durable API does not offer one; the entry stays fenced instead. */
+	async retire(id: number): Promise<OrchestratorInfo> {
+		const entry = await this.retained(id);
+		if (entry.id === Number(this.app.home.id))
+			throw new Error("The root orchestrator cannot be retired");
+		if (entry.retiredAt !== undefined)
+			throw new Error("Orchestrator is already retired");
+		await (await this.conversation(id)).abort(context);
+		const next = { ...entry, retiredAt: Date.now() };
+		await this.save(next);
+		return next;
+	}
+
+	private async save(entry: OrchestratorInfo): Promise<void> {
+		await this.app.home.commit(async (tx) => {
+			const doc = await tx.doc(Catalog);
+			doc.orchestrators = {
+				...(doc.orchestrators ?? {}),
+				[String(entry.id)]: JSON.stringify(entry),
+			};
+		}, context);
 	}
 
 	/** Resolve one orchestrator conversation by identity, or refuse. */

@@ -73,6 +73,20 @@ export const workspaceNavigationKeybinds: Keybind[] = [
 		action: "Next workspace entry",
 		standard: true,
 	},
+	// Row actions belong to the caller: this panel only reports which row and
+	// which intent, so it never edits a native identity itself.
+	{
+		key: "r",
+		cmd: "workspace.rename",
+		action: "Rename the selected orchestrator",
+		short: "rename",
+	},
+	{
+		key: "d",
+		cmd: "workspace.retire",
+		action: "Retire the selected orchestrator",
+		short: "retire",
+	},
 	// Terminals report Return as either name; a row that only answered one of
 	// them looked like a dead Enter (the Home list already binds both).
 	...["enter", "return"].map((key) => ({
@@ -99,6 +113,8 @@ export function WorkspaceNavigation(props: {
 	entries: WorkspaceEntry[];
 	/** Fixed leading UI pins, rendered outside the scrolling resource list. */
 	pinCount?: number;
+	/** A row action on the selected row; omitted when the caller offers none. */
+	onRowAction?: (value: string, action: "rename" | "retire") => void;
 	/** The selected row, owned by the caller. A row move never navigates. */
 	cursor: string;
 	onCursor: (value: string) => void;
@@ -234,6 +250,22 @@ export function WorkspaceNavigation(props: {
 				run: () => move(1),
 			},
 			{ id: "workspace.open", name: "Open workspace entry", run: open },
+			{
+				id: "workspace.rename",
+				name: "Rename the selected orchestrator",
+				run: () => {
+					if (!props.active || !interactive()) return;
+					props.onRowAction?.(cursorValue(), "rename");
+				},
+			},
+			{
+				id: "workspace.retire",
+				name: "Retire the selected orchestrator",
+				run: () => {
+					if (!props.active || !interactive()) return;
+					props.onRowAction?.(cursorValue(), "retire");
+				},
+			},
 		]),
 		bindings: bindings(workspaceNavigationKeybinds),
 	});
