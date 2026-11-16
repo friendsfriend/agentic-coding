@@ -61,15 +61,21 @@ export function OrchestratorChooser(props: {
 		const start = Math.max(0, Math.min(count - size, index() - size + 1));
 		return { start, size };
 	});
+	// Row 0 is the typed path, so a configured row's index is its own position
+	// plus the offset of the window inside `rows()` — never the window start
+	// itself, which would mark row 0 as both the typed path and the first
+	// checkout.
+	const configuredOffset = () => Math.max(0, listing().start - 1);
 	const configuredRows = createMemo(() =>
 		rows()
 			.slice(1)
 			.slice(
-				Math.max(0, listing().start - 1),
-				Math.max(0, listing().start - 1) + listing().size,
+				configuredOffset(),
+				configuredOffset() + listing().size - (listing().start === 0 ? 1 : 0),
 			),
 	);
 	const customVisible = () => listing().start === 0;
+	const rowIndex = (position: number) => 1 + configuredOffset() + position;
 	const move = (delta: number) => {
 		const total = rows().length;
 		if (!total) return;
@@ -176,7 +182,7 @@ export function OrchestratorChooser(props: {
 					</box>
 					<For each={configuredRows()}>
 						{(entry, position) => {
-							const row = () => listing().start + position();
+							const row = () => rowIndex(position());
 							return (
 								<Card
 									height={ROW_HEIGHT}

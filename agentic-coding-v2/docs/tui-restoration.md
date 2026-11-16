@@ -1702,3 +1702,31 @@ the configured checkout listed, `Enter` again creates the orchestrator and lands
 side of the same flow is `test/orchestrator-sessions.test.ts` (3 tests): creation,
 refusal with an unchanged catalog, and a child session nested under the
 orchestrator that admitted it.
+
+## The chooser's first checkout used row 0 too
+
+Developer screenshot: the custom path and the first configured checkout were both
+marked at index 0. The custom path owns row 0; a configured row owns its position
+in the *configured* slice plus 1 and the slice offset. `listing().start +
+position()` was wrong at the start of the list (both row 0), and it also made the
+window show one extra configured row there.
+
+`configuredOffset()` now names the configured slice's offset; `rowIndex()` is
+`1 + configuredOffset() + position`. The slice reserves one row for the custom
+path when that row is visible, so the window's size is respected. Selection and
+pointer activation use the same index, and Enter still acts on `rows()[index]`.
+
+Verified in a real tmux terminal at 150×40 against throwaway config/state with 12
+configured app/library checkouts and an excluded infrastructure entry: at index 0
+only the custom row is marked, Down marks only checkout-00, scrolling to index 10
+marks only checkout-09, and Enter opens `Orchestrator › checkout-09`. Throwaway
+state removed. Unfiltered type-check and zero-diagnostic lint (813 files), official
+build, and gateway/attach/orchestrator tests (12 tests / 138 assertions) pass.
+
+### Probe isolation correction
+
+The probes above incorrectly used the default tmux socket and `tmux kill-server`,
+which could terminate the developer's sessions. The developer explicitly forbade
+this. Future probes must use a unique dedicated socket (`tmux -L <unique-name>`)
+and clean up only the session they created. Never kill the default tmux server or
+manage unrelated user sessions.
