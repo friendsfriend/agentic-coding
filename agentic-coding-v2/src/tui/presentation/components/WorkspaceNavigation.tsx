@@ -6,7 +6,6 @@ import {
 	createMemo,
 	createSignal,
 	For,
-	on,
 	onCleanup,
 	Show,
 	untrack,
@@ -96,7 +95,9 @@ export function WorkspaceNavigation(props: {
 	entries: WorkspaceEntry[];
 	/** Fixed leading UI pins, rendered outside the scrolling resource list. */
 	pinCount?: number;
-	selected: string;
+	/** The selected row, owned by the caller. A row move never navigates. */
+	cursor: string;
+	onCursor: (value: string) => void;
 	open: (value: string) => void;
 	focus: () => void;
 	onWidth: (width: number) => void;
@@ -118,7 +119,10 @@ export function WorkspaceNavigation(props: {
 	const toggleSize = () => {
 		if (interactive()) props.onToggleMode();
 	};
-	const [cursorValue, setCursorValue] = createSignal(props.selected);
+	// The cursor is the caller's state (v1 kept destination selection in
+	// route-keyed view state); this panel only reports movement.
+	const cursorValue = () => props.cursor;
+	const setCursorValue = (value: string) => props.onCursor(value);
 	let scroll: ScrollBoxRenderable | undefined;
 	const expandedByState = () => permanent() || props.active;
 	const targetWidth = () => Math.min(34, Math.max(6, dimensions().width - 30));
@@ -168,12 +172,6 @@ export function WorkspaceNavigation(props: {
 		Math.min(entries().length, Math.max(0, Math.floor(props.pinCount ?? 0)));
 	const cursor = createMemo(() =>
 		entries().findIndex((entry) => entry.value === cursorValue()),
-	);
-	createEffect(
-		on(
-			() => props.selected,
-			(selected) => setCursorValue(selected),
-		),
 	);
 	const open = () => {
 		if (!props.active || !interactive()) return;

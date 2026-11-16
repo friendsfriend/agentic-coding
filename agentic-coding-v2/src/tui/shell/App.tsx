@@ -1075,10 +1075,6 @@ export function App(props: {
 		revision();
 		return client.status;
 	});
-	const bookmarks = () => {
-		revision();
-		return viewpoints.all;
-	};
 	const connectionError = () => {
 		revision();
 		return client.error;
@@ -3854,41 +3850,43 @@ export function App(props: {
 					: entry.task.status !== null && entry.task.status !== "terminal"),
 		),
 	);
-	const sidebarOptions = () => [
-		...["OpenCode", "Pi", "Pi Durable", "Orchestrator"].map((name, index) => ({
-			name,
-			description:
-				index < 2
-					? "Embedded coding agent terminal (PTY) · shares this shell's lifetime"
-					: "Native",
-			value: `mode:${index}`,
-		})),
-		{
-			name: `${current().expanded.includes("sidebar:children") ? "▾" : "▸"} Native children`,
-			description: "",
-			value: "tree:children",
-		},
-		...(current().expanded.includes("sidebar:children")
-			? (state()
-					?.sessions.filter((session) => session.parent !== null)
-					.map((session) => ({
-						name: `  ${session.writable ? "▸" : "·"} ${session.title}`,
-						description: `Session ${session.id}`,
-						value: `session:${session.id}`,
-					})) ?? [])
-			: []),
-		...filteredWorkspaceTasks(),
-		...bookmarks().map((item) => ({
-			name: item.name,
-			description: `${item.view.page} · UI-only viewpoint`,
-			value: `bookmark:${item.id}`,
-		})),
-		...pages.map(([page, title]) => ({
-			name: title,
-			description: "",
-			value: page,
-		})),
-	];
+	// The sidebar is the shell's own navigation tree, nothing else: Menu first,
+	// the two embedded agents, the orchestrator and its child sessions. Every
+	// other surface is reached through Menu, exactly as v1's destination list
+	// worked; tasks, viewpoints and pages no longer pad this list.
+	const sidebarOptions = () => {
+		const children = (state()?.sessions ?? [])
+			.filter((session) => session.parent !== null)
+			.slice(0, 20)
+			.map((session) => ({
+				name: `${session.writable ? "▸" : "·"} ${session.title}`,
+				description: `Session ${session.id}`,
+				value: `session:${session.id}`,
+			}));
+		return [
+			{
+				name: "Menu",
+				description: "All destinations",
+				value: "home",
+			},
+			{
+				name: "OpenCode",
+				description: "Embedded terminal · shares this shell's lifetime",
+				value: "opencode",
+			},
+			{
+				name: "Pi",
+				description: "Embedded terminal · shares this shell's lifetime",
+				value: "pi",
+			},
+			{
+				name: "Orchestrator",
+				description: "Native conversation",
+				value: "orchestrator",
+			},
+			...children,
+		];
+	};
 
 	const workspaceInteractive = () =>
 		!paletteOpen() &&
@@ -3896,50 +3894,40 @@ export function App(props: {
 		!timeline() &&
 		!settingsEditing() &&
 		!busy();
-	const workspaceSelected = () =>
-		current().page === "tasks" && current().resource !== null
-			? `task:${current().resource}`
-			: current().page === "session"
-				? `session:${current().resource}`
-				: ["opencode", "pi", "pi-durable", "orchestrator"].includes(
-							current().page,
-						)
-					? `mode:${["opencode", "pi", "pi-durable", "orchestrator"].indexOf(current().page)}`
-					: current().page;
+	const workspaceSelected = () => {
+		const page = current().page;
+		if (page === "session") return `session:${current().resource ?? ""}`;
+		return ["home", "opencode", "pi", "orchestrator"].includes(page)
+			? page
+			: "";
+	};
+	const [sidebarCursor, setSidebarCursor] = createSignal("home");
+	// Only a change of route moves the cursor; a row move never navigates, so it
+	// can never be undone by the next snapshot or re-render.
+	let syncedSidebarRoute = "";
+	createEffect(() => {
+		const route = workspaceSelected();
+		if (route === syncedSidebarRoute) return;
+		syncedSidebarRoute = route;
+		if (sidebarOptions().some((entry) => entry.value === route))
+			setSidebarCursor(route);
+	});
+
 	const openWorkspaceEntry = (value: string) => {
 		if (
 			!workspaceInteractive() ||
 			!sidebarOptions().some((entry) => entry.value === value)
 		)
 			return;
-
-		if (value.startsWith("bookmark:")) {
-			remember();
-			viewpoints.restore(value.slice(9), navigation);
-			restore();
-		} else if (value === "tree:children") {
-			navigation.current.expanded = current().expanded.includes(
-				"sidebar:children",
-			)
-				? current().expanded.filter((key) => key !== "sidebar:children")
-				: [...current().expanded, "sidebar:children"];
-			update();
-		} else if (value.startsWith("mode:"))
-			go(
-				(["opencode", "pi", "pi-durable", "orchestrator"] as Page[])[
-					Number(value.slice(5))
-				] ?? "orchestrator",
-			);
-		else if (value.startsWith("task:")) go("tasks", value.slice(5));
-		else if (value.startsWith("session:")) go("session", value.slice(8));
-		else go(value as Page);
+		if (value.startsWith("session:")) go("session", value.slice(8));
+		else if (["home", "opencode", "pi", "orchestrator"].includes(value))
+			go(value as Page);
 	};
 	const cycleWorkspace = (direction: -1 | 1) => {
 		if (!workspaceInteractive()) return;
 		// Cycle actual routes, not a disclosure toggle or an unrelated saved view.
 		const entries = sidebarOptions().filter(
-			(entry) =>
-				entry.value !== "tree:children" && !entry.value.startsWith("bookmark:"),
+			(entry) => !entry.value.startsWith("session:"),
 		);
 		if (!entries.length) return;
 		const index = entries.findIndex(
@@ -3978,10 +3966,11 @@ export function App(props: {
 				update();
 			}}
 			pinCount={4}
+			cursor={sidebarCursor()}
+			onCursor={setSidebarCursor}
 			active={current().focus === "sessions" && !paletteOpen() && !helpOpen()}
 			entries={sidebarOptions()}
 			onWidth={setWorkspaceWidth}
-			selected={workspaceSelected()}
 			focus={() => {
 				navigation.current.focus = "sessions";
 				update();

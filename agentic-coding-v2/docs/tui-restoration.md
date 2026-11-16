@@ -1564,3 +1564,31 @@ result so the remaining work is stated rather than assumed.
   test, on top of unfiltered type-check, zero-diagnostic lint (810 files), the
   official build and diff whitespace checks. Visual/runtime acceptance remains
   user-owned; full restoration parity stays open and unarchived.
+
+## The shell sidebar is the navigation tree, and its cursor is the caller's
+
+Two defects the developer reported after the first real run, and the fix for both.
+
+- **The cursor bounced back.** `WorkspaceNavigation` kept its own cursor signal
+  and re-synced it from the current route on every change, so a `j` that moved
+  the cursor was undone by the next snapshot or re-render. Selection is now the
+  *caller's* state (`cursor`/`onCursor`), which is v1's own contract for
+  destination lists ("selection state is controlled by the caller so it can live
+  in route-keyed view state"). The shell owns the cursor, moves it only on a
+  route change that names a row, and a row move never navigates — so nothing
+  inside the panel can reset what the developer just selected.
+- **The entries were padded.** The sidebar is the shell's navigation tree and
+  nothing else: `Menu` (the Home destination list, previously labelled Home),
+  `OpenCode`, `Pi`, `Orchestrator`, then that orchestrator's child sessions.
+  Tasks, saved viewpoints and the page list are gone from it — every other
+  surface is reached through Menu, exactly as v1's destination list worked, and
+  the child rows no longer hide behind a disclosure row.
+- **Pi Durable is not a sidebar row any more.** The page and its native authority
+  stay (and `/mode pi-durable` still reaches them); only the row is gone, pending
+  the multiple-orchestrator sessions that replace it.
+- The four leading rows are the panel's fixed pins; child sessions scroll, and
+  `Ctrl+H`/`Ctrl+L` cycle the four routes without stepping through sessions.
+- Verification: unfiltered type-check, zero-diagnostic lint (810 files), official
+  build, gateway suite and diff whitespace checks. The reported interactions were
+  not exercised in a real terminal by this change, so the run remains the
+  developer's acceptance.
