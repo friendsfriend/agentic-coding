@@ -236,7 +236,8 @@ export class Runtime {
 			);
 			app.timer = new Scheduler(
 				app.harness,
-				(input, slot) => app.startTask(input, slot),
+				// An occurrence keeps the attribution the schedule recorded.
+				(input, slot, orchestrator) => app.startTask(input, slot, orchestrator),
 				(input) => app.validateInvocation(input),
 			);
 			app.harness.resume();

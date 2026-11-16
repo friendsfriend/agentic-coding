@@ -140,6 +140,8 @@ export function createOrchestrator(
 				}),
 				replay: "safe",
 				execute: async (args, api, ctx) => {
+					// The occurrence reports to whoever asked for the schedule; the
+					// approval still belongs to the developer.
 					const existing = await app.scheduler.find(
 						args.invocation,
 						args.timing,
@@ -184,6 +186,7 @@ export function createOrchestrator(
 							args.timing,
 							args.lateGraceMs,
 							args.id,
+							Number(api.conversationId),
 						),
 					);
 				},

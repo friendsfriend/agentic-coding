@@ -132,6 +132,9 @@ export type Schedule = {
 	revision: number;
 	activeTask: number | null;
 	lastSlot: number | null;
+	/** The orchestrator that requested this schedule; its occurrences report
+	 * back there. Absent means the root asked. */
+	orchestrator?: number;
 	lateGraceMs: number | null;
 	history: { due: number; task: number | null; result: string }[];
 };

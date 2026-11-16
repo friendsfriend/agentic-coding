@@ -1809,4 +1809,31 @@ back, expects a *different* identity for the same intent to be refused by the
 duplicate-directory fence, and expects a replay after retirement to be refused.
 Verified in a real terminal on an isolated tmux socket with 26 orchestrators
 seeded on disk: the tree lists them past the old 20-row limit and `k` scrolls to
-the last one. Whole-suite and build checks below.
+the last one. Whole suite green — 115 files, 666 tests, 5843 assertions, 431 s —
+and the official build and zero-diagnostic lint pass.
+
+## A schedule remembers who asked for it
+
+Item 1's last ownership question. Scheduled occurrences were admitted as the root's
+children whatever orchestrator requested the schedule, and their completions went
+to the root for the same reason: `Scheduler` was constructed with a two-argument
+lambda, `(input, slot) => app.startTask(input, slot)`, which silently dropped the
+attribution argument the scheduler already had in hand. Two things now hold:
+
+- `Schedule.orchestrator` records the asking conversation at creation (the
+  `schedule_skill` tool passes its own `api.conversationId`), and every occurrence
+  is admitted with that attribution. The human approval that creates the schedule
+  is unchanged and still the developer's.
+- The runtime's `Scheduler` is wired with all three arguments, so the attribution
+  reaches `TaskAdmission` and the completion routing added earlier.
+
+The result is the same shape as a manually admitted task: a scheduled run is a
+child of the orchestrator that asked, and its report lands there. A schedule
+created before this change has no attribution and stays root-owned — nothing is
+retroactively reassigned.
+
+Test: `test/orchestrator-sessions.test.ts` now has 8 — a once-schedule created by
+a created orchestrator is ticked, its occurrence appears as that orchestrator's
+child, and the task carries the orchestrator identity. Whole suite green (115
+files, 666 tests, 5843 assertions, 431 s), official build and zero-diagnostic lint
+(814 files) pass.

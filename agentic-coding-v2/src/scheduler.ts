@@ -96,6 +96,8 @@ export class Scheduler {
 		timing: Timing,
 		lateGraceMs: number | null,
 		id: string,
+		/** Who asked for it; occurrences report to that orchestrator. */
+		orchestrator?: number,
 	) {
 		const previous = await this.find(invocation, timing, lateGraceMs, id);
 		if (previous) return previous;
@@ -119,6 +121,7 @@ export class Scheduler {
 			lateGraceMs,
 			history: [],
 			lastError: null,
+			...(orchestrator !== undefined ? { orchestrator } : {}),
 		};
 		return this.harness.commit(async (tx) => {
 			const doc = await tx.doc(Catalog);
@@ -207,6 +210,7 @@ export class Scheduler {
 							requestId: `schedule:${schedule.id}:${slot.due}`,
 						},
 						slot,
+						schedule.orchestrator,
 					);
 			} catch (error) {
 				await this.harness.commit(async (tx) => {

@@ -369,3 +369,50 @@ test("a repeated creation request returns the orchestrator it already made", asy
 		fs.rmSync(directory, { recursive: true, force: true });
 	}
 }, 120_000);
+
+/** A schedule remembers who asked for it, so its occurrences are that
+ * orchestrator's children and report back there — not silently to the root. */
+test("a scheduled occurrence belongs to the orchestrator that asked for it", async () => {
+	const { app, fake, invocation } = await fixture();
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-sched-"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.stateFresh,
+			(fresh) => fresh === true,
+		);
+		const created = await client.call("orchestrator.create", {
+			path: directory,
+			title: "Scheduler",
+		});
+		const due = Date.now() + 1_000;
+		await app.scheduler.create(
+			{ ...invocation, requestId: "scheduled-1" },
+			{ kind: "once", at: due },
+			null,
+			"scheduled-1",
+			created.id,
+		);
+		fake.setResponses([fauxAssistantMessage("Scheduled run finished")]);
+		await app.tick(due + 1_000);
+		const snapshot = await eventually(
+			async () => client.call("state.read", {}),
+			(value) =>
+				value.sessions.some(
+					(session) => session.task !== null && session.parent === created.id,
+				),
+		);
+		const child = snapshot.sessions.find(
+			(session) => session.task !== null && session.parent === created.id,
+		);
+		expect(child).toBeDefined();
+		const task = snapshot.tasks.find((item) => item.id === child?.task);
+		expect(task?.orchestrator).toBe(created.id);
+	} finally {
+		client.close();
+		await host.stop();
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 180_000);
