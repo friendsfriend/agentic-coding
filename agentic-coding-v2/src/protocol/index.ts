@@ -32,6 +32,9 @@ export type Session = {
 	task: number | null;
 	title: string;
 	writable: boolean;
+	/** The directory an orchestrator works in. Absent for a task conversation,
+	 * which borrows its orchestrator's. */
+	path?: string;
 };
 export type Snapshot = {
 	telemetryRevision?: number;

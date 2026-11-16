@@ -1924,3 +1924,41 @@ that file) and `test/orchestrator-sessions.test.ts` the fence test (11), which
 refuses an unknown orchestrator with "not retained" and a retired one with
 "retired". Whole suite green — 115 files, 670 tests, 5865 assertions, 464 s —
 with the official build and zero-diagnostic lint (815 files).
+
+## An orchestrator row says where it works
+
+`Session` gained `path` for the orchestrator rows, so the sidebar can say which
+checkout a row works in instead of printing a raw id (`Orchestrator 3`, which no
+developer can use for anything).
+
+The row shows the directory's **leaf** when that leaf is unambiguous, and
+`parent/leaf` otherwise — two directories can share a leaf, and one directory can
+hold two orchestrators. The shortening is done before the renderer sees it, with
+a budget that keeps the leaf, because the renderer truncates from the right and
+would throw away exactly the part that identifies the checkout. The first
+attempt elided to the sidebar's own width and produced a double elision —
+`…ntic-coding/agentic-codi…` — which hid the leaf; the budget now accounts for
+the meta column.
+
+The `+` chooser learned the same thing from the other side: it lists the
+orchestrators that already exist, so a directory in use is visible before it is
+chosen again. It is a note, never a refusal — a path is the agent's working
+directory, not a lock, and the same directory twice is a legitimate pair of
+conversations distinguished by their titles. Configured checkouts in the list
+carry `· in use` for the same reason.
+
+**And a defect the probe found:** typing `/` into the chooser's path field did
+nothing. The key was bound as `{ key: "slash" }`, which never matches the
+character a keyboard sends, so every separator was dropped — `…/other/api` became
+`otherapi` — and an absolute path could not be typed at all; only the prefilled
+directory and the configured rows worked. It is bound as `"/"` now, the same way
+`LocationPicker` binds its search key. Space was bound the same way and did work,
+so only the separator was affected.
+
+Probed on an isolated tmux socket: the chooser notes
+`already "Orchestrator" · a second is allowed` for the shell's own directory and
+creates the second orchestrator; the sidebar then shows two rows with different
+titles and the same directory, and an orchestrator in another directory shows its
+own leaf. Test: `test/orchestrator-sessions.test.ts` (11) asserts the directory
+travels with the session row. Whole suite green — 115 files, 670 tests, 5865
+assertions, 426 s — official build and zero-diagnostic lint (815 files) pass.

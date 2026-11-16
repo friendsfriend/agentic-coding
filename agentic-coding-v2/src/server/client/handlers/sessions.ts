@@ -28,6 +28,9 @@ export async function sessionCatalog(
 		task: null,
 		title: entry.title,
 		writable: true,
+		// Where this orchestrator works: two in one directory are distinguished by
+		// their titles, and each row can still say which checkout it is in.
+		path: entry.path,
 	}));
 	for (const info of state.tasks) {
 		const task = await app.taskResult(info.id);

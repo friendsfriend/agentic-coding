@@ -3896,8 +3896,37 @@ export function App(props: {
 	// sessions, and finally the row that starts another orchestrator. Every
 	// other surface is reached through Menu, exactly as v1's destination list
 	// worked; tasks, viewpoints and pages no longer pad this list.
+	// A directory is read from its end: the leaf says which checkout a row works
+	// in, while a shared prefix says very little. The renderer shortens a long
+	// row from the right, so the shortening happens here first — with a budget
+	// that keeps the leaf — instead of throwing away the part that identifies it.
+	const elidedPath = (value: string) => {
+		// Glyph column, padding and the meta's own margin.
+		const room = Math.min(20, Math.max(10, workspaceWidth() - 12));
+		return value.length <= room
+			? value
+			: `…${value.slice(value.length - room + 1)}`;
+	};
+	const leafOf = (value: string) =>
+		value.split("/").filter(Boolean).at(-1) ?? "";
 	const sidebarOptions = () => {
 		const sessions = state()?.sessions ?? [];
+		// Two checkouts may share a leaf, and one directory may hold two
+		// orchestrators; the leaf alone is enough only when it is unambiguous.
+		const leaves = new Map<string, number>();
+		for (const session of sessions)
+			if (session.parent === null && session.path) {
+				const leaf = leafOf(session.path);
+				leaves.set(leaf, (leaves.get(leaf) ?? 0) + 1);
+			}
+		const directory = (session: (typeof sessions)[number]) => {
+			const path = session.path;
+			if (!path) return `Orchestrator ${session.id}`;
+			const leaf = leafOf(path);
+			if ((leaves.get(leaf) ?? 0) <= 1) return leaf || path;
+			const parent = leafOf(path.slice(0, path.lastIndexOf("/")));
+			return elidedPath(parent ? `${parent}/${leaf}` : path);
+		};
 		// Roots are the orchestrators; a child is listed under the orchestrator
 		// that admitted it, so the tree shows who owns what.
 		const tree = sessions
@@ -3905,7 +3934,7 @@ export function App(props: {
 			.flatMap((root) => [
 				{
 					name: root.title,
-					description: `Orchestrator ${root.id}`,
+					description: directory(root),
 					value: `session:${root.id}`,
 					glyph: "∞",
 				},
@@ -5277,6 +5306,13 @@ export function App(props: {
 					<OrchestratorChooser
 						initialPath={process.cwd()}
 						configured={configuredCheckouts}
+						existing={() =>
+							(state()?.sessions ?? []).flatMap((session) =>
+								session.parent === null && session.path
+									? [{ title: session.title, path: session.path }]
+									: [],
+							)
+						}
 						pending={orchestratorPending}
 						create={createOrchestrator}
 						close={() => setOrchestratorOpen(false)}

@@ -56,7 +56,13 @@ test("a created orchestrator is a sibling conversation in its own directory", as
 		// it without a second listing.
 		const snapshot = await client.call("state.read", {});
 		const session = snapshot.sessions.find((item) => item.id === created.id);
-		expect(session).toMatchObject({ parent: null, title: "Payments" });
+		// The directory travels with the row, so a shell can say where an
+		// orchestrator works — including when two share one directory.
+		expect(session).toMatchObject({
+			parent: null,
+			title: "Payments",
+			path: fs.realpathSync(directory),
+		});
 	} finally {
 		client.close();
 		await host.stop();
