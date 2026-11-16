@@ -8,12 +8,36 @@ import { defaultConfigDir, loadConfig } from "./config.ts";
 import { acquireLock } from "./lock.ts";
 import { Runtime } from "./runtime.ts";
 import { serve } from "./server/index.ts";
+import type { WindowRoute } from "./tui/index.tsx";
+
+/** The view an attached window opens: a page and, optionally, its resource. */
+function attachRoute(value: string | undefined): WindowRoute | undefined {
+	if (value === undefined) return undefined;
+	const parsed: unknown = JSON.parse(value);
+	if (
+		typeof parsed !== "object" ||
+		parsed === null ||
+		typeof (parsed as { page?: unknown }).page !== "string"
+	)
+		throw new Error("--route must be a {page, resource} object");
+	const page = (parsed as { page: string }).page;
+	const resource = (parsed as { resource?: unknown }).resource;
+	if (
+		resource !== undefined &&
+		resource !== null &&
+		typeof resource !== "string"
+	)
+		throw new Error("--route resource must be a string or null");
+	if (!/^[a-z-]{1,32}$/.test(page))
+		throw new Error("--route page is not a page");
+	return { page, resource: resource ?? null };
+}
 
 async function main() {
 	const args = process.argv.slice(2);
 	if (args.includes("--help")) {
 		console.log(
-			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui | --headless]\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\nThe OpenTUI/Solid client opens by default on the same authenticated native host.\n--tui explicitly selects the default. --headless starts only the local HTTP host.",
+			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui | --headless]\nagentic-coding-v2 --attach-url URL [--route JSON] (client of a running host)\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\nThe OpenTUI/Solid client opens by default on the same authenticated native host.\n--tui explicitly selects the default. --headless starts only the local HTTP host.\n--attach-url opens a client of an already running host (token from\nAGENTIC_CODING_V2_ATTACH_TOKEN, never from the command line) and never starts,\nowns or locks a second host; --route names the view to open there.",
 		);
 		return;
 	}
@@ -28,10 +52,38 @@ async function main() {
 	if (args.includes("--tui") && args.includes("--headless"))
 		throw new Error("Choose either --tui or --headless, not both");
 	const tui = !args.includes("--headless"),
-		valued = args.filter((arg) => arg !== "--tui" && arg !== "--headless");
+		valued = args.filter((arg) => arg !== "--tui" && arg !== "--headless"),
+		attachUrl = option("--attach-url");
 	for (let index = 0; index < valued.length; index += 2)
-		if (!["--config-dir", "--state-dir", "--port"].includes(valued[index]))
+		if (
+			![
+				"--config-dir",
+				"--state-dir",
+				"--port",
+				"--attach-url",
+				"--route",
+			].includes(valued[index])
+		)
 			throw new Error(`Unknown option ${valued[index]}`);
+	if (attachUrl !== undefined) {
+		// An attached client owns no host: no lock, no runtime, no listener. The
+		// credential is read from the environment the spawning shell set, so it
+		// never appears on a command line.
+		if (args.includes("--headless"))
+			throw new Error("--attach-url opens the interactive client only");
+		if (option("--port") !== undefined || option("--state-dir") !== undefined)
+			throw new Error("--attach-url attaches; it never starts a host");
+		const token = process.env.AGENTIC_CODING_V2_ATTACH_TOKEN;
+		if (!token) throw new Error("AGENTIC_CODING_V2_ATTACH_TOKEN is not set");
+		const url = new URL(attachUrl);
+		if (url.protocol !== "http:" && url.protocol !== "https:")
+			throw new Error("--attach-url must be an http(s) URL");
+		const route = attachRoute(option("--route"));
+		await import("@opentui/solid/preload");
+		const { runTui } = await import("./tui/index.tsx");
+		await runTui({ url: url.toString(), token }, route ? { route } : {});
+		return;
+	}
 	const stateDir = path.resolve(
 		option("--state-dir") ??
 			path.join(os.homedir(), ".local/share/agentic-coding-v2"),

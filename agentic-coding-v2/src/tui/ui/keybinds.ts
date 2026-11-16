@@ -55,6 +55,12 @@ export const shellKeybinds: Keybind[] = [
 		short: "help",
 	},
 	{
+		key: "ctrl+t",
+		cmd: "shell.window",
+		action: "Open this view in a tmux window",
+		short: "window",
+	},
+	{
 		key: "shift+t",
 		cmd: "shell.theme",
 		action: "Theme picker",

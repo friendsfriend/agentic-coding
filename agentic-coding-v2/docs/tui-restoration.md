@@ -1492,3 +1492,41 @@ operator environment functional tests pass.
   build, gateway + telemetry-port suites (27 tests) and diff whitespace checks. No
   real terminal run here: visual/runtime acceptance remains user-owned and full
   restoration parity stays open and unarchived.
+
+## The view window (v1 Ctrl+T) without a second owner
+
+- v2 is one process per state directory: the host and its TUI share a lock, so
+  v1's "open this view in a window" had no equivalent at all. The missing piece
+  was a *client* mode, not a window mode, and that is what was added.
+- `agentic-coding-v2 --attach-url URL [--route JSON]` opens a client of a running
+  host and never starts, owns or locks one. It refuses `--headless` and it
+  refuses `--port`/`--state-dir` outright ("attaches; it never starts a host"),
+  so an attached window cannot become a second authority by accident.
+- The credential is read from `AGENTIC_CODING_V2_ATTACH_TOKEN` in the child's
+  environment and never from a command line, so it does not appear in `ps` —
+  v1 passed its token as `--attach-token` on argv, and that is the one place this
+  restoration deliberately does better. A missing token is refused before any
+  connection, config read or lock attempt.
+- `--route` is a *location*, not a command: `{page, resource}` is validated
+  (a page-shaped name and a string-or-null resource) and applied once on mount
+  against the shell's own page catalog, so an unknown page is ignored rather than
+  navigating somewhere else. Nothing is prefilled into the prompt, and no draft,
+  approval or gateway method travels through a route.
+- `Ctrl+T` in the shell calls the window opener the TUI was started with. The
+  opener is tmux-only by v1's own contract: without `$TMUX` and a `tmux` binary it
+  reports "tmux is not available; run the shell inside a tmux client" instead of
+  falling back to a detached process, and a failed `tmux new-window` reports its
+  own reason. The window name is derived from the location
+  (`acv2-<page>[-view]`). A shell with no host to attach to says so instead of
+  spawning anything, and a focused prompt keeps the key.
+- Tests (`test/attach-window.test.ts`, synthetic, authenticated boundary only):
+  a second client with the same token receives its own fresh snapshot of the same
+  host — same task identities, no ownership transfer — and closing it leaves the
+  first client connected and fresh; the page catalog a route is validated against
+  cannot contain a page the shell does not render.
+- Verified: unfiltered type-check, zero-diagnostic lint (810 files), official
+  build, cli + gateway + attach suites (10 tests) and diff whitespace checks. The
+  four attach refusals were exercised directly (missing token, `--headless`,
+  `--port`, non-TTY) without starting a host. No real tmux window was opened here
+  and no real terminal run happened: visual/runtime acceptance remains
+  user-owned, and full restoration parity stays open and unarchived.

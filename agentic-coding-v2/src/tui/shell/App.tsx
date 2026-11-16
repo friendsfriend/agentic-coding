@@ -189,7 +189,18 @@ const help = [
 	"Unknown commands refuse locally. // sends a literal slash.",
 ];
 
-export function App(props: { client: ClientConnection; quit: () => void }) {
+export function App(props: {
+	client: ClientConnection;
+	quit: () => void;
+	/** The view an attached window was opened at (v1's `--route`). */
+	initialRoute?: { page: string; resource: string | null };
+	/** Open the current view in a tmux window attached to this host; absent when
+	 * the shell was not given a host to attach to. */
+	openWindow?: (route: {
+		page: string;
+		resource: string | null;
+	}) => Promise<{ ok: true; name: string } | { ok: false; reason: string }>;
+}) {
 	const client = props.client,
 		dimensions = useTerminalDimensions();
 	const navigation = new Navigation(),
@@ -1345,6 +1356,16 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 		setNotice(null);
 		restore();
 	};
+	// An attached window opens at its route once (v1 `--route`), not on every
+	// re-render: the path is applied before the developer can navigate away.
+	let routed = false;
+	createEffect(() => {
+		const route = props.initialRoute;
+		if (routed || !route) return;
+		routed = true;
+		const page = pages.find(([page]) => page === route.page)?.[0];
+		if (page) go(page, route.resource);
+	});
 	const watchedSession = createMemo(() => (available() ? sessionId() : null));
 	createEffect(() => client.selectSession(watchedSession()));
 	onCleanup(() => client.selectSession(null));
@@ -2312,6 +2333,31 @@ export function App(props: { client: ClientConnection; quit: () => void }) {
 				id: "shell.help",
 				name: "Show keybinding/command help",
 				run: () => queueMicrotask(() => setHelpOpen((value) => !value)),
+			},
+			{
+				id: "shell.window",
+				// v1's Ctrl+T: the view currently shown, in its own tmux window that
+				// attaches to this host instead of owning a second one.
+				name: "Open this view in a window",
+				run: () => {
+					const open = props.openWindow;
+					if (!open) {
+						setNotice("This shell has no host to attach a window to");
+						return;
+					}
+					if (prompt?.focused) return;
+					const route = {
+						page: current().page,
+						resource: current().resource,
+					};
+					void open(route).then((result) =>
+						setNotice(
+							result.ok
+								? `Opened ${result.name} in a tmux window`
+								: result.reason,
+						),
+					);
+				},
 			},
 			{
 				id: "shell.theme",
