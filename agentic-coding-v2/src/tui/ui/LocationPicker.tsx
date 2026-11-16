@@ -1,7 +1,9 @@
 /** @jsxImportSource @opentui/solid */
+
 import { TextAttributes } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { Card } from "../presentation/components/Card.tsx";
 import { HelpText } from "../presentation/components/HelpText.tsx";
 import { ReadOnlyModalFrame } from "../presentation/components/ReadOnlyModalFrame.tsx";
 import { SearchHeader } from "../presentation/components/SearchHeader.tsx";
@@ -13,9 +15,9 @@ import {
 	locationEntries,
 } from "../shell/locations.ts";
 
-/** Two rows per destination plus the frame's own header/footer rows. */
+/** Two rows per destination plus the frame's title, search and footer rows. */
 const ROW_HEIGHT = 2;
-const CHROME_ROWS = 4;
+const CHROME_ROWS = 5;
 
 /** The v1 location picker: a jump list over the shell's destinations. It holds
  * no gateway command, draft or approval state — choosing a row navigates, and
@@ -35,21 +37,21 @@ export function LocationPicker(props: {
 	const rows = createMemo(() => filterLocations(entries(), query()));
 	/** Rows the frame can show; the selection window follows the cursor instead
 	 * of the list growing past the modal. */
-	const visible = () =>
+	const framedHeight = () =>
 		Math.max(
-			1,
-			Math.floor(
-				(Math.min(dimensions().height - 2, 24) - CHROME_ROWS) / ROW_HEIGHT,
-			),
+			8,
+			Math.min(dimensions().height - 2, Math.round(dimensions().height * 0.6)),
 		);
-	const window = createMemo(() => {
+	const visible = () =>
+		Math.max(1, Math.floor((framedHeight() - CHROME_ROWS) / ROW_HEIGHT));
+	const listing = createMemo(() => {
 		const count = rows().length;
 		const size = Math.min(visible(), count);
 		const start = Math.max(0, Math.min(count - size, index() - size + 1));
 		return { start, size };
 	});
 	const visibleRows = createMemo(() =>
-		rows().slice(window().start, window().start + window().size),
+		rows().slice(listing().start, listing().start + listing().size),
 	);
 	const selected = () =>
 		rows()[Math.min(index(), Math.max(0, rows().length - 1))];
@@ -118,27 +120,28 @@ export function LocationPicker(props: {
 		unregister();
 		unregisterTyping();
 	});
-	const height = () =>
-		Math.max(
-			1,
-			Math.min(
-				dimensions().height - 2,
-				Math.max(6, window().size * ROW_HEIGHT + CHROME_ROWS),
-			),
-		);
+	const height = () => framedHeight();
 	return (
 		<ReadOnlyModalFrame
-			width={Math.max(1, Math.min(dimensions().width - 2, 72))}
+			width={Math.max(
+				24,
+				Math.min(dimensions().width - 2, Math.round(dimensions().width * 0.6)),
+			)}
 			height={height()}
 			active={enabled()}
 			close={props.close}
 			footerHeight={1}
 			header={
-				<SearchHeader
-					searchMode={searching}
-					searchQuery={() => query()}
-					resultCount={() => rows().length}
-				/>
+				<box flexDirection="column" width="100%" flexShrink={0}>
+					<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
+						Locations
+					</text>
+					<SearchHeader
+						searchMode={searching}
+						searchQuery={() => query()}
+						resultCount={() => rows().length}
+					/>
+				</box>
 			}
 			footer={
 				<HelpText
@@ -167,34 +170,22 @@ export function LocationPicker(props: {
 				>
 					<For each={visibleRows()}>
 						{(entry, position) => (
-							<box
+							<Card
 								height={ROW_HEIGHT}
-								width="100%"
-								flexShrink={0}
-								flexDirection="column"
-								backgroundColor={
-									window().start + position() === index()
-										? uiColors.bgSurface1
-										: uiColors.bgMantle
-								}
-							>
-								<text
-									fg={
-										window().start + position() === index()
-											? uiColors.textPrimary
-											: uiColors.textMuted
-									}
-									attributes={
-										window().start + position() === index()
-											? TextAttributes.BOLD
-											: undefined
-									}
-								>
-									{entry.label}
-									{isCurrent(entry) ? " · current" : ""}
-								</text>
-								<text fg={uiColors.textMuted}>{entry.description}</text>
-							</box>
+								selected={() => listing().start + position() === index()}
+								title={entry.label}
+								cells={[
+									<text fg={uiColors.textMuted}>
+										{entry.group} · {entry.description}
+										{isCurrent(entry) ? " · current" : ""}
+									</text>,
+								]}
+								onMouseUp={() => {
+									setIndex(listing().start + position());
+									choose(entry);
+								}}
+								onActivate={() => choose(entry)}
+							/>
 						)}
 					</For>
 				</Show>

@@ -1422,3 +1422,24 @@ operator environment functional tests pass.
   official build, gateway + telemetry-port suites (27 tests) and diff whitespace
   checks. No real terminal run here, so visual acceptance stays user-owned and
   full restoration parity stays open and unarchived.
+
+## The location picker uses v1's row chrome and pointer behaviour
+
+- Rows are now the shared `Card`/`Selectable` row v1 used, not a local
+  hand-rolled box: indicator strip, hover fill, selected surface and the row
+  gesture all come from the one component the shell's other lists already use,
+  so the picker cannot drift from them.
+- Pointer behaviour matches v1 exactly: a single tap selects *and* accepts, the
+  legacy picker's own contract. Hover, wheel-swallowing and backdrop-tap-to-close
+  come from the frame.
+- Geometry follows v1's dialog: 60% of the terminal in both directions (clamped),
+  a `Locations` title row above the search row, and the window computed from the
+  framed height, so the selection stays visible with no separate scroll state.
+  Each row's second line is `group · description` as in v1, with the shell's
+  current location marked.
+- A local `window` accessor that shadowed the global name was renamed
+  (`listing`); the picker keeps zero diagnostics under the repository's rules.
+- Verification: unfiltered type-check, zero-diagnostic lint (809 files), official
+  build, gateway suite and diff whitespace checks. Still no real terminal run
+  here: visual/runtime acceptance remains user-owned and full restoration parity
+  stays open and unarchived.
