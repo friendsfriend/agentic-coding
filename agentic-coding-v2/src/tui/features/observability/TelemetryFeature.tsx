@@ -188,21 +188,73 @@ export function TelemetryFeature(props: {
 	createEffect(() => {
 		const publish = props.locations;
 		if (!publish) return;
-		const rows = surface() === "traces" ? traces().getTraceSummaries() : [];
-		publish(
-			rows.slice(0, 12).map((row) => ({
-				id: `observability/trace/${row.traceId}`,
-				label: row.rootSpans[0]?.name ?? `Trace ${row.traceId.slice(0, 8)}`,
-				description: [
-					`${row.spanCount} spans`,
-					`${row.durationMs} ms`,
-					...(row.errorCount > 0 ? [`${row.errorCount} errors`] : []),
-					...(row.agents.length > 0 ? [row.agents.join(", ")] : []),
-				].join(" · "),
-				group: "Loaded traces",
-				resource: `trace/${row.traceId}`,
-			})),
-		);
+		const view = surface();
+		if (view === "traces") {
+			publish(
+				traces()
+					.getTraceSummaries()
+					.slice(0, 12)
+					.map((row) => ({
+						id: `observability/trace/${row.traceId}`,
+						label: row.rootSpans[0]?.name ?? `Trace ${row.traceId.slice(0, 8)}`,
+						description: [
+							`${row.spanCount} spans`,
+							`${row.durationMs} ms`,
+							...(row.errorCount > 0 ? [`${row.errorCount} errors`] : []),
+							...(row.agents.length > 0 ? [row.agents.join(", ")] : []),
+						].join(" · "),
+						group: "Loaded traces",
+						resource: `trace/${row.traceId}`,
+					})),
+			);
+			return;
+		}
+		if (view === "metrics") {
+			publish(
+				metrics()
+					.getStreams()
+					.slice(0, 12)
+					.map((stream) => ({
+						id: `observability/metric/${metricStreamId(stream)}`,
+						label: stream.name,
+						description: [
+							stream.serviceName || "unattributed",
+							stream.type,
+							...(stream.unit ? [stream.unit] : []),
+							`${stream.dataPoints.length} points`,
+						].join(" · "),
+						group: "Loaded metric streams",
+						// The identity, not the position: a stream stays addressable even
+						// when the list it came from is reordered by a filter.
+						resource: `metric/${encodeURIComponent(stream.serviceName)}/${encodeURIComponent(stream.name)}/${encodeURIComponent(metricStreamId(stream))}`,
+					})),
+			);
+			return;
+		}
+		if (view === "topology") {
+			publish(
+				topology()
+					.getServices()
+					.slice(0, 12)
+					.map((service) => ({
+						id: `observability/service/${service.id}`,
+						label: service.id,
+						description: [
+							`${service.spanCount} spans`,
+							`${service.avgDurationMs} ms avg`,
+							...(service.errorCount > 0
+								? [`${service.errorCount} errors`]
+								: []),
+							`${service.parentIds.length} callers`,
+							`${service.childIds.length} dependencies`,
+						].join(" · "),
+						group: "Loaded services",
+						resource: `service/${encodeURIComponent(service.id)}`,
+					})),
+			);
+			return;
+		}
+		publish([]);
 	});
 	// A published location names a list view; it never smuggles a filter or a
 	// selection, so arriving this way is identical to choosing the view by key.
@@ -214,6 +266,27 @@ export function TelemetryFeature(props: {
 		const next = props.resource ?? "";
 		if (next === appliedResource) return;
 		appliedResource = next;
+		if (next.startsWith("metric/")) {
+			const [service = "", name = "", id = ""] = next
+				.slice("metric/".length)
+				.split("/")
+				.map((part) => decodeURIComponent(part));
+			if (!id) return;
+			setTrace("");
+			setService(undefined);
+			setMetric({ name, service, id });
+			navigate("metric-detail");
+			return;
+		}
+		if (next.startsWith("service/")) {
+			const id = decodeURIComponent(next.slice("service/".length));
+			if (!id) return;
+			setTrace("");
+			setMetric({ name: "", service: "", id: "" });
+			setService(id);
+			navigate("service-detail");
+			return;
+		}
 		if (next.startsWith("trace/")) {
 			const id = next.slice("trace/".length);
 			if (!id) return;

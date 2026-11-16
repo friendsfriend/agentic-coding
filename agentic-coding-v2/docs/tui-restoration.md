@@ -1467,3 +1467,28 @@ operator environment functional tests pass.
   build, gateway + telemetry-port suites (27 tests) and diff whitespace checks.
   No real terminal run here: visual/runtime acceptance remains user-owned, and
   full restoration parity stays open and unarchived.
+
+## Metric streams and services are picker locations too
+
+- The publishing handoff added for traces now covers every observability list
+  v1 offered: metric streams ("Loaded metric streams") and topology services
+  ("Loaded services"), each bounded to twelve entries and published only while
+  that view is the one on screen. Any other view publishes an empty list, so the
+  picker never offers a resource the developer cannot already see.
+- Each entry carries an **identity**, not a position: a trace id, a service id,
+  or a metric stream's own `metricStreamId` (service, name, type, unit, scope and
+  resource attributes). Arriving through a location therefore survives a filter,
+  a sort or a reordered page, which a row index would not.
+- Resources are now `trace/<id>`, `service/<id>` and
+  `metric/<service>/<name>/<streamId>`, with each component percent-encoded (a
+  stream id is JSON, and a service or metric name may contain a separator).
+  Parsing decodes exactly the components it re-sets; an empty component is
+  refused rather than guessed at.
+- Applying one resets the other detail identities first (`setTrace(""),
+  setMetric({…empty}), setService(undefined)`) and then opens the matching detail
+  view, which is the same transition `Enter` on that row performs — so a stale
+  entry fails exactly where the row would, with the existing refusal notice.
+- Verification: unfiltered type-check, zero-diagnostic lint (809 files), official
+  build, gateway + telemetry-port suites (27 tests) and diff whitespace checks. No
+  real terminal run here: visual/runtime acceptance remains user-owned and full
+  restoration parity stays open and unarchived.
