@@ -314,6 +314,13 @@ export async function dispatch(
 				text(input.title, "orchestrator title", 120),
 			);
 		}
+		case "orchestrator.profile": {
+			fields(input, ["id", "profile"]);
+			return app.orchestrators.setProfile(
+				integer(input.id),
+				text(input.profile, "profile", 200),
+			);
+		}
 		case "orchestrator.retire": {
 			fields(input, ["id"]);
 			const id = integer(input.id);
@@ -375,7 +382,17 @@ export async function dispatch(
 			);
 			if (!profile || !app.models.getModel(profile.provider, profile.modelId))
 				throw new Error("Configured model is unavailable");
-			await (await clientSession(app, integer(input.id))).configure(
+			const id = integer(input.id);
+			// An orchestrator keeps the choice: reconfiguring one records it as its
+			// own profile, so a changed default never silently replaces it.
+			if ((await app.orchestrators.read()).some((entry) => entry.id === id)) {
+				await app.orchestrators.setProfile(
+					id,
+					text(input.profile, "profile", 200),
+				);
+				return { configured: true };
+			}
+			await (await clientSession(app, id)).configure(
 				{
 					model: { provider: profile.provider, modelId: profile.modelId },
 					thinkingLevel: profile.thinking,

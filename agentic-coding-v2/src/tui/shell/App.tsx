@@ -21,6 +21,7 @@ import {
 import type { EvidenceDocument } from "../../protocol/evidence.ts";
 import type {
 	Data,
+	OrchestratorInfo,
 	ProviderQuery,
 	ProviderSummary,
 	SettingsCandidate,
@@ -133,6 +134,7 @@ import {
 	OrchestratorChooser,
 } from "../ui/OrchestratorChooser.tsx";
 import { OrchestratorDialog } from "../ui/OrchestratorDialog.tsx";
+import { OrchestratorProfilePicker } from "../ui/OrchestratorProfilePicker.tsx";
 import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
 import { color } from "../ui/theme/index.ts";
@@ -267,6 +269,14 @@ export function App(props: {
 		[themeRequested, setThemeOpen] = createSignal(false),
 		[orchestratorRequested, setOrchestratorOpen] = createSignal(false),
 		[orchestratorPending, setOrchestratorPending] = createSignal(false),
+		[orchestratorInfo, setOrchestratorInfo] = createSignal<
+			OrchestratorInfo[] | null
+		>(null),
+		[orchestratorProfileTarget, setOrchestratorProfileTarget] = createSignal<{
+			id: number;
+			title: string;
+			profile: string;
+		} | null>(null),
 		[orchestratorDialog, setOrchestratorDialog] = createSignal<{
 			id: number;
 			title: string;
@@ -316,6 +326,7 @@ export function App(props: {
 		themeRequested() ||
 		orchestratorRequested() ||
 		orchestratorDialog() !== null ||
+		orchestratorProfileTarget() !== null ||
 		messageDialog() !== null ||
 		quitConfirmation() ||
 		usageWindow() !== null;
@@ -3424,7 +3435,7 @@ export function App(props: {
 						delete origin.detail.modelInspection;
 						clear();
 						setNotice(
-							`Configured native conversation #${id}; explicitly inspect its current model to verify. No saved default or task admission metadata was changed.`,
+							`Configured native conversation #${id}; explicitly inspect its current model to verify. An orchestrator keeps this choice until changed again; no saved default or task admission metadata was changed.`,
 						);
 					} else {
 						const result = await client.call("session.read", { id });
@@ -3958,11 +3969,11 @@ export function App(props: {
 			return [{ id, kind, repository }];
 		});
 	};
-	// Only an orchestrator this shell created may be renamed or retired; the
-	// root is the app's own conversation and keeps its identity.
-	const openOrchestratorAction = (
+	// A profile may be chosen for any orchestrator, the root included; renaming
+	// and retiring apply only to the ones this shell created.
+	const openOrchestratorAction = async (
 		value: string,
-		action: "rename" | "retire",
+		action: "rename" | "retire" | "profile",
 	) => {
 		const id = value.startsWith("session:")
 			? Number(value.slice(8))
@@ -3970,13 +3981,26 @@ export function App(props: {
 		const sessions = state()?.sessions ?? [];
 		const session = sessions.find((item) => item.id === id);
 		const root = sessions.find((item) => item.parent === null)?.id;
-		if (
-			!session ||
-			session.parent !== null ||
-			session.task !== null ||
-			session.id === root
-		) {
-			setNotice("Select a created orchestrator row to rename or retire it");
+		if (!session || session.parent !== null || session.task !== null) {
+			setNotice("Select an orchestrator row");
+			return;
+		}
+		if (action === "profile") {
+			if (!orchestratorInfo()) await readOrchestratorInfo();
+			const info = (orchestratorInfo() ?? []).find(
+				(entry) => entry.id === session.id,
+			);
+			setOrchestratorProfileTarget({
+				id: session.id,
+				title: session.title,
+				profile: info?.profile ?? "",
+			});
+			return;
+		}
+		if (session.id === root) {
+			setNotice(
+				"The root orchestrator can be given a profile, not renamed or retired",
+			);
 			return;
 		}
 		setOrchestratorDialog({
@@ -3988,6 +4012,36 @@ export function App(props: {
 	// A rename or retirement is a host decision too: state is re-read only after
 	// the host answers, and a retired conversation currently on screen gives way
 	// to the first remaining orchestrator.
+	// The profile each orchestrator runs with, read alongside state: the shell
+	// must show the effect of a choice, not the default it replaced.
+	const readOrchestratorInfo = async () => {
+		setOrchestratorInfo(
+			(await client.call("orchestrator.read", {})).orchestrators,
+		);
+	};
+	const applyOrchestratorProfile = async (input: {
+		id: number;
+		profile: string;
+	}) => {
+		if (orchestratorPending()) return;
+		setOrchestratorPending(true);
+		try {
+			await client.call("orchestrator.profile", input);
+			await readOrchestratorInfo();
+			client.state = await client.call("state.read", {});
+			update();
+			setRefreshRevision((value) => value + 1);
+			setOrchestratorProfileTarget(null);
+			setNotice(`Profile ${input.profile} sticks to this orchestrator`);
+		} catch (error) {
+			reportError(
+				error instanceof Error ? error.message : "Command refused",
+				"Orchestrator",
+			);
+		} finally {
+			setOrchestratorPending(false);
+		}
+	};
 	const applyOrchestratorAction = async (input: {
 		action: "rename" | "retire";
 		id: number;
@@ -5159,6 +5213,25 @@ export function App(props: {
 					dismiss={notifications.clear}
 					interactive={() => !helpOpen() && !paletteOpen()}
 				/>
+				<Show when={orchestratorProfileTarget()}>
+					{(target) => (
+						<OrchestratorProfilePicker
+							title={target().title}
+							current={target().profile}
+							profiles={() =>
+								profileChoices().map((choice) => ({
+									id: choice.id,
+									detail: `${choice.model} · thinking ${choice.thinking}${choice.label.includes("[reported unavailable]") ? " · unavailable" : ""}`,
+								}))
+							}
+							choose={(profile) =>
+								applyOrchestratorProfile({ id: target().id, profile })
+							}
+							pending={orchestratorPending}
+							close={() => setOrchestratorProfileTarget(null)}
+						/>
+					)}
+				</Show>
 				<Show when={orchestratorDialog()}>
 					{(dialog) => (
 						<OrchestratorDialog

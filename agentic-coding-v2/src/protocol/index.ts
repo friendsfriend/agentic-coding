@@ -322,6 +322,10 @@ export type Methods = {
 		input: { id: number; title: string };
 		output: OrchestratorInfo;
 	};
+	"orchestrator.profile": {
+		input: { id: number; profile: string };
+		output: OrchestratorInfo;
+	};
 	"orchestrator.retire": {
 		input: { id: number };
 		output: { id: number; retired: true };
@@ -623,6 +627,7 @@ export const methods: Method[] = [
 	"orchestrator.read",
 	"orchestrator.create",
 	"orchestrator.rename",
+	"orchestrator.profile",
 	"orchestrator.retire",
 	"state.subscribe",
 	"session.read",

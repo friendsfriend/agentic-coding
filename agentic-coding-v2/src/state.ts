@@ -47,6 +47,9 @@ export type OrchestratorInfo = {
 	/** The caller's creation identity, so a repeated request returns this same
 	 * orchestrator instead of creating a second one. */
 	requestId?: string;
+	/** The profile the developer chose for this conversation. Absent means it
+	 * follows the configured default. */
+	profileOverride?: string;
 };
 export type TaskInfo = {
 	id: number;

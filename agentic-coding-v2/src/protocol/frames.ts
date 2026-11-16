@@ -632,7 +632,8 @@ export function result<M extends Method>(
 		data.orchestrators.forEach(orchestratorInfo);
 	} else if (
 		method === "orchestrator.create" ||
-		method === "orchestrator.rename"
+		method === "orchestrator.rename" ||
+		method === "orchestrator.profile"
 	)
 		orchestratorInfo(value);
 	else if (method === "orchestrator.retire") {

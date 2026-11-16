@@ -146,12 +146,11 @@ export class Runtime {
 	}
 	/** The agent change for one orchestrator conversation: configured exactly
 	 * like the root, working in `cwd` (the root works in the default checkout). */
-	orchestratorAgent(cwd: string | null): AgentChange {
+	orchestratorAgent(cwd: string | null, profileId?: string): AgentChange {
 		if (!this.orchestrator)
 			throw new Error("Orchestrator agent is not initialized");
-		const profile = this.config.profiles.find(
-			(item) => item.id === this.config.orchestratorProfile,
-		);
+		const chosen = profileId ?? this.config.orchestratorProfile;
+		const profile = this.config.profiles.find((item) => item.id === chosen);
 		return {
 			model: profile
 				? { provider: profile.provider, modelId: profile.modelId }
@@ -227,6 +226,9 @@ export class Runtime {
 				(tx) => configure(tx, app.home.id, app.orchestratorAgent(null)),
 				context,
 			);
+			// A chosen profile sticks; an orchestrator that never chose one follows
+			// the configured default, so changing it takes effect on the next start.
+			await app.orchestrators.reconcile();
 			app.admission = new TaskAdmission(
 				config,
 				models,

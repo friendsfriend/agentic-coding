@@ -1837,3 +1837,49 @@ a created orchestrator is ticked, its occurrence appears as that orchestrator's
 child, and the task carries the orchestrator identity. Whole suite green (115
 files, 666 tests, 5843 assertions, 431 s), official build and zero-diagnostic lint
 (814 files) pass.
+
+## The orchestrator profile is a default, and a choice sticks
+
+The configured `orchestratorProfile` is a default, not an assignment. Each
+orchestrator conversation — the root included — may be given a profile of its
+own, and once chosen it stays that conversation's profile until the developer
+changes it again, across restarts and across changes of the default.
+
+- `OrchestratorInfo.profileOverride` records a choice. The effective profile is
+  `profileOverride ?? config.orchestratorProfile`; `read()` reports both, so a
+  surface can show what it runs and whether it was chosen.
+- Choosing configures that one conversation through its own `configure`, which
+  is the same path a plain `session.configure` takes, and then records the
+  choice. Two entry points therefore agree: the sidebar's `p` (a picker of the
+  configured profiles, current one marked) and `/model-for <id> <profile>`.
+- `Orchestrators.reconcile()`, run once at open, applies the effective profile
+  to every orchestrator whose recorded profile differs from it. An orchestrator
+  that never chose follows a changed default; one that chose keeps its choice.
+  Nothing is reconfigured when nothing differs, so a restart is not a burst of
+  commits.
+- The root has no stored title or path, but its choice needs somewhere to live,
+  so its record is stored like any other — and being stored does not make it
+  renameable or retirable; both are still refused for the app's own
+  conversation.
+
+Two things this cost, both worth writing down. The root record means
+`retained(id)` can now find the root, so the root refusals in `rename`/`retire`
+moved ahead of the lookup to keep their messages true. And the first version of
+the choice path used `commit((tx) => configure(tx, ...))` instead of the
+conversation's `configure`; the two mutation-uncertainty tests in
+`test/client-gateway.test.ts` hook `app.home.configure` and went from passing to
+a three-minute timeout, which is exactly the kind of thing that would have
+looked like flakiness later. It also threw on a default naming a profile the
+config does not carry, which eight operator fixtures do on purpose — the
+tolerance is back, and a stored choice whose profile has been removed leaves the
+conversation untouched while still being reported, so it can be re-chosen.
+
+Tests: `test/orchestrator-sessions.test.ts` is 10. A choice is observable in the
+conversation's own model, survives a restart, outlives a change of default in
+both directions, is reachable through `session.configure`, leaves the root
+un-renameable, and refuses an unknown profile. Probed in an isolated tmux
+socket: the picker lists the configured profiles with the current one marked,
+`Enter` shows `Profile slow sticks to this orchestrator`, reopening reads
+`now slow`, and a restart of the shell still reads `now slow`. Whole suite green
+(115 files, 668 tests, 5860 assertions, 422 s), official build and
+zero-diagnostic lint (815 files) pass.

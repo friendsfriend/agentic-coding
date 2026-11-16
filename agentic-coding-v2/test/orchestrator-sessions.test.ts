@@ -416,3 +416,157 @@ test("a scheduled occurrence belongs to the orchestrator that asked for it", asy
 		fs.rmSync(directory, { recursive: true, force: true });
 	}
 }, 180_000);
+
+const withSecondProfile = (config: import("../src/config.ts").Config) => {
+	const first = config.profiles[0];
+	if (!first) throw new Error("fixture needs a profile");
+	// Same provider, a different model: the choice must be observable in the
+	// conversation's own agent, not just in the registry.
+	config.profiles.push({ ...first, id: "other", modelId: "replacement" });
+};
+
+/** The configured profile is a default; a developer's choice sticks to that one
+ * conversation, and the root may make the same choice. */
+test("a chosen profile sticks to its orchestrator instead of the default", async () => {
+	const { app } = await fixture(false, withSecondProfile);
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "acv2-profile-"));
+	const host = serve(app),
+		client = new ClientConnection(host.client);
+	try {
+		client.connect();
+		await eventually(
+			async () => client.stateFresh,
+			(fresh) => fresh === true,
+		);
+		const created = await client.call("orchestrator.create", {
+			path: directory,
+			title: "Profiled",
+		});
+		// It starts on the configured default, with no choice of its own.
+		expect(created).toMatchObject({ profile: "test" });
+		expect(created.profileOverride).toBeUndefined();
+
+		const chosen = await client.call("orchestrator.profile", {
+			id: created.id,
+			profile: "other",
+		});
+		expect(chosen).toMatchObject({
+			profile: "other",
+			profileOverride: "other",
+		});
+		// The conversation itself runs the chosen model now.
+		const conversation = await app.orchestrators.conversation(created.id);
+		expect((await conversation.agent(context)).model?.modelId).toBe(
+			"replacement",
+		);
+		// Reading again still reports the choice, not the default.
+		const listed = await client.call("orchestrator.read", {});
+		expect(
+			listed.orchestrators.find((entry) => entry.id === created.id)?.profile,
+		).toBe("other");
+
+		// The other route to the same decision — reconfiguring the conversation —
+		// records the same lasting choice instead of being reverted on next start.
+		const configured = await client.call("session.configure", {
+			id: created.id,
+			profile: "test",
+		});
+		expect(configured).toMatchObject({ configured: true });
+		expect(
+			(await client.call("orchestrator.read", {})).orchestrators.find(
+				(entry) => entry.id === created.id,
+			),
+		).toMatchObject({ profile: "test", profileOverride: "test" });
+		await client.call("orchestrator.profile", {
+			id: created.id,
+			profile: "other",
+		});
+
+		// The root may choose too, and unknown profiles are refused.
+		const rootChosen = await client.call("orchestrator.profile", {
+			id: Number(app.home.id),
+			profile: "other",
+		});
+		expect(rootChosen).toMatchObject({ profileOverride: "other" });
+		// Recording the root's profile choice does not make it renameable or
+		// retirable: those stay refused for the app's own conversation.
+		await expect(
+			client.call("orchestrator.rename", {
+				id: Number(app.home.id),
+				title: "x",
+			}),
+		).rejects.toThrow("refused");
+		await expect(
+			client.call("orchestrator.retire", { id: Number(app.home.id) }),
+		).rejects.toThrow("refused");
+		await expect(
+			client.call("orchestrator.profile", {
+				id: created.id,
+				profile: "missing-profile",
+			}),
+		).rejects.toThrow("refused");
+	} finally {
+		client.close();
+		await host.stop();
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+}, 120_000);
+
+/** A choice survives a restart, and an orchestrator that never chose follows the
+ * configured default when it changes. */
+test("a profile choice survives a restart while an unchosen one follows the default", async () => {
+	const { app, config, open } = await fixture(true, withSecondProfile);
+	const chosenDirectory = fs.mkdtempSync(
+		path.join(os.tmpdir(), "acv2-profile-chosen-"),
+	);
+	const plainDirectory = fs.mkdtempSync(
+		path.join(os.tmpdir(), "acv2-profile-plain-"),
+	);
+	try {
+		const chosen = await app.orchestrators.create({
+			path: chosenDirectory,
+			title: "Chosen",
+		});
+		await app.orchestrators.create({ path: plainDirectory, title: "Plain" });
+		await app.orchestrators.setProfile(chosen.id, "other");
+		await app.close();
+
+		// The default changes while the shell is not running: the orchestrator
+		// that never chose follows it, the one that chose ignores it.
+		config.orchestratorProfile = "other";
+		const followed = await open();
+		const followedEntries = await followed.orchestrators.read();
+		expect(
+			followedEntries.find((entry) => entry.title === "Chosen")?.profile,
+		).toBe("other");
+		expect(
+			followedEntries.find((entry) => entry.title === "Plain")?.profile,
+		).toBe("other");
+		const chosenConversation = await followed.orchestrators.conversation(
+			chosen.id,
+		);
+		expect((await chosenConversation.agent(context)).model?.modelId).toBe(
+			"replacement",
+		);
+		await followed.close();
+
+		// And back again: the choice outlives the default it originally differed
+		// from, which is what "sticks until the user changes it" means.
+		config.orchestratorProfile = "test";
+		const restored = await open();
+		const restoredEntries = await restored.orchestrators.read();
+		expect(
+			restoredEntries.find((entry) => entry.title === "Chosen")?.profile,
+		).toBe("other");
+		expect(
+			restoredEntries.find((entry) => entry.title === "Plain")?.profile,
+		).toBe("test");
+		const stillChosen = await restored.orchestrators.conversation(chosen.id);
+		expect((await stillChosen.agent(context)).model?.modelId).toBe(
+			"replacement",
+		);
+	} finally {
+		fs.rmSync(chosenDirectory, { recursive: true, force: true });
+		fs.rmSync(plainDirectory, { recursive: true, force: true });
+	}
+}, 180_000);

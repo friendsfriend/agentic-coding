@@ -14,28 +14,55 @@ import { Catalog, decode, type OrchestratorInfo } from "./state.ts";
 export class Orchestrators {
 	constructor(private readonly app: Runtime) {}
 
-	/** The root's own entry: the same shape as a created one, never persisted. */
-	private rootInfo(): OrchestratorInfo {
+	/** The profile an orchestrator actually runs with: its own choice, else the
+	 * configured default. */
+	private effective(entry: OrchestratorInfo): string {
+		return entry.profileOverride ?? this.app.config.orchestratorProfile;
+	}
+
+	/** The root's own entry. It has no stored title or path of its own, but its
+	 * profile choice is recorded like any other orchestrator's. */
+	private rootInfo(stored?: OrchestratorInfo): OrchestratorInfo {
 		return {
 			id: Number(this.app.home.id),
 			title: "Orchestrator",
 			path: this.app.config.repositories[0] ?? process.cwd(),
-			profile: this.app.config.orchestratorProfile,
+			profile: this.effective(
+				stored ?? { ...this.blank(), profileOverride: undefined },
+			),
+			createdAt: 0,
+			...(stored?.profileOverride
+				? { profileOverride: stored.profileOverride }
+				: {}),
+		};
+	}
+
+	private blank(): OrchestratorInfo {
+		return {
+			id: Number(this.app.home.id),
+			title: "",
+			path: "",
+			profile: "",
 			createdAt: 0,
 		};
 	}
 
 	async read(): Promise<OrchestratorInfo[]> {
-		return [this.rootInfo(), ...(await this.created())];
-	}
-
-	/** Created orchestrators that are not retired, in creation order. */
-	private async created(): Promise<OrchestratorInfo[]> {
 		const doc = await this.app.harness.snapshot(Catalog, context);
-		return Object.values(doc?.orchestrators ?? {})
-			.map((raw) => decode<OrchestratorInfo>(raw))
-			.filter((entry) => entry.retiredAt === undefined)
-			.sort((left, right) => left.createdAt - right.createdAt);
+		const entries = Object.values(doc?.orchestrators ?? {}).map((raw) =>
+			decode<OrchestratorInfo>(raw),
+		);
+		const root = entries.find((entry) => entry.id === Number(this.app.home.id));
+		return [
+			this.rootInfo(root),
+			...entries
+				.filter(
+					(entry) =>
+						entry.id !== Number(this.app.home.id) &&
+						entry.retiredAt === undefined,
+				)
+				.sort((left, right) => left.createdAt - right.createdAt),
+		];
 	}
 
 	/** The orchestrator a creation request already produced, retired or not. */
@@ -57,11 +84,11 @@ export class Orchestrators {
 	}
 
 	async rename(id: number, title: string): Promise<OrchestratorInfo> {
+		if (id === Number(this.app.home.id))
+			throw new Error("The root orchestrator keeps its own title");
 		const entry = await this.retained(id);
 		if (entry.retiredAt !== undefined)
 			throw new Error("Orchestrator is retired");
-		if (entry.id === Number(this.app.home.id))
-			throw new Error("The root orchestrator keeps its own title");
 		const next = {
 			...entry,
 			title: text(title.trim(), "orchestrator title", 120),
@@ -74,15 +101,72 @@ export class Orchestrators {
 	 * stop listing, asking and reporting to it. Deletion is not offered because
 	 * the durable API does not offer one; the entry stays fenced instead. */
 	async retire(id: number): Promise<OrchestratorInfo> {
-		const entry = await this.retained(id);
-		if (entry.id === Number(this.app.home.id))
+		if (id === Number(this.app.home.id))
 			throw new Error("The root orchestrator cannot be retired");
+		const entry = await this.retained(id);
 		if (entry.retiredAt !== undefined)
 			throw new Error("Orchestrator is already retired");
 		await (await this.conversation(id)).abort(context);
 		const next = { ...entry, retiredAt: Date.now() };
 		await this.save(next);
 		return next;
+	}
+
+	/** The developer's profile choice for one orchestrator. It is stored as an
+	 * override, so it survives restarts and outlives a change of the configured
+	 * default; the conversation is reconfigured with it immediately. */
+	async setProfile(id: number, profile: string): Promise<OrchestratorInfo> {
+		const chosen = text(profile, "profile", 200);
+		const known = this.app.config.profiles.find((item) => item.id === chosen);
+		if (!known) throw new Error("Unknown profile");
+		const root = id === Number(this.app.home.id);
+		const entry = root ? this.rootInfo() : await this.retained(id);
+		if (entry.retiredAt !== undefined)
+			throw new Error("Orchestrator is retired");
+		const next: OrchestratorInfo = {
+			...entry,
+			profile: chosen,
+			profileOverride: chosen,
+			// The root record exists only for its own choice; its title and path
+			// stay synthesized.
+			...(root
+				? {
+						title: "Orchestrator",
+						path: this.app.config.repositories[0] ?? process.cwd(),
+					}
+				: {}),
+		};
+		await (root ? this.app.home : await this.conversation(id)).configure(
+			this.app.orchestratorAgent(root ? null : next.path, chosen),
+			context,
+		);
+		await this.save(next);
+		return next;
+	}
+
+	/** Apply the effective profile to every retained orchestrator that does not
+	 * already run with it: an override always wins, an orchestrator without one
+	 * follows the configured default, and nothing is reconfigured needlessly. */
+	async reconcile(): Promise<void> {
+		const entries = await this.read();
+		for (const entry of entries) {
+			if (entry.profile === this.effective(entry)) continue;
+			const chosen = this.effective(entry);
+			// A stored choice whose profile has since been removed from the
+			// configuration leaves the conversation alone; it is still reported, so
+			// the developer can choose another one.
+			if (!this.app.config.profiles.some((item) => item.id === chosen))
+				continue;
+			const root = entry.id === Number(this.app.home.id);
+			const conversation = root
+				? this.app.home
+				: await this.conversation(entry.id);
+			await conversation.configure(
+				this.app.orchestratorAgent(root ? null : entry.path, chosen),
+				context,
+			);
+			await this.save({ ...entry, profile: chosen });
+		}
 	}
 
 	private async save(entry: OrchestratorInfo): Promise<void> {

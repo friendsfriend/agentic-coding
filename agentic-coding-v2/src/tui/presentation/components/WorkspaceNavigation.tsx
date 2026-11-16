@@ -87,6 +87,12 @@ export const workspaceNavigationKeybinds: Keybind[] = [
 		action: "Retire the selected orchestrator",
 		short: "retire",
 	},
+	{
+		key: "p",
+		cmd: "workspace.profile",
+		action: "Choose the selected orchestrator's profile",
+		short: "profile",
+	},
 	// Terminals report Return as either name; a row that only answered one of
 	// them looked like a dead Enter (the Home list already binds both).
 	...["enter", "return"].map((key) => ({
@@ -114,7 +120,10 @@ export function WorkspaceNavigation(props: {
 	/** Fixed leading UI pins, rendered outside the scrolling resource list. */
 	pinCount?: number;
 	/** A row action on the selected row; omitted when the caller offers none. */
-	onRowAction?: (value: string, action: "rename" | "retire") => void;
+	onRowAction?: (
+		value: string,
+		action: "rename" | "retire" | "profile",
+	) => void;
 	/** The selected row, owned by the caller. A row move never navigates. */
 	cursor: string;
 	onCursor: (value: string) => void;
@@ -264,6 +273,14 @@ export function WorkspaceNavigation(props: {
 				run: () => {
 					if (!props.active || !interactive()) return;
 					props.onRowAction?.(cursorValue(), "retire");
+				},
+			},
+			{
+				id: "workspace.profile",
+				name: "Choose the selected orchestrator's profile",
+				run: () => {
+					if (!props.active || !interactive()) return;
+					props.onRowAction?.(cursorValue(), "profile");
 				},
 			},
 		]),
