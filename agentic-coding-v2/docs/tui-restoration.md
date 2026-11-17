@@ -1962,3 +1962,39 @@ titles and the same directory, and an orchestrator in another directory shows it
 own leaf. Test: `test/orchestrator-sessions.test.ts` (11) asserts the directory
 travels with the session row. Whole suite green — 115 files, 670 tests, 5865
 assertions, 426 s — official build and zero-diagnostic lint (815 files) pass.
+
+## The transcript shows the transcript
+
+The developer's report: opening a conversation showed local read chrome above the
+messages — `Read context`, `▾ History · 0 loaded`, `Load newest page`,
+`Read-only · up to 500 held, 20 shown · filters stay local.`, `2 older entries
+loaded`, and a `Supplied local view details; not native authority` JSON dump.
+None of it is the conversation, and none of it is what v1 showed.
+
+- `src/tui/features/sessions/ContextPanel.tsx` and `HistoryPanel.tsx` are
+  deleted. They were mounted only above the transcript and offered an explicit
+  `session.context` inspection and a second, parallel `session.history` browser
+  with its own filters, pagination and per-entry JSON dumps. The transcript
+  already reads older pages itself, so the second browser was a duplicate
+  affordance with a debug presentation; the protocol methods and their gateway
+  coverage are untouched, only the TUI stopped surfacing them.
+- `Transcript.tsx` lost its three status lines (`Showing the newest 200 entries.`,
+  `N older entries hidden · scroll up to load`, `N older entries loaded`), its
+  `Load history / Load older history / History exhausted` header and the
+  transient `Loading history…`. Scrolling up still pages history in, and a failed
+  read now restarts from the newest page on the same scroll-up gesture instead of
+  stranding the reader without the header's `Restart history read` affordance. A
+  failure still renders its message — an error is content, not chrome.
+- The shell's generic `SuppliedObservation` block for `current().detail` is gone
+  (label included), and with it the `SuppliedObservation` import in `App.tsx`.
+  One page depended on that dump for real content: `/logs APP` on the
+  environments page put the supplied output into `detail.logs` and had no other
+  renderer, so it now prints the supplied text as plain lines instead of JSON.
+
+Left alone deliberately: the `▸ Jump to a card · N` header and the two
+supplied-integrity warnings (`Some cards share an identity and stay read-only.`,
+`The saved card is not in this transcript.`) are affordances about the
+conversation's own content rather than debug dumps, and the two
+`SuppliedObservation` carriers for an unsupported assistant part and an unpaired
+tool result only appear when the backend supplies something the transcript cannot
+place. Visual acceptance of the cleaned surface stays with the developer.

@@ -297,6 +297,13 @@ export function Transcript(props: {
 		canExpand: () => localStart() > 0,
 		loadOlder: () => {
 			if (expandLocal(false)) return true;
+			// The read failed once: the same scroll-up gesture restarts it from the
+			// newest page instead of stranding the reader without a retry.
+			if (historyError()) {
+				setHistory({ key: historyKey(), entries: [], cursor: null });
+				setHistoryLoaded(false);
+				setHistoryError(null);
+			}
 			if (canLoadHistory()) {
 				void loadHistory();
 				return true;
@@ -863,55 +870,6 @@ export function Transcript(props: {
 					<text fg={color("warning")}>
 						The saved card is not in this transcript.
 					</text>
-				</Show>
-				<Show when={window()?.truncated}>
-					<text fg={color("textMuted")}>Showing the newest 200 entries.</text>
-				</Show>
-				<Show when={localStart() > 0}>
-					<text fg={color("textMuted")}>
-						{localStart()} older entries hidden · scroll up to load
-					</text>
-				</Show>
-				<Show when={historyEntries().length > 0}>
-					<text fg={color("textMuted")}>
-						{historyEntries().length} older{" "}
-						{historyEntries().length === 1 ? "entry" : "entries"} loaded
-					</text>
-				</Show>
-				<Show when={localStart() > 0 && props.history?.connected}>
-					<ActionHeader
-						scope={historySource()}
-						interactive={
-							props.interactive &&
-							!historyPending() &&
-							Boolean(
-								canLoadHistory() ||
-									historyError() ||
-									historyEntries().length >= 400,
-							)
-						}
-						onActivate={() => {
-							if (historyError() || historyEntries().length >= 400) {
-								setHistory({ key: historyKey(), entries: [], cursor: null });
-								setHistoryLoaded(false);
-								setHistoryError(null);
-							}
-							void loadHistory();
-						}}
-					>
-						<text fg={color("accent")}>
-							{historyError() || historyEntries().length >= 400
-								? "Restart history read"
-								: !historyLoaded()
-									? "Load history"
-									: historyCursor() !== null
-										? "Load older history"
-										: "History exhausted"}
-						</text>
-					</ActionHeader>
-				</Show>
-				<Show when={historyPending()}>
-					<text fg={color("textMuted")}>Loading history…</text>
 				</Show>
 				<Show when={historyError()}>
 					{(message) => (

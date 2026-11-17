@@ -58,8 +58,6 @@ import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
 import { SchedulesView } from "../features/resources/SchedulesView.tsx";
-import { ContextPanel } from "../features/sessions/ContextPanel.tsx";
-import { HistoryPanel } from "../features/sessions/HistoryPanel.tsx";
 import { DraftHistory } from "../features/sessions/history.ts";
 import {
 	NativeAgentNavigation,
@@ -136,7 +134,6 @@ import {
 import { OrchestratorDialog } from "../ui/OrchestratorDialog.tsx";
 import { OrchestratorProfilePicker } from "../ui/OrchestratorProfilePicker.tsx";
 import { QuitDialog } from "../ui/QuitDialog.tsx";
-import { SuppliedObservation } from "../ui/SuppliedObservation.tsx";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
 import {
@@ -4359,23 +4356,6 @@ export function App(props: {
 											</text>
 										}
 									>
-										<ContextPanel
-											scope={workspaceScope()}
-											interactive={!busy() && !helpOpen() && !paletteOpen()}
-											client={client}
-											id={sessionId() ?? Number.NaN}
-											connected={
-												status() === "connected" && observation() === "watching"
-											}
-										/>
-										<HistoryPanel
-											scope={workspaceScope()}
-											interactive={!busy() && !helpOpen() && !paletteOpen()}
-											choose={openLocalChoice}
-											client={client}
-											id={sessionId() ?? Number.NaN}
-											connected={status() === "connected"}
-										/>
 										<Transcript
 											scope={workspaceScope()}
 											interactive={!busy() && !helpOpen() && !paletteOpen()}
@@ -4855,17 +4835,14 @@ export function App(props: {
 								>
 									<text fg={color("textMuted")}>No matching resources.</text>
 								</Show>
-								<Show
-									when={
-										Object.keys(current().detail).length &&
-										current().page !== "providers"
-									}
-								>
-									<SuppliedObservation
-										value={current().detail}
-										scope={workspaceScope()}
-										label="Supplied local view details; not native authority"
-									/>
+								<Show when={typeof current().detail.logs === "string"}>
+									<For each={String(current().detail.logs).split("\n")}>
+										{(line) => (
+											<text fg={color("text")} wrapMode="word">
+												{line}
+											</text>
+										)}
+									</For>
 								</Show>
 							</ActionScope>
 						</scrollbox>
