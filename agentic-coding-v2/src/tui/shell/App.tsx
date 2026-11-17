@@ -148,37 +148,35 @@ const PAGE_DESCRIPTIONS: Partial<Record<Page, string>> = Object.fromEntries(
 	PAGE_LOCATIONS.map(({ page, description }) => [page, description]),
 );
 const help = [
-	"Plain input: send to the selected native conversation",
-	"/help · /session ID · /back · /forward · /reconnect",
-	"Ctrl+P lists every destination (pages and Observability views); navigation is not a command",
-	"/skill SKILL_ID@DIGEST (loaded instructions only)",
-	"/models · /thinking · choose a supplied model/thinking bundle; the choice applies at once",
-	"/standalone-model ID@REVISION PROFILE · explicit observed standalone configuration",
-	"/abort · /compact [instructions] · /latest · /timeline",
-	"/usage · reported usage in the supplied native transcript window only",
-	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
-	"/inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
-	"/task TASK_ID · /refresh (read-only refresh)",
-	"/evidence TASK_ID CONTENT_DIGEST [BYTE_OFFSET] (explicit bounded owned evidence read)",
-	"/cancel TASK_ID",
-	"/approve REVIEW_ID@REVISION [comments]",
-	"/reject REVIEW_ID@REVISION comments",
-	"/changes REVIEW_ID@REVISION comments",
+	"Plain input: send it to the selected native conversation",
+	"/help (or F1) · /quit",
+	"/session ID · /task TASK_ID: open that conversation or task",
+	"/back · /forward · /reconnect · /refresh: move around, reattach, reload the page",
+	"Ctrl+P lists every destination (pages and Observability views); views are picked, not typed",
+	"/input-history: search what you already typed and reuse it",
+	"/usage: tokens and cost the host reports for this transcript window",
+	"/models · /thinking: pick this conversation's model and thinking level; choosing applies it",
+	"/inspect-model SESSION_ID: see the model and thinking a conversation is running",
+	"/model-for SESSION_ID PROFILE: switch that conversation to a profile you have configured",
+	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION",
+	"/standalone-model ID@REVISION PROFILE: switch a standalone session's model",
+	"/skill SKILL_ID@DIGEST: read a loaded skill's instructions",
+	"/abort: stop the current answer · /compact [instructions]: summarize history to free context",
+	"/latest: jump to the newest message · /timeline: jump to one of your earlier prompts",
+	"/logs APP: an app's newest output · /evidence TASK_ID CONTENT_DIGEST [BYTE_OFFSET]: one stored task artifact",
+	"/cancel TASK_ID: cancel a task",
+	"/approve REVIEW_ID@REVISION [comments] · /reject … comments · /changes … comments: answer a review",
+	"/run|build|test APP [target]: start one, then approve its review",
+	"/filter TEXT · /sort newest|default: narrow and order the current list",
+	"/bookmark NAME: remember this view for this session · /jump NAME_OR_ID: reopen a saved view",
+	"/pin [NAME] · /pins · /repin ID@REVISION [NAME] · /unpin ID@REVISION: views saved on the host, so they survive a restart",
+	"/forget ID: drop a remembered view",
+	"/provider NAME repos QUERY | branches|labels|collaborators REPO: read provider metadata",
+	"/provider NAME changes|issues REPO [open|closed|all] · /provider NAME change|issue|files|versions|discussions REPO NUMBER · /provider NAME jobs REPO [RUN_ID]",
+	"/provider-new OPERATION · /provider-preview · /provider-apply ID approve:DIGEST (sent once) · /provider-attempts | /provider-receipt REQUEST_ID",
+	"/settings-preview · /settings-reset · /settings-apply CANDIDATE_ID approve:DIGEST (writes the file; needs a restart)",
 	"/delete-schedule SCHEDULE_ID@REVISION",
-	"/run|build|test APP [target] (native task + review)",
-	"/logs APP · /filter TEXT · /sort newest|default",
-	"/provider NAME repos QUERY | branches|labels|collaborators REPO",
-	"/provider NAME changes|issues REPO [open|closed|all]",
-	"/provider NAME change|issue|files|versions|discussions REPO NUMBER",
-	"/provider NAME jobs REPO [RUN_ID] (required for GitHub)",
-	"/provider-new OPERATION (explicitly replace local intention editor only)",
-	"/provider-preview (seal edited intention; no remote request)",
-	"/provider-apply ID approve:DIGEST (one attempt, no implicit retry)",
-	"/provider-attempts | /provider-receipt REQUEST_ID (native journal only)",
-	"/settings-preview · /settings-reset",
-	"/settings-apply CANDIDATE_ID approve:DIGEST (explicit file save; restart required)",
-	"/wiki-page ID · open a native wiki note (the Wiki page edits and saves)",
-	"/bookmark NAME · /jump NAME_OR_ID · /forget ID",
+	"/wiki-page ID: open a wiki page",
 
 	"Unknown commands refuse locally. // sends a literal slash.",
 ];
@@ -1082,6 +1080,17 @@ export function App(props: {
 	};
 	const isTranscript = () =>
 		current().page === "orchestrator" || current().page === "session";
+	// One owner per key: while the transcript holds the content it dispatches
+	// Ctrl+T and Ctrl+O itself (it folds blocks), so the shell's window key keeps
+	// out of both dispatch and the status bar there — the transcript advertises
+	// its own chip instead of a contradicting one. Focus moved to the sidebar
+	// hands the key back.
+	const transcriptKeys = () =>
+		isTranscript() &&
+		contentFocused() &&
+		!busy() &&
+		!helpOpen() &&
+		!paletteOpen();
 	const sessionId = () =>
 		current().page === "orchestrator"
 			? (state()?.sessions.find((session) => session.parent === null)?.id ??
@@ -4384,12 +4393,7 @@ export function App(props: {
 											freezeWindow={awayFromBottom()}
 											observation={observation()}
 											observationError={observationError()}
-											enabled={
-												contentFocused() &&
-												!busy() &&
-												!helpOpen() &&
-												!paletteOpen()
-											}
+											enabled={transcriptKeys()}
 											selected={
 												typeof current().detail.transcriptSelection === "string"
 													? String(current().detail.transcriptSelection)
@@ -5166,7 +5170,12 @@ export function App(props: {
 									: settingsEditing()
 										? [...shellKeybinds, ...quitKeybinds, ...editorKeybinds]
 										: [
-												...shellKeybinds,
+												...shellKeybinds.filter(
+													(binding) =>
+														!(
+															transcriptKeys() && binding.cmd === "shell.window"
+														),
+												),
 												...quitKeybinds,
 												...(crumbActive()
 													? breadcrumbKeybinds
@@ -5177,7 +5186,7 @@ export function App(props: {
 												!settingsCatalog().length
 													? menuKeybinds
 													: []),
-												...(isTranscript() && !crumbActive()
+												...(transcriptKeys()
 													? [
 															...transcriptKeybinds,
 															...transcriptViewportKeybinds,
