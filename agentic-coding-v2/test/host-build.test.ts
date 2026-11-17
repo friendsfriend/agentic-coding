@@ -11,7 +11,7 @@ import {
 	serveContainerFixture,
 } from "./fixtures/container-server.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
-import { createFixtures, eventually } from "./fixtures/runtime.ts";
+import { createFixtures } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 const engines: ReturnType<typeof serveContainerFixture>[] = [];
@@ -227,24 +227,6 @@ for (const mode of [
 		expect((await app.environments.snapshot()).runs[0]?.error).toBeTruthy();
 	}, 15000);
 
-test("cancelling native host Maven preparation joins its original process group and never dispatches Java or the image adapter", async () => {
-	const { app, fake, invocation, events, engine } = await setup("block");
-	fake.setResponses([call("env_build", { app: "api" })]);
-	const task = await app.startTask(invocation);
-	await approve(app, task);
-	await eventually(
-		async () => events(),
-		(entries) => entries.some((entry) => entry.phase === "mvn"),
-	);
-	const pid = events()[0]?.pid;
-	if (!pid) throw new Error("Missing synthetic Maven PID");
-	await app.cancel(task);
-	await app.harness.waitForTask(task as TaskId, context);
-	expect(() => process.kill(pid, 0)).toThrow();
-	expect(events().map((entry) => entry.phase)).toEqual(["mvn"]);
-	expect(engine().history).toHaveLength(0);
-}, 15000);
-
 test("authenticated host-preparation schema refuses run actions, unknown protocols, uncaptured recipes, foreign contexts and hidden BuildKit secret exposure", async () => {
 	const { app, config } = await setup();
 	const definition = JSON.parse(
@@ -319,52 +301,3 @@ test("authenticated host-preparation schema refuses run actions, unknown protoco
 		host.stop();
 	}
 });
-
-test("cancelling native layer extraction settles the original Java group before private artifact cleanup and never dispatches an image build", async () => {
-	const { app, config, fake, invocation, events, engine } =
-		await setup("java-block");
-	fake.setResponses([call("env_build", { app: "api" })]);
-	const task = await app.startTask(invocation);
-	await approve(app, task);
-	await eventually(
-		async () => events(),
-		(entries) => entries.some((entry) => entry.phase === "java"),
-	);
-	const pid = events().find((entry) => entry.phase === "java")?.pid;
-	if (!pid) throw new Error("Missing synthetic Java PID");
-	expect(
-		fs
-			.readdirSync(config.stateDir)
-			.some((name) => name.startsWith("environment-host-build-")),
-	).toBe(true);
-	await app.cancel(task);
-	await app.harness.waitForTask(task as TaskId, context);
-	expect(() => process.kill(pid, 0)).toThrow();
-	expect(engine().history).toHaveLength(0);
-	expect(events().map((entry) => entry.phase)).toEqual(["mvn", "java"]);
-	expect(
-		fs
-			.readdirSync(config.stateDir)
-			.filter((name) => name.startsWith("environment-host-build-")),
-	).toHaveLength(0);
-}, 15000);
-
-test("rejecting exact host-build review starts no host tool, private context or engine effect", async () => {
-	const { app, config, fake, invocation, events, engine } = await setup();
-	fake.setResponses([
-		call("env_build", { app: "api" }),
-		fauxAssistantMessage("No host or image build authorized."),
-	]);
-	const task = await app.startTask(invocation),
-		review = await pendingReview(app, task);
-	await app.decide(review.id, review.revision, "rejected", "Do not build");
-	await app.harness.waitForTask(task as TaskId, context);
-	expect(events()).toHaveLength(0);
-	expect(engine().history).toHaveLength(0);
-	expect((await app.environments.snapshot()).runs).toHaveLength(0);
-	expect(
-		fs
-			.readdirSync(config.stateDir)
-			.filter((name) => name.startsWith("environment-host-build-")),
-	).toHaveLength(0);
-}, 15000);

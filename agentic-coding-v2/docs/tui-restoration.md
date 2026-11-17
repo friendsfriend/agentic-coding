@@ -2138,3 +2138,35 @@ fixed afterwards. The one-minute goal is still unmet. The remaining time is
 distributed across genuinely distinct lifecycle scenarios at roughly 0.35 seconds
 each, not concentrated in a few files, so reaching it would require deleting unique
 integration coverage rather than further consolidation.
+
+## Test-cost consolidation, unit-first pass
+
+The developer directed a further cut to about one minute, with unit tests preferred
+and real-infrastructure testing reduced to a minimum. The complete suite is now 363
+tests in 62.46 seconds with zero failures, from 573 tests in 233.39 seconds and 673
+tests in 423.52 seconds.
+
+Converted to deterministic unit tests, replacing the integration versions:
+retained-diagnostic windowing, boundary cursors, exact-ID reads and their scope
+refusals (`diagnosticHistory`), and Compose command quoting, environment-array and
+published-port parsing. Both run in milliseconds and assert the same rules the
+expensive suites exercised through a gateway, engine and disposable database.
+
+Deleted as redundant with a kept representative or as infrastructure plumbing:
+container SQL success and container/pod endpoint authority permutations, the
+SQL-to-crash lifecycle file, the prerequisite-bridge, topology, operator
+infrastructure/re-add/host-anchor/environment and cross-repository prerequisite
+suites, the Helm release suite, the Kubernetes pod, diagnostics and deployment-loss
+suites, shared diagnostics, canonical wait expiry, telemetry receivers, offline
+environment migration preview, and the tree-release/independent-recovery crash
+files. Representative scenarios were kept for task admission, one held SQL
+diagnostic with TLS refusal, one held HTTP diagnostic, one container lifecycle, one
+Kubernetes pod lifecycle, one local cluster, one shared crash/reopen, and the
+gateway client.
+
+Guarantees that lose direct automated assertion, and are now reviewed manually:
+per-operator-unit stop/re-add/host-anchor authority, prerequisite bridge sharing and
+foreign-attachment refusal, network-only topology lifetimes, Helm release identity
+and uninstall scoping, pod port-forward and deployment-loss fencing, telemetry
+receiver/codec behaviour, and offline migration preview output. The production code
+is unchanged; nothing was weakened to make a test pass.

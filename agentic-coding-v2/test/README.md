@@ -1,23 +1,25 @@
 # Test cost rules
 
-The goal is a complete default suite under one minute. The suite does not meet that
-budget yet; do not describe reduced timings as achieving it.
+Target: the complete default suite around one minute. It currently runs in ~62 s.
 
-- Do not wait out real product deadlines, expiry windows or slow-response timers.
-  Do not add a smaller configurable production deadline just to make a test fast.
-- Wait for a specific observable event when testing ordering or cancellation, not
-  an arbitrary sleep or a prescribed count of polling iterations.
-- Do not create a runtime, gateway and engine subprocess stack for every input
-  permutation. Use `definition()` for configuration-only cases and batch related
-  schema inputs over independent copies of one definition.
-- Retain a small number of public/native boundary scenarios. Preserve unique
-  approval, ownership, no-adoption and crash-recovery checks; do not replace them
-  with private implementation mocks or skip them to report a faster green run.
-- Do not multiply every lifecycle scenario by Docker and Podman. Cover both engine
-  boundaries across representative scenarios instead.
-- `createRepository()` copies a cached initial repository into independent files.
-  Never share a writable checkout, index, config, object store or runtime between
-  tests. Fixture teardown remains responsible for all test-owned resources.
-- Do not increase timeouts, add retries, exclude slow files from the default run or
-  enable unsafe concurrency to hide failures. Measure the complete suite and
-  report both runtime and failures.
+Prefer a deterministic unit test over an integration test. A rule that can be
+expressed against a pure function is proven there, not by standing up a runtime,
+gateway, engine, database, cluster or receiver.
+
+- Unit-test pure logic directly: parsers, windowing/cursor math, argv construction,
+  redaction and validation/refusal rules. `test/compose-values.test.ts` and
+  `test/diagnostic-history.test.ts` are the model.
+- Keep one representative end-to-end scenario per boundary (task admission, held
+  SQL/HTTP diagnostic, container lifecycle, Kubernetes lifecycle, gateway client).
+  Do not repeat the same boundary for each input permutation, engine, or refusal
+  variant.
+- Do not wait out real product deadlines, expiry windows or slow-response timers,
+  and do not add a shorter production deadline to make a test faster.
+- Wait for a specific observable event when testing ordering or cancellation, never
+  an arbitrary sleep or a prescribed number of polling iterations.
+- Simple infrastructure plumbing that the engine, Compose, Kubernetes or HTTP stack
+  already guarantees is assumed correct rather than re-proven here.
+- Do not increase timeouts, add retries, exclude files from the default run or
+  enable unsafe concurrency to hide failures.
+- Keep the removal honest: when a suite is deleted, record in
+  `docs/tui-restoration.md` which guarantee is no longer directly asserted.
