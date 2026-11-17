@@ -179,3 +179,58 @@ export function createTaskCodingTools(ownerOf: OwnerLookup) {
 		],
 	});
 }
+
+/** The checkout one orchestrator conversation works in. The root uses the default
+ * repository; a created orchestrator uses the path it was opened with. */
+export type WorkspaceOf = (id: ConversationId) => Promise<string>;
+
+/** An orchestrator is a direct conversation with the developer, not an autonomous
+ * task: it works in that developer's own checkout, so it needs no shell approval
+ * for a command the developer just asked for. Its file tools stay inside that
+ * checkout, and a command is never rerun automatically after an interruption —
+ * the model must observe the outcome first. Delegation to an isolated worktree is
+ * `start_task`, not these tools. */
+export function createOrchestratorCodingTools(workspaceOf: WorkspaceOf) {
+	const read = createReadTool();
+	const write = createWriteTool();
+	const edit = createEditTool();
+	const bash = createBashTool({
+		prepare: async (execution, api) => {
+			contained(await workspaceOf(api.conversationId), execution.cwd);
+		},
+	});
+	return defineExtension({
+		name: "v2.orchestrator-coding",
+		tools: [
+			defineTool({
+				...read,
+				execute: async (args, api, context) => {
+					contained(await workspaceOf(api.conversationId), args.path);
+					return read.execute(args, api, context);
+				},
+			}),
+			defineTool({
+				...write,
+				execute: async (args, api, context) => {
+					contained(await workspaceOf(api.conversationId), args.path);
+					return write.execute(args, api, context);
+				},
+			}),
+			defineTool({
+				...edit,
+				execute: async (args, api, context) => {
+					contained(await workspaceOf(api.conversationId), args.path);
+					return edit.execute(args, api, context);
+				},
+			}),
+			defineTool({
+				...bash,
+				// A restarted conversation must observe the outcome, never re-run a
+				// command that may already have had effects.
+				replay: "unsafe" as const,
+				description: `${bash.description} It runs in the developer's own checkout with host and network access. Do not start, deploy, push or clean up anything the developer did not ask for, and read the result before deciding the next step.`,
+				execute: async (args, api, context) => bash.execute(args, api, context),
+			}),
+		],
+	});
+}
