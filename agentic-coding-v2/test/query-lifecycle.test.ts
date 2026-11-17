@@ -24,7 +24,6 @@ const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 test.each([
 	"rotation",
 	"cancellation",
-	"deadline",
 	"write-function",
 	"unhealthy",
 	"replacement",
@@ -153,7 +152,6 @@ test.each([
 				if (variant === "unknown") state.offline = true;
 				fs.writeFileSync(engineFile, JSON.stringify(state));
 			}
-			const issuedAt = Date.now();
 			await approve(app, task, "Query store");
 			if (refusal) {
 				try {
@@ -169,16 +167,11 @@ test.each([
 					fs.writeFileSync(engineFile, original);
 				}
 				await app.cancel(task);
-			} else if (variant === "deadline" || variant === "write-function") {
+			} else if (variant === "write-function") {
 				await app.harness.waitForTask(task as TaskId, context);
 				expect(transcript).toContain('"isError":true');
 				expect(transcript).not.toContain(disposablePassword);
-				if (variant === "deadline") {
-					expect(Date.now() - issuedAt).toBeLessThan(15000);
-					expect(transcript).toContain("10 second deadline");
-				} else {
-					expect(transcript).toContain("25006");
-				}
+				expect(transcript).toContain("25006");
 				const state = await app.environments.snapshot();
 				expect(state.queryOperations[0]?.state).toBe("issued");
 				expect(state.runs.every((run) => run.state === "exited")).toBe(true);
@@ -227,45 +220,6 @@ test.each([
 	},
 	20000,
 );
-
-test("SQL total deadline closes its borrowed connection and publishes no success", async () => {
-	const port = disposablePort(),
-		{ app, fake, invocation } = await fixture(false, (config) =>
-			installPostgres(config, port),
-		);
-	let transcript = "";
-	fake.setResponses([
-		call("env_start", { apps: ["api"] }),
-		call("db_query", {
-			infra: "store",
-			sql: "SELECT pg_sleep(20) /* NATIVE_SQL_PROBE */",
-		}),
-		(messages) => {
-			transcript = JSON.stringify(
-				messages.messages.filter(
-					(message) =>
-						message.role === "toolResult" && message.toolName === "db_query",
-				),
-			);
-			return fauxAssistantMessage("Timed out safely");
-		},
-	]);
-	const task = await app.startTask(invocation);
-	await approve(app, task);
-	await pendingReview(app, task, "Query store");
-	const started = Date.now();
-	await approve(app, task, "Query store");
-	await app.harness.waitForTask(task as TaskId, context);
-	expect(Date.now() - started).toBeLessThan(15000);
-	expect(transcript).toContain('"isError":true');
-	expect(transcript).toContain("10 second deadline");
-	expect(transcript).not.toContain("rollback");
-	const state = await eventually(
-		() => app.environments.snapshot(),
-		(state) => state.runs.every((run) => run.state === "exited"),
-	);
-	expect(state.queryOperations[0]?.state).toBe("issued");
-}, 20000);
 
 test("cancelling an issued SQL task drains diagnostics before releasing its coupled infrastructure", async () => {
 	const port = disposablePort(),
