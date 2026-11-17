@@ -416,7 +416,6 @@ export function App(props: {
 		page: Page;
 		resource: string | null;
 		id: number | null;
-		top: number;
 	} | null =
 		navigation.current.page === "orchestrator" ||
 		navigation.current.page === "session"
@@ -427,7 +426,6 @@ export function App(props: {
 						navigation.current.page === "session"
 							? Number(navigation.current.resource)
 							: null,
-					top: navigation.current.scroll,
 				}
 			: null;
 	let readingRows: ReadonlyMap<string, BoxRenderable> | null = null;
@@ -604,28 +602,19 @@ export function App(props: {
 					!helpOpen() &&
 					!paletteOpen()
 				) {
+					// Opening a conversation always lands on its newest entry. A saved
+					// scroll offset, a pinned viewpoint's follow flag and a deep window
+					// expansion are not a reason to open an old place: the reader asked
+					// for the transcript, and reading back is their next gesture.
 					const bottom = Math.max(
 						0,
 						scroll.scrollHeight - scroll.viewport.height,
 					);
-					const follow =
-						target.detail.transcriptFollowId === id &&
-						target.detail.transcriptFollowing === true;
-					if (!follow && saved.top > 0 && localPaging?.canExpand()) {
-						// Restore old numeric positions against the same full supplied bound,
-						// not against the new smaller initial mount. No history read: a
-						// requestable native page must never stand in for a local expansion.
-						setAwayFromBottom(true);
-						if (localPaging.expandAll()) renderer.requestRender();
-					} else {
-						const top = follow
-							? bottom
-							: Math.min(Math.max(0, saved.top), bottom);
-						pendingTranscriptRestore = null;
-						resetReadingPlace();
-						followingBottom = follow;
-						if (scroll.scrollTop !== top) scroll.scrollTo(top);
-					}
+					pendingTranscriptRestore = null;
+					resetReadingPlace();
+					followingBottom = true;
+					setAwayFromBottom(false);
+					if (scroll.scrollTop !== bottom) scroll.scrollTo(bottom);
 				}
 			}
 			// Settle a local prepend only in its captured UI/session/window scope.
@@ -1316,9 +1305,7 @@ export function App(props: {
 	};
 	const remember = () => {
 		if (prompt) navigation.current.draft = prompt.plainText;
-		if (pendingTranscriptRestore)
-			navigation.current.scroll = pendingTranscriptRestore.top;
-		else if (scroll) {
+		if (scroll) {
 			navigation.current.scroll = Math.max(0, Math.round(scroll.scrollTop));
 			const id = sessionId();
 			if (
@@ -1358,7 +1345,6 @@ export function App(props: {
 					page: navigation.current.page,
 					resource: navigation.current.resource,
 					id: sessionId(),
-					top: navigation.current.scroll,
 				}
 			: null;
 		if (!pendingTranscriptRestore) scroll?.scrollTo(navigation.current.scroll);

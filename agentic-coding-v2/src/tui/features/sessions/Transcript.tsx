@@ -1117,11 +1117,7 @@ export function Transcript(props: {
 									}}
 								</For>
 								<Show when={message().role === "assistant"}>
-									<ResponseFooter
-										message={message()}
-										scope={messageObservation()}
-										interactive={active()}
-									/>
+									<ResponseFooter message={message()} />
 								</Show>
 								<Show
 									when={

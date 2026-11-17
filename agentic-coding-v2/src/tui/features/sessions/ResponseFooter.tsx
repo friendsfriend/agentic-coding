@@ -1,98 +1,58 @@
 /** @jsxImportSource @opentui/solid */
-import { createMemo, Show } from "solid-js";
+import { createMemo } from "solid-js";
 import type { Data } from "../../../protocol/index.ts";
 import { Stamp } from "../../presentation/components/Stamp.tsx";
 import {
 	formatCost,
 	formatTokenCount,
 } from "../../presentation/components/transcriptFormat.ts";
-import { DetailsFold } from "../../ui/DetailsFold.tsx";
-import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
 
 const fields = (value: unknown): Data =>
 	value && typeof value === "object" && !Array.isArray(value)
 		? (value as Data)
 		: {};
-const reported = (value: unknown, cost = false) =>
-	typeof value === "number" && Number.isFinite(value) && value >= 0
-		? cost
-			? formatCost(value)
-			: formatTokenCount(value)
-		: "not supplied/usable";
+const usable = (value: unknown) =>
+	typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-const modelLabel = (value: unknown) => {
-	if (typeof value !== "string") return "(not supplied)";
-	const points = Array.from(JSON.stringify(value));
-	return points.slice(0, 100).join("") + (points.length > 100 ? "…" : "");
+/** `"provider/model"`, in one quote pair and bounded like any supplied label. */
+const modelName = (message: Data) => {
+	const provider = typeof message.provider === "string" ? message.provider : "",
+		model = typeof message.model === "string" ? message.model : "",
+		name = [provider, model].filter((part) => part.length > 0).join("/");
+	if (!name) return "not supplied";
+	const points = Array.from(JSON.stringify(name));
+	return points.length > 100
+		? `${points.slice(0, 100).join("")}…`
+		: points.join("");
 };
-
-/** A summary only. Reasoning is a subset of output and cacheWrite1h a subset
- * of cacheWrite: neither is added again. Exact supplied fields remain below. */
-export function ReportedUsage(props: { usage: unknown; window?: boolean }) {
-	const usage = () => fields(props.usage);
-	const cost = () => (props.window ? usage().cost : fields(usage().cost).total);
-	return (
-		<text fg={color("textMuted")} wrapMode="word">
-			{props.window ? "Usage, window · " : "Usage · "}
-			{reported(cost(), true)} · {reported(usage().input)}→
-			{reported(usage().output)} tok · cache {reported(usage().cacheRead)}/
-			{reported(usage().cacheWrite)}
-			<Show when={usage().reasoning !== undefined}>
-				{" "}
-				· reasoning {reported(usage().reasoning)}
-			</Show>
-			<Show when={usage().cacheWrite1h !== undefined}>
-				{" "}
-				· 1h cache write {reported(usage().cacheWrite1h)}
-			</Show>
-		</text>
-	);
-}
 
 /** Original right-edge recorded stamp/footer composition. Request start and
  * monotonic recorded duration only; no ticking, inferred finish or speed. */
-export function ResponseFooter(props: {
-	message: Data;
-	scope: unknown;
-	interactive: boolean;
-}) {
-	const source = createMemo(() => ({
-		scope: props.scope,
-		message: props.message,
-	}));
-	const metadata = createMemo(() => {
-		const message = props.message;
-		return Object.fromEntries(
-			[
-				"api",
-				"provider",
-				"model",
-				"responseModel",
-				"responseId",
-				"thinkingLevel",
-				"providerThinkingLevel",
-				"timestamp",
-				"durationMs",
-				"usage",
-				"stopReason",
-				"rawStopReason",
-				"endTurn",
-				"errorMessage",
-				"diagnostics",
-				"deferred",
-			]
-				.filter((key) => Object.hasOwn(message, key))
-				.map((key) => [key, message[key]]),
-		);
+export function ResponseFooter(props: { message: Data }) {
+	// The one-line summary the developer reads: model, then only the accounting
+	// that was actually supplied. Reasoning is a subset of output and cacheWrite1h
+	// a subset of cacheWrite, so neither is added again; nothing is estimated.
+	const summary = createMemo(() => {
+		const usage = fields(props.message.usage),
+			segments: string[] = [];
+		if (usable(fields(usage.cost).total))
+			segments.push(formatCost(Number(fields(usage.cost).total)));
+		if (usable(usage.input) || usable(usage.output))
+			segments.push(
+				`${usable(usage.input) ? formatTokenCount(Number(usage.input)) : "—"}→${
+					usable(usage.output) ? formatTokenCount(Number(usage.output)) : "—"
+				} tok`,
+			);
+		return segments;
 	});
 	return (
 		<box flexDirection="column" paddingLeft={3} paddingRight={1} flexShrink={0}>
 			<box flexDirection="row">
 				<text fg={color("textMuted")} flexGrow={1} wrapMode="word">
-					Assistant · {modelLabel(props.message.provider)}/
-					{modelLabel(props.message.model)} ·{" "}
-					{props.message.nativePartial === true ? "streaming" : "retained"}
+					{`${modelName(props.message)}${summary()
+						.map((segment) => ` · ${segment}`)
+						.join("")}`}
 				</text>
 				<Stamp
 					timestamp={props.message.timestamp}
@@ -105,20 +65,6 @@ export function ResponseFooter(props: {
 					clockLabel="request"
 				/>
 			</box>
-			<ReportedUsage usage={props.message.usage} />
-			<DetailsFold
-				interactive={props.interactive}
-				scope={source()}
-				label="Response details"
-				summary={`${Object.keys(metadata()).length} supplied fields`}
-			>
-				<SuppliedObservation
-					interactive={props.interactive}
-					scope={source()}
-					label="Supplied response metadata, usage and recorded timing; not task completion evidence. Missing fields remain absent; reported zero is not proof of free billing"
-					value={metadata()}
-				/>
-			</DetailsFold>
 		</box>
 	);
 }

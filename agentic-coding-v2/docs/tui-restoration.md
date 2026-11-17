@@ -1998,3 +1998,54 @@ conversation's own content rather than debug dumps, and the two
 `SuppliedObservation` carriers for an unsupported assistant part and an unpaired
 tool result only appear when the backend supplies something the transcript cannot
 place. Visual acceptance of the cleaned surface stays with the developer.
+
+## The response footer is one line
+
+The developer's report: an assistant message carried `▸ Response details · 9 supplied
+fields` (a fold over the whole supplied response metadata) and two summary lines
+(`Assistant · "provider"/"model" · retained` and `Usage · <$0.01 · 3.9K→988 tok ·
+cache 0/0 · reasoning 333`). The requested shape is one line:
+`"opencode-go/deepseek-v4.1-flash" · <$0.01 · 3.9K→988 tok`.
+
+`ResponseFooter.tsx` now renders exactly that: the model as one quoted
+`"provider/model"` pair (bounded like every other supplied label, `not supplied`
+when neither is present), then only the accounting actually supplied — `cost.total`
+and `input→output tok` — and nothing else. The `Assistant · ` prefix, the
+`retained`/`streaming` tail, the `Usage · ` prefix, `cache read/write` and
+`reasoning` are gone from the line. The right-edge `Stamp` (request start and
+recorded duration) and the `streaming`/`pending` suppression of a duration are
+unchanged.
+
+The `DetailsFold` with the raw supplied metadata, usage and timing is removed with
+its `SuppliedObservation` carrier, so the message no longer has a raw JSON
+inspection path in the TUI; the fold component itself stays (providers, resources
+and observability still use it), and `ResponseFooter` lost its now-unused `scope`
+and `interactive` props. Reasoning remains a subset of output and `cacheWrite1h`
+a subset of `cacheWrite` — neither was re-added, and nothing is estimated. The
+`ReportedUsageModal` (the ported cost modal) is untouched and still shows the full
+supplied accounting on demand.
+
+## Opening a conversation lands on its newest entry
+
+The developer's report: opening a transcript could land somewhere other than the
+newest message — on a saved scroll offset, or on a deep local window left over
+from an earlier visit. The requested rule: always show the latest entry when the
+view opens.
+
+The transcript restore in the shell's post-render settle no longer honours a
+recorded offset. `pendingTranscriptRestore` now carries only the exact target
+identity (page, resource, session id); when it matches the mounted transcript the
+shell clears the reading place, sets `followingBottom`, clears `awayFromBottom`
+and scrolls to `scrollHeight - viewport.height`. A saved `View.scroll` is still
+recorded by `remember()` and still restores ordinary list/resource pages — it just
+no longer decides where a conversation opens. Reading back stays a gesture the
+reader makes: scrolling up keeps paging in older history exactly as before, and
+the `JumpToLatest` affordance is unchanged.
+
+Two consequences worth naming. A pinned viewpoint's `transcriptFollow` flag is now
+vestigial for opening (every open follows); it is still recorded when a viewpoint
+is pinned, so the pin keeps describing what it captured rather than being
+silently rewritten. And the deep-position branch is gone with the offset: the
+shell no longer calls `expandAll()` to rebuild an old scroll bound, because the
+open always targets the end of the newest page. Visual acceptance of the settle
+order (streaming, window growth, resize) stays with the developer.
