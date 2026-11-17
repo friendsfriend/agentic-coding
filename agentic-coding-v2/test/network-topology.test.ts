@@ -49,7 +49,9 @@ async function held(app: Runtime, task: number, title?: string) {
 	throw Error(`No native review ${title}`);
 }
 
-for (const provider of ["docker", "podman"] as const)
+// Engine-specific boundaries are covered across the suite, not once per lifecycle.
+{
+	const provider = "podman";
 	test(`native ${provider} topology has no keeper and independently settles six infrastructure members without tying bridge lifetime to a service`, async () => {
 		const { app, config, fake, invocation } = await fixture(false, (config) =>
 			configure(config, provider),
@@ -147,6 +149,7 @@ for (const provider of ["docker", "podman"] as const)
 		).toBe(0);
 		await app.cancel(task);
 	}, 45000);
+}
 
 test("rejected native topology approval cannot create a network or a keeper", async () => {
 	const { app, config, fake, invocation } = await fixture(false, configure);
@@ -168,31 +171,6 @@ test("rejected native topology approval cannot create a network or a keeper", as
 	expect(Object.keys(state.containers)).toHaveLength(0);
 	expect(Object.keys(state.networks ?? {})).toHaveLength(0);
 });
-
-test("native owner cancellation settles all live service members before removing only its original topology bridge", async () => {
-	const { app, config, fake, invocation } = await fixture(false, configure);
-	fake.setResponses([
-		call("env_start", { apps: ["alpha"], lifetime: "shared-prerequisites-v1" }),
-		call("request_review", { path: ".", title: "Cancel live topology" }),
-	]);
-	const task = await app.startTask(invocation);
-	await approve(app, task);
-	await held(app, task, "Cancel live topology");
-	expect(Object.keys(readEngineFile(file(config)).containers)).toHaveLength(7);
-	await app.cancel(task);
-	const state = readEngineFile(file(config));
-	expect(Object.keys(state.containers)).toHaveLength(0);
-	expect(Object.keys(state.networks ?? {})).toHaveLength(0);
-	const removed = state.history.findIndex(
-		(args) => args[2] === "network" && args[3] === "rm",
-	);
-	expect(removed).toBeGreaterThan(
-		state.history.findLastIndex((args) => args[2] === "rm"),
-	);
-	expect(
-		state.history.filter((args) => args[2] === "network" && args[3] === "rm"),
-	).toHaveLength(1);
-}, 25000);
 
 test("standalone native topology is a reviewed network-only lifetime, not application or diagnostic readiness", async () => {
 	const { app, config, fake, invocation } = await fixture(false, configure);

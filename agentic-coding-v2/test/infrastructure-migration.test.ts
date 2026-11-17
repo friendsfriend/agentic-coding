@@ -15,7 +15,7 @@ import {
 } from "./fixtures/network-topology.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
-const { fixture, cleanup } = createFixtures();
+const { fixture, definition, cleanup } = createFixtures();
 const engines: ReturnType<typeof configureTopologyFixture>[] = [];
 afterEach(async () => {
 	try {
@@ -497,7 +497,7 @@ for (const corruption of [
 		expect(readEngineFile(topologyEngineFile(config)).history).toHaveLength(0);
 	});
 test("missing explicit infrastructure workspace never infers a repository or a global lifetime", async () => {
-	const { config } = await fixture(false, (config) =>
+	const { config } = await definition((config) =>
 		engines.push(configureTopologyFixture(config)),
 	);
 	const source = inputs(config),
@@ -515,7 +515,7 @@ test("missing explicit infrastructure workspace never infers a repository or a g
 /** A published mapping is not a conflict: the migration reports what the live
  * configuration already has as present, so the remaining work is visible. */
 test("infrastructure units the live configuration already has are reported present instead of as conflicts", async () => {
-	const { config } = await fixture(false, (config) => {
+	const { config } = await definition((config) => {
 		config.profiles = [];
 		fs.mkdirSync(config.configDir, { recursive: true });
 	});
@@ -546,7 +546,7 @@ test("infrastructure units the live configuration already has are reported prese
 /** Same identity, different unit: refuse that unit and withhold the mapping
  * rather than overwriting a live project the developer published. */
 test("an existing infrastructure project that differs from the proposed unit is refused, never overwritten", async () => {
-	const { config } = await fixture(false, (config) => {
+	const { config } = await definition((config) => {
 		config.profiles = [];
 		fs.mkdirSync(config.configDir, { recursive: true });
 	});
@@ -586,7 +586,7 @@ test("an existing infrastructure project that differs from the proposed unit is 
 /** A source with no v1 definition is a specific blocker that the developer can
  * accept per service; identity is never inferred silently. */
 test("an infrastructure source without a definition needs an explicit identity acceptance", async () => {
-	const { config } = await fixture(false, (config) => {
+	const { config } = await definition((config) => {
 		config.profiles = [];
 		fs.mkdirSync(config.configDir, { recursive: true });
 	});

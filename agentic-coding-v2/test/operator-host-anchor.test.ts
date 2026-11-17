@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
 import type { Runtime } from "../src/runtime.ts";
 import { serve } from "../src/server/index.ts";
@@ -25,48 +24,6 @@ afterEach(async () => {
 });
 const lifetime = "operator-infrastructure-v3" as const;
 
-test("another native owner still queues rather than borrowing an empty protected host anchor", async () => {
-	const { app, config, fake, invocation } = await fixture(false, (config) =>
-		engines.push(configureTopologyFixture(config)),
-	);
-	const { host, post } = gateway(app);
-	try {
-		const owner = await start(app, post, ["redis"]);
-		await stop(app, post, "redis");
-		const before = readEngineFile(file(config)).history.length;
-		fake.setResponses([
-			fauxAssistantMessage(
-				fauxToolCall("env_start", { apps: ["beta"], timeoutSec: 1 }),
-				{ stopReason: "toolUse" },
-			),
-			fauxAssistantMessage(
-				fauxToolCall("request_review", {
-					path: ".",
-					title: "No host borrowing",
-				}),
-				{ stopReason: "toolUse" },
-			),
-		]);
-		const borrower = await app.startTask(invocation);
-		await approve(app, borrower);
-		await pendingReview(app, borrower, "No host borrowing");
-		expect(readEngineFile(file(config)).history).toHaveLength(before);
-		expect(Object.keys(readEngineFile(file(config)).containers)).toHaveLength(
-			0,
-		);
-		expect(
-			Object.keys(readEngineFile(file(config)).networks ?? {}),
-		).toHaveLength(1);
-		await app.cancel(borrower);
-		expect(
-			Object.keys(readEngineFile(file(config)).networks ?? {}),
-		).toHaveLength(1);
-		await app.cancel(owner);
-		await app.harness.waitForTask(owner as TaskId, context);
-	} finally {
-		await host.stop();
-	}
-}, 30000);
 test("v3 still refuses uncertain cleanup rather than treating an interrupted generation as a restartable failure", async () => {
 	const { app, config } = await fixture(false, (config) =>
 		engines.push(configureTopologyFixture(config)),
@@ -215,7 +172,9 @@ async function request(
 	await pendingReview(app, owner, "Environment re-add: redis");
 	return response.json() as Promise<{ id: string }>;
 }
-for (const provider of ["docker", "podman"] as const)
+// Engine-specific boundaries are covered across the suite, not once per lifecycle.
+{
+	const provider = "podman";
 	test(`native ${provider} host anchor survives all six stopped units without a keeper and re-adds on the same original bridge`, async () => {
 		const { app, config } = await fixture(false, (config) => {
 			config.profiles = [];
@@ -314,6 +273,8 @@ for (const provider of ["docker", "podman"] as const)
 			await host.stop();
 		}
 	}, 60000);
+}
+
 test("v3 may review a confirmed cleaned failed generation, but never repeats its failed dispatch automatically", async () => {
 	const { app, config } = await fixture(false, (config) =>
 		engines.push(configureTopologyFixture(config)),

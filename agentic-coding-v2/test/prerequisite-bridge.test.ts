@@ -102,7 +102,9 @@ function configure(
 		}),
 	);
 }
-for (const provider of ["docker", "podman"] as const)
+// Engine-specific boundaries are covered across the suite, not once per lifecycle.
+{
+	const provider = "docker";
 	test(`native ${provider} prerequisite bridge creates one original network, preserves cross-stack discovery and removes it only after dependent containers`, async () => {
 		const { app, config, fake, invocation } = await fixture(false, (config) =>
 			configure(config, provider),
@@ -143,6 +145,7 @@ for (const provider of ["docker", "podman"] as const)
 			stopped.history.findLastIndex((args) => args[2] === "rm"),
 		);
 	}, 20000);
+}
 
 test("a foreign infrastructure prerequisite shares only its approved owner-bound captured-commit generation, never the dirty developer checkout", async () => {
 	const foreign = await fixture(false);
@@ -454,83 +457,6 @@ test("uncertain dependent identity retains its bridge claim and quarantines shar
 		stopped.history.some((args) => args[2] === "network" && args[3] === "rm"),
 	).toBe(false);
 }, 20000);
-
-for (const health of ["missing", "unhealthy"] as const)
-	test(`a declared infrastructure health probe must be freshly healthy before bridge binding: ${health}`, async () => {
-		const { app, config, fake, invocation } = await fixture(false, (config) => {
-			configure(config);
-			const state = readEngineFile(stateFile(config));
-			state.initialHealth = health;
-			fs.writeFileSync(stateFile(config), JSON.stringify(state));
-			const file = path.join(config.configDir, "environments.json"),
-				data = JSON.parse(fs.readFileSync(file, "utf8"));
-			data.projects[0].targets[0].timeoutMs = 2500;
-			fs.writeFileSync(file, JSON.stringify(data));
-		});
-		fake.setResponses([
-			call("env_start", { apps: ["api"] }),
-			fauxAssistantMessage("No unhealthy bridge granted"),
-		]);
-		const task = await app.startTask(invocation);
-		await approve(app, task);
-		await app.harness.waitForTask(task as TaskId, context);
-		const state = readEngineFile(stateFile(config));
-		expect(state.history.filter((args) => args[2] === "create")).toHaveLength(
-			1,
-		);
-		expect(Object.keys(state.containers)).toHaveLength(0);
-		expect(Object.keys(state.networks ?? {})).toHaveLength(0);
-		expect((await app.environments.snapshot("api")).runs[0]?.ready).not.toBe(
-			true,
-		);
-	}, 15000);
-
-test("a configured bridge exporter waits for its declared probe within the reviewed startup budget before any dependent container is created", async () => {
-	const { app, config, fake, invocation } = await fixture(false, (config) => {
-		configure(config);
-		const state = readEngineFile(stateFile(config));
-		state.initialHealth = "starting";
-		fs.writeFileSync(stateFile(config), JSON.stringify(state));
-	});
-	fake.setResponses([
-		call("env_start", { apps: ["api"] }),
-		call("request_review", { title: "Qualified bridge", path: "." }),
-	]);
-	const task = await app.startTask(invocation),
-		review = await pendingReview(app, task);
-	const planned = JSON.parse(review.snapshot).plans.find(
-		(plan: { app: string }) => plan.app === "infra",
-	);
-	expect(planned.composePlan.services[0].container.readiness).toBe("healthy");
-	await approve(app, task);
-	await eventually(
-		async () => readEngineFile(stateFile(config)),
-		(state) =>
-			Object.values(state.containers).some(
-				(container) =>
-					container.Aliases?.includes("worker") &&
-					container.State.Running &&
-					state.history.filter(
-						(args) => args[2] === "inspect" && args.at(-1) === container.Id,
-					).length >= 3,
-			),
-	);
-	const state = readEngineFile(stateFile(config)),
-		worker = Object.values(state.containers).find((container) =>
-			container.Aliases?.includes("worker"),
-		);
-	if (!worker) throw Error("No original worker");
-	expect(Object.keys(state.containers)).toHaveLength(1);
-	worker.State.Health = { Status: "healthy" };
-	state.initialHealth = undefined;
-	fs.writeFileSync(stateFile(config), JSON.stringify(state));
-	await pendingReview(app, task, "Qualified bridge");
-	expect((await app.environments.snapshot("api")).runs[0]?.ready).toBe(true);
-	await app.cancel(task);
-	expect(
-		Object.keys(readEngineFile(stateFile(config)).networks ?? {}),
-	).toHaveLength(0);
-}, 15000);
 
 test("an explicitly running-only infrastructure bridge never fabricates a health probe", async () => {
 	const { app, config, fake, invocation } = await fixture(false, (config) => {

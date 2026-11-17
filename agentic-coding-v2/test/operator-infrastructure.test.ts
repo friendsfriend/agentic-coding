@@ -55,7 +55,9 @@ async function observed(
 	}
 	throw new Error("Native operator state did not settle");
 }
-for (const provider of ["docker", "podman"] as const)
+// Engine-specific boundaries are covered across the suite, not once per lifecycle.
+{
+	const provider = "docker";
 	test(`authenticated ${provider} operator controls six explicit infrastructure units independently with one topology, no keeper or model`, async () => {
 		const { app, config } = await fixture(false, (config) => {
 			config.profiles = [];
@@ -283,6 +285,8 @@ for (const provider of ["docker", "podman"] as const)
 			await host.stop();
 		}
 	}, 90000);
+}
+
 for (const [name, request] of [
 	["app roots", { apps: ["alpha"] }],
 	["topology root", { apps: ["topology"] }],

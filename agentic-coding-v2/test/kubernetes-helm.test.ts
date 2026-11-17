@@ -10,7 +10,7 @@ import { approve, pendingReview } from "./fixtures/environment.ts";
 import { helmClient, helmDeploymentClient } from "./fixtures/helm-client.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
-const { fixture, cleanup } = createFixtures();
+const { fixture, definition, cleanup } = createFixtures();
 afterEach(cleanup);
 const stateFile = (config: Config) =>
 	path.join(config.configDir, "helm-state.json");
@@ -421,41 +421,37 @@ for (const [label, files, message] of [
 		expect(calls(config)).toHaveLength(0);
 	}, 30000);
 
-for (const [label, helm] of [
-	["outside values", { values: ["../values.yaml"] }],
-	["structured setString", { setString: { "a.b": "x,y=z" } }],
-	["indexed setString path", { setString: { "a[0]": "x" } }],
-	["unknown Helm field", { postRenderer: "x" }],
-] as const)
-	test(`Helm ${label} is refused by the configuration schema`, async () => {
-		const { config } = await fixture(false, (config) => configure(config));
-		const { validateProjects } = await import("../src/environment/catalog.ts");
-		const document = JSON.parse(
-			fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
-		);
-		expect(validateProjects(config, document)).toHaveLength(1);
+test("Helm configuration refuses unsupported fields without a runtime per input", async () => {
+	const { config } = await definition(configure);
+	const { validateProjects } = await import("../src/environment/catalog.ts");
+	const original = JSON.parse(
+		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
+	);
+	expect(validateProjects(config, original)).toHaveLength(1);
+	for (const helm of [
+		{ values: ["../values.yaml"] },
+		{ setString: { "a.b": "x,y=z" } },
+		{ setString: { "a[0]": "x" } },
+		{ postRenderer: "x" },
+	]) {
+		const document = structuredClone(original);
 		Object.assign(document.projects[0].targets[0].kubernetes.helm, helm);
 		expect(() => validateProjects(config, document)).toThrow(/Helm/);
-		expect(calls(config)).toHaveLength(0);
-	}, 30000);
-
-for (const [label, extra] of [
-	["environment", { environment: { A: "b" } }],
-	["secret references", { secretRefs: { A: "B" } }],
-	["image fields", { kubernetes: { image: "x" } }],
-] as const)
-	test(`Helm targets refuse ${label} rather than binding them outside the chart`, async () => {
-		const { config } = await fixture(false, (config) => configure(config));
-		const { validateProjects } = await import("../src/environment/catalog.ts");
-		const document = JSON.parse(
-			fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
-		);
-		const target = document.projects[0].targets[0];
+	}
+	for (const extra of [
+		{ environment: { A: "b" } },
+		{ secretRefs: { A: "B" } },
+		{ kubernetes: { image: "x" } },
+	]) {
+		const document = structuredClone(original),
+			target = document.projects[0].targets[0];
 		if ("kubernetes" in extra)
 			Object.assign(target.kubernetes, extra.kubernetes);
 		else Object.assign(target, extra);
 		expect(() => validateProjects(config, document)).toThrow(/Helm/);
-	}, 30000);
+	}
+	expect(calls(config)).toHaveLength(0);
+});
 
 const deployment = (namespace: string) =>
 	`apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: ${namespace}\n`;

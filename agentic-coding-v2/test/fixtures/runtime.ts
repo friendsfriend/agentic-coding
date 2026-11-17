@@ -6,8 +6,8 @@ import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { type Config, digest } from "../../src/config.ts";
-import { git } from "../../src/git.ts";
 import { Runtime } from "../../src/runtime.ts";
+import { createRepository } from "./repository.ts";
 
 export function createFixtures() {
 	const roots: string[] = [],
@@ -17,8 +17,7 @@ export function createFixtures() {
 		for (const root of roots.splice(0))
 			fs.rmSync(root, { recursive: true, force: true });
 	}
-	async function fixture(
-		persistent = false,
+	async function definition(
 		configure?: (config: Config) => void,
 		streaming?: Pick<
 			NonNullable<Parameters<typeof fauxProvider>[0]>,
@@ -28,13 +27,7 @@ export function createFixtures() {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-v2-test-"));
 		roots.push(root);
 		const repo = path.join(root, "repo");
-		fs.mkdirSync(repo);
-		await git(repo, ["init", "-b", "main"]);
-		await git(repo, ["config", "user.name", "Test"]);
-		await git(repo, ["config", "user.email", "test@example.invalid"]);
-		fs.writeFileSync(path.join(repo, "README.md"), "Initial\n");
-		await git(repo, ["add", "README.md"]);
-		await git(repo, ["commit", "-m", "initial"]);
+		await createRepository(repo);
 		const fake = fauxProvider({
 			...streaming,
 			models: [{ id: "original" }, { id: "replacement" }],
@@ -71,6 +64,18 @@ export function createFixtures() {
 			configDir: path.join(root, "config"),
 		};
 		configure?.(config);
+		return { config, models, fake };
+	}
+	async function fixture(
+		persistent = false,
+		configure?: (config: Config) => void,
+		streaming?: Pick<
+			NonNullable<Parameters<typeof fauxProvider>[0]>,
+			"tokensPerSecond" | "tokenSize"
+		>,
+	) {
+		const { config, models, fake } = await definition(configure, streaming);
+		const stateDir = config.stateDir;
 		const open = async () => {
 			const app = await Runtime.open(
 				config,
@@ -96,7 +101,7 @@ export function createFixtures() {
 		};
 		return { app, config, fake, open, invocation };
 	}
-	return { fixture, cleanup, apps };
+	return { fixture, definition, cleanup, apps };
 }
 export async function eventually<T>(
 	read: () => Promise<T>,

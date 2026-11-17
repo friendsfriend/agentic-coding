@@ -2088,3 +2088,28 @@ one per dead `ac-v2-test-*` temp dir, exactly the leak recorded in
 dirty fixture environment, not a diagnosis: the watcher leak makes a full run
 unreliable on a machine that has been running suites for a while, and it remains
 unclaimed in the fixture teardown.
+
+## Test-cost consolidation
+
+The developer rejected real-deadline waiting tests and full-stack setup per input
+permutation. After the previously committed SQL/HTTP deadline and container/Compose
+suite removals, this pass removes bridge startup-expiry variants and the probe
+poll-count scenario, reduces the Docker/Podman lifecycle cross-product, and removes
+two overlapping topology cancellation/owner-queue scenarios. Distinct agent and
+operator admission paths, re-add approvals, host-anchor survival, and unique
+ownership/recovery refusal cases remain.
+
+Fixture repositories now copy an in-memory initial Git repository rather than
+spawning five Git setup commands per test. Every checkout, index, config and object
+store remains an independent file copy; a disposable real-Git check verified that
+committing and changing config in one repository leaves its sibling clean and
+unchanged. Configuration-only migration cases now use `definition()` without
+opening a runtime. Seven Helm schema variants share one definition while each
+mutation gets its own document copy. `test/README.md` records the cost rules.
+
+Verification: unfiltered type-check and lint clean; official build clean. Full
+serial suite: 608 pass, zero failures, 251.20 seconds, versus the earlier measured
+673 tests / 423.52 seconds before all removals and consolidation. This is not a
+one-minute suite yet. No production behavior, timeout, retry policy or default
+coverage selection changed; the removed cases are no longer covered by those
+integration scenarios.

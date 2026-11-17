@@ -202,7 +202,9 @@ async function stop(
 	if (!ended) throw new Error("Missing confirmed released unit");
 	return ended;
 }
-for (const provider of ["docker", "podman"] as const)
+// Engine-specific boundaries are covered across the suite, not once per lifecycle.
+{
+	const provider = "docker";
 	test(`authenticated ${provider} re-add requires fresh native review, keeps the original topology and never reuses a unit generation`, async () => {
 		const { app, config } = await fixture(false, (config) => {
 			config.profiles = [];
@@ -345,6 +347,8 @@ for (const provider of ["docker", "podman"] as const)
 			await host.stop();
 		}
 	}, 60000);
+}
+
 for (const scenario of ["v1", "live-unit", "extra-field"] as const)
 	test(`native re-add refuses ${scenario} before queueing execution or another review`, async () => {
 		const { app, config } = await fixture(false, (config) =>
