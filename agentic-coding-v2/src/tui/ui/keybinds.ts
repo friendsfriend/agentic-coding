@@ -5,6 +5,26 @@ export type Keybind = {
 	short?: string;
 	standard?: boolean;
 };
+/**
+ * v1's global exit keys. They dispatch from their own layer rather than the shell
+ * layer, because a bound key is consumed before a text renderable can type it:
+ * that layer stands down whenever a text entry, dialog or embedded terminal owns
+ * the keyboard, so `q` stays a letter where a letter is expected.
+ */
+export const quitKeybinds: Keybind[] = [
+	{
+		key: "q",
+		cmd: "shell.quitQ",
+		action: "Exit this client (press q twice)",
+		short: "quit",
+	},
+	{
+		key: "ctrl+c",
+		cmd: "shell.quitCtrlC",
+		action: "Copy the selection, or exit this client (press Ctrl+C twice)",
+		standard: true,
+	},
+];
 export const shellKeybinds: Keybind[] = [
 	{
 		key: "ctrl+s",
@@ -378,7 +398,7 @@ export const textareaBindings = (catalog: Keybind[]) =>
 					: ("newline" as const),
 		}));
 export const keybindCatalogs = {
-	Shell: shellKeybinds,
+	Shell: [...shellKeybinds, ...quitKeybinds],
 	Transcript: [...transcriptKeybinds, ...transcriptViewportKeybinds],
 	Controls: actionKeybinds,
 	Suggestions: paletteKeybinds,

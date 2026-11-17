@@ -1,11 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
-import type {
-	BoxRenderable,
-	ScrollBoxRenderable,
-	TextareaRenderable,
-} from "@opentui/core";
-import { TextAttributes } from "@opentui/core";
+import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core";
+import { TextAttributes, TextareaRenderable } from "@opentui/core";
 import { useKeymap } from "@opentui/keymap/solid";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
@@ -117,6 +113,7 @@ import {
 	pageFocusKeybinds,
 	paletteKeybinds,
 	promptKeybinds,
+	quitKeybinds,
 	shellKeybinds,
 	textareaBindings,
 	transcriptKeybinds,
@@ -2204,6 +2201,42 @@ export function App(props: {
 		)
 			renderer.clearSelection();
 	}
+	// v1's global exit: the first press asks for the same key again within a
+	// second, and the second press leaves the client. Arming is a plain local
+	// timer, so it can never outlive the client or reach the host.
+	const quitWindowMs = 1000;
+	let quitArmedAt = 0;
+	const quitKey = (key: "q" | "ctrl+c") => {
+		// A selection is what the developer is acting on: v1 copies it instead of
+		// arming an exit, and says so rather than leaving under them.
+		if (
+			key === "ctrl+c" &&
+			(renderer.getSelection()?.getSelectedText() ?? "")
+		) {
+			quitArmedAt = 0;
+			copySelection();
+			return;
+		}
+		const now = Date.now();
+		if (quitArmedAt > 0 && now - quitArmedAt < quitWindowMs) {
+			quitArmedAt = 0;
+			props.quit();
+			return;
+		}
+		quitArmedAt = now;
+		setNotice(
+			key === "ctrl+c"
+				? "If you want to quit press Ctrl+C again"
+				: "If you want to quit press q again",
+		);
+	};
+	// A focused text renderable owns printable keys, so `q` must be a letter
+	// there. InputRenderable extends TextareaRenderable, so one check covers
+	// both, including the inputs a mounted feature owns.
+	const typingIntoText = () => {
+		if (renderer.isDestroyed) return false;
+		return renderer.currentFocusedRenderable instanceof TextareaRenderable;
+	};
 	// The renderer's diagnostics console owns its own text selection and copies
 	// nothing unless this callback is installed, so its advertised copy binding
 	// would silently discard what the operator selected.
@@ -2264,6 +2297,36 @@ export function App(props: {
 		],
 	});
 	onCleanup(unregisterCopy);
+	// The quit keys have their own layer, below every dialog and text owner: a
+	// layer's enabled state is the only way to leave a key unclaimed, because a
+	// bound key is consumed before the renderable that expects to type it.
+	const unregisterQuit = keymap.registerLayer({
+		id: "v2.quitKeys",
+		priority: 5,
+		enabled: () =>
+			!typingIntoText() &&
+			!helpOpen() &&
+			!helpRequested() &&
+			!paletteOpen() &&
+			!settingsEditing() &&
+			!settingsThemeOpen() &&
+			!environmentModal() &&
+			agentTerminalFocus() === null,
+		commands: layerCommands([
+			{
+				id: "shell.quitQ",
+				name: "Exit the local client (press q twice)",
+				run: () => quitKey("q"),
+			},
+			{
+				id: "shell.quitCtrlC",
+				name: "Copy the selection, or exit (press Ctrl+C twice)",
+				run: () => quitKey("ctrl+c"),
+			},
+		]),
+		bindings: bindings(quitKeybinds),
+	});
+	onCleanup(unregisterQuit);
 	const unregisterViewport = keymap.registerLayer({
 		id: "v2.transcriptViewport",
 		priority: 35,
@@ -5145,9 +5208,10 @@ export function App(props: {
 							: (paletteOpen()
 									? paletteKeybinds
 									: settingsEditing()
-										? [...shellKeybinds, ...editorKeybinds]
+										? [...shellKeybinds, ...quitKeybinds, ...editorKeybinds]
 										: [
 												...shellKeybinds,
+												...quitKeybinds,
 												...(crumbActive()
 													? breadcrumbKeybinds
 													: actionKeybinds),
