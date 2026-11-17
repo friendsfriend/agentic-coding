@@ -43,6 +43,7 @@ import {
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 import { TranscriptRowsContext } from "./TranscriptRows.ts";
 import { TranscriptShellOutput } from "./TranscriptShellOutput.tsx";
+import { toolIcon, toolPresentation } from "./tool-presentation.ts";
 
 const object = (value: unknown): Data =>
 	value && typeof value === "object" && !Array.isArray(value)
@@ -142,36 +143,10 @@ export function ToolCard(props: {
 		"browser_snapshot",
 		"browser_find",
 	]);
-	const icons: Record<string, string> = {
-		...Object.fromEntries([...browserActions].map((name) => [name, "→"])),
-		browser_run_script: "λ",
-		browser_eval: "λ",
-		browser_console: "≋",
-		browser_network: "≋",
-		db_query: "!",
-		browser_screenshot: "▧",
-		browser_record_start: "▧",
-		browser_record_stop: "▧",
-		read: "→",
-		write: "←",
-		edit: "←",
-		apply_patch: "←",
-		patch: "←",
-		glob: "✱",
-		grep: "✱",
-		find: "✱",
-		bash: "$",
-		shell: "$",
-		execute: "▶",
-		task: "✓",
-		subagent: "✓",
-		webfetch: "%",
-		websearch: "◈",
-		codemode: "λ",
-		developer_question: "?",
-		agent_ask: "?",
-	};
 	const args = () => object(props.call.arguments);
+	// What the row says before it is opened: the family's own icon and target.
+	const presentation = () =>
+		toolPresentation(name(), args(), props.result ? "done" : "pending");
 	const name = () => string(props.call.name) || "Unnamed native tool";
 	// Original pending aliases share shell presentation, not terminal semantics.
 	const shellSource = () =>
@@ -396,6 +371,8 @@ export function ToolCard(props: {
 			const path = string(args().path);
 			return `${props.result ? fileVerb.done : fileVerb.pending} ${path || name()}`;
 		}
+		const family = presentation();
+		if (family) return family.label;
 		if (!browserActions.has(name())) return summary() || name();
 		const verb = name().slice("browser_".length).replaceAll("_", " ");
 		const target =
@@ -613,16 +590,14 @@ export function ToolCard(props: {
 							props.progress?.status === "running"
 						}
 						browser={name().startsWith("browser_")}
-						icon={Object.hasOwn(icons, name()) ? (icons[name()] ?? "•") : "•"}
+						icon={toolIcon(name())}
 						label={headerLabel()}
 						hint={
 							fileVerbs[name()]
 								? fileHint()
 								: shellSource()
 									? shellHint()
-									: headerLabel() !== name()
-										? name()
-										: undefined
+									: presentation()?.hint
 						}
 						timestamp={props.result?.timestamp}
 						durationMs={props.result?.durationMs}

@@ -10,6 +10,10 @@ import {
 	runningCompaction,
 } from "../src/tui/features/sessions/prompt-meter.ts";
 import {
+	toolIcon,
+	toolPresentation,
+} from "../src/tui/features/sessions/tool-presentation.ts";
+import {
 	generationSpeed,
 	modelLabel,
 	turnStats,
@@ -259,6 +263,105 @@ test("a compaction is running only while a supplied record says so", () => {
 	expect(
 		runningCompaction([{ taskId: 9, reason: "manual", retry: {} }]),
 	).toEqual({ reason: "manual" });
+});
+
+// v1 gave each tool family its own line; v2's own families (orchestrator,
+// environment, evidence, scheduling) were named twice and had no icon at all.
+test("a tool family is named by what it does and what it does it to", () => {
+	// Families with a bespoke body keep their own header.
+	for (const name of [
+		"read",
+		"write",
+		"edit",
+		"bash",
+		"shell",
+		"execute",
+		"codemode",
+		"developer_question",
+		"agent_ask",
+		"browser_click",
+	])
+		expect(toolPresentation(name, {}, "done")).toBe(null);
+	// A started task names the skill it runs and the checkout it runs in; an
+	// unreturned call is never spelled as a completed one.
+	expect(
+		toolPresentation(
+			"start_task",
+			{
+				skill: "review-runner",
+				repository: "agentic-coding",
+				policy: "read-only",
+			},
+			"pending",
+		),
+	).toEqual({
+		label: "Starting review-runner",
+		hint: "agentic-coding · read-only",
+	});
+	expect(
+		toolPresentation("start_task", { skill: "review-runner" }, "done"),
+	).toEqual({ label: "Started review-runner" });
+	// An environment action reads as the action it prepares, on the apps it names.
+	expect(
+		toolPresentation(
+			"environment_action",
+			{ apps: ["api", "web"], action: "build", runtime: "docker" },
+			"done",
+		),
+	).toEqual({ label: "Build api, web", hint: "docker" });
+	// Diagnostics name their verb and path; SQL keeps its own line and names the
+	// database it runs against.
+	expect(
+		toolPresentation(
+			"http_request",
+			{ app: "gateway", method: "post", path: "/v1/x" },
+			"done",
+		),
+	).toEqual({ label: "POST /v1/x", hint: "gateway" });
+	expect(toolPresentation("http_request", { app: "gateway" }, "done")).toEqual({
+		label: "GET",
+		hint: "gateway",
+	});
+	expect(
+		toolPresentation(
+			"db_query",
+			{ infra: "primary", sql: "\n  select 1\n  from dual" },
+			"done",
+		),
+	).toEqual({ label: "SQL · primary", hint: "select 1" });
+	// Everything else states its own name and target once: never the name twice,
+	// never an argument the call did not supply.
+	expect(toolPresentation("frobnicate", {}, "done")).toEqual({
+		label: "frobnicate",
+	});
+	expect(
+		toolPresentation("webfetch", { url: "https://x.test/a" }, "done"),
+	).toEqual({ label: "webfetch", hint: "https://x.test/a" });
+	expect(
+		toolPresentation("task", { description: "Read the logs" }, "done"),
+	).toEqual({ label: "task", hint: "Read the logs" });
+	// Evidence names the file it retained and keeps the caption as its
+	// description, bounded like every other supplied label.
+	expect(
+		toolPresentation(
+			"attach_evidence",
+			{ path: "out/run.log", caption: "x".repeat(400) },
+			"done",
+		),
+	).toEqual({ label: "Attached out/run.log", hint: `${"x".repeat(89)}…` });
+});
+
+test("every family is recognised by an icon, named ones exactly", () => {
+	expect(toolIcon("read")).toBe("→");
+	expect(toolIcon("start_task")).toBe("▷");
+	expect(toolIcon("env_start")).toBe("⚙");
+	expect(toolIcon("env_cluster_status")).toBe("☸");
+	expect(toolIcon("workflow_status")).toBe("◷");
+	expect(toolIcon("stage_info")).toBe("▤");
+	expect(toolIcon("browser_eval")).toBe("λ");
+	expect(toolIcon("browser_screenshot")).toBe("▧");
+	expect(toolIcon("browser_click")).toBe("→");
+	expect(toolIcon("frobnicate")).toBe("•");
 });
 
 // v1's Ctrl+T / Ctrl+O: one kind of block at a time, and the whole kind moves
