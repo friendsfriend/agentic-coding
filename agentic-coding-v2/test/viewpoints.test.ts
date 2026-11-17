@@ -23,7 +23,7 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			expanded: [],
 			scroll: 3,
 			focus: "content",
-			workspace: { mode: "permanent", side: "right" },
+			workspace: { mode: "permanent" },
 		};
 	const resourceView: UiView = {
 		...view,
@@ -49,7 +49,8 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			null,
 			[],
 			{},
-			{ mode: "permanent" },
+			{ side: "left" },
+			{ mode: "collapsed" },
 			{ mode: "permanent", side: "up" },
 			{ mode: ["permanent"], side: "left" },
 			{ mode: "permanent", side: "left", execute: true },
@@ -88,27 +89,41 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 		).toEqual(saved);
 		expect(await client.call("viewpoints.read", {})).toEqual([saved]);
 		for (const mode of ["expanding", "permanent"] as const) {
-			for (const side of ["left", "right"] as const) {
-				const layout = await client.call("viewpoints.save", {
+			const layout = await client.call("viewpoints.save", {
+				id,
+				name: "Task position",
+				revision,
+				view: { ...view, workspace: { mode } },
+			});
+			revision = layout.revision;
+			expect(layout.view.workspace).toEqual({ mode });
+			for (const filter of ["active", "attention", "all"] as const) {
+				const filtered = await client.call("viewpoints.save", {
 					id,
 					name: "Task position",
 					revision,
-					view: { ...view, workspace: { mode, side } },
+					view: { ...view, workspace: { mode, filter } },
 				});
-				revision = layout.revision;
-				expect(layout.view.workspace).toEqual({ mode, side });
-				for (const filter of ["active", "attention", "all"] as const) {
-					const filtered = await client.call("viewpoints.save", {
-						id,
-						name: "Task position",
-						revision,
-						view: { ...view, workspace: { mode, side, filter } },
-					});
-					revision = filtered.revision;
-					expect(filtered.view.workspace).toEqual({ mode, side, filter });
-				}
+				revision = filtered.revision;
+				expect(filtered.view.workspace).toEqual({ mode, filter });
 			}
 		}
+		// A `side` from an older saved view is accepted and dropped, never stored
+		// again: the sidebar has one side, so a restored view cannot keep another.
+		const retired = await client.call("viewpoints.save", {
+			id,
+			name: "Task position",
+			revision,
+			view: {
+				...view,
+				workspace: { mode: "permanent", side: "right", filter: "all" },
+			} as unknown as UiView,
+		});
+		revision = retired.revision;
+		expect(retired.view.workspace).toEqual({
+			mode: "permanent",
+			filter: "all",
+		});
 		expect(JSON.stringify(saved)).not.toContain("draft");
 		for (const extra of [
 			{ draft: "private prompt" },
@@ -139,7 +154,7 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 			view: {
 				...view,
 				scroll: 4,
-				workspace: { mode: "permanent", side: "right", filter: "attention" },
+				workspace: { mode: "permanent", filter: "attention" },
 			},
 		});
 		revision = changed.revision;
@@ -407,7 +422,7 @@ test("authenticated durable viewpoints store only bounded UI state, refuse stale
 				view: {
 					...view,
 					scroll: 4,
-					workspace: { mode: "permanent", side: "right", filter: "attention" },
+					workspace: { mode: "permanent", filter: "attention" },
 				},
 			}),
 			expect.objectContaining({

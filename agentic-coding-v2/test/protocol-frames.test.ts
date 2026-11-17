@@ -24,6 +24,7 @@ const context = () => ({
 const transcript = () => ({
 	id: 7,
 	model: null,
+	contextWindow: null,
 	thinking: "off",
 	entries: [],
 	truncated: false,

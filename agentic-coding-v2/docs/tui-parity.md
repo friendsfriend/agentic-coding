@@ -1204,25 +1204,30 @@ content and bindings, not permission to replace the original presentation.
   view state. Ordinary route changes carry the preference; Back/Forward and local
   memory viewpoints restore their own cloned layout. Preserve the original
   6/34-column compact/expanded geometry and 150ms tween.
-- Mount the same workspace presentation on the selected outer left/right side;
-  mirror the original open/collapse glyphs by side. Each side mount registers its
-  own key layer so retiring one cannot unregister the replacement. Native agent
+- Mount the workspace presentation once, on the left of the content row; the
+  original mirrored open/collapse glyphs collapse to the left pair (`»` grows,
+  `«` shrinks). One mount registers one key layer, so there is no retiring side
+  whose layer could unregister the replacement. Native agent
   identities and workspace entry ordering remain unchanged: OpenCode, Pi,
   Pi Durable, Orchestrator, native children, viewpoints and feature resources.
 - Restore the original Ctrl+S workspace/content toggle and Ctrl+H/Ctrl+L route
-  cycle alongside existing aliases. These target workspace identities on either
-  side, not physical panel indices. Cycles exclude child disclosure and unrelated
+  cycle alongside existing aliases. These target workspace identities, not
+  physical panel indices. Cycles exclude child disclosure and unrelated
   viewpoint snapshots; pointer activation and host cycling share current route
   membership checks. Covered modals, editing and busy state refuse interaction.
   Ctrl+A is not newly claimed from standalone/input selection surfaces.
-- `/workspace expanding|permanent left|right` explicitly changes only local
-  display state. Palette/autocomplete entries prepare the four choices; submission
-  validates exact arguments before clearing the draft. No config write, native
-  provider call, session admission or execution occurs.
-- Add an optional closed `UiView.workspace` layout to native viewpoints, with
-  exact mode/side enums and refusal of missing/extra/execution-shaped fields.
-  Native pin/repin capture it; UI-only restoration preserves it. Old native/local
-  views lacking layout remain valid and use expanding/left on restoration.
+- The sidebar owns the displayed layout: `E` toggles expanding/permanent and `F`
+  cycles the task filter (active/attention/all), both through the shell's view
+  state. There is no `/workspace` prompt command, so neither the layout choices
+  nor the filter are prepared or validated as command text. The retired `side`
+  is not a layout choice at all: a saved view that still carries one is accepted
+  and dropped on save and on restore. No config write, native provider call,
+  session admission or execution occurs.
+- Add an optional closed `UiView.workspace` layout to native viewpoints, with an
+  exact mode enum, an optional closed filter enum and refusal of
+  missing/extra/execution-shaped fields. Native pin/repin capture it; UI-only
+  restoration preserves it. Old native/local views lacking layout remain valid
+  and use expanding on restoration.
   Persistence is through explicitly saved viewpoints, not a silent global config
   update or automatic bookmark adoption on startup.
 - Extend the existing authenticated viewpoint fixture with all four layouts,
@@ -1241,8 +1246,10 @@ content and bindings, not permission to replace the original presentation.
   App-owned mounted-node/registry reveal fences. Add digits, identifier punctuation
   and space to the modal's finite filtering alphabet; do not install an editor,
   global keyboard hook or paste listener.
-- `/models`, argument-free `/model` and `/thinking` open choices from the supplied
-  authenticated profile snapshot, never SDK discovery. Keep native profile IDs
+- `/models` and `/thinking` open choices from the supplied authenticated profile
+  snapshot, never SDK discovery. The prompt has no `/model` command: the choice
+  itself is the switch, and `/model-for`/`/standalone-model` remain the explicit
+  prepare-then-submit route. Keep native profile IDs
   exact and reject duplicate identities and unsafe command tokens. Show model and
   declared thinking together, with observed availability marked as reported rather
   than probed or inferred. This native API configures profile bundles, not arbitrary
@@ -1252,12 +1259,14 @@ content and bindings, not permission to replace the original presentation.
   these choices. Retire pending header gestures when view identity, labels or
   interactivity changes. Existing text, color, clipping and prompt composition stay
   in place; standalone model/usage labels are not invented from backend behavior.
-- Choice activation only prepares `/model-for NATIVE_ID PROFILE` or
-  `/standalone-model UUID@REVISION PROFILE`. Preserve an unsent draft, require the
-  captured view identity and exact current profile observation, and fence native
-  writability or standalone mode/scope/revision/readiness. Retire the chooser on
-  navigation, disconnect or target loss/change rather than adopting another row.
-  Palette/autocomplete still prepare commands for explicit submission.
+- Choice activation applies the bundle immediately through the existing native
+  `session.configure`/`standalone.configure`, for the target captured when the
+  choices opened — no prepared command text, no implicit target adoption and no
+  retry. Require the captured view identity and exact current profile observation,
+  and fence native writability or standalone mode/scope/revision/readiness. Retire
+  the chooser on navigation, disconnect or target loss/change rather than adopting
+  another row. `/model-for`, `/standalone-model` and the Profiles panel still
+  prepare a command for explicit submission.
 - The explicit standalone command rechecks the observed UUID/revision and ready
   state before calling the existing native configuration API. No numeric alias,
   implicit current revision, session creation or uncertain replay is introduced.
@@ -1302,13 +1311,14 @@ content and bindings, not permission to replace the original presentation.
   rather than silently adopting the next task. Retire presses on view replacement,
   source/position/filter/layout/interactivity changes and cleanup.
 - Add optional closed workspace.filter to UI-only viewpoints, retaining older
-  mode/side DTOs and defaulting absent filters to Active in the shell. Layout
+  mode-only DTOs and defaulting absent filters to Active in the shell. Layout
   changes preserve filtering; ordinary routes, Back/Forward and explicit local/
-  native viewpoints carry it. `/workspace filter active|attention|all` and its
-  palette suggestions change/prepare display state only, without a config write,
-  task admission or draft submission. Existing authenticated viewpoint checks
-  cover all filters on both modes/sides, invalid shapes, reopen persistence and
-  unchanged tasks/schedules. No helper/renderer/navigation-matrix tests are added.
+  native viewpoints carry it. The sidebar's `F` key cycles the filter, and its
+  `E` key toggles the size, as display state only, without a config write, task
+  admission or draft submission. Existing authenticated viewpoint checks cover
+  every filter on both modes, a tolerated-and-dropped retired side, invalid
+  shapes, reopen persistence and unchanged tasks/schedules. No
+  helper/renderer/navigation-matrix tests are added.
 - Cached snapshots remain navigable but visibly disclaim current activity;
   connection-generation freshness is not an atomic per-task observation or action
   permission. Original resource/pin customization, richer phase/progress content,

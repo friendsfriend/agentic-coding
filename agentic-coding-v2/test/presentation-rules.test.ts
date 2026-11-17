@@ -2,6 +2,11 @@
 // engine. These replace the screenshots-and-stack tests that used to prove them.
 import { expect, test } from "bun:test";
 import { readKubernetes } from "../src/environment/kubernetes-config.ts";
+import { bulkFold, foldAll } from "../src/tui/features/sessions/card-folds.ts";
+import {
+	activeContextTokens,
+	promptMeter,
+} from "../src/tui/features/sessions/prompt-meter.ts";
 import {
 	modelLabel,
 	turnStats,
@@ -110,4 +115,82 @@ test("a Kubernetes pod target refuses what the chart or the operator owns", () =
 		expect(() => readKubernetes({ ...base, portForwards: forwards })).toThrow(
 			/Kubernetes|forward/,
 		);
+});
+
+// The prompt footer reports the active context against the model's own window;
+// it never invents either, and the window totals stay visibly separate.
+test("the prompt meter reports context, cost and window tokens in that order", () => {
+	expect(
+		promptMeter({
+			contextTokens: 63_900,
+			contextWindow: 1_000_000,
+			cost: 0.01,
+			input: 1200,
+			output: 300,
+		}),
+	).toBe("63.9K (6%) · $0.01 · tok 1.2K→300");
+	// No catalogued window: the percentage is omitted, the size is not.
+	expect(
+		promptMeter({ contextTokens: 8100, contextWindow: null, cost: 0 }),
+	).toBe("8.1K · $0.00");
+	// Nothing recorded reports nothing rather than a zero.
+	expect(promptMeter({})).toBe("");
+	expect(promptMeter({ cost: 0.002 })).toBe("<$0.01");
+});
+
+test("the active context is the newest generation's prompt, cache included", () => {
+	const entries = [
+		{ id: 1, model: [{ role: "assistant", usage: { input: 10 } }] },
+		{ id: 2, model: [{ role: "user" }] },
+		{
+			id: 3,
+			model: [
+				{ role: "assistant", usage: { input: 4000 } },
+				{ role: "toolResult" },
+				{
+					role: "assistant",
+					usage: { input: 400, cacheRead: 3600, cacheWrite: 40 },
+				},
+			],
+		},
+		// A trailing entry with no usage cannot hide the last recorded one.
+		{ id: 4, model: [{ role: "assistant" }] },
+	];
+	expect(activeContextTokens(entries)).toBe(4040);
+	expect(activeContextTokens([{ id: 1, model: [{ role: "user" }] }])).toBe(
+		undefined,
+	);
+	// A zero total is not a context size.
+	expect(
+		activeContextTokens([
+			{ id: 1, model: [{ role: "assistant", usage: { input: 0 } }] },
+		]),
+	).toBe(undefined);
+});
+
+// v1's Ctrl+T / Ctrl+O: one kind of block at a time, and the whole kind moves
+// together — closed until one of its members is open, then closed again.
+test("a bulk fold closes a half-open kind and keeps every other fold", () => {
+	const thoughts = ["a:1", "a:2"];
+	expect(bulkFold(thoughts, [])).toEqual({ ids: thoughts, open: true });
+	expect(bulkFold(thoughts, ["a:2"])).toEqual({ ids: thoughts, open: false });
+	expect(bulkFold(thoughts, ["a:1", "a:2"])).toEqual({
+		ids: thoughts,
+		open: false,
+	});
+	// A card's own section fold is not a card: it never decides the kind's state.
+	expect(bulkFold(thoughts, ["a:1:output"])).toEqual({
+		ids: thoughts,
+		open: true,
+	});
+	expect(foldAll(["a:1", "a:1:output", "b:1"], thoughts, false)).toEqual([
+		"a:1:output",
+		"b:1",
+	]);
+	expect(foldAll(["a:1:output", "b:1"], thoughts, true)).toEqual([
+		"a:1:output",
+		"b:1",
+		"a:1",
+		"a:2",
+	]);
 });

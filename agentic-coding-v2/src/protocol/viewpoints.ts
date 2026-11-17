@@ -25,25 +25,27 @@ export function uiWorkspaceFilter(value: unknown): UiWorkspaceFilter {
 }
 export type UiWorkspaceLayout = {
 	mode: "expanding" | "permanent";
-	side: "left" | "right";
 	filter?: UiWorkspaceFilter;
 };
-/** Closed display preferences, never shell configuration or execution state. */
+/** Closed display preferences, never shell configuration or execution state. A
+ * `side` written by an older saved view is tolerated (it must still be a real
+ * side) and never re-emitted: the sidebar has one side now, so restoring such a
+ * view cannot silently keep a layout the UI no longer offers. */
 export function uiWorkspaceLayout(value: unknown): UiWorkspaceLayout {
 	const data = record(value);
 	if (
 		Object.keys(data).some(
-			(key) => key !== "mode" && key !== "side" && key !== "filter",
+			(key) => key !== "mode" && key !== "filter" && key !== "side",
 		) ||
 		!Object.hasOwn(data, "mode") ||
-		!Object.hasOwn(data, "side") ||
 		(data.mode !== "expanding" && data.mode !== "permanent") ||
-		(data.side !== "left" && data.side !== "right")
+		(Object.hasOwn(data, "side") &&
+			data.side !== "left" &&
+			data.side !== "right")
 	)
 		throw new Error("Invalid UI-only workspace layout");
 	return {
 		mode: data.mode,
-		side: data.side,
 		...(Object.hasOwn(data, "filter")
 			? { filter: uiWorkspaceFilter(data.filter) }
 			: {}),
@@ -162,7 +164,12 @@ export function uiView(value: unknown): UiView {
 		)
 	)
 		throw new Error("Invalid UI-only viewpoint state");
-	if (Object.hasOwn(data, "workspace")) uiWorkspaceLayout(data.workspace);
+	// The workspace layout is re-emitted in its canonical shape: a retired `side`
+	// from an older saved view is validated above and then dropped, so a save
+	// never stores a layout the shell cannot display.
+	const workspace = Object.hasOwn(data, "workspace")
+		? uiWorkspaceLayout(data.workspace)
+		: undefined;
 	if (Object.hasOwn(data, "resourcePreferences"))
 		uiResourcePreferences(data.resourcePreferences, data.page);
 	if (Object.hasOwn(data, "transcriptFollow")) {
@@ -184,7 +191,10 @@ export function uiView(value: unknown): UiView {
 		)
 			throw new Error("Invalid UI-only transcript follow state");
 	}
-	return structuredClone(data) as UiView;
+	return structuredClone({
+		...data,
+		...(workspace ? { workspace } : {}),
+	}) as UiView;
 }
 export function nativeViewpoint(value: unknown): NativeViewpoint {
 	const data = record(value);

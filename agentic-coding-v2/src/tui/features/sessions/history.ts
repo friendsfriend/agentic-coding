@@ -1,6 +1,5 @@
 const readCommands = new Set([
 	"help",
-	"view",
 	"session",
 	"task",
 	"refresh",

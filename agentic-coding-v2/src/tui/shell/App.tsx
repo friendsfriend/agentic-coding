@@ -39,7 +39,6 @@ import {
 	type UiResourcePreferences,
 	uiView,
 	uiWorkspaceFilter,
-	uiWorkspaceLayout,
 } from "../../protocol/viewpoints.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { EmbeddedAgentView } from "../features/agents/EmbeddedAgentView.tsx";
@@ -54,11 +53,16 @@ import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
 import { SchedulesView } from "../features/resources/SchedulesView.tsx";
+import { foldAll } from "../features/sessions/card-folds.ts";
 import { DraftHistory } from "../features/sessions/history.ts";
 import {
 	NativeAgentNavigation,
 	nativeAgentNavigationKeybinds,
 } from "../features/sessions/NativeAgentNavigation.tsx";
+import {
+	activeContextTokens,
+	promptMeter,
+} from "../features/sessions/prompt-meter.ts";
 import { ReportedUsageModal } from "../features/sessions/ReportedUsageModal.tsx";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
 import {
@@ -89,10 +93,6 @@ import {
 import { ReadOnlyChoicePicker } from "../presentation/components/ReadOnlyChoicePicker.tsx";
 import { SessionPrompt } from "../presentation/components/SessionPrompt.tsx";
 import { StatusBar } from "../presentation/components/StatusBar.tsx";
-import {
-	formatCost,
-	formatTokenCount,
-} from "../presentation/components/transcriptFormat.ts";
 import {
 	WorkspaceNavigation,
 	workspaceNavigationKeybinds,
@@ -133,11 +133,7 @@ import { OrchestratorProfilePicker } from "../ui/OrchestratorProfilePicker.tsx";
 import { QuitDialog } from "../ui/QuitDialog.tsx";
 import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
-import {
-	type LocationEntry,
-	OBSERVABILITY_LOCATIONS,
-	PAGE_LOCATIONS,
-} from "./locations.ts";
+import { type LocationEntry, PAGE_LOCATIONS } from "./locations.ts";
 import { Navigation, type Page, type View, view } from "./navigation.ts";
 import { Viewpoints } from "./viewpoints.ts";
 
@@ -153,18 +149,15 @@ const PAGE_DESCRIPTIONS: Partial<Record<Page, string>> = Object.fromEntries(
 );
 const help = [
 	"Plain input: send to the selected native conversation",
-	"/help · /view tasks|environments|providers|schedules",
-	"/view observability traces|metrics|logs|topology",
-	"/session ID · /back · /forward · /reconnect",
-	"/view skills · /skill SKILL_ID@DIGEST (loaded instructions only)",
-	"/models · /model [PROFILE] · /thinking · choose supplied model/thinking profile bundles",
+	"/help · /session ID · /back · /forward · /reconnect",
+	"Ctrl+P lists every destination (pages and Observability views); navigation is not a command",
+	"/skill SKILL_ID@DIGEST (loaded instructions only)",
+	"/models · /thinking · choose a supplied model/thinking bundle; the choice applies at once",
 	"/standalone-model ID@REVISION PROFILE · explicit observed standalone configuration",
 	"/abort · /compact [instructions] · /latest · /timeline",
 	"/usage · reported usage in the supplied native transcript window only",
-	"/workspace expanding|permanent left|right · UI layout only; no configuration write",
-	"/workspace filter active|attention|all · observed native tasks only; f cycles in sidebar",
 	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION (orchestrator/transcript management; chat-only native authority)",
-	"/view profiles · /inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
+	"/inspect-model SESSION_ID · /model-for SESSION_ID PROFILE",
 	"/task TASK_ID · /refresh (read-only refresh)",
 	"/evidence TASK_ID CONTENT_DIGEST [BYTE_OFFSET] (explicit bounded owned evidence read)",
 	"/cancel TASK_ID",
@@ -182,7 +175,7 @@ const help = [
 	"/provider-preview (seal edited intention; no remote request)",
 	"/provider-apply ID approve:DIGEST (one attempt, no implicit retry)",
 	"/provider-attempts | /provider-receipt REQUEST_ID (native journal only)",
-	"/view settings · /settings-preview · /settings-reset",
+	"/settings-preview · /settings-reset",
 	"/settings-apply CANDIDATE_ID approve:DIGEST (explicit file save; restart required)",
 	"/wiki-page ID · open a native wiki note (the Wiki page edits and saves)",
 	"/bookmark NAME · /jump NAME_OR_ID · /forget ID",
@@ -1832,10 +1825,18 @@ export function App(props: {
 	const promptUsage = () => {
 		const value = transcript();
 		if (!isTranscript() || !value) return undefined;
-		// The gateway totals only the returned history window. They are neither
-		// active context size nor a lifetime/billing estimate.
-		const scope = observation() === "watching" ? "window" : "cached window";
-		return `${scope} ${formatCost(value.usage.cost)} · tok ${formatTokenCount(value.usage.input)}→${formatTokenCount(value.usage.output)}`;
+		// The original footer: active context against the model's window, then the
+		// recorded cost and tokens of the returned history window. The totals are
+		// still window-scoped, never a lifetime or billing estimate.
+		return (
+			promptMeter({
+				contextTokens: activeContextTokens(value.entries),
+				contextWindow: value.contextWindow,
+				cost: value.usage.cost,
+				input: value.usage.input,
+				output: value.usage.output,
+			}) || undefined
+		);
 	};
 	const prepareCommand = (command: string) => {
 		remember();
@@ -1853,6 +1854,44 @@ export function App(props: {
 		update();
 		return true;
 	};
+	// The choice is the switch. The prompt has no `/model` command to prepare, and
+	// the prompt's own model/thinking labels already open these choices, so a
+	// selection performs the configure the prepared `/model-for` or
+	// `/standalone-model` text used to submit — against the exact target fenced
+	// when the choices opened, never a row or conversation adopted meanwhile.
+	const applyProfile = async (saved: ProfilePickerState, profile: string) => {
+		const target = saved.target;
+		setBusy(true);
+		setNotice(null);
+		try {
+			if (target.kind === "native") {
+				await client.call("session.configure", { id: target.id, profile });
+				delete saved.origin.detail.modelInspection;
+				setNotice(
+					`Native conversation #${target.id} now runs ${profile}. Inspect its current model to verify; no saved default or task admission metadata changed.`,
+				);
+			} else {
+				await client.call("standalone.configure", {
+					id: target.id,
+					revision: target.revision,
+					profile,
+				});
+				setNotice(
+					`Standalone session #${target.id}@${target.revision} now runs ${profile}.`,
+				);
+			}
+			setRefreshRevision((value) => value + 1);
+		} catch (error) {
+			reportError(
+				error instanceof Error ? error.message : "Command refused",
+				`${saved.purpose} profile`,
+			);
+		} finally {
+			// `chooseProfile` refuses while busy, so nothing else holds this flag.
+			setBusy(false);
+			update();
+		}
+	};
 	const chooseProfile = (saved: ProfilePickerState, key: string): boolean => {
 		const selected = saved.rows.find((row) => row.key === key);
 		const observed = profileChoices().find((row) => row.key === key);
@@ -1868,24 +1907,11 @@ export function App(props: {
 			!/^\S+$/.test(selected.id)
 		)
 			return false;
-		remember();
-		if (navigation.current.draft.trim()) {
-			setNotice(
-				"An unsent draft was not replaced. Clear or save it before preparing a model/thinking command.",
-			);
-			return false;
-		}
-		const target = saved.target;
-		const command =
-			target.kind === "native"
-				? `/model-for ${target.id} ${selected.id}`
-				: `/standalone-model ${target.id}@${target.revision} ${selected.id}`;
 		batch(() => {
 			setProfilePicker(null);
 			setPaletteOpen(false);
 		});
-		navigation.current.focus = "content";
-		prepareCommand(command);
+		void applyProfile(saved, selected.id);
 		return true;
 	};
 	const historyKey = () =>
@@ -1987,27 +2013,12 @@ export function App(props: {
 		}
 	};
 	const paletteEntries = () => [
-		...pages.map(([page, description]) => ({
-			command: `/view ${page}`,
-			description,
-		})),
-		...["opencode", "pi", "pi-durable", "orchestrator"].map((mode) => ({
-			command: `/mode ${mode}`,
-			description: "Select native session mode without launching an engine",
-		})),
 		...[
 			"/help",
 			"/input-history",
 			"/usage",
 			"/models",
 			"/thinking",
-			"/workspace expanding left",
-			"/workspace expanding right",
-			"/workspace permanent left",
-			"/workspace permanent right",
-			"/workspace filter active",
-			"/workspace filter attention",
-			"/workspace filter all",
 			"/refresh",
 			"/back",
 			"/forward",
@@ -2027,11 +2038,6 @@ export function App(props: {
 					{
 						command: `/inspect-model ${sessionId()}`,
 						description: "Inspect selected native conversation model/thinking",
-					},
-					{
-						command: "/model PROFILE",
-						description:
-							"Configure selected conversation from a running-host profile (no in-flight replacement)",
 					},
 					{
 						command: "/timeline",
@@ -2729,22 +2735,7 @@ export function App(props: {
 						throw new Error("Use ID@REVISION from current server state");
 					return { id: match[1], revision: Number(match[2]) };
 				};
-				if (command === "workspace") {
-					if (words.length !== 2)
-						throw new Error(
-							"Use /workspace expanding|permanent left|right or /workspace filter active|attention|all; UI preferences only",
-						);
-					origin.workspace =
-						words[0] === "filter"
-							? { ...origin.workspace, filter: uiWorkspaceFilter(words[1]) }
-							: uiWorkspaceLayout({
-									...origin.workspace,
-									mode: words[0],
-									side: words[1],
-								});
-					clear();
-					update();
-				} else if (command === "standalone") {
+				if (command === "standalone") {
 					if (!["orchestrator", "pi", "opencode"].includes(origin.page))
 						throw new Error(
 							"Manage standalone sessions through orchestrator/transcript commands",
@@ -2792,9 +2783,7 @@ export function App(props: {
 						setRefreshRevision((value) => value + 1);
 					} else throw new Error("Unknown standalone command");
 				} else if (
-					(command === "abort" ||
-						(command === "model" && Boolean(args)) ||
-						command === "compact") &&
+					(command === "abort" || command === "compact") &&
 					(origin.page === "pi" || origin.page === "opencode")
 				) {
 					const selected = standalone()?.sessions.find(
@@ -2805,18 +2794,12 @@ export function App(props: {
 						throw new Error("Select a currently observed standalone session");
 					if (command === "abort")
 						await client.call("standalone.abort", { id: selected.id });
-					else if (command === "compact")
+					else
 						await client.call("standalone.compact", {
 							id: selected.id,
 							revision: selected.revision,
 							requestId: crypto.randomUUID(),
 							...(args ? { instructions: args } : {}),
-						});
-					else
-						await client.call("standalone.configure", {
-							id: selected.id,
-							revision: selected.revision,
-							profile: args,
 						});
 					clear();
 					setRefreshRevision((value) => value + 1);
@@ -2854,11 +2837,7 @@ export function App(props: {
 						setPaletteOpen(true);
 					});
 					clear();
-				} else if (
-					command === "models" ||
-					command === "thinking" ||
-					(command === "model" && !args)
-				) {
+				} else if (command === "models" || command === "thinking") {
 					if (args)
 						throw new Error(
 							`/${command} accepts no arguments; choose a supplied native profile bundle`,
@@ -2920,28 +2899,6 @@ export function App(props: {
 				} else if (command === "help") {
 					queueMicrotask(() => setHelpOpen(true));
 					clear();
-				} else if (command === "view") {
-					// An observability view is its own location (v1 routed them
-					// separately), so the command addresses one view, not the page only.
-					const [name, view = ""] = args.split(/\s+/),
-						page = pages.find(([page]) => page === name)?.[0];
-					if (!page) throw new Error("Unknown feature view");
-					const resource =
-						page === "observability" &&
-						OBSERVABILITY_LOCATIONS.some((entry) => entry.resource === view)
-							? view
-							: null;
-					if (page === "observability" && view && !resource)
-						throw new Error(
-							"Use /view observability traces|metrics|logs|topology",
-						);
-					clear();
-					go(page, resource);
-				} else if (command === "mode") {
-					if (!["opencode", "pi", "pi-durable", "orchestrator"].includes(args))
-						throw new Error("Unknown native mode");
-					clear();
-					go(args as Page);
 				} else if (command === "session") {
 					const id = numbered();
 					if (!state()?.sessions.some((session) => session.id === id))
@@ -3605,14 +3562,11 @@ export function App(props: {
 					setNotice(
 						`Read at most the newest 64000 UTF-16 units of supplied ${args} output. Not native log history, a complete capture or an acknowledgement.`,
 					);
-				} else if (["model", "abort", "compact"].includes(command)) {
+				} else if (command === "abort" || command === "compact") {
 					const id = sessionId();
 					if (id === null)
 						throw new Error("Select a native conversation first");
-					if (command === "model")
-						await client.call("session.configure", { id, profile: args });
-					else if (command === "abort")
-						await client.call("session.abort", { id });
+					if (command === "abort") await client.call("session.abort", { id });
 					else
 						await client.call("session.compact", {
 							id,
@@ -4267,7 +4221,6 @@ export function App(props: {
 			scope={workspaceScope()}
 			interactive={workspaceInteractive()}
 			mode={current().workspace.mode}
-			side={current().workspace.side}
 			filter={workspaceFilter()}
 			taskCount={filteredWorkspaceTasks().length}
 			tasksKnown={snapshotFresh()}
@@ -4331,9 +4284,7 @@ export function App(props: {
 					<Badge text={current().page} highlight="accent" />
 				</box>
 				<box flexDirection="row" flexGrow={1} minHeight={0}>
-					<Show when={current().workspace.side === "left"}>
-						<WorkspacePanel />
-					</Show>
+					<WorkspacePanel />
 					<box flexGrow={1} minWidth={0} flexDirection="column">
 						<BreadcrumbRow
 							width={Math.max(
@@ -4461,6 +4412,14 @@ export function App(props: {
 												if (readingRows === rows) setPromptTimeline(items);
 											}}
 											expanded={current().expanded}
+											setExpanded={(ids, open) => {
+												navigation.current.expanded = foldAll(
+													current().expanded,
+													ids,
+													open,
+												);
+												update();
+											}}
 											toggle={(id) => {
 												navigation.current.expanded =
 													current().expanded.includes(id)
@@ -5003,7 +4962,7 @@ export function App(props: {
 							>
 								{(saved) => (
 									<ReadOnlyChoicePicker
-										note="Prepare only · model/thinking are bundled"
+										note="Applies at once · model/thinking are bundled"
 										layerId="v2.profile-picker"
 										title={
 											saved().purpose === "thinking"
@@ -5017,7 +4976,7 @@ export function App(props: {
 												? "No supplied profile bundles for this exact model."
 												: "No unambiguous supplied profiles to show."
 										}
-										refusal="Selection changed or an unsent draft blocks preparation; inspect and choose explicitly."
+										refusal="Selection changed or the target is no longer current; inspect and choose explicitly."
 										active={
 											!helpOpen() && !busy() && profilePicker() === saved()
 										}
@@ -5188,9 +5147,6 @@ export function App(props: {
 								go("session", String(id));
 						}}
 					/>
-					<Show when={current().workspace.side === "right"}>
-						<WorkspacePanel />
-					</Show>
 				</box>
 				<StatusBar
 					keybinds={[

@@ -169,6 +169,12 @@ export function transcript(value: unknown): Transcript {
 	if (
 		!integer(data.id) ||
 		!(data.model === null || typeof data.model === "string") ||
+		!(
+			data.contextWindow === null ||
+			(typeof data.contextWindow === "number" &&
+				Number.isFinite(data.contextWindow) &&
+				data.contextWindow > 0)
+		) ||
 		typeof data.thinking !== "string" ||
 		typeof data.truncated !== "boolean"
 	)

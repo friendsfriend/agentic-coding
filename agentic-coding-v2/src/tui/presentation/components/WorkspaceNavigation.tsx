@@ -108,7 +108,6 @@ export function WorkspaceNavigation(props: {
 	active: boolean;
 	scope: object;
 	mode: "expanding" | "permanent";
-	side: "left" | "right";
 	onToggleMode: () => void;
 	filter: UiWorkspaceFilter;
 	onFilterChange: (filter: UiWorkspaceFilter) => void;
@@ -130,14 +129,9 @@ export function WorkspaceNavigation(props: {
 }) {
 	const dimensions = useTerminalDimensions();
 	const permanent = () => props.mode === "permanent";
-	const toggleGlyph = () =>
-		permanent()
-			? props.side === "left"
-				? "«"
-				: "»"
-			: props.side === "left"
-				? "»"
-				: "«";
+	// The sidebar has one side, so the original mirrored glyphs collapse to the
+	// left-side pair: pointing outward to grow, inward to shrink.
+	const toggleGlyph = () => (permanent() ? "«" : "»");
 	const interactive = () => props.interactive !== false;
 	const focus = () => {
 		if (interactive()) props.focus();
@@ -220,8 +214,7 @@ export function WorkspaceNavigation(props: {
 		if (entry) setCursorValue(entry.value);
 	};
 	const unregister = useKeymap().registerLayer({
-		// Each side mount owns its own layer; retiring one cannot remove the other.
-		id: `v2.workspace-navigation.${props.side}`,
+		id: "v2.workspace-navigation",
 		priority: 15,
 		enabled: () => props.active && interactive(),
 		commands: layerCommands([
@@ -337,7 +330,6 @@ export function WorkspaceNavigation(props: {
 						slot().index,
 						width(),
 						props.tasksKnown,
-						props.side,
 						props.filter,
 						props.active,
 						interactive(),
@@ -491,7 +483,6 @@ export function WorkspaceNavigation(props: {
 										props.filter,
 										width(),
 										props.tasksKnown,
-										props.side,
 										props.active,
 										interactive(),
 										expanded(),

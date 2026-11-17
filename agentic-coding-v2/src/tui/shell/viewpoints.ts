@@ -62,7 +62,7 @@ function checkedView(value: unknown): View {
 		...item,
 		workspace: Object.hasOwn(item, "workspace")
 			? uiWorkspaceLayout(item.workspace)
-			: { mode: "expanding", side: "left" },
+			: { mode: "expanding" },
 	}) as View;
 }
 /** Data-only bookmark collection. Restoration has no reference to client commands. */

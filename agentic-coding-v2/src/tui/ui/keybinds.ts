@@ -262,11 +262,24 @@ export const transcriptKeybinds: Keybind[] = [
 		action: "Select next observed card",
 		short: "next card",
 	},
+	// v1's two transcript toggles: one kind of block, all of them at once.
+	{
+		key: "ctrl+t",
+		cmd: "transcript.thinking",
+		action: "Expand/collapse every thought",
+		short: "thoughts",
+	},
 	{
 		key: "ctrl+o",
+		cmd: "transcript.tools",
+		action: "Expand/collapse every tool card",
+		short: "tools",
+	},
+	{
+		key: "ctrl+alt+t",
 		cmd: "transcript.toggle",
 		action: "Toggle selected observed card",
-		short: "expand",
+		standard: true,
 	},
 	{
 		key: "ctrl+alt+a",

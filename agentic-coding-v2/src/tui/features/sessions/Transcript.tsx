@@ -37,6 +37,7 @@ import {
 import { LocalChoiceContext } from "../../ui/LocalChoice.ts";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { bulkFold } from "./card-folds.ts";
 import { NativeProgress } from "./NativeProgress.tsx";
 import { ResponseFooter } from "./ResponseFooter.tsx";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
@@ -97,6 +98,8 @@ export function Transcript(props: {
 	) => void;
 	expanded: string[];
 	toggle: (id: string) => void;
+	/** Open or close many cards at once: the original one-kind toggle. */
+	setExpanded: (ids: string[], open: boolean) => void;
 }) {
 	const keymap = useKeymap(),
 		choices = useContext(LocalChoiceContext);
@@ -609,6 +612,19 @@ export function Transcript(props: {
 		if (revealSelection && node && !node.isDestroyed)
 			props.reveal(node, base.identity);
 	};
+	// v1: `Ctrl+T` / `Ctrl+O` expand every block of one kind, or collapse them all.
+	// The kind's own cards are the whole set, so one open card is enough to read
+	// the key as "collapse", exactly as the original did.
+	const toggleKind = (kind: "thinking" | "toolCall") => {
+		if (!enabled() || !active()) return;
+		const rows = controls().filter((row) => row.part.type === kind);
+		if (rows.length === 0) return;
+		const fold = bulkFold(
+			rows.map((row) => row.identity),
+			props.expanded,
+		);
+		props.setExpanded(fold.ids, fold.open);
+	};
 	const move = (direction: number) => {
 		if (!enabled() || !active()) return;
 		const rows = controls();
@@ -755,6 +771,16 @@ export function Transcript(props: {
 						id: "transcript.next",
 						name: "Next observed thinking/tool card",
 						run: () => move(1),
+					},
+					{
+						id: "transcript.thinking",
+						name: "Expand or collapse every thought",
+						run: () => toggleKind("thinking"),
+					},
+					{
+						id: "transcript.tools",
+						name: "Expand or collapse every tool card",
+						run: () => toggleKind("toolCall"),
 					},
 					{
 						id: "transcript.toggle",

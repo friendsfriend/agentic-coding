@@ -48,7 +48,7 @@ export function view(
 		focus: "content",
 		draft: "",
 		detail: {},
-		workspace: { mode: "expanding", side: "left" },
+		workspace: { mode: "expanding" },
 	};
 }
 /** Navigation stores state, not commands. Back restores the actual previous view. */

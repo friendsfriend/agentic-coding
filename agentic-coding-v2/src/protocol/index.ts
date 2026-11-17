@@ -101,6 +101,9 @@ export type SessionHistoryPage = {
 export type Transcript = {
 	id: number;
 	model: string | null;
+	/** The catalogue's context window for `model`, when it is catalogued. It is
+	 * the model's capacity, never a claim about the returned history window. */
+	contextWindow: number | null;
 	thinking: string;
 	entries: Data[];
 	truncated: boolean;

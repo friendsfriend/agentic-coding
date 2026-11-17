@@ -1410,9 +1410,9 @@ operator environment functional tests pass.
   the filter, the modal, the search flag, the selection and the trace/metric/
   service identity, and then performs the same bounded read. No filter, sort or
   selection can be smuggled through a location.
-- `/view observability traces|metrics|logs|topology` addresses the same views
-  from the prompt (it refuses an unknown view by listing them, and `/view
-  observability` alone still opens the page), and the picker marks the view the
+- The destination picker (`Ctrl+P`) is the only way to address the same views from
+  the keyboard: a view is a location, not a prompt command, so there is no
+  `/view` to keep in step with the catalog, and the picker marks the view the
   shell currently holds as `· current`.
 - Not claimed: v1 *also* listed loaded resources (recent traces, metric streams,
   topology services) in this picker. v2 reads one bounded page per surface and
@@ -1584,7 +1584,7 @@ Two defects the developer reported after the first real run, and the fix for bot
   surface is reached through Menu, exactly as v1's destination list worked, and
   the child rows no longer hide behind a disclosure row.
 - **Pi Durable is not a sidebar row any more.** The page and its native authority
-  stay (and `/mode pi-durable` still reaches them); only the row is gone, pending
+  stay (and `Alt+3` still reaches them); only the row is gone, pending
   the multiple-orchestrator sessions that replace it.
 - The four leading rows are the panel's fixed pins; child sessions scroll, and
   `Ctrl+H`/`Ctrl+L` cycle the four routes without stepping through sessions.

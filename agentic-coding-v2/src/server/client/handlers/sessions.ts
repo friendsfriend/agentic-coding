@@ -131,6 +131,11 @@ export async function readSession(
 ): Promise<Transcript> {
 	const session = await clientSession(app, id, false);
 	const agent = await session.agent(context);
+	// The model's own capacity, from the catalogue: the prompt footer's percentage
+	// is only meaningful against the window the request is actually measured in.
+	const catalogued = agent.model
+		? app.models.getModel(agent.model.provider, agent.model.modelId)
+		: undefined;
 	const history = await session.entries(
 		{ order: "descending" },
 		201,
@@ -147,6 +152,11 @@ export async function readSession(
 		model: agent.model
 			? `${agent.model.provider}/${agent.model.modelId}`
 			: null,
+		contextWindow:
+			typeof catalogued?.contextWindow === "number" &&
+			catalogued.contextWindow > 0
+				? catalogued.contextWindow
+				: null,
 		thinking: agent.thinkingLevel,
 		entries: [...visible].reverse().map((entry) => ({ ...entry })),
 		truncated: history.items.length > 200,
