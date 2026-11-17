@@ -5,6 +5,40 @@ import {
 } from "../../presentation/components/transcriptFormat.ts";
 import { fields, usable } from "./turn-stats.ts";
 
+/** The newest assistant message that reported a prompt: the record the context
+ * and speed readings both come from, so the footer never mixes one generation's
+ * tokens with another's duration. */
+export function lastAssistantMessage(entries: Data[]): Data | undefined {
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = fields(entries[index]);
+		const messages = Array.isArray(entry.model) ? entry.model : [];
+		for (let position = messages.length - 1; position >= 0; position -= 1) {
+			const message = fields(messages[position]);
+			if (message.role === "assistant") return message;
+		}
+	}
+	return undefined;
+}
+
+/** A compaction the session is running right now, from the supplied live
+ * documents: the original footer's indicator, so a quiet session says why it is
+ * quiet. `retrying` is a supplied retry record carrying an error; the reason
+ * reads `manual` only when the source says so, every other supplied reason
+ * reads `automatic` exactly as it did before. */
+export function runningCompaction(
+	compactions: Data[] | undefined,
+): { reason: string; retrying?: true } | undefined {
+	const record = (compactions ?? []).find(
+		(item) => item && typeof item === "object" && !Array.isArray(item),
+	);
+	if (!record) return undefined;
+	const reason = typeof record.reason === "string" ? record.reason : "";
+	if (!reason) return undefined;
+	const retry = fields(record.retry);
+	const error = typeof retry.error === "string" ? retry.error.trim() : "";
+	return { reason, ...(error ? { retrying: true as const } : {}) };
+}
+
 /** Prompt tokens of the newest generation: the active context size the original
  * prompt footer reported, as the sum of the input the request sent and the cache
  * reads/writes it reused. Committed entries only — a live partial carries no
@@ -38,6 +72,8 @@ export function promptMeter(values: {
 	cost?: number;
 	input?: number;
 	output?: number;
+	tokensPerSecond?: number;
+	compacting?: { reason: string; retrying?: true };
 }): string {
 	const parts: string[] = [];
 	if (values.contextTokens !== undefined) {
@@ -53,5 +89,14 @@ export function promptMeter(values: {
 		parts.push(
 			`tok ${formatTokenCount(usable(values.input) ? values.input : 0)}→${formatTokenCount(usable(values.output) ? values.output : 0)}`,
 		);
+	if (usable(values.tokensPerSecond))
+		parts.push(`${values.tokensPerSecond} tok/s`);
+	if (values.compacting) {
+		const reason =
+			values.compacting.reason === "manual" ? "manual" : "automatic";
+		parts.push(
+			`compacting (${reason}${values.compacting.retrying ? ", retrying" : ""})`,
+		);
+	}
 	return parts.join(" · ");
 }

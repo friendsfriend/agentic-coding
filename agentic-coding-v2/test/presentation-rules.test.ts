@@ -5,9 +5,12 @@ import { readKubernetes } from "../src/environment/kubernetes-config.ts";
 import { bulkFold, foldAll } from "../src/tui/features/sessions/card-folds.ts";
 import {
 	activeContextTokens,
+	lastAssistantMessage,
 	promptMeter,
+	runningCompaction,
 } from "../src/tui/features/sessions/prompt-meter.ts";
 import {
+	generationSpeed,
 	modelLabel,
 	turnStats,
 } from "../src/tui/features/sessions/turn-stats.ts";
@@ -166,6 +169,96 @@ test("the active context is the newest generation's prompt, cache included", () 
 			{ id: 1, model: [{ role: "assistant", usage: { input: 0 } }] },
 		]),
 	).toBe(undefined);
+});
+
+// The footer's last two segments: the completed generation's own rate and a
+// compaction the session is running, in the original order and wording.
+test("the prompt meter reports the recorded rate and a running compaction", () => {
+	expect(
+		promptMeter({
+			contextTokens: 63_900,
+			contextWindow: 200_000,
+			cost: 0.01,
+			input: 1200,
+			output: 300,
+			tokensPerSecond: 42.7,
+			compacting: { reason: "manual" },
+		}),
+	).toBe(
+		"63.9K (32%) · $0.01 · tok 1.2K→300 · 42.7 tok/s · compacting (manual)",
+	);
+	// Any other supplied reason reads as the automatic one, and a supplied retry
+	// error adds the retrying marker; the error text itself stays out of the meter.
+	expect(
+		promptMeter({
+			compacting: { reason: "threshold", retrying: true },
+		}),
+	).toBe("compacting (automatic, retrying)");
+	// An unusable rate adds nothing at all; a supplied zero still prints, because
+	// the producer only records a rate it measured.
+	expect(promptMeter({ tokensPerSecond: Number.NaN })).toBe("");
+	expect(promptMeter({ tokensPerSecond: 0 })).toBe("0 tok/s");
+});
+
+test("the rate pairs one message's output with its own recorded duration", () => {
+	const completed = {
+		role: "assistant",
+		usage: { output: 300 },
+		durationMs: 7000,
+	};
+	expect(generationSpeed(completed)).toBe(42.9);
+	// A partial has no duration yet, and an unrecorded duration is not a rate.
+	expect(generationSpeed({ role: "assistant", usage: { output: 300 } })).toBe(
+		undefined,
+	);
+	expect(generationSpeed({ ...completed, durationMs: 0 })).toBe(undefined);
+	expect(
+		generationSpeed({ ...completed, usage: { output: 0 }, durationMs: 5000 }),
+	).toBe(undefined);
+	expect(generationSpeed(undefined)).toBe(undefined);
+	// The reading comes from the newest assistant message, never from a tool
+	// result or a user turn that follows it.
+	expect(
+		lastAssistantMessage([
+			{ id: 1, model: [{ role: "assistant", usage: { input: 5 } }] },
+			{
+				id: 2,
+				model: [
+					{
+						role: "assistant",
+						usage: { input: 10, output: 20 },
+						durationMs: 1000,
+					},
+					{ role: "toolResult" },
+				],
+			},
+			{ id: 3, model: [{ role: "user" }] },
+		]),
+	).toMatchObject({ durationMs: 1000 });
+	expect(lastAssistantMessage([{ id: 1, model: [{ role: "user" }] }])).toBe(
+		undefined,
+	);
+});
+
+test("a compaction is running only while a supplied record says so", () => {
+	expect(runningCompaction([])).toBe(undefined);
+	expect(runningCompaction(undefined)).toBe(undefined);
+	// A record without a reason cannot name what is running.
+	expect(runningCompaction([{ taskId: 9 }])).toBe(undefined);
+	expect(runningCompaction([{ taskId: 9, reason: "manual" }])).toEqual({
+		reason: "manual",
+	});
+	// The first supplied record is the one running; a retry error is only a
+	// marker, never the message the footer prints.
+	expect(
+		runningCompaction([
+			{ taskId: 9, reason: "threshold", retry: { error: "rate limited" } },
+			{ taskId: 10, reason: "manual" },
+		]),
+	).toEqual({ reason: "threshold", retrying: true });
+	expect(
+		runningCompaction([{ taskId: 9, reason: "manual", retry: {} }]),
+	).toEqual({ reason: "manual" });
 });
 
 // v1's Ctrl+T / Ctrl+O: one kind of block at a time, and the whole kind moves

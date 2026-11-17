@@ -6,13 +6,19 @@ import {
 	formatTokenCount,
 } from "../../presentation/components/transcriptFormat.ts";
 import { color } from "../../ui/theme/index.ts";
-import { modelLabel, type TurnStats, usable } from "./turn-stats.ts";
+import {
+	generationSpeed,
+	modelLabel,
+	type TurnStats,
+	usable,
+} from "./turn-stats.ts";
 
 /** Original right-edge recorded stamp/footer composition. Request start and
  * monotonic recorded duration only; no ticking, inferred finish or speed. */
 export function ResponseFooter(props: { stats: TurnStats }) {
 	// The one-line summary the developer reads: the model(s), the summed recorded
-	// cost and the summed recorded input→output tokens of this input's exchange.
+	// cost, the summed recorded input→output tokens of this input's exchange and
+	// the last generation's measured rate.
 	// Reasoning is a subset of output and cacheWrite1h a subset of cacheWrite, so
 	// neither is added again; a partial group reports only what it already holds.
 	const summary = createMemo(() => {
@@ -25,6 +31,10 @@ export function ResponseFooter(props: { stats: TurnStats }) {
 					usable(output) ? formatTokenCount(output) : "—"
 				} tok`,
 			);
+		// The exchange's measured rate, from the last generation that recorded both
+		// its output and its duration. No timing, no rate.
+		const rate = generationSpeed(props.stats.last);
+		if (rate !== undefined) segments.push(`${rate} tok/s`);
 		return segments;
 	});
 	return (

@@ -20,6 +20,25 @@ export type TurnStats = {
 	responses: number;
 };
 
+/** Recorded output tokens per second for one *completed* generation: that
+ * message's own output over its own recorded duration, to one decimal, as the
+ * original transcript reported it. A streaming partial and a message whose duration
+ * was never recorded report nothing rather than a rate the source does
+ * not know. */
+export function generationSpeed(message: Data | undefined): number | undefined {
+	if (!message) return undefined;
+	const output = fields(message.usage).output;
+	const duration = message.durationMs;
+	if (!usable(output) || output <= 0) return undefined;
+	if (
+		typeof duration !== "number" ||
+		!Number.isFinite(duration) ||
+		duration <= 0
+	)
+		return undefined;
+	return Math.round((output / (duration / 1000)) * 10) / 10;
+}
+
 const modelName = (message: Data) => {
 	const provider = typeof message.provider === "string" ? message.provider : "",
 		model = typeof message.model === "string" ? message.model : "";

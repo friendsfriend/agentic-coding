@@ -61,7 +61,9 @@ import {
 } from "../features/sessions/NativeAgentNavigation.tsx";
 import {
 	activeContextTokens,
+	lastAssistantMessage,
 	promptMeter,
+	runningCompaction,
 } from "../features/sessions/prompt-meter.ts";
 import { ReportedUsageModal } from "../features/sessions/ReportedUsageModal.tsx";
 import { SessionExplorer } from "../features/sessions/SessionExplorer.tsx";
@@ -73,6 +75,7 @@ import {
 	type LocalTranscriptPaging,
 	Transcript,
 } from "../features/sessions/Transcript.tsx";
+import { generationSpeed } from "../features/sessions/turn-stats.ts";
 import { SettingsPanel } from "../features/settings/SettingsPanel.tsx";
 import { SettingsThemePicker } from "../features/settings/SettingsThemePicker.tsx";
 import {
@@ -158,24 +161,30 @@ const help = [
 	"/models · /thinking: pick this conversation's model and thinking level; choosing applies it",
 	"/inspect-model SESSION_ID: see the model and thinking a conversation is running",
 	"/model-for SESSION_ID PROFILE: switch that conversation to a profile you have configured",
-	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE · /standalone open ID · /standalone retire ID@REVISION",
-	"/standalone-model ID@REVISION PROFILE: switch a standalone session's model",
 	"/skill SKILL_ID@DIGEST: read a loaded skill's instructions",
 	"/abort: stop the current answer · /compact [instructions]: summarize history to free context",
 	"/latest: jump to the newest message · /timeline: jump to one of your earlier prompts",
-	"/logs APP: an app's newest output · /evidence TASK_ID CONTENT_DIGEST [BYTE_OFFSET]: one stored task artifact",
+	"/standalone create pi|opencode PROFILE REPOSITORY_INDEX TITLE: start an engine session",
+	"/standalone open ID: reopen one · /standalone retire ID@REVISION: shut one down",
+	"/standalone-model ID@REVISION PROFILE: switch a standalone session's model",
+	"/logs APP: an app's newest output",
+	"/evidence TASK_ID CONTENT_DIGEST [BYTE_OFFSET]: one stored task artifact",
 	"/cancel TASK_ID: cancel a task",
-	"/approve REVIEW_ID@REVISION [comments] · /reject … comments · /changes … comments: answer a review",
+	"/approve REVIEW_ID@REVISION [comments] · /reject REVIEW_ID@REVISION comments · /changes REVIEW_ID@REVISION comments: answer a review",
 	"/run|build|test APP [target]: start one, then approve its review",
 	"/filter TEXT · /sort newest|default: narrow and order the current list",
 	"/bookmark NAME: remember this view for this session · /jump NAME_OR_ID: reopen a saved view",
-	"/pin [NAME] · /pins · /repin ID@REVISION [NAME] · /unpin ID@REVISION: views saved on the host, so they survive a restart",
 	"/forget ID: drop a remembered view",
+	"/pin [NAME] · /pins · /repin ID@REVISION [NAME] · /unpin ID@REVISION: views saved on the host, so they survive a restart",
 	"/provider NAME repos QUERY | branches|labels|collaborators REPO: read provider metadata",
-	"/provider NAME changes|issues REPO [open|closed|all] · /provider NAME change|issue|files|versions|discussions REPO NUMBER · /provider NAME jobs REPO [RUN_ID]",
-	"/provider-new OPERATION · /provider-preview · /provider-apply ID approve:DIGEST (sent once) · /provider-attempts | /provider-receipt REQUEST_ID",
-	"/settings-preview · /settings-reset · /settings-apply CANDIDATE_ID approve:DIGEST (writes the file; needs a restart)",
-	"/delete-schedule SCHEDULE_ID@REVISION",
+	"/provider NAME changes|issues REPO [open|closed|all]: read changes and issues",
+	"/provider NAME change|issue|files|versions|discussions REPO NUMBER: read one in detail",
+	"/provider NAME jobs REPO [RUN_ID]: read CI runs",
+	"/provider-new OPERATION: draft an upstream change · /provider-preview: seal it into one exact request",
+	"/provider-apply ID approve:DIGEST: send it once · /provider-attempts | /provider-receipt REQUEST_ID: what happened",
+	"/settings-preview: check your edited settings · /settings-reset: discard the edits",
+	"/settings-apply CANDIDATE_ID approve:DIGEST: write the file (needs a restart)",
+	"/delete-schedule SCHEDULE_ID@REVISION: delete a schedule",
 	"/wiki-page ID: open a wiki page",
 
 	"Unknown commands refuse locally. // sends a literal slash.",
@@ -1835,7 +1844,8 @@ export function App(props: {
 		const value = transcript();
 		if (!isTranscript() || !value) return undefined;
 		// The original footer: active context against the model's window, then the
-		// recorded cost and tokens of the returned history window. The totals are
+		// recorded cost and tokens of the returned history window, the last
+		// generation's recorded rate, and a running compaction. The totals are
 		// still window-scoped, never a lifetime or billing estimate.
 		return (
 			promptMeter({
@@ -1844,6 +1854,8 @@ export function App(props: {
 				cost: value.usage.cost,
 				input: value.usage.input,
 				output: value.usage.output,
+				tokensPerSecond: generationSpeed(lastAssistantMessage(value.entries)),
+				compacting: runningCompaction(value.progress.compactions),
 			}) || undefined
 		);
 	};
@@ -2022,49 +2034,74 @@ export function App(props: {
 		}
 	};
 	const paletteEntries = () => [
-		...[
-			"/help",
-			"/input-history",
-			"/usage",
-			"/models",
-			"/thinking",
-			"/refresh",
-			"/back",
-			"/forward",
-			"/filter FILTER",
-			"/sort newest",
-			"/bookmark NAME",
-			"/jump VIEWPOINT_ID",
-			"/settings-preview",
-		].map((command) => ({
-			command,
-			description:
-				"Prepare native UI command; placeholders require explicit editing",
-		})),
+		{
+			command: "/help",
+			description: "All keybindings and prompt commands",
+		},
+		{
+			command: "/input-history",
+			description: "Search what you already typed and reuse it",
+		},
+		{
+			command: "/usage",
+			description: "Tokens and cost the host reports for this transcript",
+		},
+		{
+			command: "/models",
+			description: "Switch this conversation's model",
+		},
+		{
+			command: "/thinking",
+			description: "Switch this conversation's thinking level",
+		},
+		{
+			command: "/refresh",
+			description: "Re-read the current page from the host",
+		},
+		{ command: "/back", description: "Return to the previous view" },
+		{ command: "/forward", description: "Return to the view you left" },
+		{
+			command: "/filter FILTER",
+			description: "Narrow the current list by text",
+		},
+		{
+			command: "/sort newest",
+			description: "Order the current list newest first",
+		},
+		{
+			command: "/bookmark NAME",
+			description: "Remember this view for this session",
+		},
+		{
+			command: "/jump VIEWPOINT_ID",
+			description: "Reopen a remembered or saved view",
+		},
+		{
+			command: "/settings-preview",
+			description: "Validate the edited settings before saving",
+		},
 		...(sessionId() === null
 			? []
 			: [
 					{
 						command: `/inspect-model ${sessionId()}`,
-						description: "Inspect selected native conversation model/thinking",
+						description: "See the model and thinking this conversation runs",
 					},
 					{
 						command: "/timeline",
-						description:
-							"Choose a supplied native user prompt; no history fetch or admission",
+						description: "Jump to one of your earlier prompts",
 					},
 					{
 						command: "/latest",
-						description:
-							"Jump within the supplied native transcript window; no history fetch",
+						description: "Jump to the newest message in this transcript",
 					},
 					{
 						command: "/compact",
-						description: "Prepare native transcript compaction task",
+						description: "Summarize the history to free context",
 					},
 					{
 						command: "/abort",
-						description: "Prepare selected native conversation abort",
+						description: "Stop the answer this conversation is producing",
 					},
 				]),
 		...(selectedTaskId() === null
@@ -2072,7 +2109,7 @@ export function App(props: {
 			: [
 					{
 						command: `/task ${selectedTaskId()}`,
-						description: "Read selected owning app task",
+						description: "Open the task behind this conversation",
 					},
 				]),
 	];
