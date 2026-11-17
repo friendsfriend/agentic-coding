@@ -19,6 +19,8 @@ import { StructuredData } from "../../ui/StructuredData.tsx";
 import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { SuppliedRecordWindow } from "../../ui/SuppliedRecordWindow.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { CustomToolBody } from "./CustomToolBody.tsx";
+import { customToolBody } from "./custom-tool-view.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
 import {
 	type SuppliedBrowserSection,
@@ -147,6 +149,24 @@ export function ToolCard(props: {
 	// What the row says before it is opened: the family's own icon and target.
 	const presentation = () =>
 		toolPresentation(name(), args(), props.result ? "done" : "pending");
+	// A family whose result has real structure projects it into its own rows and
+	// sections; a family outside the projection keeps the generic body, and its
+	// exact supplied data stays reachable either way.
+	const projected = createMemo(() =>
+		customToolBody({
+			name: name(),
+			args: args(),
+			text: output(),
+			details: Object.keys(object(props.result?.details)).length
+				? object(props.result?.details)
+				: null,
+			...(typeof props.progress?.output === "string"
+				? { progressOutput: props.progress.output }
+				: {}),
+			failed: props.result?.isError === true,
+			pending: !props.result,
+		}),
+	);
 	const name = () => string(props.call.name) || "Unnamed native tool";
 	// Original pending aliases share shell presentation, not terminal semantics.
 	const shellSource = () =>
@@ -371,6 +391,8 @@ export function ToolCard(props: {
 			const path = string(args().path);
 			return `${props.result ? fileVerb.done : fileVerb.pending} ${path || name()}`;
 		}
+		const projection = projected();
+		if (projection) return projection.label;
 		const family = presentation();
 		if (family) return family.label;
 		if (!browserActions.has(name())) return summary() || name();
@@ -597,7 +619,7 @@ export function ToolCard(props: {
 								? fileHint()
 								: shellSource()
 									? shellHint()
-									: presentation()?.hint
+									: (projected()?.hint ?? presentation()?.hint)
 						}
 						timestamp={props.result?.timestamp}
 						durationMs={props.result?.durationMs}
@@ -773,7 +795,16 @@ export function ToolCard(props: {
 							open={open}
 							fold={fold}
 						/>
-						<Show when={!specialized() && props.result}>
+						<Show when={projected()}>
+							{(projection) => (
+								<CustomToolBody
+									body={projection()}
+									syntax={props.syntax}
+									interactive={active()}
+								/>
+							)}
+						</Show>
+						<Show when={!specialized() && props.result && !projected()}>
 							<Show
 								when={structured() !== null}
 								fallback={

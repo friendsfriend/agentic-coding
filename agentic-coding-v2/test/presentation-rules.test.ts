@@ -4,6 +4,10 @@ import { expect, test } from "bun:test";
 import { readKubernetes } from "../src/environment/kubernetes-config.ts";
 import { bulkFold, foldAll } from "../src/tui/features/sessions/card-folds.ts";
 import {
+	customToolBody,
+	safeToolValue,
+} from "../src/tui/features/sessions/custom-tool-view.ts";
+import {
 	activeContextTokens,
 	lastAssistantMessage,
 	promptMeter,
@@ -362,6 +366,234 @@ test("every family is recognised by an icon, named ones exactly", () => {
 	expect(toolIcon("browser_screenshot")).toBe("▧");
 	expect(toolIcon("browser_click")).toBe("→");
 	expect(toolIcon("frobnicate")).toBe("•");
+});
+
+// A family whose result has structure gets the reading its payload deserves:
+// matches grouped by file, a response's status and headers, a query's columns.
+test("a search groups its matches by file and counts them", () => {
+	const body = customToolBody({
+		name: "grep",
+		args: { pattern: "needle", path: "src" },
+		text: [
+			"src/a.ts:12:const needle = 1;",
+			"src/a.ts:40:needle again",
+			"src/b.ts:7:  needle",
+			"binary file matches",
+		].join("\n"),
+		details: null,
+		failed: false,
+		pending: false,
+	});
+	expect(body?.label).toBe("Search “needle”");
+	expect(body?.hint).toBe("src · 2 files · 3 matches");
+	expect(body?.sections.map((section) => section.label)).toEqual([
+		"src/a.ts",
+		"src/b.ts",
+	]);
+	expect(body?.sections[0]?.rows).toEqual([
+		{ text: "const needle = 1;", lineNumber: 12, highlight: "needle" },
+		{ text: "needle again", lineNumber: 40, highlight: "needle" },
+	]);
+	// A line the pattern does not explain is not turned into a match.
+	expect(body?.rows).toEqual([{ text: "binary file matches" }]);
+});
+
+test("an HTTP result reports its status, headers and body", () => {
+	const body = customToolBody({
+		name: "http_request",
+		args: { app: "gateway", method: "post", path: "/v1/x" },
+		text: "",
+		details: {
+			view: {
+				status: 404,
+				statusText: "Not Found",
+				durationMs: 12,
+				url: "https://x.test/v1/x?token=abc",
+				headers: {
+					"content-type": "application/json",
+					authorization: "hunter2",
+				},
+				body: '{"error":"missing"}',
+			},
+		},
+		failed: false,
+		pending: false,
+	});
+	expect(body?.label).toBe("POST /v1/x");
+	expect(body?.hint).toBe("404 · 12ms");
+	expect(body?.rows).toEqual([{ text: "HTTP 404 Not Found", tone: "error" }]);
+	const headers = body?.sections.find((section) => section.id === "headers");
+	expect(headers?.rows).toEqual([
+		{ text: "Content type: application/json" },
+		{ text: "Authorization: [redacted]" },
+	]);
+	// A body that is JSON is drawn as JSON, and the request section keeps only
+	// what the verb and path do not already say.
+	expect(body?.sections.find((section) => section.id === "body")).toEqual({
+		id: "body",
+		label: "Response body",
+		shell: true,
+		rows: [{ text: '{\n  "error": "missing"\n}', syntax: "json" }],
+	});
+	expect(
+		body?.sections.find((section) => section.id === "request")?.rows,
+	).toEqual([{ text: "App: gateway" }]);
+});
+
+test("a query renders its columns and rows as a table, in supplied order", () => {
+	const body = customToolBody({
+		name: "db_query",
+		args: { infra: "primary", sql: "select id, name from installers" },
+		text: "",
+		details: {
+			view: {
+				columns: ["id", "name"],
+				rows: [
+					[1, "alpha"],
+					[2, "beta"],
+				],
+			},
+		},
+		failed: false,
+		pending: false,
+	});
+	expect(body?.label).toBe("Query primary");
+	expect(body?.hint).toBe("2 rows");
+	expect(
+		body?.sections.find((section) => section.id === "results")?.rows,
+	).toEqual([
+		{
+			text: "",
+			table: {
+				columns: ["id", "name"],
+				rows: [
+					["1", "alpha"],
+					["2", "beta"],
+				],
+			},
+		},
+	]);
+	// The statement itself keeps its own syntax under its own section.
+	expect(body?.sections.find((section) => section.id === "sql")?.rows).toEqual([
+		{ text: "select id, name from installers", syntax: "sql" },
+	]);
+});
+
+test("a failed call is an error envelope, never a domain result", () => {
+	const body = customToolBody({
+		name: "env_logs",
+		args: { app: "api" },
+		text: "boom",
+		details: null,
+		failed: true,
+		pending: false,
+	});
+	expect(body?.sections.map((section) => section.id)).toContain("error");
+	expect(
+		body?.sections.find((section) => section.id === "error")?.rows[0]?.tone,
+	).toBe("error");
+	// Logs keep their lines whole, with the exit code only when it was recorded.
+	const logs = customToolBody({
+		name: "env_logs",
+		args: { app: "api" },
+		text: "",
+		details: {
+			view: { output: "line one\nline two", exitCode: 2, status: "failed" },
+		},
+		failed: false,
+		pending: false,
+	});
+	expect(logs?.label).toBe("Logs api");
+	expect(logs?.hint).toBe("failed · exit 2");
+	expect(logs?.sections[0]).toMatchObject({
+		id: "output",
+		label: "Output (failed)",
+		tone: "error",
+		rows: [{ text: "line one" }, { text: "line two" }],
+	});
+});
+
+test("a trace keeps its children beneath their span and redacts credentials", () => {
+	const body = customToolBody({
+		name: "otel_query",
+		args: { name: "GET /v1" },
+		text: "",
+		details: {
+			view: {
+				spans: [
+					{
+						name: "GET /v1",
+						durationMs: 12,
+						status: "ok",
+						children: [{ name: "db", durationMs: 3, status: "error" }],
+					},
+				],
+			},
+		},
+		failed: false,
+		pending: false,
+	});
+	expect(body?.rows[0]).toMatchObject({
+		text: "GET /v1 · 12ms",
+		tone: "success",
+	});
+	// The span's own fields stay beside its children, never flattened into them.
+	expect(body?.rows[0]?.detail?.[0]).toEqual({
+		text: "Status: ok",
+		tone: "success",
+	});
+	// A child without children of its own keeps its fields as fields, and its
+	// recorded error tone travels with the status row.
+	expect(body?.rows[0]?.detail?.map((row) => row.text)).toEqual([
+		"Status: ok",
+		"Name: db",
+		"Duration Ms: 3",
+		"Status: error",
+	]);
+	expect(body?.rows[0]?.detail?.at(-1)?.tone).toBe("error");
+	// A credential recorded in a supplied record is not drawn on screen, and a
+	// fill's typed value never is either.
+	expect(
+		safeToolValue({
+			headers: { authorization: "x" },
+			name: "api_key",
+			value: "y",
+		}),
+	).toEqual({
+		headers: { authorization: "[redacted]" },
+		name: "api_key",
+		value: "[redacted]",
+	});
+	expect(
+		customToolBody({
+			name: "browser_fill",
+			args: { selector: "#pw", value: "hunter2" },
+			text: "",
+			details: null,
+			failed: false,
+			pending: false,
+		}),
+	).toBe(null);
+});
+
+test("a family outside the projection keeps the generic body", () => {
+	for (const name of [
+		"read",
+		"bash",
+		"codemode",
+		"browser_click",
+		"frobnicate",
+	])
+		expect(
+			customToolBody({
+				name,
+				args: {},
+				text: "",
+				details: null,
+				failed: false,
+				pending: false,
+			}),
+		).toBe(null);
 });
 
 // v1's Ctrl+T / Ctrl+O: one kind of block at a time, and the whole kind moves
