@@ -2049,3 +2049,42 @@ silently rewritten. And the deep-position branch is gone with the offset: the
 shell no longer calls `expandAll()` to rebuild an old scroll bound, because the
 open always targets the end of the newest page. Visual acceptance of the settle
 order (streaming, window growth, resize) stays with the developer.
+
+## One footer per input, not per response
+
+The developer's request: the footer should appear once per *input* — once per user
+or workflow message — and report that input's stats, instead of after every
+assistant turn.
+
+`src/tui/features/sessions/turn-stats.ts` groups the rendered messages: a `user`
+message opens a group, and every following `assistant` response belongs to it
+(`toolResult` rows belong to the group but are not responses). For each group it
+sums the *recorded* `usage.cost.total`, `usage.input` and `usage.output`, collects
+the distinct `provider/model` identities in first-seen order, and keeps the last
+assistant record for the request stamp. Nothing is estimated: a field that was
+never supplied stays absent, and a group answered by several models names each of
+them (`"p/m1, p/m2"`). Reasoning is still a subset of output and `cacheWrite1h` a
+subset of `cacheWrite`, so neither is summed in again.
+
+The summary is carried by the group's last *rendered* message, not by its last
+assistant message, so a trailing tool result does not leave a footer stranded
+above it. `ResponseFooter` takes that aggregate instead of a single message: one
+muted line — `"provider/model" · summed cost · summed input→output tok` — with the
+recorded request stamp of the group's final response on the right edge. The
+aggregation lives in its own module because it is pure presentation logic over
+supplied messages; a throwaway script confirmed the grouping (two responses in one
+input → one footer on the last message: `$0.01 · 3000→500`, a trailing
+`toolResult` carrier, an assistant group with no preceding user message, and a
+group with no assistant response emitting nothing). No helper/renderer test was
+added, per the testing agreement.
+
+Environment note from this pass: the first full-suite run after the footer change did
+not finish — it stopped responding after 618 passing tests, inside
+`test/lifetime-identity.test.ts`. Seventeen orphaned fixture
+`kubectl … logs --follow` watchers from earlier (aborted) runs were still alive,
+one per dead `ac-v2-test-*` temp dir, exactly the leak recorded in
+`docs/backend-acceptance.md`. With those reaped, the same file passes alone in
+4.8 s and the full suite passes 673/673 in 419 s. This is an observation about a
+dirty fixture environment, not a diagnosis: the watcher leak makes a full run
+unreliable on a machine that has been running suites for a while, and it remains
+unclaimed in the fixture teardown.

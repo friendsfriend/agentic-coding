@@ -45,6 +45,7 @@ import { ToolCard } from "./ToolCard.tsx";
 import { ToolContentParts } from "./ToolContentParts.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 import { TranscriptRowsContext } from "./TranscriptRows.ts";
+import { turnStats } from "./turn-stats.ts";
 
 /** Local mounted-entry paging, extended by explicit native history pages the
  * reader asks for. A page is an observation appended above the retained window,
@@ -403,6 +404,9 @@ export function Transcript(props: {
 			? JSON.stringify([message.identity, "live"])
 			: (retainedRenderKeys.get(message) ?? JSON.stringify(message)),
 	);
+	// One summary per input: the exchange admits its footer on its last rendered
+	// message, never after each assistant turn.
+	const footers = createMemo(() => turnStats(visibleMessages()));
 	const markdownCache = new SessionMarkdownCache();
 	createEffect(() => {
 		markdownCache.retain(
@@ -1116,8 +1120,8 @@ export function Transcript(props: {
 										);
 									}}
 								</For>
-								<Show when={message().role === "assistant"}>
-									<ResponseFooter message={message()} />
+								<Show when={footers().get(String(message().identity))}>
+									{(stats) => <ResponseFooter stats={stats()} />}
 								</Show>
 								<Show
 									when={
