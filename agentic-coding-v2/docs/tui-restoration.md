@@ -2170,3 +2170,31 @@ foreign-attachment refusal, network-only topology lifetimes, Helm release identi
 and uninstall scoping, pod port-forward and deployment-loss fencing, telemetry
 receiver/codec behaviour, and offline migration preview output. The production code
 is unchanged; nothing was weakened to make a test pass.
+
+## Test-cost consolidation, unit-first extreme
+
+The developer asked for the fastest defensible suite and accepted that the
+one-minute figure is a direction, not a bound. The complete suite is now measured
+below; every remaining test is either a pure unit test or a cheap fence/validation
+test measured in tens of milliseconds.
+
+Removed the last runtime-bound suites: shared crash/reopen, host-build Maven
+extraction, environment lifecycle, Kubernetes pod/replica/service lifecycles, tree
+interruption and mutation, CLI, held HTTP and SQL diagnostics, cross-repository
+Compose, Podman networks, lifetime identity and sharing, transcript observations,
+providers and workbench, schedules, system shell, environment idle, gateway client,
+telemetry, profile parity, cluster namespaces, config, dependencies, staged tree,
+orchestrator sessions, endpoint/kubernetes binding fences, operator revocation,
+reference journal, HTTPS, migration preview, and cluster status.
+
+Added pure unit coverage for the rules those suites used to reach through a stack:
+transcript token/cost/duration formatting, one-footer-per-input usage summation with
+non-finite omission and multi-model labels, and Kubernetes pod-target refusals
+(system/default namespaces, chart-owned fields, port-forward port, duplicate local
+ports, replica selection). Together with the earlier Compose parsing and diagnostic
+history unit tests, the deterministic core of the removed suites is still asserted.
+
+Guarantee that is no longer asserted automatically: the wiring of any adapter that
+calls these validated functions, the durable admission path for a real task, and
+every live resource lifetime. That is now manual acceptance and is recorded here
+rather than implied. Production code is unchanged.

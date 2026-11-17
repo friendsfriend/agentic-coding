@@ -28,6 +28,34 @@ Keep tests small and functional. Test observable behavior and user-facing outcom
 - Keep verification claims honest: passing fake-backed tests does not establish compatibility with a live runtime. Do not use real credentials, model calls, running apps or live infrastructure without explicit authorization.
 - This scope does not replace the required lint and whole-project type-check gates above.
 
+## Test suite cost strategy (agentic-coding-v2)
+
+The default suite must stay fast: the whole run is the inner loop, so a test that
+costs seconds is a design smell. The strategy is unit-first and it is expected to
+continue in this direction.
+
+- Unit-test the rule, not the wiring. Parsers, windowing/cursor math, argv
+  construction, validation and refusal tables, redaction and formatting belong in
+  direct tests of the pure function (`test/compose-values.test.ts`,
+  `test/diagnostic-history.test.ts`, `test/presentation-rules.test.ts`).
+- Keep at most one representative scenario per boundary. Never repeat a boundary
+  for each input permutation, engine, provider or refusal variant, and never stand
+  up a runtime, gateway, engine, database, cluster or receiver to re-prove what a
+  pure function already decides.
+- Assume simple plumbing is correct. Container/Compose/Kubernetes/HTTP mechanics
+  that the underlying tool guarantees are not re-proven by tests.
+- Never wait out a product deadline, expiry window or slow-response timer, and
+  never add a shorter production deadline to make a test faster. Wait for a
+  specific observable event; an arbitrary sleep or a prescribed number of polling
+  iterations is not an assertion.
+- Do not raise timeouts, add retries, exclude files or enable unsafe concurrency to
+  make a slow suite look fast.
+- When a suite is deleted rather than converted, record in the project docs which
+  guarantee is no longer asserted automatically and is now reviewed by hand. Keep
+  the trade explicit; do not claim coverage that no longer exists.
+- Measure the complete suite after a batch of changes, not after every edit, and
+  report runtime and failures together.
+
 ## Workflow architecture
 
 See [`agentic-coding/docs/workflow-architecture.md`](agentic-coding/docs/workflow-architecture.md) for the workflow layer map and step checklist. Role knowledge belongs in `agentic-coding/src/workflow/steps/`; the engine, CLI, and dashboard must read registered step behavior rather than duplicate role tables.
