@@ -65,7 +65,7 @@ export class Orchestrators {
 		];
 	}
 
-	/** The orchestrator a creation request already produced, retired or not. */
+	/** The orchestrator a creation request already produced, closed or not. */
 	private async byRequest(requestId: string): Promise<OrchestratorInfo | null> {
 		const doc = await this.app.harness.snapshot(Catalog, context);
 		for (const raw of Object.values(doc?.orchestrators ?? {})) {
@@ -75,7 +75,7 @@ export class Orchestrators {
 		return null;
 	}
 
-	/** One created orchestrator, retired or not: the fence for update/retire. */
+	/** One created orchestrator, closed or not: the fence for update/close. */
 	private async retained(id: number): Promise<OrchestratorInfo> {
 		const doc = await this.app.harness.snapshot(Catalog, context);
 		const raw = doc?.orchestrators?.[String(id)];
@@ -88,7 +88,7 @@ export class Orchestrators {
 			throw new Error("The root orchestrator keeps its own title");
 		const entry = await this.retained(id);
 		if (entry.retiredAt !== undefined)
-			throw new Error("Orchestrator is retired");
+			throw new Error("Orchestrator is closed");
 		const next = {
 			...entry,
 			title: text(title.trim(), "orchestrator title", 120),
@@ -97,15 +97,17 @@ export class Orchestrators {
 		return next;
 	}
 
-	/** Retire it: abort whatever it is running, keep the transcript on disk and
-	 * stop listing, asking and reporting to it. Deletion is not offered because
-	 * the durable API does not offer one; the entry stays fenced instead. */
-	async retire(id: number): Promise<OrchestratorInfo> {
+	/** Close it: abort whatever it is running, keep the transcript on disk and
+	 * stop listing, asking and reporting to it, so the session ends and leaves the
+	 * sidebar. It cannot be reopened; the same checkout accepts a new orchestrator.
+	 * Deletion is not offered because the durable API does not offer one; the entry
+	 * stays fenced instead. */
+	async close(id: number): Promise<OrchestratorInfo> {
 		if (id === Number(this.app.home.id))
-			throw new Error("The root orchestrator cannot be retired");
+			throw new Error("The root orchestrator cannot be closed");
 		const entry = await this.retained(id);
 		if (entry.retiredAt !== undefined)
-			throw new Error("Orchestrator is already retired");
+			throw new Error("Orchestrator is already closed");
 		await (await this.conversation(id)).abort(context);
 		const next = { ...entry, retiredAt: Date.now() };
 		await this.save(next);
@@ -120,7 +122,7 @@ export class Orchestrators {
 		if (id === undefined || id === Number(this.app.home.id)) return undefined;
 		const entry = await this.retained(id);
 		if (entry.retiredAt !== undefined)
-			throw new Error("Orchestrator is retired");
+			throw new Error("Orchestrator is closed");
 		return entry.id;
 	}
 
@@ -134,7 +136,7 @@ export class Orchestrators {
 		const root = id === Number(this.app.home.id);
 		const entry = root ? this.rootInfo() : await this.retained(id);
 		if (entry.retiredAt !== undefined)
-			throw new Error("Orchestrator is retired");
+			throw new Error("Orchestrator is closed");
 		const next: OrchestratorInfo = {
 			...entry,
 			profile: chosen,
@@ -234,7 +236,7 @@ export class Orchestrators {
 			const replayed = await this.byRequest(requestId);
 			if (replayed) {
 				if (replayed.retiredAt !== undefined)
-					throw new Error("Orchestrator was created and has been retired");
+					throw new Error("Orchestrator was created and has been closed");
 				return replayed;
 			}
 		}

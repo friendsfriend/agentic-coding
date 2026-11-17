@@ -11,15 +11,17 @@ import { uiColors } from "../presentation/theme/colors.ts";
 const TITLE_KEYS = `abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:/+@ ()[]`;
 
 /** One local dialog for the two things the shell may do to an orchestrator it
- * created: rename it, or retire it. Retiring is not deletion — the host keeps
- * its transcript — so the dialog says exactly that instead of implying removal. */
+ * created: rename it, or close it. Closing ends the session — it leaves the
+ * sidebar, refuses input and keeps its transcript on disk — and it is not
+ * deletion, so the dialog says what the developer loses and what they must do
+ * next instead of implying removal. */
 export function OrchestratorDialog(props: {
 	target: { id: number; title: string };
-	mode: "rename" | "retire";
+	mode: "rename" | "close";
 	/** A boundary call is in flight; keys are inert until the host answers. */
 	pending: () => boolean;
 	rename: (input: { id: number; title: string }) => void;
-	retire: (input: { id: number }) => void;
+	closeSession: (input: { id: number }) => void;
 	close: () => void;
 }) {
 	const dimensions = useTerminalDimensions();
@@ -53,7 +55,8 @@ export function OrchestratorDialog(props: {
 				: [
 						{
 							key: "y",
-							cmd: () => enabled() && props.retire({ id: props.target.id }),
+							cmd: () =>
+								enabled() && props.closeSession({ id: props.target.id }),
 						},
 						{ key: "n", cmd: () => props.close() },
 					]),
@@ -74,12 +77,12 @@ export function OrchestratorDialog(props: {
 				<SearchHeader>
 					<text
 						fg={
-							props.mode === "retire" ? uiColors.warning : uiColors.textPrimary
+							props.mode === "close" ? uiColors.warning : uiColors.textPrimary
 						}
 						attributes={TextAttributes.BOLD}
 					>
-						{props.mode === "retire"
-							? `⚠ Retire ${props.target.title}?`
+						{props.mode === "close"
+							? `⚠ Close ${props.target.title}?`
 							: `Rename ${props.target.title}`}
 					</text>
 				</SearchHeader>
@@ -87,9 +90,9 @@ export function OrchestratorDialog(props: {
 			footer={
 				<HelpText
 					entries={
-						props.mode === "retire"
+						props.mode === "close"
 							? [
-									{ key: "y", action: "retire" },
+									{ key: "y", action: "close" },
 									{ key: "n", action: "keep" },
 									{ key: "Esc", action: "keep" },
 								]
@@ -100,8 +103,9 @@ export function OrchestratorDialog(props: {
 					}
 					activatable={() => true}
 					onActivate={(entry) => {
-						if (props.mode === "retire") {
-							if (entry.key === "y") props.retire({ id: props.target.id });
+						if (props.mode === "close") {
+							if (entry.key === "y")
+								props.closeSession({ id: props.target.id });
 							else props.close();
 						} else if (entry.key === "Enter") rename();
 						else props.close();
@@ -110,11 +114,12 @@ export function OrchestratorDialog(props: {
 			}
 		>
 			<box flexDirection="column" width="100%" gap={1}>
-				{props.mode === "retire" ? (
+				{props.mode === "close" ? (
 					<text fg={uiColors.textMuted} wrapMode="word">
-						It stops being listed, asked and reported to. Its transcript stays
-						on disk; running work it asked for is stopped. This cannot be
-						undone.
+						The session ends and leaves the sidebar: nothing can be asked,
+						reported or sent to it again. Its transcript stays on disk, and a
+						new orchestrator must be created to continue work in this checkout.
+						Running work it asked for is stopped. This cannot be undone.
 					</text>
 				) : (
 					<box height={1} flexDirection="row" overflow="hidden">

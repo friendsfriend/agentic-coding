@@ -277,7 +277,7 @@ export function App(props: {
 		[orchestratorDialog, setOrchestratorDialog] = createSignal<{
 			id: number;
 			title: string;
-			mode: "rename" | "retire";
+			mode: "rename" | "close";
 		} | null>(null),
 		// Locations a mounted feature published (its loaded resources). The shell
 		// owns the copy the picker reads; the feature decides what its current
@@ -3999,10 +3999,10 @@ export function App(props: {
 		return row.parent ?? undefined;
 	};
 	// A profile may be chosen for any orchestrator, the root included; renaming
-	// and retiring apply only to the ones this shell created.
+	// and closing apply only to the ones this shell created.
 	const openOrchestratorAction = async (
 		value: string,
-		action: "rename" | "retire" | "profile",
+		action: "rename" | "close" | "profile",
 	) => {
 		const id = value.startsWith("session:")
 			? Number(value.slice(8))
@@ -4027,8 +4027,13 @@ export function App(props: {
 			return;
 		}
 		if (session.id === root) {
+			// The reserved root is the conversation everything reports through; the
+			// durable API offers no deletion and no replacement root, so closing it
+			// is not a thing the shell can do. Name the path that does work.
 			setNotice(
-				"The root orchestrator can be given a profile, not renamed or retired",
+				action === "close"
+					? "The root orchestrator cannot be closed. Press + to create an orchestrator for this checkout and work there; a created one can be closed."
+					: "The root orchestrator keeps its own title. Rename a created orchestrator instead.",
 			);
 			return;
 		}
@@ -4038,8 +4043,8 @@ export function App(props: {
 			mode: action,
 		});
 	};
-	// A rename or retirement is a host decision too: state is re-read only after
-	// the host answers, and a retired conversation currently on screen gives way
+	// A rename or closure is a host decision too: state is re-read only after
+	// the host answers, and a closed conversation currently on screen gives way
 	// to the first remaining orchestrator.
 	// The profile each orchestrator runs with, read alongside state: the shell
 	// must show the effect of a choice, not the default it replaced.
@@ -4072,7 +4077,7 @@ export function App(props: {
 		}
 	};
 	const applyOrchestratorAction = async (input: {
-		action: "rename" | "retire";
+		action: "rename" | "close";
 		id: number;
 		title?: string;
 	}) => {
@@ -4084,7 +4089,7 @@ export function App(props: {
 					id: input.id,
 					title: input.title ?? "",
 				});
-			else await client.call("orchestrator.retire", { id: input.id });
+			else await client.call("orchestrator.close", { id: input.id });
 			client.state = await client.call("state.read", {});
 			update();
 			setRefreshRevision((value) => value + 1);
@@ -5250,8 +5255,8 @@ export function App(props: {
 							rename={(input) =>
 								applyOrchestratorAction({ action: "rename", ...input })
 							}
-							retire={(input) =>
-								applyOrchestratorAction({ action: "retire", ...input })
+							closeSession={(input) =>
+								applyOrchestratorAction({ action: "close", ...input })
 							}
 							close={() => setOrchestratorDialog(null)}
 						/>

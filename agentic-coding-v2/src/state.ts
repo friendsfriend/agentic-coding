@@ -41,8 +41,10 @@ export type OrchestratorInfo = {
 	path: string;
 	profile: string;
 	createdAt: number;
-	/** Set when the developer retires it: still retained natively, no longer
-	 * listed, asked or reported to. */
+	/** Set when the developer closes it: still retained natively, no longer
+	 * listed, asked or reported to. The persisted name stays `retiredAt` so
+	 * sessions closed before the developer-facing name became "close" keep their
+	 * fence; it is the closure instant either way. */
 	retiredAt?: number;
 	/** The caller's creation identity, so a repeated request returns this same
 	 * orchestrator instead of creating a second one. */

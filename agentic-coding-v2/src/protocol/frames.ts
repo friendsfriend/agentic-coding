@@ -636,10 +636,10 @@ export function result<M extends Method>(
 		method === "orchestrator.profile"
 	)
 		orchestratorInfo(value);
-	else if (method === "orchestrator.retire") {
+	else if (method === "orchestrator.close") {
 		const data = record(value);
-		if (!integer(data.id, 1) || data.retired !== true)
-			throw new Error("Invalid orchestrator retirement");
+		if (!integer(data.id, 1) || data.closed !== true)
+			throw new Error("Invalid orchestrator closure");
 	} else if (method === "state.read") snapshot(value);
 	else if (method === "session.read") transcript(value);
 	else if (method === "task.read") {

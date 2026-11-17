@@ -321,11 +321,11 @@ export async function dispatch(
 				text(input.profile, "profile", 200),
 			);
 		}
-		case "orchestrator.retire": {
+		case "orchestrator.close": {
 			fields(input, ["id"]);
 			const id = integer(input.id);
-			await app.orchestrators.retire(id);
-			return { id, retired: true as const };
+			await app.orchestrators.close(id);
+			return { id, closed: true as const };
 		}
 		case "session.context":
 			fields(input, ["id"]);

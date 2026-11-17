@@ -83,9 +83,9 @@ export const workspaceNavigationKeybinds: Keybind[] = [
 	},
 	{
 		key: "d",
-		cmd: "workspace.retire",
-		action: "Retire the selected orchestrator",
-		short: "retire",
+		cmd: "workspace.close",
+		action: "Close the selected orchestrator session",
+		short: "close",
 	},
 	{
 		key: "p",
@@ -120,10 +120,7 @@ export function WorkspaceNavigation(props: {
 	/** Fixed leading UI pins, rendered outside the scrolling resource list. */
 	pinCount?: number;
 	/** A row action on the selected row; omitted when the caller offers none. */
-	onRowAction?: (
-		value: string,
-		action: "rename" | "retire" | "profile",
-	) => void;
+	onRowAction?: (value: string, action: "rename" | "close" | "profile") => void;
 	/** The selected row, owned by the caller. A row move never navigates. */
 	cursor: string;
 	onCursor: (value: string) => void;
@@ -268,11 +265,11 @@ export function WorkspaceNavigation(props: {
 				},
 			},
 			{
-				id: "workspace.retire",
-				name: "Retire the selected orchestrator",
+				id: "workspace.close",
+				name: "Close the selected orchestrator session",
 				run: () => {
 					if (!props.active || !interactive()) return;
-					props.onRowAction?.(cursorValue(), "retire");
+					props.onRowAction?.(cursorValue(), "close");
 				},
 			},
 			{

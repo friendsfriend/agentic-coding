@@ -329,9 +329,11 @@ export type Methods = {
 		input: { id: number; profile: string };
 		output: OrchestratorInfo;
 	};
-	"orchestrator.retire": {
+	/** Close a created orchestrator for good: it leaves the sidebar and refuses
+	 * input, and a new orchestrator must be created for that checkout. */
+	"orchestrator.close": {
 		input: { id: number };
-		output: { id: number; retired: true };
+		output: { id: number; closed: true };
 	};
 	"state.subscribe": { input: Data; output: { subscribed: true } };
 	"session.context": { input: { id: number }; output: SessionContext };
@@ -634,7 +636,7 @@ export const methods: Method[] = [
 	"orchestrator.create",
 	"orchestrator.rename",
 	"orchestrator.profile",
-	"orchestrator.retire",
+	"orchestrator.close",
 	"state.subscribe",
 	"session.read",
 	"session.context",

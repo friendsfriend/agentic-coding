@@ -2198,3 +2198,11 @@ Guarantee that is no longer asserted automatically: the wiring of any adapter th
 calls these validated functions, the durable admission path for a real task, and
 every live resource lifetime. That is now manual acceptance and is recorded here
 rather than implied. Production code is unchanged.
+
+## Closing an orchestrator session
+
+The sidebar could already fence a created orchestrator under the word `d` **retire**, but the name and the dialog implied something softer than what happens: the session ends. It is now **close** everywhere the developer meets it — the `d` binding and its footer label, the palette command `workspace.close`, the confirmation dialog, the notices and the protocol method `orchestrator.close` (which replaces `orchestrator.retire`; the persisted field keeps the name `retiredAt`, so sessions closed under the old name stay closed).
+
+The dialog now states the whole consequence: the session leaves the sidebar, nothing can be asked, reported or sent to it again, its transcript stays on disk, running work it asked for is stopped, a new orchestrator has to be created to continue in that checkout, and this cannot be undone. `test/orchestrator-close.test.ts` asserts the part that is a promise rather than a sentence: the closed conversation is not listed, it is not addressable, closing it twice is refused, and the same checkout accepts a fresh orchestrator afterwards.
+
+Closing is a fence, not a deletion, because the durable API offers neither a conversation delete nor a replacement root. That is also why the reserved root cannot be closed: it is the conversation every unattributed completion and every schedule occurrence reports through. Selecting the root and pressing `d` says so and names the path that does work — create an orchestrator for the checkout with `+` and close that one. Live tasks admitted by a closed orchestrator are not cancelled: their completions fall back to the root, as the completion path already did for an orchestrator that is gone.

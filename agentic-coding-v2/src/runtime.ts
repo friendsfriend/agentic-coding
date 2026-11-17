@@ -458,7 +458,7 @@ export class Runtime {
 				if (task?.state.status !== "terminal") continue;
 				await this.environments.releaseOwner(info.id);
 				// The orchestrator that admitted the task hears about it; one that
-				// is gone (retired, or never recorded) cannot swallow the report, so
+				// is gone (closed, or never recorded) cannot swallow the report, so
 				// the root is the fallback rather than a dropped completion.
 				const admitting = info.orchestrator ?? Number(this.home.id);
 				const target =
