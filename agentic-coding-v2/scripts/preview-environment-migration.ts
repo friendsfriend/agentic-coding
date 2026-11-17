@@ -86,7 +86,7 @@ function capture(relative: string) {
 	try {
 		real = fs.realpathSync(file);
 	} catch {
-		throw new Refusal("Missing/broken source input");
+		throw new Refusal(`Missing or broken source input: ${relative}`);
 	}
 	if (!roots.some((root) => real.startsWith(`${root}${path.sep}`)))
 		throw new Refusal(
@@ -428,20 +428,134 @@ function convertedBuild(relative: string) {
 		throw new Refusal("Unconverted credential bind remains in Dockerfile");
 	return { source, buildSecrets, secretRefs };
 }
-const infrastructureIds = [
-	"redis",
-	"postgres",
-	"mailpit",
-	"activemq",
-	"azurite",
-	"playwright-server",
-] as const;
+/** Every infrastructure compose source the v1 configuration declares, other than
+ * the topology network itself. The list is read from the sources: a service the
+ * developer added is one the migration has to report on, whatever its metadata
+ * looks like — a fixed list cannot see it, and silence is not parity. */
+function infrastructureServiceIds(root: string) {
+	const directory = path.join(root, "infrastructure/compose");
+	if (!fs.existsSync(directory)) return [];
+	return fs
+		.readdirSync(directory)
+		.filter(
+			(file) => file.endsWith("-compose.yml") && file !== "network-compose.yml",
+		)
+		.map((file) => file.slice(0, -"-compose.yml".length))
+		.sort();
+}
+/** A structural comparison: two definitions are the same unit when they say the
+ * same thing, whatever order their keys were written in. */
+function canonical(value: unknown): string {
+	return JSON.stringify(value, (_key, item) =>
+		item && typeof item === "object" && !Array.isArray(item)
+			? Object.fromEntries(
+					Object.entries(item).sort(([left], [right]) =>
+						left.localeCompare(right),
+					),
+				)
+			: item,
+	);
+}
+const infrastructureIds = infrastructureServiceIds(source);
+/** Identity for infrastructure sources that carry no v1 definition must be
+ * accepted by the developer, per service: a name is not inferred from whatever
+ * the source happens to say unless it was asked for. */
+const deriveIdentities = new Set(
+	(word("--derive-infrastructure-identity") ?? "")
+		.split(",")
+		.map((id) => id.trim())
+		.filter(Boolean),
+);
+for (const id of deriveIdentities)
+	if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id) || !infrastructureIds.includes(id))
+		throw new Refusal(
+			`--derive-infrastructure-identity names no declared infrastructure source: ${id}`,
+		);
+/** Units this preview adds to the document; published as one unit or not at all. */
 const infrastructureProjects = new Set<string>();
+/** Units the live configuration already has, identical to the proposed ones. */
+const infrastructurePresent = new Set<string>();
+const infrastructureDerived = new Set<string>();
+const infrastructureRefused: { project: string; reason: string }[] = [];
 if (infrastructureRoot) {
 	const targetId = "run-compose-default",
 		topologyId = "host-infra-network";
-	const bundle: typeof projects = [],
-		refs = new Set<string>();
+	const refs = new Set<string>(),
+		pending: {
+			project: (typeof projects)[number];
+			row: (typeof rows)[number];
+		}[] = [];
+	const liveProject = (id: string) =>
+		projects.find((existing) => String(existing.id) === id);
+	/** A live project is only "present" when it is the same unit; a different
+	 * project with the same identity is a conflict, never an overwrite. */
+	const reconcile = (id: string, proposed: (typeof projects)[number]) => {
+		const live = liveProject(id);
+		if (!live) return "pending" as const;
+		if (canonical(live) !== canonical(proposed))
+			throw new Refusal(
+				`Existing native project ${id} differs from the proposed captured unit; no target or defaults are overwritten`,
+			);
+		infrastructurePresent.add(id);
+		rows.push({
+			app: id,
+			source:
+				id === topologyId
+					? "infrastructure/compose/network-compose.yml"
+					: `infrastructure/compose/${id.slice("host-infra-".length)}-compose.yml`,
+			target: targetId,
+			status: "already-present",
+			reason:
+				"Existing native infrastructure project is identical to the proposed captured unit; nothing is created, overwritten or re-approved",
+		});
+		return "present" as const;
+	};
+	/** Declared metadata from a v1 definition, or the identity the source states
+	 * itself: exactly one service, and the container name it reserves. A derived
+	 * identity is reported as such; it is not a v1 declaration. */
+	const metadataOf = (id: string) => {
+		const declared = `infrastructure/definitions/${id}.json`;
+		if (fs.existsSync(path.join(source, declared))) {
+			const metadata = object(JSON.parse(capture(declared)));
+			if (
+				Object.keys(metadata).sort().join() !==
+					"containerBaseName,displayName,ident" ||
+				metadata.ident !== id ||
+				typeof metadata.displayName !== "string" ||
+				!metadata.displayName ||
+				metadata.displayName.length > 200 ||
+				typeof metadata.containerBaseName !== "string" ||
+				!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(metadata.containerBaseName)
+			)
+				throw new Refusal(
+					"Global infrastructure metadata differs from its explicit native mapping",
+				);
+			return { ...metadata, basis: "declared" as const };
+		}
+		if (!deriveIdentities.has(id))
+			throw new Refusal(
+				`Global infrastructure source ${id} has no v1 definition; add one or accept the identity the source states with --derive-infrastructure-identity ${id}`,
+			);
+		const relative = `infrastructure/compose/${id}-compose.yml`,
+			services = object(
+				object(Bun.YAML.parse(convertedCompose(relative).source)).services,
+			),
+			container = object(services[id]).container_name;
+		if (
+			Object.keys(services).join() !== id ||
+			typeof container !== "string" ||
+			!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(container)
+		)
+			throw new Refusal(
+				`Global infrastructure source ${id} declares no single service with a reserved container name; an explicit definition is required`,
+			);
+		return {
+			ident: id,
+			displayName: id,
+			containerBaseName: container,
+			basis: "derived" as const,
+		};
+	};
 	try {
 		const network = flatten("infrastructure/compose/network-compose.yml");
 		if (
@@ -454,7 +568,7 @@ if (infrastructureRoot) {
 			throw new Refusal(
 				"Global topology differs from the explicit single bridge; effects cannot be omitted",
 			);
-		bundle.push({
+		const topology = {
 			id: topologyId,
 			kind: "infrastructure",
 			repository: infrastructureRoot,
@@ -475,109 +589,148 @@ if (infrastructureRoot) {
 					},
 				},
 			],
-		});
+		} as (typeof projects)[number];
+		if (reconcile(topologyId, topology) === "pending")
+			pending.push({
+				project: topology,
+				row: {
+					app: topologyId,
+					source: "infrastructure/compose/network-compose.yml",
+					target: targetId,
+					status: "candidate",
+					reason:
+						"One declared local bridge for the captured units; no legacy bridge or existing container is adopted",
+				},
+			});
+		// Each unit is converted on its own: one unusable source refuses itself
+		// with its own reason instead of collapsing the whole mapping into an
+		// opaque block, and a unit the live configuration already has is reported
+		// as present rather than as a conflict.
 		for (const id of infrastructureIds) {
-			const metadata = object(
-				JSON.parse(capture(`infrastructure/definitions/${id}.json`)),
-			);
-			if (
-				Object.keys(metadata).sort().join() !==
-					"containerBaseName,displayName,ident" ||
-				metadata.ident !== id ||
-				typeof metadata.displayName !== "string" ||
-				!metadata.displayName ||
-				metadata.displayName.length > 200 ||
-				typeof metadata.containerBaseName !== "string" ||
-				!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(metadata.containerBaseName)
-			)
-				throw new Refusal(
-					"Global infrastructure metadata differs from its explicit native mapping",
-				);
-			const converted = convertedCompose(
-					`infrastructure/compose/${id}-compose.yml`,
-				),
-				parsed = object(Bun.YAML.parse(converted.source)),
-				services = object(parsed.services);
-			if (
-				Object.keys(services).join() !== id ||
-				object(services[id]).container_name !== metadata.containerBaseName ||
-				JSON.stringify(parsed.networks) !== JSON.stringify(network.networks)
-			)
-				throw new Refusal(
-					"Global service closure differs from its one declared service and exact bridge",
-				);
-			const compose = {
-				file: "compose.native.yaml",
-				source: converted.source,
-				provider: "docker",
-				socket,
-				network: "shared",
-				networkFrom: { app: topologyId, target: targetId },
-			};
-			const parsedNative = compileComposeSource(
-				infrastructureRoot,
-				readCompose(compose),
-				{ source: converted.source, contentDigest: digest(converted.source) },
-			);
-			for (const service of parsedNative.services)
-				for (const ref of Object.values(service.secretRefs ?? {}))
-					refs.add(ref);
-			bundle.push({
-				id: `host-infra-${id}`,
-				kind: "infrastructure",
-				repository: infrastructureRoot,
-				defaults: { run: targetId },
-				targets: [
+			const project = `host-infra-${id}`,
+				relative = `infrastructure/compose/${id}-compose.yml`;
+			try {
+				const metadata = metadataOf(id);
+				if (metadata.basis === "derived") infrastructureDerived.add(id);
+				const converted = convertedCompose(relative),
+					parsed = object(Bun.YAML.parse(converted.source)),
+					services = object(parsed.services);
+				if (
+					Object.keys(services).join() !== id ||
+					object(services[id]).container_name !== metadata.containerBaseName ||
+					JSON.stringify(parsed.networks) !== JSON.stringify(network.networks)
+				)
+					throw new Refusal(
+						"Global service closure differs from its one declared service and exact bridge",
+					);
+				const compose = {
+					file: "compose.native.yaml",
+					source: converted.source,
+					provider: "docker",
+					socket,
+					network: "shared",
+					networkFrom: { app: topologyId, target: targetId },
+				};
+				const parsedNative = compileComposeSource(
+					infrastructureRoot,
+					readCompose(compose),
 					{
-						id: targetId,
-						label: metadata.displayName,
-						action: "run",
-						runtime: "compose",
-						profile: "default",
-						prerequisites: [{ app: topologyId, target: targetId }],
-						compose,
+						source: converted.source,
+						contentDigest: digest(converted.source),
 					},
-				],
-			});
-		}
-		if (
-			bundle.some((project) =>
-				projects.some((existing) => existing.id === project.id),
-			)
-		)
-			throw new Refusal(
-				"Global infrastructure IDs conflict with native definitions; no target or defaults are overwritten",
-			);
-		validateProjects(config, {
-			version: 1,
-			projects: [...projects, ...bundle],
-		});
-		projects.push(...bundle);
-		for (const project of bundle) {
-			infrastructureProjects.add(String(project.id));
-			rows.push({
-				app: String(project.id),
-				source: `infrastructure/compose/${project.id === topologyId ? "network" : String(project.id).slice("host-infra-".length)}-compose.yml`,
-				target: targetId,
-				status: "candidate",
-				reason:
-					"Explicit frozen native infrastructure mapping: independent units on one original protected topology, exact reserved source container names and loopback publications; no existing-container adoption, legacy bridge/volume reuse or cross-owner borrowing",
-			});
-		}
-		for (const ref of refs) required.add(ref);
-	} catch (error) {
-		for (const id of ["network", ...infrastructureIds])
-			rows.push({
-				app: `host-infra-${id}`,
-				source: `infrastructure/compose/${id}-compose.yml`,
-				status: "blocked",
-				reason:
+				);
+				const proposed = {
+					id: project,
+					kind: "infrastructure",
+					repository: infrastructureRoot,
+					defaults: { run: targetId },
+					targets: [
+						{
+							id: targetId,
+							label: metadata.displayName,
+							action: "run",
+							runtime: "compose",
+							profile: "default",
+							prerequisites: [{ app: topologyId, target: targetId }],
+							compose,
+						},
+					],
+				} as (typeof projects)[number];
+				if (reconcile(project, proposed) === "present") continue;
+				for (const service of parsedNative.services)
+					for (const ref of Object.values(service.secretRefs ?? {}))
+						refs.add(ref);
+				pending.push({
+					project: proposed,
+					row: {
+						app: project,
+						source: relative,
+						target: targetId,
+						status: "candidate",
+						reason:
+							metadata.basis === "derived"
+								? "Identity taken from the source's own single service and reserved container name; the source carries no v1 definition"
+								: "Explicit frozen native infrastructure mapping: independent units on one original protected topology, exact reserved source container names and loopback publications; no existing-container adoption, legacy bridge/volume reuse or cross-owner borrowing",
+					},
+				});
+			} catch (error) {
+				const reason =
 					error instanceof Refusal
 						? error.message
-						: "Global infrastructure conversion refused atomically; values withheld",
+						: "Global infrastructure conversion refused; values withheld";
+				infrastructureRefused.push({ project, reason });
+				rows.push({
+					app: project,
+					source: relative,
+					target: targetId,
+					status: "blocked",
+					reason,
+				});
+			}
+		}
+		if (pending.length) {
+			// One mapping, published once: a refused unit withholds the others
+			// rather than leaving an app with a network and no database.
+			const withheld = infrastructureRefused[0];
+			if (withheld)
+				for (const entry of pending)
+					rows.push({
+						...entry.row,
+						status: "blocked",
+						reason: `Withheld because ${withheld.project} refused: infrastructure is published as one mapping, never partially`,
+					});
+			else {
+				const proposed = pending.map((entry) => entry.project);
+				validateProjects(config, {
+					version: 1,
+					projects: [...projects, ...proposed],
+				});
+				projects.push(...proposed);
+				for (const ref of refs) required.add(ref);
+				for (const entry of pending) {
+					rows.push(entry.row);
+					infrastructureProjects.add(entry.row.app);
+				}
+			}
+		}
+	} catch (error) {
+		const reason =
+			error instanceof Refusal
+				? error.message
+				: "Global infrastructure conversion refused; values withheld";
+		for (const id of ["network", ...infrastructureIds]) {
+			const project = `host-infra-${id}`;
+			infrastructureRefused.push({ project, reason });
+			rows.push({
+				app: project,
+				source: `infrastructure/compose/${id}-compose.yml`,
+				status: "blocked",
+				reason,
 			});
+		}
 	}
 }
+
 for (const project of projects) {
 	const id = String(project.id),
 		repository = String(project.repository);
@@ -1399,8 +1552,17 @@ const report = {
 	requiredRepositoryApprovals: requiredRepositories,
 	infrastructureMapping: infrastructureRoot
 		? {
-				status: infrastructureProjects.size === 7 ? "candidate" : "blocked",
+				// A unit the live configuration already has is reported as present,
+				// not as a conflict: the migration is about what is missing.
+				status: infrastructureRefused.length
+					? "blocked"
+					: infrastructureProjects.size
+						? "candidate"
+						: "already-present",
 				projects: [...infrastructureProjects],
+				present: [...infrastructurePresent],
+				refused: infrastructureRefused,
+				derivedIdentity: [...infrastructureDerived].sort(),
 				recommendedOperatorLifetime: "operator-infrastructure-v3",
 				lifetimeEnforcedByConfiguration: false,
 				services: infrastructureIds.map((id) => `host-infra-${id}`),
@@ -1433,9 +1595,13 @@ const report = {
 	defaultDecisions,
 	remaining: [
 		"changed host-Maven/image source versions and existing-native override reconciliation require explicit metadata review",
-		infrastructureProjects.size === 7
-			? "cross-owner host consumption still requires an explicit native attachment authority; protected same-owner source mapping is available"
-			: "global infrastructure source mapping requires an explicit --infrastructure-repository; no host workspace inferred",
+		!infrastructureRoot
+			? "global infrastructure source mapping requires an explicit --infrastructure-repository; no host workspace inferred"
+			: infrastructureRefused.length
+				? `global infrastructure units refused individually and withheld as one mapping: ${infrastructureRefused.map((entry) => entry.project).join(", ")}`
+				: infrastructureProjects.size
+					? "global infrastructure units are converted but unpublished; exact native approval is still required"
+					: "cross-owner host consumption still requires an explicit native attachment authority; protected same-owner source mapping is available",
 		...(requiredRepositories.length
 			? [
 					"explicit native repository policy approval is required before this proposed infrastructure mapping can pass live preflight",

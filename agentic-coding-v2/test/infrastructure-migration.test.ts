@@ -83,6 +83,7 @@ function preview(
 	source: string,
 	outputName: string,
 	repository: string | undefined = config.repositories[0],
+	extra: string[] = [],
 ) {
 	const output = path.join(path.dirname(config.configDir), outputName);
 	const child = Bun.spawnSync(
@@ -98,6 +99,7 @@ function preview(
 			"--socket",
 			engines.at(-1)?.socket ?? "/tmp/absent-fixture.sock",
 			...(repository ? ["--infrastructure-repository", repository] : []),
+			...extra,
 		],
 		{ cwd: config.repositories[0], stdout: "pipe", stderr: "pipe" },
 	);
@@ -508,4 +510,138 @@ test("missing explicit infrastructure workspace never infers a repository or a g
 		),
 	).toHaveLength(7);
 	expect(readEngineFile(topologyEngineFile(config)).history).toHaveLength(0);
+});
+
+/** A published mapping is not a conflict: the migration reports what the live
+ * configuration already has as present, so the remaining work is visible. */
+test("infrastructure units the live configuration already has are reported present instead of as conflicts", async () => {
+	const { config } = await fixture(false, (config) => {
+		config.profiles = [];
+		fs.mkdirSync(config.configDir, { recursive: true });
+	});
+	const source = inputs(config),
+		published = preview(config, source, "infra-published-once");
+	expect(published.report.infrastructureMapping.status).toBe("candidate");
+	expect(published.report.infrastructureMapping.projects).toHaveLength(7);
+	// The developer promoted exactly this document; nothing else changed.
+	fs.writeFileSync(
+		path.join(config.configDir, "environments.json"),
+		published.content,
+	);
+	const again = preview(config, source, "infra-already-present");
+	expect(again.report.infrastructureMapping.status).toBe("already-present");
+	expect(again.report.infrastructureMapping.present).toHaveLength(7);
+	expect(again.report.infrastructureMapping.refused).toEqual([]);
+	expect(again.report.infrastructureMapping.projects).toEqual([]);
+	expect(again.document.projects).toEqual(published.document.projects);
+	// Nothing to publish means nothing changes.
+	expect(again.report.definitionDigest).toBe(again.report.baseDigest);
+	expect(
+		again.report.rows.every(
+			(row: { status: string }) => row.status !== "blocked",
+		),
+	).toBe(true);
+});
+
+/** Same identity, different unit: refuse that unit and withhold the mapping
+ * rather than overwriting a live project the developer published. */
+test("an existing infrastructure project that differs from the proposed unit is refused, never overwritten", async () => {
+	const { config } = await fixture(false, (config) => {
+		config.profiles = [];
+		fs.mkdirSync(config.configDir, { recursive: true });
+	});
+	const source = inputs(config),
+		published = preview(config, source, "infra-differs-base");
+	const live = JSON.parse(published.content) as {
+		projects: { id: string; targets: { compose?: { source?: string } }[] }[];
+	};
+	const redis = live.projects.find(
+		(project) => project.id === "host-infra-redis",
+	);
+	if (!redis?.targets[0]?.compose) throw new Error("fixture unit missing");
+	redis.targets[0].compose.source = (
+		redis.targets[0].compose.source ?? ""
+	).replace("fixture:latest", "fixture:edited");
+	const edited = `${JSON.stringify(live, null, 2)}\n`;
+	fs.writeFileSync(path.join(config.configDir, "environments.json"), edited);
+	const refused = preview(config, source, "infra-differs");
+	expect(refused.report.infrastructureMapping.status).toBe("blocked");
+	expect(refused.report.infrastructureMapping.projects).toEqual([]);
+	const refusedUnits = refused.report.infrastructureMapping.refused as {
+		project: string;
+		reason: string;
+	}[];
+	expect(refusedUnits.map((entry) => entry.project)).toContain(
+		"host-infra-redis",
+	);
+	expect(
+		refusedUnits.find((entry) => entry.project === "host-infra-redis")?.reason,
+	).toContain("differs from the proposed captured unit");
+	expect(refused.document.projects).toEqual(live.projects);
+	expect(
+		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
+	).toBe(edited);
+});
+
+/** A source with no v1 definition is a specific blocker that the developer can
+ * accept per service; identity is never inferred silently. */
+test("an infrastructure source without a definition needs an explicit identity acceptance", async () => {
+	const { config } = await fixture(false, (config) => {
+		config.profiles = [];
+		fs.mkdirSync(config.configDir, { recursive: true });
+	});
+	const source = inputs(config);
+	fs.writeFileSync(
+		path.join(source, "infrastructure/compose/extra-db-compose.yml"),
+		Bun.YAML.stringify({
+			include: ["../../infrastructure/compose/network-compose.yml"],
+			name: "legacy-global",
+			services: {
+				"extra-db": {
+					image: "fixture:latest",
+					container_name: "legacy-extra-db",
+					command: ["serve"],
+					restart: "always",
+					networks: ["devenv-local"],
+					ports: ["45400:9000"],
+				},
+			},
+		}),
+	);
+	const refused = preview(config, source, "infra-extra-refused");
+	expect(refused.report.infrastructureMapping.status).toBe("blocked");
+	const blocker = (
+		refused.report.infrastructureMapping.refused as {
+			project: string;
+			reason: string;
+		}[]
+	).find((entry) => entry.project === "host-infra-extra-db");
+	expect(blocker?.reason).toContain(
+		"--derive-infrastructure-identity extra-db",
+	);
+	expect(refused.report.infrastructureMapping.projects).toEqual([]);
+	expect(
+		refused.document.projects.some(
+			(project: { id: string }) => project.id === "host-infra-extra-db",
+		),
+	).toBe(false);
+
+	const accepted = preview(config, source, "infra-extra-derived", undefined, [
+		"--derive-infrastructure-identity",
+		"extra-db",
+	]);
+	expect(accepted.report.infrastructureMapping.refused).toEqual([]);
+	expect(accepted.report.infrastructureMapping.status).toBe("candidate");
+	expect(accepted.report.infrastructureMapping.derivedIdentity).toEqual([
+		"extra-db",
+	]);
+	const project = accepted.document.projects.find(
+		(entry: { id: string }) => entry.id === "host-infra-extra-db",
+	);
+	expect(project?.targets[0]?.label).toBe("extra-db");
+	expect(
+		accepted.report.rows.find(
+			(row: { app: string }) => row.app === "host-infra-extra-db",
+		)?.reason,
+	).toContain("reserved container name");
 });
