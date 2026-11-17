@@ -48,9 +48,6 @@ export type EngineState = {
 	replaceAfterStop?: boolean;
 	replaceWithCopiedLabels?: boolean;
 	buildExit?: number;
-	buildDelayMs?: number;
-	inspectDelayMs?: number;
-	startDelayMs?: number;
 	initialHealth?: "missing" | "unhealthy" | "starting";
 	/** Exit code reported by the synthetic one-shot `wait` receipt. */
 	completionExit?: number;
@@ -63,6 +60,13 @@ export const readEngineFile = (file: string) =>
 export function serveContainerFixture(file: string) {
 	const directory = fs.mkdtempSync("/tmp/acv2-engine-");
 	const socket = path.join(directory, "api %23.sock");
+	const gates: Array<{
+		command: string;
+		remaining: number;
+		enter: () => void;
+		wait: Promise<void>;
+		release: () => void;
+	}> = [];
 	const server = (() => {
 		try {
 			return Bun.serve({
@@ -426,12 +430,13 @@ export function serveContainerFixture(file: string) {
 								throw new Error("Unexpected engine command");
 						}
 					fs.writeFileSync(file, JSON.stringify(state));
-					if (args[0] === "build" && state.buildDelayMs)
-						await Bun.sleep(state.buildDelayMs);
-					if (args[0] === "inspect" && state.inspectDelayMs)
-						await Bun.sleep(state.inspectDelayMs);
-					if (args[0] === "start" && state.startDelayMs)
-						await Bun.sleep(state.startDelayMs);
+					const gate = gates.find(
+						(entry) => entry.command === args[0] && entry.remaining > 0,
+					);
+					if (gate && --gate.remaining === 0) {
+						gate.enter();
+						await gate.wait;
+					}
 					return Response.json({ stdout, stderr, follow, exit });
 				},
 			});
@@ -442,7 +447,21 @@ export function serveContainerFixture(file: string) {
 	})();
 	return {
 		socket,
+		/** Hold one command acknowledgement until the test explicitly releases it. */
+		hold(command: string, occurrence = 1) {
+			let enter = () => {},
+				release = () => {};
+			const entered = new Promise<void>((resolve) => {
+				enter = resolve;
+			});
+			const wait = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			gates.push({ command, remaining: occurrence, enter, wait, release });
+			return { entered, release };
+		},
 		stop: async (force: boolean) => {
+			for (const gate of gates) gate.release();
 			try {
 				await server.stop(force);
 			} finally {

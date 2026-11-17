@@ -2113,3 +2113,28 @@ serial suite: 608 pass, zero failures, 251.20 seconds, versus the earlier measur
 one-minute suite yet. No production behavior, timeout, retry policy or default
 coverage selection changed; the removed cases are no longer covered by those
 integration scenarios.
+
+## Test-cost consolidation, second pass
+
+Removed the SQL success/function-write outcome and read-only credential-rotation
+cases that `container-sql.test.ts` already asserts, keeping the live-authority,
+cancellation and crash/reopen boundaries in `query-lifecycle.test.ts`. Combined the
+per-variant container SQL and endpoint-authority refusals into one live setup per
+file that restores the fixture engine between checks, instead of one runtime, engine
+and disposable database per variant. Folded Helm Availability readiness and the
+re-add live-unit/extra-field refusals into the lifecycle scenarios that already hold
+the same host. Batched effect-free validation inputs — topology candidates, bridge
+staging and operator admission refusals — over one authenticated host and one
+definition each, which is where nearly all of their measured time went.
+
+Two waiting mechanisms were replaced rather than shortened: engine startup is now
+held by an explicit fixture gate the test releases, and a port forward is terminated
+by its own pid observation, so no test waits a chosen duration. The unused
+build/inspect/start delay knobs and the timed forward exit were deleted.
+
+Verification: unfiltered type-check, lint and the official build are clean; the
+complete suite is 573 tests in 234.74 seconds with one timing-sensitive assertion
+fixed afterwards. The one-minute goal is still unmet. The remaining time is
+distributed across genuinely distinct lifecycle scenarios at roughly 0.35 seconds
+each, not concentrated in a few files, so reaching it would require deleting unique
+integration coverage rather than further consolidation.

@@ -64,8 +64,8 @@ socket.on("error",()=>socket.destroy());upstream.on("error",()=>upstream.destroy
 socket.pipe(upstream);upstream.pipe(socket);
 });
 server.listen(local,"127.0.0.1",()=>console.log("Forwarding from 127.0.0.1:"+local));
-if(process.env.FIXTURE_FORWARD_EXIT_MS)setTimeout(()=>{server.close();process.exit(0);},Number(process.env.FIXTURE_FORWARD_EXIT_MS));
-else setInterval(()=>{},1000);
+if(process.env.FIXTURE_FORWARD_PID_FILE){fs.writeFileSync(process.env.FIXTURE_FORWARD_PID_FILE,String(process.pid));process.on("SIGTERM",()=>process.exit(0));process.on("exit",()=>fs.writeFileSync(process.env.FIXTURE_FORWARD_PID_FILE+".exited","done"));}
+setInterval(()=>{},1000);
 }
 else if(args.includes("logs")){const lines=JSON.parse(process.env.FIXTURE_LOG_LINES??"[]");for(const line of lines)console.log(line);if(args.includes("--follow"))setInterval(()=>{},1000);process.exitCode=0;}
 else{

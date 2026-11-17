@@ -218,11 +218,42 @@ async function stop(
 					(run) => run.plan.compose?.networkOnly,
 				);
 			if (!topology) throw new Error("Missing topology");
+			const live = (await app.snapshot()).environments.runs.find(
+				(run) => run.plan.app === "redis",
+			);
+			if (!live) throw new Error("Missing live unit");
+			const beforeLive = readEngineFile(file(config)).history.length;
+			expect(
+				(
+					await post("/api/environments/units/readd", {
+						requestId: "refuse-live-unit",
+						runId: live.id,
+						revision: live.revision,
+						reason: "Cannot re-add a live unit",
+					})
+				).status,
+			).toBe(400);
+			expect(await app.environments.unitStarts.history()).toHaveLength(0);
+			expect(readEngineFile(file(config)).history).toHaveLength(beforeLive);
 			const network = Object.values(
 				readEngineFile(file(config)).networks ?? {},
 			)[0]?.Id;
 			let previous = await stop(app, post, "redis");
 			const oldest = previous;
+			const beforeExtra = readEngineFile(file(config)).history.length;
+			expect(
+				(
+					await post("/api/environments/units/readd", {
+						requestId: "refuse-extra-field",
+						runId: previous.id,
+						revision: previous.revision,
+						reason: "No adoption fields",
+						adopt: true,
+					})
+				).status,
+			).toBe(400);
+			expect(await app.environments.unitStarts.history()).toHaveLength(0);
+			expect(readEngineFile(file(config)).history).toHaveLength(beforeExtra);
 			client.connect();
 			await eventually(
 				async () => client.status,
@@ -349,45 +380,34 @@ async function stop(
 	}, 60000);
 }
 
-for (const scenario of ["v1", "live-unit", "extra-field"] as const)
-	test(`native re-add refuses ${scenario} before queueing execution or another review`, async () => {
-		const { app, config } = await fixture(false, (config) =>
-			engines.push(configureTopologyFixture(config)),
-		);
-		const { host, post } = gateway(app);
-		try {
-			const owner = await start(
-				app,
-				post,
-				scenario === "v1" ? "operator-infrastructure-v1" : lifetime,
-			);
-			const unit =
-				scenario === "live-unit"
-					? (await app.snapshot()).environments.runs.find(
-							(run) => run.plan.app === "redis",
-						)
-					: await stop(app, post, "redis");
-			if (!unit) throw new Error("Missing unit");
-			const before = readEngineFile(file(config)).history.length;
-			expect(
-				(
-					await post("/api/environments/units/readd", {
-						requestId: "invalid-readd",
-						runId: unit.id,
-						revision: unit.revision,
-						reason: "Refused scope",
-						...(scenario === "extra-field" ? { adopt: true } : {}),
-					})
-				).status,
-			).toBe(400);
-			expect(await app.environments.unitStarts.history()).toHaveLength(0);
-			expect(readEngineFile(file(config)).history).toHaveLength(before);
-			await app.cancel(owner);
-			await app.harness.waitForTask(owner as TaskId, context);
-		} finally {
-			await host.stop();
-		}
-	}, 30000);
+test("native re-add refuses the old v1 lifetime before queueing execution or another review", async () => {
+	const { app, config } = await fixture(false, (config) =>
+		engines.push(configureTopologyFixture(config)),
+	);
+	const { host, post } = gateway(app);
+	try {
+		const owner = await start(app, post, "operator-infrastructure-v1");
+		const unit = await stop(app, post, "redis");
+		if (!unit) throw new Error("Missing unit");
+		const before = readEngineFile(file(config)).history.length;
+		expect(
+			(
+				await post("/api/environments/units/readd", {
+					requestId: "invalid-readd",
+					runId: unit.id,
+					revision: unit.revision,
+					reason: "Refused scope",
+				})
+			).status,
+		).toBe(400);
+		expect(await app.environments.unitStarts.history()).toHaveLength(0);
+		expect(readEngineFile(file(config)).history).toHaveLength(before);
+		await app.cancel(owner);
+		await app.harness.waitForTask(owner as TaskId, context);
+	} finally {
+		await host.stop();
+	}
+}, 30000);
 for (const decision of ["rejected", "cancelled", "topology-closed"] as const)
 	test(`pending unit re-add ${decision} never dispatches a replacement topology or unapproved unit`, async () => {
 		const { app, config } = await fixture(false, (config) =>

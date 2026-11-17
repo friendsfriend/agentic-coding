@@ -56,6 +56,7 @@ function configure(
 	options: {
 		files?: Record<string, string>;
 		state?: Record<string, unknown>;
+		namespace?: string;
 		helm?: Record<string, unknown>;
 	} = {},
 ) {
@@ -99,7 +100,7 @@ function configure(
 							timeoutMs: 8000,
 							kubernetes: {
 								cluster: "local",
-								namespace: "fixtures",
+								namespace: options.namespace ?? "fixtures",
 								workload: "helm-release-v1",
 								helm: {
 									chart: "chart",
@@ -146,18 +147,29 @@ async function held(
 	return owner;
 }
 
-test("explicit Helm release installs one frozen chart revision, observes its own label and uninstalls only that release", async () => {
-	const value = await fixture(false, configure),
+test("default-namespace Helm release waits for Available, installs a frozen chart and uninstalls only its owned revision", async () => {
+	const value = await fixture(false, (config) =>
+			configure(config, { namespace: "default", state: { unavailable: true } }),
+		),
 		{ app, config } = value;
 	const owner = await held(value, { replicas: 2 });
+	await eventually(
+		() => app.environments.snapshot(),
+		(snapshot) =>
+			snapshot.runs[0]?.runtimeStatuses?.[0]?.health === "starting" &&
+			read(config).releases["default/api-local"] !== undefined,
+	);
+	const starting = read(config);
+	starting.unavailable = false;
+	fs.writeFileSync(stateFile(config), JSON.stringify(starting));
 	await pendingReview(app, owner, "Hold release");
-	const release = read(config).releases["fixtures/api-local"];
+	const release = read(config).releases["default/api-local"];
 	expect(release).toMatchObject({ revision: 1, status: "deployed" });
 	const install = calls(config).find((call) => call.verb === "install");
 	expect(install.args).toEqual(
 		expect.arrayContaining([
 			"--namespace",
-			"fixtures",
+			"default",
 			"--set-string",
 			"app.imageTag=v1",
 			"--set",
@@ -207,7 +219,7 @@ test("explicit Helm release installs one frozen chart revision, observes its own
 		readiness: "helm-deployments-available",
 		health: "healthy",
 		owned: true,
-		id: "fixtures/api-local@1",
+		id: "default/api-local@1",
 	});
 	await app.cancel(owner);
 	await app.harness.waitForTask(owner as TaskId, context);
@@ -478,43 +490,6 @@ for (const [label, manifest] of [
 		await app.cancel(owner);
 		await app.harness.waitForTask(owner as TaskId, context);
 	}, 30000);
-
-test("the default namespace is accepted like v1 and readiness waits for Available Deployments", async () => {
-	const value = await fixture(false, (config) =>
-			configure(config, { state: { unavailable: true } }),
-		),
-		{ config } = value;
-	const document = JSON.parse(
-		fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
-	);
-	document.projects[0].targets[0].kubernetes.namespace = "default";
-	fs.writeFileSync(
-		path.join(config.configDir, "environments.json"),
-		JSON.stringify(document),
-	);
-	const reopened = await value.open();
-	const owner = await held({ ...value, app: reopened });
-	await eventually(
-		() => reopened.environments.snapshot(),
-		(snapshot) =>
-			snapshot.runs[0]?.runtimeStatuses?.[0]?.health === "starting" &&
-			read(config).releases["default/api-local"] !== undefined,
-	);
-	expect(
-		(await reopened.environments.snapshot()).runs[0]?.runtimeStatuses?.[0]
-			?.health,
-	).toBe("starting");
-	const state = read(config);
-	state.unavailable = false;
-	fs.writeFileSync(stateFile(config), JSON.stringify(state));
-	await pendingReview(reopened, owner, "Hold release");
-	expect(
-		(await reopened.environments.snapshot()).runs[0]?.runtimeStatuses?.[0],
-	).toMatchObject({ state: "running", health: "healthy" });
-	await reopened.cancel(owner);
-	await reopened.harness.waitForTask(owner as TaskId, context);
-	expect(read(config).releases).toEqual({});
-}, 30000);
 
 for (const [label, state] of [
 	["a Deployment owned by another release", { foreignDeployment: true }],

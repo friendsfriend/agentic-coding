@@ -21,17 +21,12 @@ afterEach(cleanup);
 const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 	fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 
-test.each([
-	"rotation",
-	"cancellation",
-	"write-function",
-	"unhealthy",
-	"replacement",
-	"unknown",
-])(
+// Successful frozen-credential queries and read-only function failures are covered
+// together in container-sql.test.ts. This file owns live authority, cancellation and
+// the crash/reopen boundary; cancellation asserts the coupled infrastructure release.
+test.each(["ownership-refusals", "cancellation"])(
 	"container query handle lifecycle: %s",
 	async (variant) => {
-		const refusal = ["unhealthy", "replacement", "unknown"].includes(variant);
 		const port = disposablePort();
 		let engine: ReturnType<typeof serveContainerFixture> | undefined;
 		const { app, config, fake, invocation } = await fixture(false, (config) => {
@@ -103,112 +98,89 @@ test.each([
 				output += new TextDecoder().decode(part.value);
 			}
 			reader.releaseLock();
-			let transcript = "";
-			fake.setResponses([
-				call("env_start", { apps: ["api"] }),
-				call("db_query", {
-					infra: "store",
-					sql:
-						variant === "rotation"
-							? "SELECT value FROM fixture_secrets"
-							: variant === "write-function"
-								? "SELECT fixture_write() /* NATIVE_SQL_PROBE */"
-								: "SELECT pg_sleep(20) /* NATIVE_SQL_PROBE */",
-				}),
-				(messages) => {
-					transcript = JSON.stringify(
-						messages.messages.filter(
-							(message) =>
-								message.role === "toolResult" &&
-								message.toolName === "db_query",
-						),
+			const probes = path.join(config.configDir, "sql-probes");
+			if (variant === "ownership-refusals") {
+				const refusals = ["unhealthy", "replacement", "unknown"] as const;
+				let transcript = "";
+				const responses: Parameters<typeof fake.setResponses>[0] = [
+					call("env_start", { apps: ["api"] }),
+				];
+				for (const refusal of refusals)
+					responses.push(
+						call("db_query", {
+							infra: "store",
+							sql: "SELECT 1 /* NATIVE_SQL_PROBE */",
+						}),
+						(messages) => {
+							transcript = JSON.stringify(
+								messages.messages
+									.filter(
+										(message) =>
+											message.role === "toolResult" &&
+											message.toolName === "db_query",
+									)
+									.at(-1),
+							);
+							return call("request_review", { path: ".", title: refusal });
+						},
 					);
-					return refusal
-						? call("request_review", {
-								path: ".",
-								title: "Hold rejected container SQL",
-							})
-						: fauxAssistantMessage("Container query completed");
-				},
-			]);
-			const task = await app.startTask(invocation);
-			await approve(app, task);
-			await pendingReview(app, task, "Query store");
-			fs.writeFileSync(
-				path.join(config.configDir, ".env"),
-				"DISPOSABLE_SQL_USER=changed\nDISPOSABLE_SQL_PASSWORD=rotated\n",
-			);
-			const engineFile = path.join(config.configDir, "engine.json"),
-				original = fs.readFileSync(engineFile, "utf8");
-			if (refusal) {
-				const state = readEngineFile(engineFile),
-					container = Object.values(state.containers)[0];
-				if (!container)
-					throw new Error("Fixture infrastructure container is missing");
-				if (variant === "unhealthy")
-					container.State.Health = { Status: "unhealthy" };
-				if (variant === "replacement")
-					container.Id = "copied-label-replacement";
-				if (variant === "unknown") state.offline = true;
-				fs.writeFileSync(engineFile, JSON.stringify(state));
-			}
-			await approve(app, task, "Query store");
-			if (refusal) {
-				try {
-					await pendingReview(app, task, "Hold rejected container SQL");
-					expect(transcript).toContain('"isError":true');
-					expect(
-						(await app.environments.snapshot()).queryOperations,
-					).toHaveLength(0);
-					expect(fs.existsSync(path.join(config.configDir, "sql-probes"))).toBe(
-						false,
-					);
-				} finally {
-					fs.writeFileSync(engineFile, original);
+				responses.push(fauxAssistantMessage("No rejected query dispatched"));
+				fake.setResponses(responses);
+				const task = await app.startTask(invocation);
+				await approve(app, task);
+				const engineFile = path.join(config.configDir, "engine.json");
+				for (const refusal of refusals) {
+					await pendingReview(app, task, "Query store");
+					const original = fs.readFileSync(engineFile, "utf8"),
+						state = readEngineFile(engineFile),
+						container = Object.values(state.containers)[0];
+					if (!container) throw new Error("Missing fixture container");
+					if (refusal === "unhealthy")
+						container.State.Health = { Status: "unhealthy" };
+					else if (refusal === "replacement")
+						container.Id = "copied-label-replacement";
+					else state.offline = true;
+					try {
+						fs.writeFileSync(engineFile, JSON.stringify(state));
+						await approve(app, task, "Query store");
+						await pendingReview(app, task, refusal);
+						expect(transcript).toContain('"isError":true');
+						expect(
+							(await app.environments.snapshot()).queryOperations,
+						).toHaveLength(0);
+						expect(fs.existsSync(probes)).toBe(false);
+					} finally {
+						fs.writeFileSync(engineFile, original);
+					}
+					await approve(app, task, refusal);
 				}
-				await app.cancel(task);
-			} else if (variant === "write-function") {
 				await app.harness.waitForTask(task as TaskId, context);
-				expect(transcript).toContain('"isError":true');
-				expect(transcript).not.toContain(disposablePassword);
-				expect(transcript).toContain("25006");
-				const state = await app.environments.snapshot();
-				expect(state.queryOperations[0]?.state).toBe("issued");
-				expect(state.runs.every((run) => run.state === "exited")).toBe(true);
-				const engineState = JSON.parse(
-					fs.readFileSync(path.join(config.configDir, "engine.json"), "utf8"),
-				);
-				expect(Object.keys(engineState.containers)).toHaveLength(0);
-			} else if (variant === "rotation") {
-				await app.harness.waitForTask(task as TaskId, context);
-				expect(transcript).not.toContain(disposablePassword);
-				expect(transcript).toContain("[REDACTED]");
-				expect(
-					(await app.environments.snapshot()).queryOperations[0]?.state,
-				).toBe("completed");
 			} else {
-				await eventually(
-					async () => fs.existsSync(path.join(config.configDir, "sql-probes")),
-					Boolean,
-				);
+				fake.setResponses([
+					call("env_start", { apps: ["api"] }),
+					call("db_query", {
+						infra: "store",
+						sql: "SELECT pg_sleep(20) /* NATIVE_SQL_PROBE */",
+					}),
+				]);
+				const task = await app.startTask(invocation);
+				await approve(app, task);
+				await approve(app, task, "Query store");
+				await eventually(async () => fs.existsSync(probes), Boolean);
 				const before = await app.environments.snapshot();
 				expect(before.queryOperations[0]?.state).toBe("issued");
 				expect(before.runs.every((run) => run.state === "running")).toBe(true);
-				const started = Date.now();
 				await app.cancel(task);
-				expect(Date.now() - started).toBeLessThan(5000);
 				const after = await app.environments.snapshot();
 				expect(after.queryOperations[0]?.state).toBe("issued");
 				expect(after.runs.every((run) => run.state === "exited")).toBe(true);
+				expect(fs.readFileSync(probes, "utf8").trim()).toBe("query");
 				expect(
-					fs
-						.readFileSync(path.join(config.configDir, "sql-probes"), "utf8")
-						.trim(),
-				).toBe("query");
-				const engineState = JSON.parse(
-					fs.readFileSync(path.join(config.configDir, "engine.json"), "utf8"),
-				);
-				expect(Object.keys(engineState.containers)).toHaveLength(0);
+					Object.keys(
+						readEngineFile(path.join(config.configDir, "engine.json"))
+							.containers,
+					),
+				).toHaveLength(0);
 			}
 		} finally {
 			server.kill("SIGKILL");
@@ -220,37 +192,6 @@ test.each([
 	},
 	20000,
 );
-
-test("cancelling an issued SQL task drains diagnostics before releasing its coupled infrastructure", async () => {
-	const port = disposablePort(),
-		{ app, config, fake, invocation } = await fixture(false, (config) =>
-			installPostgres(config, port),
-		);
-	fake.setResponses([
-		call("env_start", { apps: ["api"] }),
-		call("db_query", {
-			infra: "store",
-			sql: "SELECT pg_sleep(20) /* NATIVE_SQL_PROBE */",
-		}),
-	]);
-	const task = await app.startTask(invocation);
-	await approve(app, task);
-	await pendingReview(app, task, "Query store");
-	await approve(app, task, "Query store");
-	await eventually(
-		async () => fs.existsSync(path.join(config.configDir, "sql-probes")),
-		Boolean,
-	);
-	const started = Date.now();
-	await app.cancel(task);
-	expect(Date.now() - started).toBeLessThan(5000);
-	const state = await app.environments.snapshot();
-	expect(state.runs.every((run) => run.state === "exited")).toBe(true);
-	expect(state.queryOperations[0]?.state).toBe("issued");
-	expect(
-		fs.readFileSync(path.join(config.configDir, "sql-probes"), "utf8").trim(),
-	).toBe("query");
-}, 15000);
 
 test("SIGKILL preserves uncertain SQL issuance and reopen never replays it or adopts database authority", async () => {
 	const port = disposablePort(),

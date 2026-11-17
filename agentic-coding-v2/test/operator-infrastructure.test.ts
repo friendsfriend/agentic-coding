@@ -287,39 +287,40 @@ async function observed(
 	}, 90000);
 }
 
-for (const [name, request] of [
-	["app roots", { apps: ["alpha"] }],
-	["topology root", { apps: ["topology"] }],
-	["selected topology", { apps: ["redis", "topology"] }],
-	["agent lifetime substituted", { lifetime: "referenced-roots-v1" }],
-	["derived root marker", { operatorRoot: true }],
-	["unsupported action", { action: "build" }],
-	["unrelated replicas", { replicas: 2 }],
-] as const)
-	test(`authenticated operator infrastructure refuses ${name} before any task or engine effect`, async () => {
-		const { app, config } = await fixture(false, (config) =>
-			engines.push(configureTopologyFixture(config)),
-		);
-		const { host, post } = gateway(app);
-		try {
+test("authenticated operator infrastructure batches invalid inputs before any task or engine effect", async () => {
+	const { app, config } = await fixture(false, (config) =>
+		engines.push(configureTopologyFixture(config)),
+	);
+	const { host, post } = gateway(app);
+	try {
+		for (const [name, request] of [
+			["app roots", { apps: ["alpha"] }],
+			["topology root", { apps: ["topology"] }],
+			["selected topology", { apps: ["redis", "topology"] }],
+			["agent lifetime substituted", { lifetime: "referenced-roots-v1" }],
+			["derived root marker", { operatorRoot: true }],
+			["unsupported action", { action: "build" }],
+			["unrelated replicas", { replicas: 2 }],
+		] as const) {
 			const result = await post("/api/environments/actions", {
 				apps: ["redis"],
 				action: "run",
 				target: "run",
 				lifetime,
-				requestId: "invalid-units",
+				requestId: `invalid-${name}`,
 				...request,
 			});
-			expect(result.status).toBe(400);
+			expect({ name, status: result.status }).toEqual({ name, status: 400 });
 			const state = await app.snapshot();
 			expect(state.tasks).toHaveLength(0);
 			expect(state.reviews).toHaveLength(0);
 			expect(state.environments.runs).toHaveLength(0);
 			expect(readEngineFile(file(config)).history).toHaveLength(0);
-		} finally {
-			await host.stop();
 		}
-	});
+	} finally {
+		await host.stop();
+	}
+});
 test("operator infrastructure does not infer a service dependency as another independently selected unit", async () => {
 	const { app, config } = await fixture(false, (config) => {
 		engines.push(configureTopologyFixture(config));
@@ -559,11 +560,11 @@ test("reopened operator observations and copied labels cannot restore unit autho
 test("unit stop cannot partially release an operator batch whose startup is still in flight", async () => {
 	const { app, config } = await fixture(false, (config) => {
 		engines.push(configureTopologyFixture(config));
-		const state = readEngineFile(file(config));
-		state.startDelayMs = 1500;
-		fs.writeFileSync(file(config), JSON.stringify(state));
 	});
 	const { host, post } = gateway(app);
+	const engine = engines.at(-1);
+	if (!engine) throw new Error("Missing engine fixture");
+	const gate = engine.hold("start", 2);
 	try {
 		const response = await post("/api/environments/actions", {
 			apps: ["redis", "postgres"],
@@ -576,6 +577,7 @@ test("unit stop cannot partially release an operator batch whose startup is stil
 		const { taskId } = (await response.json()) as { taskId: number };
 		await pendingReview(app, taskId);
 		await approve(app, taskId);
+		await gate.entered;
 		const partial = await observed(
 			app,
 			(state) =>
@@ -607,6 +609,7 @@ test("unit stop cannot partially release an operator batch whose startup is stil
 				["stop", "rm"].includes(args[2] ?? ""),
 			),
 		).toHaveLength(0);
+		gate.release();
 		await observed(
 			app,
 			(state) =>
@@ -624,6 +627,7 @@ test("unit stop cannot partially release an operator batch whose startup is stil
 		await app.cancel(taskId);
 		await app.harness.waitForTask(taskId as TaskId, context);
 	} finally {
+		gate.release();
 		await host.stop();
 	}
 }, 45000);

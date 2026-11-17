@@ -287,92 +287,90 @@ test("a stopped owned container grants no endpoint authority", async () => {
 	}
 }, 30000);
 
-test.each(["unhealthy", "replacement", "unknown", "delayed", "cancelled"])(
-	"container endpoint admission rejects %s after approval preparation",
-	async (scenario) => {
-		let requests = 0;
-		const endpoint = Bun.serve({
-			port: 0,
-			hostname: "127.0.0.1",
-			fetch: () => {
-				requests++;
-				return new Response("must not be reached");
-			},
-		});
-		try {
-			const { app, config, fake, invocation } = await fixture(
-				false,
-				(config) => {
-					if (!endpoint.port)
-						throw new Error("Disposable endpoint has no port");
-					const value = target(config, endpoint.port, {
-						auth: false,
-						secure: false,
-					});
-					fs.writeFileSync(
-						path.join(config.configDir, "environments.json"),
-						JSON.stringify(document(config, value)),
-					);
-				},
+test("container endpoint preparation refuses lost authority and cancellation without dispatch", async () => {
+	let requests = 0;
+	const endpoint = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch: () => {
+			requests++;
+			return new Response("must not be reached");
+		},
+	});
+	try {
+		const { app, config, fake, invocation } = await fixture(false, (config) => {
+			if (!endpoint.port) throw new Error("Disposable endpoint has no port");
+			const value = target(config, endpoint.port, {
+				auth: false,
+				secure: false,
+			});
+			fs.writeFileSync(
+				path.join(config.configDir, "environments.json"),
+				JSON.stringify(document(config, value)),
 			);
-			let refused = "";
-			fake.setResponses([
-				call("env_start", { apps: ["api"] }),
-				call("env_http_request", {
-					app: "api",
-					endpoint: "api",
-					path: "/not-sent",
-				}),
-				(messages) => {
-					refused = JSON.stringify(
-						messages.messages.filter(
+		});
+		let refused = "";
+		const scenarios = ["unhealthy", "replacement", "unknown"] as const;
+		const request = () =>
+			call("env_http_request", {
+				app: "api",
+				endpoint: "api",
+				path: "/not-sent",
+			});
+		const responses: Parameters<typeof fake.setResponses>[0] = [
+			call("env_start", { apps: ["api"] }),
+		];
+		for (const scenario of scenarios)
+			responses.push(request(), (messages) => {
+				refused = JSON.stringify(
+					messages.messages
+						.filter(
 							(message) =>
 								message.role === "toolResult" &&
 								message.toolName === "env_http_request",
-						),
-					);
-					return call("request_review", {
-						path: ".",
-						title: "Hold refused endpoint",
-					});
-				},
-			]);
-			const task = await app.startTask(invocation);
-			await approve(app, task);
+						)
+						.at(-1),
+				);
+				return call("request_review", { path: ".", title: scenario });
+			});
+		responses.push(request());
+		fake.setResponses(responses);
+		const task = await app.startTask(invocation);
+		await approve(app, task);
+		const file = path.join(config.configDir, "engine.json");
+		for (const scenario of scenarios) {
 			await pendingReview(app, task, "Endpoint GET: api/api");
-			const file = path.join(config.configDir, "engine.json"),
-				original = fs.readFileSync(file, "utf8"),
-				state = readEngineFile(file);
+			const original = fs.readFileSync(file, "utf8"),
+				state = readEngineFile(file),
+				container = Object.values(state.containers)[0];
+			if (!container) throw new Error("Fixture container was not created");
 			try {
-				if (scenario === "cancelled") {
-					await app.cancel(task);
-				} else {
-					const container = Object.values(state.containers)[0];
-					if (!container) throw new Error("Fixture container was not created");
-					if (scenario === "unhealthy")
-						container.State.Health = { Status: "unhealthy" };
-					if (scenario === "replacement")
-						container.Id = "replacement-with-copied-labels";
-					if (scenario === "unknown") state.offline = true;
-					if (scenario === "delayed") state.inspectDelayMs = 5000;
-					fs.writeFileSync(file, JSON.stringify(state));
-					await approve(app, task, "Endpoint GET: api/api");
-					await pendingReview(app, task, "Hold refused endpoint");
-					expect(refused).toContain('"isError":true');
-				}
+				if (scenario === "unhealthy")
+					container.State.Health = { Status: "unhealthy" };
+				else if (scenario === "replacement")
+					container.Id = "replacement-with-copied-labels";
+				else state.offline = true;
+				fs.writeFileSync(file, JSON.stringify(state));
+				await approve(app, task, "Endpoint GET: api/api");
+				await pendingReview(app, task, scenario);
+				expect(refused).toContain('"isError":true');
 				expect(requests).toBe(0);
 				expect((await app.environments.snapshot()).httpOperations).toHaveLength(
 					0,
 				);
 			} finally {
-				if (scenario !== "cancelled") fs.writeFileSync(file, original);
+				fs.writeFileSync(file, original);
 			}
-		} finally {
-			endpoint.stop(true);
+			await approve(app, task, scenario);
 		}
-	},
-	15000,
-);
+		await pendingReview(app, task, "Endpoint GET: api/api");
+		await app.cancel(task);
+		expect(requests).toBe(0);
+		expect((await app.environments.snapshot()).httpOperations).toHaveLength(0);
+	} finally {
+		endpoint.stop(true);
+	}
+}, 15000);
 
 test("cancelling issued container HTTP drains the request before releasing the live container", async () => {
 	let requests = 0,

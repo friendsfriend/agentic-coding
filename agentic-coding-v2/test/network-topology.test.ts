@@ -343,71 +343,74 @@ test("reopened native topology refuses an occupied copied-label network instead 
 	expect(Object.keys(after.containers)).toHaveLength(0);
 }, 20000);
 
-for (const invalid of [
-	"not-infrastructure",
-	"empty-without-opt-in",
-	"services",
-	"volume",
-	"network-name",
-	"isolated",
-	"borrower",
-	"boolean",
-	"secret",
-	"endpoint",
-	"telemetry",
-] as const)
-	test(`authenticated topology candidate refuses ${invalid} without native effects`, async () => {
-		const { app, config } = await fixture(false, configure),
-			data = JSON.parse(fs.readFileSync(definitions(config), "utf8")),
-			project = data.projects[0],
-			target = project.targets[0];
-		if (invalid === "not-infrastructure") project.kind = "app";
-		if (invalid === "empty-without-opt-in") delete target.compose.networkOnly;
-		if (invalid === "services")
-			target.compose.source =
-				"services:\n  ignored:\n    image: fixture:latest\n";
-		if (invalid === "volume")
-			target.compose.source = "services: {}\nvolumes: {}\n";
-		if (invalid === "network-name")
-			target.compose.source =
-				"services: {}\nnetworks:\n  default:\n    name: devenv-local\n";
-		if (invalid === "isolated") target.compose.network = "isolated";
-		if (invalid === "borrower")
-			target.compose.networkFrom = { app: "postgres", target: "run" };
-		if (invalid === "boolean") target.compose.networkOnly = "true";
-		if (invalid === "secret")
-			target.secretRefs = { PASSWORD: "NO_PRIVATE_VALUE" };
-		if (invalid === "endpoint")
-			target.endpoints = { app: "http://127.0.0.1:12345" };
-		if (invalid === "telemetry")
-			target.telemetry = {
-				protocol: "otlp-http-json",
-				listen: "0.0.0.0:0",
-				collectorService: "imagined",
-				transport: "tls-host-gateway-v1",
+test("authenticated network-topology candidate validation batches independent inputs without native effects", async () => {
+	const { app, config } = await fixture(false, configure),
+		source = fs.readFileSync(definitions(config), "utf8"),
+		host = serve(app);
+	try {
+		const url = new URL(host.url),
+			token = new URLSearchParams(url.hash.slice(1)).get("token"),
+			post = async (route: string, body: unknown) => {
+				const response = await fetch(new URL(route, url), {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${token}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(body),
+				});
+				expect(response.status).toBe(200);
+				return response.json();
 			};
-		const host = serve(app);
-		try {
-			const url = new URL(host.url),
-				token = new URLSearchParams(url.hash.slice(1)).get("token"),
-				post = async (route: string, body: unknown) => {
-					const response = await fetch(new URL(route, url), {
-						method: "POST",
-						headers: {
-							Authorization: `Bearer ${token}`,
-							"Content-Type": "application/json",
-						},
-						body: JSON.stringify(body),
-					});
-					expect(response.status).toBe(200);
-					return response.json();
+
+		for (const invalid of [
+			"not-infrastructure",
+			"empty-without-opt-in",
+			"services",
+			"volume",
+			"network-name",
+			"isolated",
+			"borrower",
+			"boolean",
+			"secret",
+			"endpoint",
+			"telemetry",
+		] as const) {
+			const data = JSON.parse(source);
+			const project = data.projects[0],
+				target = project.targets[0];
+			if (invalid === "not-infrastructure") project.kind = "app";
+			if (invalid === "empty-without-opt-in") delete target.compose.networkOnly;
+			if (invalid === "services")
+				target.compose.source =
+					"services:\n  ignored:\n    image: fixture:latest\n";
+			if (invalid === "volume")
+				target.compose.source = "services: {}\nvolumes: {}\n";
+			if (invalid === "network-name")
+				target.compose.source =
+					"services: {}\nnetworks:\n  default:\n    name: devenv-local\n";
+			if (invalid === "isolated") target.compose.network = "isolated";
+			if (invalid === "borrower")
+				target.compose.networkFrom = { app: "postgres", target: "run" };
+			if (invalid === "boolean") target.compose.networkOnly = "true";
+			if (invalid === "secret")
+				target.secretRefs = { PASSWORD: "NO_PRIVATE_VALUE" };
+			if (invalid === "endpoint")
+				target.endpoints = { app: "http://127.0.0.1:12345" };
+			if (invalid === "telemetry")
+				target.telemetry = {
+					protocol: "otlp-http-json",
+					listen: "0.0.0.0:0",
+					collectorService: "imagined",
+					transport: "tls-host-gateway-v1",
 				};
+
 			const draft = await post("/api/environments/drafts", {
-					requestId: "create",
+					requestId: `create-${invalid}`,
 					content: JSON.stringify(data),
 				}),
 				checked = await post("/api/environments/drafts/preflight", {
-					requestId: "candidate",
+					requestId: `check-${invalid}`,
 					id: draft.id,
 					revision: draft.revision,
 					digest: draft.digest,
@@ -419,7 +422,8 @@ for (const invalid of [
 			expect(snapshot.tasks).toHaveLength(0);
 			expect(snapshot.reviews).toHaveLength(0);
 			expect(snapshot.environments.runs).toHaveLength(0);
-		} finally {
-			host.stop();
 		}
-	});
+	} finally {
+		await host.stop();
+	}
+});

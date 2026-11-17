@@ -173,7 +173,7 @@ test("an owned pod endpoint requires its declared loopback forward and re-observ
 
 test("a pod whose declared forward has exited grants no endpoint authority", async () => {
 	let received = 0;
-	const { app, fake, invocation } = await fixture(false, (config) => {
+	const { app, config, fake, invocation } = await fixture(false, (config) => {
 		const upstream = Bun.serve({
 			port: 0,
 			hostname: "127.0.0.1",
@@ -184,7 +184,9 @@ test("a pod whose declared forward has exited grants no endpoint authority", asy
 		});
 		if (!upstream.port) throw new Error("Disposable server has no port");
 		servers.push(upstream);
-		cluster(config, upstream.port, { FIXTURE_FORWARD_EXIT_MS: "400" });
+		cluster(config, upstream.port, {
+			FIXTURE_FORWARD_PID_FILE: path.join(config.configDir, "forward.pid"),
+		});
 		fs.writeFileSync(
 			path.join(config.configDir, "environments.json"),
 			JSON.stringify(document(config, target(disposablePort()))),
@@ -194,7 +196,13 @@ test("a pod whose declared forward has exited grants no endpoint authority", asy
 	fake.setResponses([
 		call("env_start", { apps: ["api"], runtime: "kubernetes" }),
 		async () => {
-			await Bun.sleep(900);
+			const pidFile = path.join(config.configDir, "forward.pid");
+			await eventually(async () => fs.existsSync(pidFile), Boolean);
+			process.kill(
+				Number.parseInt(fs.readFileSync(pidFile, "utf8"), 10),
+				"SIGTERM",
+			);
+			await eventually(async () => fs.existsSync(`${pidFile}.exited`), Boolean);
 			return call("env_http_request", {
 				app: "api",
 				endpoint: "api",

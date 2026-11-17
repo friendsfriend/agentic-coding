@@ -140,7 +140,7 @@ function document(
 const forwardRefusal =
 	"Kubernetes query connections require exactly one declared loopback port forward on the query port";
 
-test("an owned pod query connection requires its declared forward and stays read-only and redacted", async () => {
+test("an owned pod query requires its declared forward and stays read-only with frozen credentials and redaction", async () => {
 	const sqlPort = disposablePort(),
 		databasePort = disposablePort();
 	const { app, config, fake, invocation } = await fixture(false, (config) => {
@@ -196,6 +196,11 @@ test("an owned pod query connection requires its declared forward and stays read
 	const review = await pendingReview(app, task, "Query store");
 	expect(review.snapshot).toContain("read-only transaction");
 	expect(review.snapshot).not.toContain(disposablePassword);
+	// Rotation belongs to the same successful binding scenario, not another host.
+	fs.writeFileSync(
+		path.join(config.configDir, ".env"),
+		"DISPOSABLE_SQL_USER=changed\nDISPOSABLE_SQL_PASSWORD=rotated\n",
+	);
 	await approve(app, task, "Query store");
 	await app.harness.waitForTask(task as TaskId, context);
 	const result = JSON.parse(payload) as {
@@ -224,7 +229,7 @@ test("a pod whose declared forward has exited grants no SQL authority", async ()
 		configureLocalCluster(config, podClient, {
 			FIXTURE_STATE: path.join(config.configDir, "pods.json"),
 			FIXTURE_FORWARD_PORT: String(databasePort),
-			FIXTURE_FORWARD_EXIT_MS: "400",
+			FIXTURE_FORWARD_PID_FILE: path.join(config.configDir, "forward.pid"),
 		});
 		fs.writeFileSync(
 			path.join(config.configDir, "environments.json"),
@@ -254,7 +259,13 @@ test("a pod whose declared forward has exited grants no SQL authority", async ()
 	// The declaration is admissible, so preparation reaches approval; the forward
 	// has exited before the approved call is dispatched.
 	await pendingReview(app, task, "Query store");
-	await Bun.sleep(700);
+	const pidFile = path.join(config.configDir, "forward.pid");
+	await eventually(async () => fs.existsSync(pidFile), Boolean);
+	process.kill(
+		Number.parseInt(fs.readFileSync(pidFile, "utf8"), 10),
+		"SIGTERM",
+	);
+	await eventually(async () => fs.existsSync(`${pidFile}.exited`), Boolean);
 	await approve(app, task, "Query store");
 	await app.harness.waitForTask(task as TaskId, context);
 	expect(refused).toContain(
@@ -266,63 +277,6 @@ test("a pod whose declared forward has exited grants no SQL authority", async ()
 	expect(
 		state.queryOperations.filter((query) => query.state === "completed"),
 	).toHaveLength(0);
-}, 30000);
-
-test("a rotated configuration still queries through frozen startup pod credentials with redacted output", async () => {
-	const sqlPort = disposablePort(),
-		databasePort = disposablePort();
-	const { app, config, fake, invocation } = await fixture(false, (config) => {
-		installDatabase(config);
-		configureLocalCluster(config, podClient, {
-			FIXTURE_STATE: path.join(config.configDir, "pods.json"),
-			FIXTURE_FORWARD_PORT: String(databasePort),
-		});
-		fs.writeFileSync(
-			path.join(config.configDir, "environments.json"),
-			JSON.stringify(document(config, sqlPort)),
-		);
-	});
-	await startDatabase(config, databasePort);
-	let payload = "";
-	fake.setResponses([
-		call("env_start", { apps: ["api", "store"], runtime: "kubernetes" }),
-		call("db_query", {
-			infra: "store",
-			sql: "SELECT value FROM fixture_secrets /* NATIVE_SQL_PROBE */",
-		}),
-		(messages) => {
-			payload = JSON.stringify(
-				messages.messages.filter(
-					(message) =>
-						message.role === "toolResult" && message.toolName === "db_query",
-				),
-			);
-			return fauxAssistantMessage("Done");
-		},
-	]);
-	const task = await app.startTask(invocation);
-	await approve(app, task);
-	await pendingReview(app, task, "Query store");
-	// Rotation after preparation must not change the frozen startup credentials
-	// the approved pod query authenticates with.
-	fs.writeFileSync(
-		path.join(config.configDir, ".env"),
-		"DISPOSABLE_SQL_USER=changed\nDISPOSABLE_SQL_PASSWORD=rotated\n",
-	);
-	await approve(app, task, "Query store");
-	await app.harness.waitForTask(task as TaskId, context);
-	const result = JSON.parse(payload) as {
-		isError?: boolean;
-		content: { type: string; text: string }[];
-	}[];
-	expect(result[0]?.isError).toBeFalsy();
-	const body = JSON.parse(result[0]?.content[0]?.text ?? "{}");
-	expect(body.rows).toEqual([{ value: "[REDACTED]" }]);
-	expect(payload).not.toContain(disposablePassword);
-	const state = await app.environments.snapshot();
-	expect(
-		state.queryOperations.filter((query) => query.state === "completed"),
-	).toHaveLength(1);
 }, 30000);
 
 test("cancelling an issued pod query drains diagnostics without publishing success", async () => {
@@ -365,9 +319,12 @@ test("cancelling an issued pod query drains diagnostics without publishing succe
 	const started = Date.now();
 	await app.cancel(task);
 	expect(Date.now() - started).toBeLessThan(10000);
-	const after = await app.environments.snapshot();
+	// Cancellation settles asynchronously: observe the release, never assume it.
+	const after = await eventually(
+		() => app.environments.snapshot(),
+		(snapshot) => snapshot.runs.every((run) => run.state === "exited"),
+	);
 	expect(after.queryOperations[0]?.state).toBe("issued");
-	expect(after.runs.every((run) => run.state === "exited")).toBe(true);
 	expect(
 		fs.readFileSync(path.join(config.configDir, "sql-probes"), "utf8").trim(),
 	).toBe("query");

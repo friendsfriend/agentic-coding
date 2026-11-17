@@ -299,7 +299,8 @@ test("conflicting cross-stack DNS aliases refuse a dependent before creation and
 }, 15000);
 
 test("original native endpoint admission refuses changing bridge membership while a sibling creation acknowledgement is pending", async () => {
-	let requests = 0;
+	let requests = 0,
+		release = () => {};
 	const web = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -324,11 +325,13 @@ test("original native endpoint admission refuses changing bridge membership whil
 		const task = await app.startTask(invocation);
 		await approve(app, task);
 		await pendingReview(app, task, "First root");
-		const state = readEngineFile(stateFile(config));
-		state.startDelayMs = 1500;
-		fs.writeFileSync(stateFile(config), JSON.stringify(state));
+		const engine = engines.at(-1);
+		if (!engine) throw new Error("Missing engine fixture");
+		const gate = engine.hold("start");
+		release = gate.release;
 		await approve(app, task, "First root");
 		await approve(app, task);
+		await gate.entered;
 		await eventually(
 			async () => readEngineFile(stateFile(config)),
 			(state) =>
@@ -345,12 +348,14 @@ test("original native endpoint admission refuses changing bridge membership whil
 			app.environments.http.prepare(owner, "api", "web", "/"),
 		).rejects.toThrow("membership is changing");
 		expect(requests).toBe(0);
+		gate.release();
 		await pendingReview(app, task, "Settled members");
 		await app.cancel(task);
 		expect(
 			Object.keys(readEngineFile(stateFile(config)).networks ?? {}),
 		).toHaveLength(0);
 	} finally {
+		release();
 		web.stop(true);
 	}
 }, 20000);
@@ -580,54 +585,59 @@ test("authenticated saved-input bridge preflight binds descriptors without minti
 	}
 });
 
-for (const invalid of [
-	"wrong-target",
-	"different-socket",
-	"raw-network-id",
-	"missing-edge",
-	"app-provider",
-	"different-provider",
-	"isolated",
-] as const)
-	test(`authenticated staging refuses prerequisite bridge ${invalid} without workloads`, async () => {
-		const { app, config } = await fixture(false, configure);
-		const document = JSON.parse(
-			fs.readFileSync(path.join(config.configDir, "environments.json"), "utf8"),
-		);
-		const infra = document.projects[0],
-			dependent = document.projects[1].targets[0];
-		if (invalid === "missing-edge") delete dependent.prerequisites;
-		if (invalid === "wrong-target")
-			dependent.compose.networkFrom.target = "other";
-		if (invalid === "different-socket")
-			dependent.compose.socket = "/tmp/acv2-no-other-engine.sock";
-		if (invalid === "raw-network-id")
-			dependent.compose.networkFrom.id = "e".repeat(64);
-		if (invalid === "app-provider") infra.kind = "app";
-		if (invalid === "different-provider") dependent.compose.provider = "podman";
-		if (invalid === "isolated") dependent.compose.network = "isolated";
-		const host = serve(app);
-		try {
-			const url = new URL(host.url),
-				token = new URLSearchParams(url.hash.slice(1)).get("token"),
-				post = async (route: string, body: unknown) => {
-					const response = await fetch(new URL(route, url), {
-						method: "POST",
-						headers: {
-							Authorization: `Bearer ${token}`,
-							"Content-Type": "application/json",
-						},
-						body: JSON.stringify(body),
-					});
-					expect(response.status).toBe(200);
-					return response.json();
-				};
+test("authenticated prerequisite-bridge candidate validation batches independent inputs without native effects", async () => {
+	const { app, config } = await fixture(false, configure),
+		source = fs.readFileSync(
+			path.join(config.configDir, "environments.json"),
+			"utf8",
+		),
+		host = serve(app);
+	try {
+		const url = new URL(host.url),
+			token = new URLSearchParams(url.hash.slice(1)).get("token"),
+			post = async (route: string, body: unknown) => {
+				const response = await fetch(new URL(route, url), {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${token}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(body),
+				});
+				expect(response.status).toBe(200);
+				return response.json();
+			};
+
+		for (const invalid of [
+			"wrong-target",
+			"different-socket",
+			"raw-network-id",
+			"missing-edge",
+			"app-provider",
+			"different-provider",
+			"isolated",
+		] as const) {
+			const document = JSON.parse(source);
+			const infra = document.projects[0],
+				dependent = document.projects[1].targets[0];
+			if (invalid === "missing-edge") delete dependent.prerequisites;
+			if (invalid === "wrong-target")
+				dependent.compose.networkFrom.target = "other";
+			if (invalid === "different-socket")
+				dependent.compose.socket = "/tmp/acv2-no-other-engine.sock";
+			if (invalid === "raw-network-id")
+				dependent.compose.networkFrom.id = "e".repeat(64);
+			if (invalid === "app-provider") infra.kind = "app";
+			if (invalid === "different-provider")
+				dependent.compose.provider = "podman";
+			if (invalid === "isolated") dependent.compose.network = "isolated";
+
 			const draft = await post("/api/environments/drafts", {
-					requestId: "create",
+					requestId: `create-${invalid}`,
 					content: JSON.stringify(document),
 				}),
 				checked = await post("/api/environments/drafts/preflight", {
-					requestId: "check",
+					requestId: `check-${invalid}`,
 					id: draft.id,
 					revision: draft.revision,
 					digest: draft.digest,
@@ -635,7 +645,8 @@ for (const invalid of [
 			expect(checked.schemaAccepted).toBeNull();
 			expect(readEngineFile(stateFile(config)).history).toHaveLength(0);
 			expect((await app.snapshot()).tasks).toHaveLength(0);
-		} finally {
-			host.stop();
 		}
-	});
+	} finally {
+		await host.stop();
+	}
+});
