@@ -80,19 +80,32 @@ export function PinRow(props: {
 					</text>
 				</box>
 				<Show when={props.height > 1}>
-					<text
-						fg={
-							props.tree?.summary
-								? tone()
-								: props.tree?.kind === "workflow"
-									? uiColors.info
-									: uiColors.textMuted
-						}
-					>
-						{clip(
-							`${props.tree ? `${" ".repeat(props.tree.prefix.length)}    ` : ""}${props.tree?.summary || props.pin.meta}`,
-						)}
-					</text>
+					<box flexDirection="row" height={1} flexShrink={0}>
+						<Show when={props.tree}>
+							<text fg={uiColors.textMuted}>
+								{props.tree?.continuation}
+								{"  "}
+							</text>
+						</Show>
+						<text
+							fg={
+								props.tree?.summary
+									? tone()
+									: props.tree?.kind === "workflow"
+										? uiColors.info
+										: uiColors.textMuted
+							}
+						>
+							{clip(
+								props.tree?.summary || props.pin.meta,
+								Math.max(
+									4,
+									(props.width ?? 30) -
+										(props.tree ? props.tree.continuation.length + 2 : 0),
+								),
+							)}
+						</text>
+					</box>
 				</Show>
 			</Show>
 		</Selectable>

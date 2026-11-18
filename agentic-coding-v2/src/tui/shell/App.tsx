@@ -3965,7 +3965,7 @@ export function App(props: {
 			},
 			...tree,
 			{
-				name: "+ New orchestrator",
+				name: "New orchestrator",
 				description: "Another directory or a configured checkout",
 				value: "orchestrator:new",
 				glyph: "+",

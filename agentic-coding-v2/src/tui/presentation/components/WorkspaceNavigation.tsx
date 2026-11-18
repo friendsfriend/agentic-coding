@@ -37,6 +37,7 @@ export type WorkspaceEntry = {
 	tone?: "primary" | "accent" | "muted" | "success" | "warning" | "error";
 	tree?: {
 		prefix: string;
+		continuation: string;
 		parent?: string;
 		branch: boolean;
 		collapsed: boolean;

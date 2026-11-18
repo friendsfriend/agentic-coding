@@ -42,10 +42,15 @@ test("sidebar follows visual workflow lineage and arbitrarily nested task owners
 		[1, 2, 3, 4, 5, 6, 7].map((id) => `session:${id}`),
 	);
 	expect(rows[1].tree?.parent).toBe("session:1");
+	// Child junctions sit under the parent's disclosure, not one column farther
+	// right per level. Expanded parent detail rows continue into their children.
+	expect(rows[3].tree?.continuation).toBe("    │ ");
+	expect(rows[4].tree?.prefix.indexOf("├")).toBe(rows[3].tree?.prefix.length);
+	expect(rows[5].tree?.continuation.trim()).toBe("");
 	expect(rows[4]).toMatchObject({
 		name: "Security",
 		tone: "accent",
-		tree: { parent: "session:4", prefix: "      ├─" },
+		tree: { parent: "session:4", prefix: "    ├─", continuation: "    │   " },
 	});
 	expect(rows[2]).toMatchObject({ name: "Apply", glyph: "✓", tone: "success" });
 	expect(rows[5]).toMatchObject({

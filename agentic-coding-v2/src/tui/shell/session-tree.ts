@@ -140,7 +140,10 @@ export function sessionTree(
 				prefix:
 					parent === undefined
 						? ""
-						: `${ancestors.map((isLast) => (isLast ? "   " : "│  ")).join("")}${last ? "└─" : "├─"}`,
+						: `${ancestors.map((isLast) => (isLast ? "  " : "│ ")).join("")}${last ? "└─" : "├─"}`,
+				// Same two-column cells as the title. Detail rows retain sibling
+				// trunks and, for an expanded parent, the line into its children.
+				continuation: `${parent === undefined ? "" : `${ancestors.map((isLast) => (isLast ? "  " : "│ ")).join("")}${last ? "  " : "│ "}`}${nested.length && !hidden ? "│ " : "  "}`,
 				parent: parent === undefined ? undefined : `session:${parent}`,
 				branch: nested.length > 0,
 				collapsed: hidden,
