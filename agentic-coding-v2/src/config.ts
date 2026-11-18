@@ -46,6 +46,9 @@ import openspecWorkflowSkill from "../skills/openspec-workflow/SKILL.md" with {
 };
 import researchSkill from "../skills/research/SKILL.md" with { type: "text" };
 import reviewSkill from "../skills/review/SKILL.md" with { type: "text" };
+import verifyWorkflowSkill from "../skills/verify-workflow/SKILL.md" with {
+	type: "text",
+};
 import wikiCommentSkill from "../skills/wiki-comment/SKILL.md" with {
 	type: "text",
 };
@@ -175,6 +178,7 @@ export function loadConfig(
 		codeSkill,
 		researchSkill,
 		reviewSkill,
+		verifyWorkflowSkill,
 		...[
 			openspecWorkflowSkill,
 			openspecExplore,

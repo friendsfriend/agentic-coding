@@ -110,6 +110,8 @@ test("the driver spawns skills the host actually loaded", async () => {
 	expect(driver).toBeDefined();
 	// Every skill the driver names must exist, or start_task refuses it at admission
 	// and the workflow stops halfway through a change.
+	const verifier = config.skills.find((item) => item.id === "verify-workflow");
+	expect(verifier).toBeDefined();
 	const spawns = [...(driver?.content ?? "").matchAll(/skill: "([^"]+)"/g)].map(
 		(match) => match[1],
 	);

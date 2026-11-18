@@ -4184,6 +4184,13 @@ export function App(props: {
 		setOrchestratorPending(true);
 		try {
 			const created = await client.call("orchestrator.create", input);
+			if (input.skill)
+				await client.call("session.send", {
+					id: created.id,
+					content:
+						"Start this skill. No idea has been supplied yet; ask me what I want to work on.",
+					requestId: `session-start:${input.requestId}`,
+				});
 			client.state = await client.call("state.read", {});
 			update();
 			setRefreshRevision((value) => value + 1);
@@ -4662,7 +4669,7 @@ export function App(props: {
 											void createOrchestrator({
 												path: here || process.cwd(),
 												title: id,
-												requestId: `skill:${id}:${revision}`,
+												requestId: `skill:${crypto.randomUUID()}`,
 												skill: id,
 												revision,
 											});

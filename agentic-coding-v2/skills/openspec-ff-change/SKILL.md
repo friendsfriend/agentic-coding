@@ -35,7 +35,7 @@ Fast-forward through artifact creation - generate everything needed to start imp
 
 4. **Create artifacts in sequence until apply-ready**
 
-   Use the **TodoWrite tool** to track progress through the artifacts.
+   Track progress through the artifacts in your response.
 
    Loop through artifacts in dependency order (artifacts with no pending dependencies first):
 

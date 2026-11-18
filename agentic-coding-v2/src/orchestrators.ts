@@ -2,9 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
-import { text } from "./config.ts";
+import { digest, text } from "./config.ts";
 import type { Runtime } from "./runtime.ts";
 import { Catalog, decode, type OrchestratorInfo } from "./state.ts";
+import { ensureFeatureWorktree, featureBranch } from "./worktrees.ts";
 
 /** Conversations the developer talks to. The root orchestrator is reserved by
  * the durable harness and stays implicit here; every other orchestrator is an
@@ -26,7 +27,7 @@ export class Orchestrators {
 		return {
 			id: Number(this.app.home.id),
 			title: "Orchestrator",
-			path: this.app.config.repositories[0] ?? process.cwd(),
+			path: stored?.path || this.app.config.repositories[0] || process.cwd(),
 			profile: this.effective(
 				stored ?? { ...this.blank(), profileOverride: undefined },
 			),
@@ -135,7 +136,8 @@ export class Orchestrators {
 		const known = this.app.config.profiles.find((item) => item.id === chosen);
 		if (!known) throw new Error("Unknown profile");
 		const root = id === Number(this.app.home.id);
-		const entry = root ? this.rootInfo() : await this.retained(id);
+		const entry = root ? (await this.read())[0] : await this.retained(id);
+		if (!entry) throw new Error("Orchestrator is not retained");
 		if (entry.retiredAt !== undefined)
 			throw new Error("Orchestrator is closed");
 		const next: OrchestratorInfo = {
@@ -147,29 +149,24 @@ export class Orchestrators {
 			...(root
 				? {
 						title: "Orchestrator",
-						path: this.app.config.repositories[0] ?? process.cwd(),
+						path: entry.path,
 					}
 				: {}),
 		};
 		await (root ? this.app.home : await this.conversation(id)).configure(
-			this.app.orchestratorAgent(
-				root ? null : next.path,
-				chosen,
-				next.skill?.id,
-			),
+			this.app.orchestratorAgent(next.path, chosen, next.skill?.id),
 			context,
 		);
 		await this.save(next);
 		return next;
 	}
 
-	/** Apply the effective profile to every retained orchestrator that does not
-	 * already run with it: an override always wins, an orchestrator without one
-	 * follows the configured default, and nothing is reconfigured needlessly. */
+	/** Restore effective profile, persisted directory and loaded skill at startup.
+	 * An explicit profile override wins over the configured default. */
 	async reconcile(): Promise<void> {
 		const entries = await this.read();
 		for (const entry of entries) {
-			if (entry.profile === this.effective(entry)) continue;
+			// Reapply persisted cwd and skill too: the root is reset by harness startup.
 			const chosen = this.effective(entry);
 			// A stored choice whose profile has since been removed from the
 			// configuration leaves the conversation alone; it is still reported, so
@@ -181,11 +178,7 @@ export class Orchestrators {
 				? this.app.home
 				: await this.conversation(entry.id);
 			await conversation.configure(
-				this.app.orchestratorAgent(
-					root ? null : entry.path,
-					chosen,
-					entry.skill?.id,
-				),
+				this.app.orchestratorAgent(entry.path, chosen, entry.skill?.id),
 				context,
 			);
 			await this.save({ ...entry, profile: chosen });
@@ -200,6 +193,35 @@ export class Orchestrators {
 				[String(entry.id)]: JSON.stringify(entry),
 			};
 		}, context);
+	}
+
+	/** Moving the owning conversation keeps all later shared tasks in the feature
+	 * worktree. Persist the path: restart/profile changes must not send it home. */
+	async worktree(id: number, name: string, ticket?: string, base?: string) {
+		const entry = (await this.read()).find((item) => item.id === id);
+		if (!entry)
+			throw new Error("Worktree binding requires an interactive conversation");
+		const branch = featureBranch(name, ticket);
+		const location = path.join(
+			this.app.config.stateDir,
+			"worktrees",
+			"features",
+			digest(`${id}:${branch}`).slice(0, 24),
+		);
+		fs.mkdirSync(path.dirname(location), { recursive: true, mode: 0o700 });
+		const result = await ensureFeatureWorktree(
+			entry.path,
+			branch,
+			base,
+			location,
+		);
+		const next = { ...entry, path: result.path };
+		await this.save(next);
+		await (await this.conversation(id)).configure(
+			this.app.orchestratorAgent(next.path, next.profile, next.skill?.id),
+			context,
+		);
+		return result;
 	}
 
 	/** Resolve one orchestrator conversation by identity, or refuse. */
@@ -273,7 +295,8 @@ export class Orchestrators {
 		const existing = (await this.read()).find(
 			(item) => item.path === target && item.title === title,
 		);
-		if (existing) throw new Error("Orchestrator already exists at that path");
+		if (existing && !skill)
+			throw new Error("Orchestrator already exists at that path");
 		const conversation = await this.app.harness.createConversation(
 			{
 				// Ownerless: a sibling of the root, not owned or cascaded by it, so

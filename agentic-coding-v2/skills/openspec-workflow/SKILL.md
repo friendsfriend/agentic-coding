@@ -22,52 +22,51 @@ After you spawn, end your turn. When the task finishes its result arrives in thi
 conversation as a durable message — never poll `task_result`, and never treat your own
 summary as evidence that the work happened.
 
-## Decide whether to interact
+## 1. Explore in this conversation
 
-You decide, not a rule, whether the developer's message already contains what you need.
+The initial idea is optional. It may come directly from the developer or be forwarded
+by the original orchestrator through start_session inputs. If present, read it and
+investigate immediately; never ask them to repeat it. If absent, ask what they want to
+build and wait for their answer. This is ordinary conversation, not request_review.
 
-Ask when the answer would change what you write: which capability this touches, whether
-the change is one change or three, what must not change, which of two real options they
-prefer. Do not ask for permission to do the work you were asked to do, and do not ask
-what you could read from the code yourself.
+Load the official instructions with catalog({ skill: "openspec-explore" }) and follow
+that stance here: read specs, neighbouring changes and code, discuss options with the
+developer, distinguish findings from assumptions, and do not implement. No tool
+filtering: this is a prompt rule. Ask questions only when their answers change the work. Once the
+intent is clear and the developer says to proceed (or the initial request already says
+so), continue without a redundant approval question.
 
-While you are still deciding, stay in thinking mode: read the code, read
-`openspec list`, `openspec list --specs`, `openspec show <change>`, sketch options, and
-write nothing. `openspec-explore` is that stance in full — follow it if you want the long
-form. Do not create or edit files while exploring; the only exception is artifacts the
-developer explicitly asks you to write early.
+## Workspace
 
-## 1. Explore
+Usually use a new feature worktree. Before creating any proposal or implementation,
+call feature_worktree with a lowercase kebab-case name and the optional ticket supplied
+by the developer. Do not invent a ticket or ask for one just to fill a field:
 
-Read before you write: which capabilities exist, what the neighbouring specs already
-promise, and the code the change would touch. Say what you found and what you assume,
-separately. Keep the change smaller than the problem looks: one change is one bounded
-capability, and a second capability is a second change.
+    feature_worktree({ name: "short-description", ticket: "ABC-123" })
 
-When the shape is clear, state the intent in the developer's language — one paragraph,
-not a design — and continue. Do not stop to ask "shall I proceed" if they already told
-you to go.
+The tool uses Worktrunk and moves this conversation into the returned directory. It
+creates/reuses branch feature/ABC-123-short-description, or feature/short-description
+without a ticket. Never shell out to git worktree or rename an unrelated branch. Use
+an explicit base when the developer specified one; otherwise HEAD is the starting
+point. Check the returned path before writing. If the developer explicitly wants the
+current checkout instead, honour that exception.
+
+Choose a unique short run key once and prefix every requestId below with it. This
+keeps two features with the same change name in different repositories independent.
+Reuse the same key on continuation/retry, never generate a new one per tool retry.
+
+All later tasks use workspace shared: shared with THIS feature worktree, not the
+original checkout. Do not create another worktree per phase. Repository still names
+the configured repository; the runtime resolves shared cwd from this conversation.
 
 ## 2. Propose
 
-    openspec new change "<kebab-case-id>"
-    openspec status --change "<id>" --json
-
-Then write each artifact the schema lists, from the instructions OpenSpec prints for it
-and in dependency order — proposal, then specs, then design, then tasks:
-
-    openspec instructions <artifact> --change "<id>"
-
-`openspec-propose` is the fast single-shot version of exactly this; use it if the
-developer asked for a proposal with no discussion left. Answer in the artifact files, not
-in the chat: the proposal's Capabilities section is a contract with the spec deltas, and
-a capability named there needs its `specs/<name>/spec.md`. Finish with
-
-    openspec validate "<id>"
-
-and fix everything it reports. An artifact that does not validate is not written. Report
-the change id, its path and what each artifact now says, then continue into apply unless
-the developer asked to read the proposal first — if they did, stop and wait for them.
+Load catalog({ skill: "openspec-propose" }) and follow those official instructions in
+this conversation. Use the actual schema's artifact graph and openspec instructions,
+not a hardcoded list of artifact paths. The original idea and the explore discussion
+are the proposal input; do not make the developer repeat them. Validate the resulting
+change and fix validation issues before applying. Report its id, path and artifacts.
+If the developer asked to read the proposal first, stop and wait; otherwise continue.
 
 ## 3. Apply
 
@@ -77,33 +76,27 @@ Spawn the implementation and end your turn:
                  profile, requestId: "apply:<id>",
                  inputs: "Apply the OpenSpec change <id> in <directory>." })
 
-## 4. Verify
+## 4. Independent verification workflow
 
-When apply reports back, verify before deciding anything:
+When apply reports back, inspect its actual outcome. Failure is not completion. Then
+spawn the reusable verifier, rather than implementing a fix loop here:
 
-    start_task({ skill: "openspec-verify-change", workspace: "shared", topicId, repository,
-                 profile, requestId: "verify:<id>:1",
-                 inputs: "Verify the OpenSpec change <id> in <directory> against its own
-                          artifacts and the code that now implements it." })
+    start_task({ skill: "verify-workflow", workspace: "shared", topicId, repository,
+                 profile, requestId: "verify-workflow:<id>",
+                 inputs: "Verify the OpenSpec change <id> in <directory> against its
+                          requirements, artifacts and implementation. Own independent
+                          review, fix and re-review. Report CLEAN or BLOCKED and real
+                          check results. No archive or push." })
 
-Add a `review` sub-agent with the next requestId when the change touched real behaviour
-and you want an independent read of the diff; one extra reviewer, not a panel.
+End your turn. The verify-workflow agent owns the reviewers and fixers and joins them.
+It is reusable for non-OpenSpec work too; OpenSpec is context supplied in its inputs,
+not its runtime or a requirement for using it. Do not run a duplicate repair loop here.
 
-## 5. Decide
+## 5. Read the verification outcome
 
-Read every finding and decide yourself. Neither verifier decides for you: a finding you
-cannot reproduce in the code is not a finding.
-
-Blocking findings get one fix sub-agent, then a fresh verify with the next number:
-
-    start_task({ skill: "openspec-apply-change", workspace: "shared", topicId, repository,
-                 profile, requestId: "fix:<id>:1",
-                 inputs: "Address only these findings in the OpenSpec change <id>:
-                          <the findings, verbatim>" })
-
-Stop after two fix rounds. Findings that still block after that mean the proposal or the
-design was wrong, and rewriting them is the developer's decision, not another sub-agent's
-work. Refuse findings that the change never asked for — say which and why.
+Proceed only on a CLEAN result backed by independent review and required checks. A
+BLOCKED outcome, failed task, unresolved decision or missing evidence stays here for
+discussion with the developer. Never archive because the verifier merely terminated.
 
 ## 6. Archive
 
@@ -117,15 +110,24 @@ With nothing unchecked:
     start_task({ skill: "openspec-archive-change", workspace: "shared", topicId, repository,
                  profile, requestId: "archive:<id>",
                  inputs: "Archive the completed OpenSpec change <id> in <directory>.
-                          Every task is ticked. Do not ask anyone anything: if you find
+                          Every task is ticked. Synchronize the verified delta specs to main specs before archiving; sync is authorized. Do not skip syncing. Do not ask anyone anything: if you find
                           something unfinished, stop and report what is missing." })
 
 A task has no developer listening, so its skill's "ask the developer to confirm" branch
 would end the turn unanswered — that check is yours, before the spawn.
 
+## Commit and push
+
+This feature workflow authorizes committing and a normal push of its own feature branch
+to the repository's existing intended remote. After clean verification and archive,
+inspect git status/diff, stage only the change's exact files, commit and push that branch
+with upstream tracking. Never include unrelated work, force-push, merge, alter remotes,
+use credentials from files, or push a protected/default branch. If the remote is
+ambiguous, ask. If the developer requested local-only work, do not push. Report a push
+failure honestly; do not broaden permissions to overcome it.
+
 ## Reporting
 
 One short report per phase, in the developer's language, and never make them reconstruct
 what happened: the change id and path, what apply changed, the findings you accepted and
-refused, the archive path and the specs it folded in. Never push, deploy, install
-services, rotate credentials or touch unrelated work.
+refused, the archive path and the specs it folded in. Never deploy, install services, rotate credentials or touch unrelated work.

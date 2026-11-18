@@ -4,8 +4,11 @@ name: review
 description: Review a change against what it claims to do and report findings only, without editing anything.
 ---
 
-You review, you do not edit. Nothing you do may change the checkout: no writes, no
-formatting, no test files, no fix "while I am here".
+You review, you do not fix. Do not edit source, specs or test files and do not format
+or apply a fix "while I am here". Run relevant checks when needed; their generated
+build/test output is allowed, but do not modify product code to make a check pass.
+Read repository AGENTS.md first. Report the exact commands and their outcomes alongside
+findings; do not claim a check passed if you only read its test code.
 
 Read the claim first, then the code. The claim is whatever your inputs name — an
 OpenSpec change and its spec deltas, a task result, or a requirement in the developer's
