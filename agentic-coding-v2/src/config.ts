@@ -8,7 +8,14 @@ import {
 	parseFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 import codeSkill from "../skills/code/SKILL.md" with { type: "text" };
+import openspecApplySkill from "../skills/openspec-apply/SKILL.md" with {
+	type: "text",
+};
+import openspecWorkflowSkill from "../skills/openspec-workflow/SKILL.md" with {
+	type: "text",
+};
 import researchSkill from "../skills/research/SKILL.md" with { type: "text" };
+import reviewSkill from "../skills/review/SKILL.md" with { type: "text" };
 import wikiCommentSkill from "../skills/wiki-comment/SKILL.md" with {
 	type: "text",
 };
@@ -134,18 +141,23 @@ export function loadConfig(
 	const repositories = (
 		Array.isArray(data.repositories) ? data.repositories : [cwd]
 	).map((item) => fs.realpathSync(text(item, "repository", 4096)));
-	const skills: Skill[] = [codeSkill, researchSkill, wikiCommentSkill].map(
-		(content) => {
-			const { frontmatter } = parseFrontmatter(content);
-			return {
-				id: text(frontmatter.name, "system skill name"),
-				description: text(frontmatter.description, "system skill description"),
-				content,
-				origin: "system" as const,
-				digest: digest(content),
-			};
-		},
-	);
+	const skills: Skill[] = [
+		codeSkill,
+		researchSkill,
+		reviewSkill,
+		openspecWorkflowSkill,
+		openspecApplySkill,
+		wikiCommentSkill,
+	].map((content) => {
+		const { frontmatter } = parseFrontmatter(content);
+		return {
+			id: text(frontmatter.name, "system skill name"),
+			description: text(frontmatter.description, "system skill description"),
+			content,
+			origin: "system" as const,
+			digest: digest(content),
+		};
+	});
 	const dir = path.join(configDir, "skills");
 	if (fs.existsSync(dir)) {
 		const loaded = loadSkillsFromDir({ dir, source: "user" });
