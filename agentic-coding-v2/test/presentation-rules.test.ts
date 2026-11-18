@@ -303,14 +303,39 @@ test("a tool family is named by what it does and what it does it to", () => {
 	expect(
 		toolPresentation("start_task", { skill: "review-runner" }, "done"),
 	).toEqual({ label: "Started review-runner" });
-	// An environment action reads as the action it prepares, on the apps it names.
+	// One action tool, five actions: the row names the action that was asked for,
+	// on the apps it names, and spells a returned call as completed.
+	for (const [action, pending, done] of [
+		["run", "Starting", "Started"],
+		["build", "Building", "Built"],
+		["test", "Testing", "Tested"],
+		["stop", "Stopping", "Stopped"],
+	] as const) {
+		const args = { apps: ["api", "web"], action, runtime: "docker" };
+		expect(toolPresentation("environment_action", args, "pending")).toEqual({
+			label: `${pending} api, web`,
+			hint: "docker",
+		});
+		expect(toolPresentation("environment_action", args, "done")).toEqual({
+			label: `${done} api, web`,
+			hint: "docker",
+		});
+	}
+	// A single app has one name, and a queue continuation names its acquisition.
 	expect(
 		toolPresentation(
 			"environment_action",
-			{ apps: ["api", "web"], action: "build", runtime: "docker" },
+			{ action: "build", app: "api" },
 			"done",
 		),
-	).toEqual({ label: "Build api, web", hint: "docker" });
+	).toEqual({ label: "Built api" });
+	expect(
+		toolPresentation(
+			"environment_action",
+			{ action: "wait", acquisition: "acq-1" },
+			"pending",
+		),
+	).toEqual({ label: "Waiting for", hint: "acq-1" });
 	// Diagnostics name their verb and path; SQL keeps its own line and names the
 	// database it runs against.
 	expect(

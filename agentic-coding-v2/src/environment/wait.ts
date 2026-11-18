@@ -35,7 +35,7 @@ export function waitingResult(
 		observedAt: poll.observedAt,
 		currentState: receipt.state,
 		replayed,
-		continuation: "env_wait",
+		continuation: "environment_action wait",
 		authority:
 			"No apps reserved or started by this result. The original exact approved plan may be continued only by its native owner while its live retained queue entry exists. This receipt never restores queue or execution authority after host restart.",
 	};

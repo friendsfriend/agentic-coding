@@ -263,27 +263,24 @@ const FAMILIES: Readonly<Record<string, readonly string[]>> = {
 	environment: [
 		"env_list",
 		"env_status",
-		"env_start",
-		"env_stop",
-		"env_wait",
 		"env_discover",
 		"env_draft_stage",
 		"env_draft_source",
 		"env_cluster_status",
 		"env_cluster_namespace",
+		"environment_action",
 	],
 	logs: ["env_build", "env_test", "env_logs"],
 	http: ["env_http_request"],
 	database: ["db_query"],
 	telemetry: ["otel_query"],
-	evidence: ["attach_evidence", "attach_image"],
+	evidence: ["attach_evidence"],
 	orchestrator: [
 		"catalog",
 		"start_task",
 		"task_result",
 		"cancel_task",
 		"request_review",
-		"environment_action",
 	],
 };
 
@@ -296,22 +293,17 @@ const families = new Map<string, string>(
 const ACTION_LABELS: Readonly<Record<string, string>> = {
 	env_list: "Environment",
 	env_status: "Status",
-	env_start: "Start",
-	env_stop: "Stop",
-	env_wait: "Wait for",
 	env_discover: "Discover",
 	env_draft_stage: "Draft stage",
 	env_draft_source: "Draft source",
 	env_cluster_status: "Cluster status",
 	env_cluster_namespace: "Cluster namespace",
 	attach_evidence: "Attach evidence",
-	attach_image: "Attach image",
 	catalog: "Catalog",
 	start_task: "Start task",
 	task_result: "Task result",
 	cancel_task: "Cancel task",
 	request_review: "Review",
-	environment_action: "Environment action",
 };
 
 const arg = (args: Data, ...keys: string[]): string => {

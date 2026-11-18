@@ -69,9 +69,12 @@ setInterval(async()=>{if(!fs.existsSync(change))return;fs.unlinkSync(change);awa
 		);
 	});
 	subject.fake.setResponses([
-		fauxAssistantMessage(fauxToolCall("env_start", { apps: ["api"] }), {
-			stopReason: "toolUse",
-		}),
+		fauxAssistantMessage(
+			fauxToolCall("environment_action", { action: "run", apps: ["api"] }),
+			{
+				stopReason: "toolUse",
+			},
+		),
 		fauxAssistantMessage(
 			fauxToolCall("request_review", {
 				path: ".",

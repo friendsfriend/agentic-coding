@@ -2,19 +2,21 @@ import {
 	type ConversationId,
 	defineExtension,
 	defineTool,
+	type Extension,
 } from "@earendil-works/pi-durable";
 import {
 	createBashTool,
 	createEditTool,
+	createPowerShellTool,
 	createReadTool,
 	createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import { Type } from "typebox";
 import type { Config } from "./config.ts";
 import { captureAttachment } from "./evidence-capture.ts";
-import { captureReview, contained } from "./git.ts";
+import { captureReview } from "./git.ts";
 import { requestReview } from "./reviews.ts";
-import { Catalog, type TaskInfo } from "./state.ts";
+import type { TaskInfo } from "./state.ts";
 
 export const toolResult = (value: unknown) => ({
 	output: [
@@ -25,6 +27,27 @@ export const toolResult = (value: unknown) => ({
 	],
 });
 export type OwnerLookup = (id: ConversationId) => Promise<TaskInfo>;
+
+/** The runtime's own file and shell tools, offered as they are. A task works in
+ * its own isolated workspace and an orchestrator in its own checkout, so neither
+ * needs a wrapped copy: no containment rewrite, no approval inserted in front of
+ * a command, no rewritten replay rule. `bash` keeps the runtime default, which
+ * never re-runs an interrupted command.
+ *
+ * `powershell` is the same tool on a Windows host, where the shell is PowerShell;
+ * elsewhere it would be a tool that can only fail, so it is not offered. */
+export function createCodingTools(): Extension {
+	return defineExtension({
+		name: "v2.coding",
+		tools: [
+			createReadTool(),
+			createWriteTool(),
+			createEditTool(),
+			createBashTool(),
+			...(process.platform === "win32" ? [createPowerShellTool()] : []),
+		],
+	});
+}
 
 export function createAgentTools(config: Config, ownerOf: OwnerLookup) {
 	return defineExtension({
@@ -55,31 +78,9 @@ export function createAgentTools(config: Config, ownerOf: OwnerLookup) {
 				},
 			}),
 			defineTool({
-				name: "attach_image",
-				description:
-					"Store a PNG, JPEG, WebP or GIF from this task's workspace and return an inline Markdown image reference.",
-				parameters: Type.Object({
-					path: Type.String(),
-					caption: Type.String(),
-				}),
-				replay: "safe",
-				execute: async (args, api, context) => {
-					const owner = await ownerOf(api.conversationId);
-					return toolResult(
-						await captureAttachment(
-							config,
-							owner,
-							{ ...args, kind: "image" },
-							api,
-							context,
-						),
-					);
-				},
-			}),
-			defineTool({
 				name: "attach_evidence",
 				description:
-					"Retain an image, UTF-8 log/script/report/JSON, ZIP trace or WebM/MP4 from this task workspace (10 MB maximum). Files are never executed, extracted or independently certified as evidence.",
+					"Retain one file from this task's workspace as task-owned evidence: a PNG, JPEG, WebP or GIF image, a UTF-8 log, script, report or JSON, a ZIP trace or a WebM/MP4 video (10 MB maximum). Answers with a durable markdown reference — `![caption](/attachments/<sha256>)` for an image, a link otherwise — which the transcript renders and an authenticated client serves; naming that reference in the final answer is how a task hands the file to its orchestrator and the developer. Bytes are copied out of the workspace, so the file outlives the task; they are never executed, extracted or independently certified.",
 				parameters: Type.Object({
 					path: Type.String(),
 					caption: Type.String(),
@@ -100,136 +101,6 @@ export function createAgentTools(config: Config, ownerOf: OwnerLookup) {
 							context,
 						),
 					),
-			}),
-		],
-	});
-}
-
-/** File tools enforce the task path boundary; an arbitrary shell is never implicitly authorized. */
-export function createTaskCodingTools(ownerOf: OwnerLookup) {
-	const read = createReadTool();
-	const write = createWriteTool();
-	const edit = createEditTool();
-	const bash = createBashTool();
-	return defineExtension({
-		name: "v2.coding",
-		tools: [
-			defineTool({
-				...read,
-				execute: async (args, api, context) => {
-					contained((await ownerOf(api.conversationId)).workspace, args.path);
-					return read.execute(args, api, context);
-				},
-			}),
-			defineTool({
-				...write,
-				execute: async (args, api, context) => {
-					const owner = await ownerOf(api.conversationId);
-					if (owner.policy !== "workspace-write")
-						throw new Error("Task policy forbids writes");
-					contained(owner.workspace, args.path);
-					return write.execute(args, api, context);
-				},
-			}),
-			defineTool({
-				...edit,
-				execute: async (args, api, context) => {
-					const owner = await ownerOf(api.conversationId);
-					if (owner.policy !== "workspace-write")
-						throw new Error("Task policy forbids writes");
-					contained(owner.workspace, args.path);
-					return edit.execute(args, api, context);
-				},
-			}),
-			defineTool({
-				...bash,
-				replay: "safe" as const,
-				description: `${bash.description} Every exact command requires human approval. A started command is never rerun automatically after interruption.`,
-				execute: async (args, api, context) => {
-					const owner = await ownerOf(api.conversationId);
-					if (owner.policy !== "workspace-write")
-						throw new Error("Task policy forbids shell execution");
-					const snapshot = `Unsandboxed local shell command (may access the host and network).\nApprove only if its effects are authorized.\n\nWorking directory: ${owner.workspace}\nTimeout: ${args.timeout ?? "default"}\n\n${args.command}`;
-					const decision = await requestReview(
-						owner,
-						{
-							path: "[shell command]",
-							title: "Authorize exact shell command",
-							snapshot,
-						},
-						api,
-						context,
-					);
-					if (decision.state !== "approved")
-						throw new Error(
-							`Shell command not authorized: ${decision.state}. ${decision.comments}`,
-						);
-					await api.commit(async (tx) => {
-						const doc = await tx.doc(Catalog);
-						const id = String(api.taskId);
-						if (doc.shellStarts[id])
-							throw new Error(
-								"Command execution was already started; its outcome may be unknown. Inspect effects before issuing a new command.",
-							);
-						doc.shellStarts[id] = decision.digest;
-					}, context);
-					return bash.execute(args, api, context);
-				},
-			}),
-		],
-	});
-}
-
-/** The checkout one orchestrator conversation works in. The root uses the default
- * repository; a created orchestrator uses the path it was opened with. */
-export type WorkspaceOf = (id: ConversationId) => Promise<string>;
-
-/** An orchestrator is a direct conversation with the developer, not an autonomous
- * task: it works in that developer's own checkout, so it needs no shell approval
- * for a command the developer just asked for. Its file tools stay inside that
- * checkout, and a command is never rerun automatically after an interruption —
- * the model must observe the outcome first. Delegation to an isolated worktree is
- * `start_task`, not these tools. */
-export function createOrchestratorCodingTools(workspaceOf: WorkspaceOf) {
-	const read = createReadTool();
-	const write = createWriteTool();
-	const edit = createEditTool();
-	const bash = createBashTool({
-		prepare: async (execution, api) => {
-			contained(await workspaceOf(api.conversationId), execution.cwd);
-		},
-	});
-	return defineExtension({
-		name: "v2.orchestrator-coding",
-		tools: [
-			defineTool({
-				...read,
-				execute: async (args, api, context) => {
-					contained(await workspaceOf(api.conversationId), args.path);
-					return read.execute(args, api, context);
-				},
-			}),
-			defineTool({
-				...write,
-				execute: async (args, api, context) => {
-					contained(await workspaceOf(api.conversationId), args.path);
-					return write.execute(args, api, context);
-				},
-			}),
-			defineTool({
-				...edit,
-				execute: async (args, api, context) => {
-					contained(await workspaceOf(api.conversationId), args.path);
-					return edit.execute(args, api, context);
-				},
-			}),
-			defineTool({
-				...bash,
-				// A restarted conversation must observe the outcome, never re-run a
-				// command that may already have had effects.
-				replay: "unsafe" as const,
-				description: `${bash.description} It runs in the developer's own checkout with host and network access. Do not start, deploy, push or clean up anything the developer did not ask for, and read the result before deciding the next step.`,
-				execute: async (args, api, context) => bash.execute(args, api, context),
 			}),
 		],
 	});

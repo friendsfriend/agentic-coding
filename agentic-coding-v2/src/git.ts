@@ -179,7 +179,7 @@ export async function captureReview(
 		const bytes = fs.readFileSync(file);
 		if (bytes.includes(0))
 			throw new Error(
-				"Untracked binary review is not supported; use attach_image for screenshots",
+				"Untracked binary review is not supported; use attach_evidence with an image kind for screenshots",
 			);
 		snapshot += `\n--- /dev/null\n+++ ${name}\n${bytes
 			.toString("utf8")

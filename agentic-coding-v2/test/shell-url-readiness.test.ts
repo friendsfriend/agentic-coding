@@ -59,7 +59,7 @@ for (const occupied of [false, true])
 				"Disposable owned readiness fixture",
 			]);
 			fake.setResponses([
-				call("env_start", { apps: ["web"] }),
+				call("environment_action", { action: "run", apps: ["web"] }),
 				call("request_review", { path: ".", title: "Readiness result" }),
 			]);
 			const task = await app.startTask(invocation);

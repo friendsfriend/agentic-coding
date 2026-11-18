@@ -53,10 +53,10 @@ test("native since uses host receipt times rather than spoofable app dates and s
 		failure = "";
 	const observations: unknown[] = [];
 	fake.setResponses([
-		call("env_start", { apps: ["api"] }),
+		call("environment_action", { action: "run", apps: ["api"] }),
 		call("request_review", { path: ".", title: "Read recent logs" }),
 		() => call("env_logs", { app: "api", since, grep: "[x]", tail: 2 }),
-		call("env_stop", { apps: ["api"] }),
+		call("environment_action", { action: "stop", apps: ["api"] }),
 		() => call("env_logs", { app: "api", since, grep: "[x]", tail: 2 }),
 		call("env_logs", { app: "api", since: "9999-12-31T23:59:59Z" }),
 		call("env_logs", { app: "api", since: "yesterday" }),

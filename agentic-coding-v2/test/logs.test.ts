@@ -55,7 +55,7 @@ test("native log reads filter redacted lines literally, tail matching lines, pre
 	const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) =>
 		fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 	fake.setResponses([
-		call("env_build", { app: "api" }),
+		call("environment_action", { action: "build", app: "api" }),
 		fauxAssistantMessage("Done"),
 	]);
 	const foreign = await app.startTask(invocation);
@@ -73,7 +73,7 @@ test("native log reads filter redacted lines literally, tail matching lines, pre
 		}>;
 	}> = [];
 	fake.setResponses([
-		call("env_start", { apps: ["api"] }),
+		call("environment_action", { action: "run", apps: ["api"] }),
 		() => call("env_logs", { app: "api", grep: "[x]", tail: 2 }),
 		() => call("env_logs", { app: "api", grep: "large", tail: 1 }),
 		() =>

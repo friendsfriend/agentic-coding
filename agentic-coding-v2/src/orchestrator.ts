@@ -87,48 +87,6 @@ export function createOrchestrator(
 					),
 			}),
 			defineTool({
-				name: "environment_action",
-				description:
-					"Prepare a direct Run/Build/Test environment action without launching an agent or selecting a model profile. Inspect env_list first. Choose apps, target/environment profile/runtime and optionally Kubernetes replicas and Git base. Choose workspaceMode checkout (default, includes mutable uncommitted files) or worktree (isolated at a captured commit; optional baseRef only here). The native action waits for exact HUMAN review in the environment UI before executing. Admission is not startup success. Use task_result/env_status for progress; cancel_task stops the action and all coupled resources. Saved resources are never adopted or automatically replayed.",
-				parameters: Type.Object({
-					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
-					action: Type.Union([
-						Type.Literal("run"),
-						Type.Literal("build"),
-						Type.Literal("test"),
-					]),
-					target: Type.Optional(Type.String()),
-					profile: Type.Optional(Type.String()),
-					runtime: Type.Optional(
-						Type.Union([
-							Type.Literal("shell"),
-							Type.Literal("docker"),
-							Type.Literal("podman"),
-							Type.Literal("compose"),
-							Type.Literal("kubernetes"),
-						]),
-					),
-					replicas: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
-					baseRef: Type.Optional(Type.String()),
-					workspaceMode: Type.Optional(
-						Type.Union([Type.Literal("checkout"), Type.Literal("worktree")]),
-					),
-				}),
-				replay: "safe",
-				execute: async (args, api) =>
-					toolResult({
-						taskId: await app.startEnvironmentAction(
-							{
-								...args,
-								requestId: `orchestrator-environment-${api.taskId}`,
-							},
-							false,
-							Number(api.conversationId),
-						),
-						state: "admitted; awaiting preparation and exact human review",
-					}),
-			}),
-			defineTool({
 				name: "task_result",
 				description:
 					"Read the exact native status/result for a task. This is an explicit read, not a wait: it answers immediately with the current state and never blocks until completion — a still-running task notifies you on its own when it finishes.",

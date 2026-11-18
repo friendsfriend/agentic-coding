@@ -45,7 +45,6 @@ const icons: Record<string, string> = {
 	task_result: "◇",
 	cancel_task: "⊘",
 	request_review: "✓",
-	attach_image: "▣",
 	attach_evidence: "▣",
 };
 
@@ -110,6 +109,16 @@ const target = (args: Data) => {
 	return "";
 };
 
+/** The action `environment_action` was asked for, spelled for a call that has and
+ * has not returned. */
+const actionVerbs: Record<string, { pending: string; done: string }> = {
+	run: { pending: "Starting", done: "Started" },
+	build: { pending: "Building", done: "Built" },
+	test: { pending: "Testing", done: "Tested" },
+	stop: { pending: "Stopping", done: "Stopped" },
+	wait: { pending: "Waiting for", done: "Waited for" },
+};
+
 /** The verb a family reports, spelled for a call that has and has not returned:
  * an unreturned call is never named as a completed one. */
 const verbs: Record<string, { pending: string; done: string }> = {
@@ -117,9 +126,6 @@ const verbs: Record<string, { pending: string; done: string }> = {
 	environment_action: { pending: "Preparing", done: "Prepared" },
 	cancel_task: { pending: "Cancelling", done: "Cancelled" },
 	request_review: { pending: "Review", done: "Reviewed" },
-	env_start: { pending: "Starting", done: "Started" },
-	env_stop: { pending: "Stopping", done: "Stopped" },
-	env_wait: { pending: "Waiting for", done: "Waited for" },
 	env_cluster_status: { pending: "Cluster", done: "Cluster" },
 };
 
@@ -161,7 +167,7 @@ export function toolPresentation(
 	if (owned.has(name)) return null;
 	if (name === "env_http_request") return httpLabel(args);
 	if (name === "db_query") return sqlLabel(args);
-	if (name === "attach_image" || name === "attach_evidence") {
+	if (name === "attach_evidence") {
 		// The file is the target and the caption describes it; the kind of evidence
 		// is the call's own name, which the icon and the row already carry.
 		const verb = phase === "done" ? "Attached" : "Attach";
@@ -187,19 +193,23 @@ export function toolPresentation(
 		};
 	}
 	if (name === "environment_action") {
-		const verb = verbs.environment_action?.[phase] ?? "Prepare";
-		const action = capitalise(text(args.action));
-		const apps = target({ apps: args.apps });
-		const shape = [text(args.runtime), text(args.target), text(args.profile)]
+		// One tool, five actions: the row names the action that was asked for and
+		// the apps it names, and it never reads as started before it returned.
+		const action = text(args.action) || "run";
+		const verb =
+			actionVerbs[action]?.[phase] ?? capitalise(text(args.action) || "Action");
+		const apps =
+			target({ apps: args.apps }) || (text(args.app) ? text(args.app) : "");
+		const shape = [
+			text(args.runtime),
+			text(args.target),
+			text(args.profile),
+			text(args.acquisition),
+		]
 			.filter((part) => part)
 			.join(" · ");
 		return {
-			label: oneLine(
-				action
-					? `${action}${apps ? ` ${apps}` : ""}`
-					: `${verb} environment action`,
-				100,
-			),
+			label: oneLine(`${verb}${apps ? ` ${apps}` : ""}`, 100),
 			hint: shape || undefined,
 		};
 	}

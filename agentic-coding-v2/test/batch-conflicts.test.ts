@@ -42,10 +42,13 @@ test("two apps binding the same loopback endpoint port fail before approval, res
 	});
 	let failure = "";
 	fake.setResponses([
-		call("env_start", { apps: ["first", "second"] }),
+		call("environment_action", { action: "run", apps: ["first", "second"] }),
 		(messages) => {
 			for (const message of messages.messages) {
-				if (message.role !== "toolResult" || message.toolName !== "env_start")
+				if (
+					message.role !== "toolResult" ||
+					message.toolName !== "environment_action"
+				)
 					continue;
 				for (const part of message.content)
 					if (part.type === "text") failure += part.text;
@@ -101,10 +104,13 @@ test("two infrastructure targets listening on one query port fail before approva
 	});
 	let failure = "";
 	fake.setResponses([
-		call("env_start", { apps: ["store-a", "store-b"] }),
+		call("environment_action", { action: "run", apps: ["store-a", "store-b"] }),
 		(messages) => {
 			for (const message of messages.messages) {
-				if (message.role !== "toolResult" || message.toolName !== "env_start")
+				if (
+					message.role !== "toolResult" ||
+					message.toolName !== "environment_action"
+				)
 					continue;
 				for (const part of message.content)
 					if (part.type === "text") failure += part.text;
@@ -151,7 +157,7 @@ test("one app aliasing one URL under two endpoint names is admitted and starts",
 		);
 	});
 	fake.setResponses([
-		call("env_start", { apps: ["only"] }),
+		call("environment_action", { action: "run", apps: ["only"] }),
 		call("request_review", { path: ".", title: "Hold aliased endpoint" }),
 	]);
 	const task = await app.startTask(invocation);

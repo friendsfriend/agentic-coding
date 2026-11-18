@@ -14,6 +14,7 @@ import { definitionByteLimit } from "./definition-limits.ts";
 import { createHttpTools } from "./http-tools.ts";
 import { type Lifetime, validateLifetime } from "./lifetime.ts";
 import type { Environments } from "./manager.ts";
+import type { OperatorAction } from "./operator.ts";
 import { createQueryTools } from "./query-tools.ts";
 import type { Action, Selection } from "./selection.ts";
 import { environmentResult } from "./tool-result.ts";
@@ -24,10 +25,20 @@ export const environmentInspectionTools = new Set([
 	"env_status",
 	"env_logs",
 	"otel_query",
+	// An orchestrator owns no environment, so the one action tool it gets only
+	// admits a reviewed native action task.
+	"environment_action",
 ]);
+/** Admits a Run/Build/Test action as a new native task, for a conversation that
+ * owns no environment of its own. */
+export type AdmitEnvironmentAction = (
+	request: OperatorAction,
+	conversationId: ConversationId,
+) => Promise<number>;
 export function createEnvironmentTools(
 	manager: Environments,
 	ownerOf: (id: ConversationId) => Promise<TaskInfo | null>,
+	admit?: AdmitEnvironmentAction,
 ) {
 	async function execute(
 		action: Action,
@@ -473,11 +484,25 @@ export function createEnvironmentTools(
 				},
 			}),
 			defineTool({
-				name: "env_start",
+				name: "environment_action",
 				description:
-					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Legacy same-repository requires expand infrastructure defaults. Explicit configured prerequisites pin run-target IDs on app or infrastructure projects in authorized repositories. Foreign prerequisites use displayed exact commits in new private owner-bound detached worktrees created only after approval/reservation; existing paths and saved descriptions are never adopted. All graphs remain bounded to 16 projects and start dependency-first. App prerequisite chains require coupled lifetime; reference/shared lifetimes still attach infrastructure generations only. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Explicit lifetime:independent-roots-v1 instead requests independent scoped activity/idle/stop for agent-owned standalone app roots only, after atomic startup. Explicit lifetime:referenced-roots-v1 instead keeps one atomic acquisition but releases app roots independently: declared infrastructure prerequisites are retained by the remaining roots and cleaned only with the last reference, dependent-first. Roots and prerequisites may be shell processes, owned Docker/Podman containers or Compose stacks; both modes refuse Kubernetes resources and foreign/shared external infrastructure and require agent ownership. Explicit lifetime:shared-prerequisites-v1 additionally admits a later disjoint acquisition by this task while an earlier one is still live, attaching it to the already-live prerequisite generation instead of starting a second copy: app roots must differ, the reused generation must still be the original live ready unretained handle, and cleanup releases a prerequisite only with its last reference across all of this task's acquisitions. No second held run acquisition or expired sibling reacquisition while another root remains held, except that shared attach. Legacy defaults and operator actions are unchanged. Root apps must belong to this task's repository/workspace; merely configuring another repository never authorizes selecting it as a root. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Opt-in shell telemetry additionally discloses a per-run authenticated ephemeral loopback JSON receiver and exporter variables. Explicit Compose collector-v1 telemetry instead discloses a per-run pinned HTTPS host-gateway listener, private bearer, generated exporter configuration and public CA mount for only the named unexposed collector. Source overrides, implicit external receivers and copied-label replacement are refused. Buffers/receivers close with their original owned process/stack; uncertain closure or replaced CA files quarantine the slot. Neither form grants saved authority. Explicit infrastructure-only Compose networkOnly creates a native topology bridge without any keeper container or fabricated application readiness; empty services must be explicitly opted in. It grants no cross-owner/global-host scope. Explicit configured Compose networkFrom binds only an original ready same-owner infrastructure prerequisite bridge with an exact declared app/target pin, matching provider/socket and collision-free native alias claims. It grants no cross-owner/global-host sharing or saved network-ID authority. Compose supports a limited file subset: Docker and Podman shared modes each use an owned bridge with service-name aliases, fenced by live creation identity (Podman returns the claimed name and the ID is read back through one label-verified inspect); explicitly isolated mode has no shared network/DNS. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout normally releases queue position. Explicit retainQueue:true adds a disclosed retained wait receipt for env_wait continuation of only this approved plan, with no apps reserved/started between calls. Stops, task cleanup and host shutdown/restart invalidate the live entry; saved queue records never restore authority.",
+					"Run, build, test, wait for or stop configured environment targets. A native skill task acts on its own apps and infrastructure under exact human approval of the immutable plan; an orchestrator instead admits a Run/Build/Test action as a new native task that the developer reviews in the environment UI. Name the apps (one app for build/test), optionally a target ID, environment profile, runtime, Kubernetes replicas, and — on admission only — a Git base and checkout/worktree mode. `run` acquires the whole batch atomically and waits inside the tool; `wait` continues only the acquisition a `run` was explicitly approved to retain; `stop` stops only apps this task started, dependents before dependencies. Admission is not startup success and a saved receipt is never adopted: inspect env_status or task_result.",
 				parameters: Type.Object({
-					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
+					action: Type.Union([
+						Type.Literal("run"),
+						Type.Literal("build"),
+						Type.Literal("test"),
+						Type.Literal("wait"),
+						Type.Literal("stop"),
+					]),
+					apps: Type.Optional(
+						Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
+					),
+					app: Type.Optional(Type.String({ maxLength: 64 })),
+					acquisition: Type.Optional(
+						Type.String({ minLength: 1, maxLength: 128 }),
+					),
+					retainQueue: Type.Optional(Type.Boolean()),
 					recoverAcquisition: Type.Optional(
 						Type.String({
 							minLength: 1,
@@ -486,13 +511,22 @@ export function createEnvironmentTools(
 								"Original interrupted retained wait owned by this task. Requires fresh current-plan approval and a new queue entry; does not restore FIFO position.",
 						}),
 					),
-					retainQueue: Type.Optional(Type.Boolean()),
 					lifetime: Type.Optional(
 						Type.Union([
 							Type.Literal("independent-roots-v1"),
 							Type.Literal("referenced-roots-v1"),
 							Type.Literal("shared-prerequisites-v1"),
 						]),
+					),
+					baseRef: Type.Optional(
+						Type.String({
+							maxLength: 200,
+							description:
+								"Admission only: a local commit or ref, pinned when the action is admitted.",
+						}),
+					),
+					workspaceMode: Type.Optional(
+						Type.Union([Type.Literal("checkout"), Type.Literal("worktree")]),
 					),
 					...selectionFields,
 					timeoutSec: Type.Optional(
@@ -501,76 +535,86 @@ export function createEnvironmentTools(
 				}),
 				replay: "safe",
 				executionMode: "sequential",
-				execute: async (args, api, context) =>
-					execute(
-						"run",
-						args.apps,
-						args,
-						args.timeoutSec ?? 30,
-						api,
-						context,
-						args.retainQueue === true,
-						args.lifetime,
-						args.recoverAcquisition,
-					),
-			}),
-			defineTool({
-				name: "env_wait",
-				description:
-					"Continue only this native task's live retained acquisition from an explicitly retainQueue-approved env_start. No app/target/runtime changes or new execution authority: use the original acquisition ID. FIFO place survives bounded calls, not host restart. A completed poll replay returns diagnostics, never re-enqueues or adopts saved resources. Cancelling/stopping/completing the task releases its retained position.",
-				parameters: Type.Object({
-					acquisition: Type.String({ minLength: 1, maxLength: 128 }),
-					timeoutSec: Type.Optional(
-						Type.Integer({ minimum: 1, maximum: 7200 }),
-					),
-				}),
-				replay: "safe",
-				executionMode: "sequential",
 				execute: async (args, api, context) => {
-					const owner = await ownerOf(api.conversationId);
-					if (!owner)
-						throw new Error(
-							"Queue continuation requires the original native skill task",
+					const action = args.action,
+						apps = args.apps ?? (args.app === undefined ? [] : [args.app]),
+						selection: Selection = {
+							target: args.target,
+							profile: args.profile,
+							runtime: args.runtime,
+							replicas: args.replicas,
+						},
+						owner = await ownerOf(api.conversationId);
+					// An orchestrator owns no environment: it admits a native action task
+					// that the developer reviews, and it can only ask for work to start.
+					if (!owner) {
+						if (action !== "run" && action !== "build" && action !== "test")
+							throw new Error(
+								`environment_action ${action} requires the native skill task that owns the apps`,
+							);
+						if (apps.length === 0)
+							throw new Error(`environment_action ${action} needs apps`);
+						if (!admit)
+							throw new Error(
+								"Environment actions require a native skill task",
+							);
+						return environmentResult({
+							taskId: await admit(
+								{
+									...selection,
+									apps,
+									action,
+									requestId: `orchestrator-environment-${api.taskId}`,
+									...(args.baseRef === undefined
+										? {}
+										: { baseRef: args.baseRef }),
+									...(args.workspaceMode === undefined
+										? {}
+										: { workspaceMode: args.workspaceMode }),
+								},
+								api.conversationId,
+							),
+							state: "admitted; awaiting preparation and exact human review",
+						});
+					}
+					if (action === "run") {
+						if (apps.length === 0)
+							throw new Error("environment_action run needs apps");
+						return execute(
+							"run",
+							apps,
+							selection,
+							args.timeoutSec ?? 30,
+							api,
+							context,
+							args.retainQueue === true,
+							args.lifetime,
+							args.recoverAcquisition,
 						);
-					return environmentResult(
-						await manager.acquisitions.continueWait(
-							`env-wait-${api.taskId}`,
-							owner,
-							args.acquisition,
-							(args.timeoutSec ?? 30) * 1000,
-							context.abortSignal,
-						),
-					);
-				},
-			}),
-			...(["build", "test"] as const).map((action) =>
-				defineTool({
-					name: `env_${action}`,
-					description: `Request human approval and execute one configured ${action} target in this task's workspace, returning exit status and redacted output. Requires no app slot; one build/test action at a time per workspace. Action timeouts are configured per target.`,
-					parameters: Type.Object({ app: Type.String(), ...selectionFields }),
-					replay: "safe",
-					executionMode: "sequential",
-					execute: async (args, api, context) =>
-						execute(action, [args.app], args, 30, api, context),
-				}),
-			),
-			defineTool({
-				name: "env_stop",
-				description:
-					"Stop only apps started by this task, with confirmed live process-group or receipt-fenced runtime cleanup before release. Kubernetes deletion requires live creation UIDs and API UID preconditions. Never stops another task's apps or adopts persisted PIDs/IDs. Also cancels matching pending acquisitions. For a coupled dependency batch, selecting any member stops every member, dependents before dependencies, as disclosed by its immutable startup approval.",
-				parameters: Type.Object({
-					apps: Type.Optional(
-						Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
-					),
-				}),
-				replay: "safe",
-				executionMode: "sequential",
-				execute: async (args, api) => {
-					const owner = await ownerOf(api.conversationId);
-					if (!owner)
-						throw new Error(
-							"Stopping environments requires their owning skill task",
+					}
+					if (action === "build" || action === "test") {
+						const app = args.app ?? apps[0];
+						if (app === undefined || apps.length > 1)
+							throw new Error(
+								`environment_action ${action} takes exactly one app`,
+							);
+						return execute(action, [app], selection, 30, api, context);
+					}
+					if (action === "wait") {
+						if (args.acquisition === undefined)
+							throw new Error(
+								"environment_action wait needs the acquisition a run retained",
+							);
+						return environmentResult(
+							await manager.acquisitions.continueWait(
+								`env-wait-${api.taskId}`,
+								owner,
+								args.acquisition,
+								(args.timeoutSec ?? 30) * 1000,
+								context.abortSignal,
+							),
 						);
+					}
 					manager.idle.touch(owner.id);
 					return environmentResult({
 						stopped: await manager.stopOnce(

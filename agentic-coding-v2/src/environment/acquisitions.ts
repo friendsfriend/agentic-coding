@@ -274,7 +274,7 @@ export class Acquisitions {
 				)
 			)
 				throw new Error(
-					"Continue the existing retained acquisition with env_wait, or cancel it before acquiring another batch",
+					'Continue the existing retained acquisition with environment_action (action: "wait"), or cancel it before acquiring another batch',
 				);
 			const receipt = await this.authority.store().commit(async (tx) => {
 				const task = await tx.task(owner.id as TaskId),

@@ -150,7 +150,7 @@ Secrets use explicit `.env` key allowlists. DevEnv validates keys before Helm in
 
 ## Replica count
 
-An agent start can ask for several replicas (`env_start` with
+An agent start can ask for several replicas (`environment_action` with
 `runtime: "kubernetes"` and `replicas`), which the run applies as a Helm value:
 `replicasValuePath` names that value and defaults to `replicaCount`.
 

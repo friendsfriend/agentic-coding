@@ -46,7 +46,7 @@ export function environmentApproval(
 				? {
 						retainQueue: true,
 						queueScope:
-							"A bounded acquisition timeout retains this exact plan's FIFO place without reserving or starting apps between calls. Only this native owner may explicitly continue it through env_wait; changing apps/selection requires cancelling it and fresh approval. Matching env_stop, task completion/cancellation and host shutdown/restart invalidate the live queue entry. Saved queue and poll receipts are diagnostic only and never restore execution authority. Continuation wait durations may be 1..7200 seconds per call; they do not extend the native task lifetime.",
+							"A bounded acquisition timeout retains this exact plan's FIFO place without reserving or starting apps between calls. Only this native owner may explicitly continue it through environment_action with action wait; changing apps/selection requires cancelling it and fresh approval. A matching environment_action stop, task completion/cancellation and host shutdown/restart invalidate the live queue entry. Saved queue and poll receipts are diagnostic only and never restore execution authority. Continuation wait durations may be 1..7200 seconds per call; they do not extend the native task lifetime.",
 					}
 				: {}),
 			...(plans.some((plan) => plan.telemetry)

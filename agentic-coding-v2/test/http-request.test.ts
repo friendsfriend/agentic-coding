@@ -88,7 +88,7 @@ test("approved HTTPS writes preserve bounded same-origin redirect semantics and 
 			fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
 		let transcript = "";
 		fake.setResponses([
-			call("env_start", { apps: ["api"] }),
+			call("environment_action", { action: "run", apps: ["api"] }),
 			call("env_http_request", {
 				app: "api",
 				endpoint: "bearer",

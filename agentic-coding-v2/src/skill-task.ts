@@ -49,6 +49,9 @@ export function createSkillTask(
 						thinkingLevel: task.input.profile.thinking,
 						cwd: workspace,
 						extensions: [coding, agentTools, environmentTools],
+						// A read-only task is offered no way to change the workspace: the
+						// writing tools are simply not in its enabled set, so the model is
+						// never told about them.
 						tools: [
 							...(coding.tools ?? []).filter(
 								(tool) =>

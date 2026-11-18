@@ -54,7 +54,7 @@ test("explicit owned infrastructure shares atomic approval and cleanup with apps
 		runs: Array<{ projectKind: string; output: string }>;
 	}> = [];
 	fake.setResponses([
-		call("env_start", { apps: ["store", "api"] }),
+		call("environment_action", { action: "run", apps: ["store", "api"] }),
 		call("env_logs", { infra: "store", grep: "db-owned" }),
 		call("env_logs", { infra: "api" }),
 		(messages) => {

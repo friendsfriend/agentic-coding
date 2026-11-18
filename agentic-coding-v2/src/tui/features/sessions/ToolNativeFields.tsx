@@ -36,10 +36,6 @@ const known: Record<
 			"createdAt",
 		]),
 	],
-	attach_image: (args, result) => [
-		...pick(args, ["path", "caption"]),
-		...pick(result, ["id", "mediaType", "filename"]),
-	],
 	attach_evidence: (args, result) => [
 		...pick(args, ["kind", "path", "caption"]),
 		...pick(result, ["id", "mediaType", "filename"]),
@@ -57,20 +53,20 @@ const known: Record<
 		...pick(result, ["id", "state", "cancelled", "reason"]),
 	],
 	environment_action: (args, result) => [
-		...pick(args, ["apps", "action", "target", "profile", "runtime"]),
-		...pick(result, ["taskId", "state"]),
-	],
-	env_start: (args, result) => [
-		...pick(args, ["apps", "app", "target", "profile", "runtime"]),
-		...pick(result, ["state", "status", "apps", "endpoints"]),
+		...pick(args, [
+			"action",
+			"apps",
+			"app",
+			"target",
+			"profile",
+			"runtime",
+			"acquisition",
+		]),
+		...pick(result, ["taskId", "state", "status", "stopped", "endpoints"]),
 	],
 	env_status: (args, result) => [
 		...pick(args, ["app"]),
 		...pick(result, ["state", "status", "holder", "waiting", "run"]),
-	],
-	env_stop: (args, result) => [
-		...pick(args, ["app"]),
-		...pick(result, ["stopped", "state"]),
 	],
 };
 

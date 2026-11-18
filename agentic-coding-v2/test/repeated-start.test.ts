@@ -47,16 +47,19 @@ test("repeated identical approved starts return a durable same-holder receipt wi
 		}>
 	> = [];
 	fake.setResponses([
-		call("env_start", { apps: ["api"] }),
-		call("env_start", { apps: ["api"] }),
+		call("environment_action", { action: "run", apps: ["api"] }),
+		call("environment_action", { action: "run", apps: ["api"] }),
 		(messages) => {
 			for (const message of messages.messages) {
-				if (message.role !== "toolResult" || message.toolName !== "env_start")
+				if (
+					message.role !== "toolResult" ||
+					message.toolName !== "environment_action"
+				)
 					continue;
 				for (const part of message.content)
 					if (part.type === "text") outputs.push(JSON.parse(part.text));
 			}
-			return call("env_stop", { apps: ["api"] });
+			return call("environment_action", { action: "stop", apps: ["api"] });
 		},
 		call("request_review", { path: ".", title: "Hold repeated start" }),
 	]);
@@ -89,11 +92,18 @@ test("an approved changed plan cannot reuse or replace the task's held app", asy
 	const { app, fake, invocation } = await application();
 	let refusal = "";
 	fake.setResponses([
-		call("env_start", { apps: ["api"] }),
-		call("env_start", { apps: ["api"], target: "other" }),
+		call("environment_action", { action: "run", apps: ["api"] }),
+		call("environment_action", {
+			action: "run",
+			apps: ["api"],
+			target: "other",
+		}),
 		(messages) => {
 			for (const message of messages.messages) {
-				if (message.role !== "toolResult" || message.toolName !== "env_start")
+				if (
+					message.role !== "toolResult" ||
+					message.toolName !== "environment_action"
+				)
 					continue;
 				for (const part of message.content)
 					if (part.type === "text") refusal += part.text;

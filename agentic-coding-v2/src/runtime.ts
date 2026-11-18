@@ -14,11 +14,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { TaskAdmission } from "./admission.ts";
-import {
-	createAgentTools,
-	createOrchestratorCodingTools,
-	createTaskCodingTools,
-} from "./agent-tools.ts";
+import { createAgentTools, createCodingTools } from "./agent-tools.ts";
 import { type Config, text } from "./config.ts";
 import { AppRegistry } from "./environment/app-registry.ts";
 import { ClusterOperator } from "./environment/cluster-operator.ts";
@@ -178,18 +174,16 @@ export class Runtime {
 	): Promise<Runtime> {
 		const app = new Runtime(config, models);
 		const registry = createRegistry();
-		const coding = createTaskCodingTools((id) => app.ownerOf(id));
+		const coding = createCodingTools();
 		const agentTools = createAgentTools(config, (id) => app.ownerOf(id));
 		// Every orchestrator conversation — the root and each created sibling —
 		// inspects environments without owning a task; only a task's own
 		// conversation resolves to an owner.
-		const environmentTools = createEnvironmentTools(app.environments, (id) =>
-			app.taskOwnerOrNull(id),
-		);
-		// The orchestrator decides per request whether to act in this checkout with
-		// its own file and shell tools or to delegate the work to a skill task.
-		const orchestratorCoding = createOrchestratorCodingTools((id) =>
-			app.orchestratorWorkspace(id),
+		const environmentTools = createEnvironmentTools(
+			app.environments,
+			(id) => app.taskOwnerOrNull(id),
+			(request, conversationId) =>
+				app.startEnvironmentAction(request, false, conversationId),
 		);
 		const skillTask = createSkillTask(
 			config,
@@ -202,7 +196,6 @@ export class Runtime {
 		registry.install(coding);
 		registry.install(agentTools);
 		registry.install(environmentTools);
-		registry.install(orchestratorCoding);
 		registry.install(orchestrator);
 		registry.install(app.operatorEnvironments.extension);
 		app.engine = await Harness.open(
@@ -221,13 +214,13 @@ export class Runtime {
 			// One orchestrator agent, shared by the root and every created
 			// orchestrator: they differ only in the directory they work in.
 			app.orchestrator = {
-				extensions: [orchestrator, environmentTools, orchestratorCoding],
+				extensions: [orchestrator, environmentTools, coding],
 				tools: [
 					...(orchestrator.tools ?? []),
 					...(environmentTools.tools ?? []).filter((tool) =>
 						environmentInspectionTools.has(tool.name),
 					),
-					...(orchestratorCoding.tools ?? []),
+					...(coding.tools ?? []),
 				],
 				instructions: `${orchestratorPrompt}\nYou work directly in the checkout this conversation was opened in and can read, write, edit and run commands there. Inspect env_list before proposing environment operations. Use env_discover with an explicit configured repository for read-only root manifest hints; these are not trusted or validated target definitions and grant no edit, import or execution authority. Use environment_action for direct Run/Build/Test controls without an agent/model profile. Workspace-write skill tasks may also use their own environment tools. Both require exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
 			};
@@ -333,16 +326,6 @@ export class Runtime {
 	}
 	/** The task a tool context belongs to, or `null` for an orchestrator
 	 * conversation. Ownership, not an identity list, decides this. */
-	/** The checkout one orchestrator conversation works in: its own recorded path,
-	 * or the default repository for the root and any orchestrator without one. */
-	async orchestratorWorkspace(id: ConversationId): Promise<string> {
-		const entries = await this.orchestrators.read();
-		return (
-			entries.find((entry) => entry.id === Number(id))?.path ??
-			this.config.repositories[0] ??
-			process.cwd()
-		);
-	}
 	async taskOwnerOrNull(id: ConversationId): Promise<TaskInfo | null> {
 		const conversation = await this.harness.commit(
 			(tx) => tx.conversation(id),

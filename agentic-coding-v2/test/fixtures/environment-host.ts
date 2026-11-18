@@ -30,7 +30,8 @@ const models = createModels();
 models.setProvider(fake.provider);
 fake.setResponses([
 	fauxAssistantMessage(
-		fauxToolCall("env_start", {
+		fauxToolCall("environment_action", {
+			action: "run",
 			apps: input.apps ?? ["api"],
 			...(input.lifetime ? { lifetime: input.lifetime } : {}),
 			...(input.runtime ? { runtime: input.runtime } : {}),
