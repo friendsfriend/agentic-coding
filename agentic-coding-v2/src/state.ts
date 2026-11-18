@@ -90,7 +90,7 @@ export type Invocation = {
 	repository: string;
 	inputs: string;
 	requestId: string;
-	relatedTo?: number;
+	relatedTo?: number | null;
 };
 export type TaskInput = {
 	baseCommit: string;

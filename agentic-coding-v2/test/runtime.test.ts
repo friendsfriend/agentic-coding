@@ -87,7 +87,11 @@ test("native skill task completes in a separate worktree; admission is idempoten
 			return fauxAssistantMessage("Reviewed the predecessor implementation.");
 		},
 	]);
-	const id = await app.startTask(invocation);
+	// Models may fill optional linkage with 0; first admission and retries must
+	// agree that zero, null and omission all mean no predecessor.
+	const id = await app.startTask({ ...invocation, relatedTo: 0 });
+	expect(await app.startTask({ ...invocation, relatedTo: null })).toBe(id);
+	expect(await app.startTask(invocation)).toBe(id);
 	expect(
 		await app.startTask(
 			Object.fromEntries(

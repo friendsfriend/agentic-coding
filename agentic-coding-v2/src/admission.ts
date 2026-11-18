@@ -72,7 +72,7 @@ export class TaskAdmission {
 			profile,
 			repository,
 			inputs: invocation.inputs,
-			relatedTo: invocation.relatedTo ?? null,
+			relatedTo: invocation.relatedTo || null,
 			occurrence: null,
 			baseCommit: (
 				await git(repository, [
@@ -126,8 +126,8 @@ export class TaskAdmission {
 				)
 					throw new Error("Schedule changed before admission");
 			}
-			if (invocation.relatedTo !== undefined) {
-				const previous = doc.tasks[String(invocation.relatedTo)];
+			if (input.relatedTo !== null) {
+				const previous = doc.tasks[String(input.relatedTo)];
 				if (
 					!previous ||
 					decode<TaskInfo>(previous).topicId !== invocation.topicId
@@ -159,7 +159,7 @@ export class TaskAdmission {
 				profile: input.profile.id,
 				repository: input.repository,
 				workspace: "",
-				relatedTo: invocation.relatedTo ?? null,
+				relatedTo: invocation.relatedTo || null,
 				createdAt: Date.now(),
 				reported: false,
 			};

@@ -72,7 +72,12 @@ const invocationSchema = Type.Object({
 	repository: Type.String(),
 	inputs: Type.String(),
 	requestId: Type.String(),
-	relatedTo: Type.Optional(Type.Integer()),
+	relatedTo: Type.Optional(
+		Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], {
+			description:
+				"Optional predecessor task ID in the same topic. For a first task omit this, use null, or use 0. Never invent an ID.",
+		}),
+	),
 });
 const timingSchema = Type.Union([
 	Type.Object({ kind: Type.Literal("once"), at: Type.Integer() }),

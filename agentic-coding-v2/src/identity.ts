@@ -15,7 +15,8 @@ export function invocationFingerprint(
 			profile: invocation.profile,
 			repository: path.resolve(invocation.repository),
 			inputs: invocation.inputs,
-			relatedTo: invocation.relatedTo ?? null,
+			// Zero is the tool convention for no predecessor, just like omission/null.
+			relatedTo: invocation.relatedTo || null,
 			workspace: invocation.workspace,
 			occurrence,
 			...(invocation.baseRef !== undefined && invocation.baseRef !== "HEAD"
