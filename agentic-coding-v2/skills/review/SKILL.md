@@ -12,8 +12,15 @@ findings; do not claim a check passed if you only read its test code.
 
 Read the claim first, then the code. The claim is whatever your inputs name — an
 OpenSpec change and its spec deltas, a task result, or a requirement in the developer's
-words. The code is `git status`, `git diff HEAD`, and the untracked files the change
-added, plus the tests that are supposed to prove it.
+words. When assigned by a coordinator, review only its explicit changed-file list in
+its supplied feature-branch diff/base, including identified pending edits. You may read
+other files for context, but they do not expand the review scope. If the assignment
+omits the file list/base, or needs another feature-changed file, return a scope request.
+For a standalone review, establish the requested change's base and changed-file list
+first; do not silently substitute `git diff HEAD` for committed feature changes.
+Report only defects introduced by those changes, anchored to an assigned changed
+file/hunk; exclude pre-existing defects, unrelated cleanup and optional improvements.
+Missing tests or requirements must be tied to the reviewed change, not a repository audit.
 
 For each thing the claim demands, answer three questions in this order:
 
