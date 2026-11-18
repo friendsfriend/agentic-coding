@@ -4011,16 +4011,52 @@ export function App(props: {
 	};
 	// A profile may be chosen for any orchestrator, the root included; renaming
 	// and closing apply only to the ones this shell created.
+	const removeSidebarTasks = async (id?: number) => {
+		if (orchestratorPending()) return;
+		setOrchestratorPending(true);
+		try {
+			const result =
+				id === undefined
+					? await client.call("task.clearFinished", {})
+					: await client.call("task.dismiss", { id });
+			client.state = await client.call("state.read", {});
+			update();
+			setRefreshRevision((value) => value + 1);
+			if (!state()?.sessions.some((item) => item.id === sessionId())) {
+				const next = state()?.sessions.find((item) => item.task === null);
+				if (next) go("session", String(next.id));
+				else go("home");
+			}
+			setNotice(
+				`Removed ${result.removed} finished tasks; ${result.keptActive} active tasks kept. Conversations and native history retained.`,
+			);
+		} catch (error) {
+			reportError(
+				error instanceof Error ? error.message : "Task cleanup refused",
+				"Task cleanup",
+			);
+		} finally {
+			setOrchestratorPending(false);
+		}
+	};
 	const openOrchestratorAction = async (
 		value: string,
-		action: "rename" | "close" | "profile",
+		action: "rename" | "close" | "profile" | "clear",
 	) => {
+		if (action === "clear") {
+			await removeSidebarTasks();
+			return;
+		}
 		const id = value.startsWith("session:")
 			? Number(value.slice(8))
 			: Number.NaN;
 		const sessions = state()?.sessions ?? [];
 		const session = sessions.find((item) => item.id === id);
 		const root = sessions.find((item) => item.parent === null)?.id;
+		if (session?.task != null && action === "close") {
+			await removeSidebarTasks(session.task);
+			return;
+		}
 		if (!session || session.parent !== null || session.task !== null) {
 			setNotice("Select an orchestrator row");
 			return;

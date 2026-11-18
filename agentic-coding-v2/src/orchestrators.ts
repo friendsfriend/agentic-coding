@@ -5,6 +5,7 @@ import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
 import { digest, text } from "./config.ts";
 import type { Runtime } from "./runtime.ts";
 import { Catalog, decode, type OrchestratorInfo } from "./state.ts";
+import { cleanupOrchestratorTasks } from "./task-retention.ts";
 import { ensureFeatureWorktree, featureBranch } from "./worktrees.ts";
 
 /** Conversations the developer talks to. The root orchestrator is reserved by
@@ -109,11 +110,17 @@ export class Orchestrators {
 		if (id === Number(this.app.home.id))
 			throw new Error("The root orchestrator cannot be closed");
 		const entry = await this.retained(id);
-		if (entry.retiredAt !== undefined)
-			throw new Error("Orchestrator is already closed");
-		await (await this.conversation(id)).abort(context);
+		if (entry.retiredAt !== undefined) {
+			// Idempotent retry also repairs task leftovers from older closures.
+			await cleanupOrchestratorTasks(this.app, id);
+			return entry;
+		}
+		const conversation = await this.conversation(id);
 		const next = { ...entry, retiredAt: Date.now() };
+		// Fence new root and descendant admissions before asking workers to stop.
 		await this.save(next);
+		await cleanupOrchestratorTasks(this.app, id);
+		await conversation.abort(context);
 		return next;
 	}
 

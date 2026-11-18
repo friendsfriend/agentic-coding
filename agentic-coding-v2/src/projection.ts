@@ -21,7 +21,9 @@ export async function projectState(
 	models: Models,
 ) {
 	const doc = await harness.snapshot(Catalog, context);
-	const infos = values<TaskInfo>(doc?.tasks);
+	const infos = values<TaskInfo>(doc?.tasks).filter(
+		(info) => info.dismissedAt === undefined,
+	);
 	const activities = await taskActivities(
 		harness,
 		infos.map((info) => info.id),

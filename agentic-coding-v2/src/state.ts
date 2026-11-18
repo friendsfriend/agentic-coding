@@ -65,6 +65,8 @@ export type OrchestratorInfo = {
 };
 export type TaskInfo = {
 	id: number;
+	/** Retained natively but removed from operator inventories. */
+	dismissedAt?: number;
 	kind?: "operator-environment";
 	conversationId?: number;
 	/** The conversation that admitted this task: an orchestrator's, or the agent

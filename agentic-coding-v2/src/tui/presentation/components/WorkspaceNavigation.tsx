@@ -106,8 +106,14 @@ export const workspaceNavigationKeybinds: Keybind[] = [
 	{
 		key: "d",
 		cmd: "workspace.close",
-		action: "Close the selected orchestrator session",
-		short: "close",
+		action: "Remove finished task tree or close orchestrator",
+		short: "remove",
+	},
+	{
+		key: "shift+d",
+		cmd: "workspace.clearFinished",
+		action: "Clear finished tasks; keep active tasks and orchestrators",
+		short: "clear finished",
 	},
 	{
 		key: "p",
@@ -141,7 +147,10 @@ export function WorkspaceNavigation(props: {
 	/** Fixed leading UI pins, rendered outside the scrolling resource list. */
 	pinCount?: number;
 	/** A row action on the selected row; omitted when the caller offers none. */
-	onRowAction?: (value: string, action: "rename" | "close" | "profile") => void;
+	onRowAction?: (
+		value: string,
+		action: "rename" | "close" | "profile" | "clear",
+	) => void;
 	/** The selected row, owned by the caller. A row move never navigates. */
 	cursor: string;
 	onCursor: (value: string) => void;
@@ -313,10 +322,18 @@ export function WorkspaceNavigation(props: {
 			},
 			{
 				id: "workspace.close",
-				name: "Close the selected orchestrator session",
+				name: "Remove finished task tree or close orchestrator",
 				run: () => {
 					if (!props.active || !interactive()) return;
 					props.onRowAction?.(cursorValue(), "close");
+				},
+			},
+			{
+				id: "workspace.clearFinished",
+				name: "Clear finished tasks; keep active tasks and orchestrators",
+				run: () => {
+					if (!props.active || !interactive()) return;
+					props.onRowAction?.(cursorValue(), "clear");
 				},
 			},
 			{

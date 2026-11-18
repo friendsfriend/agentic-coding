@@ -9,6 +9,7 @@ import { defaultConfigDir, loadConfig } from "./config.ts";
 import { acquireLock } from "./lock.ts";
 import { Runtime } from "./runtime.ts";
 import { serve } from "./server/index.ts";
+import { dismissTasks } from "./task-retention.ts";
 import type { WindowRoute } from "./tui/index.tsx";
 
 /** The view an attached window opens: a page and, optionally, its resource. */
@@ -39,9 +40,13 @@ async function main() {
 	// Register the runtime's static loaders before any model/auth resolution.
 	registerBunOAuthFlows();
 	const args = process.argv.slice(2);
+	if (args.includes("--clear-finished-tasks") && args.includes("--attach-url"))
+		throw new Error(
+			"Task maintenance requires the stopped host state, not an attached client",
+		);
 	if (args.includes("--help")) {
 		console.log(
-			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui | --headless]\nagentic-coding-v2 --attach-url URL [--route JSON] (client of a running host)\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\nThe OpenTUI/Solid client opens by default on the same authenticated native host.\n--tui explicitly selects the default. --headless starts only the local HTTP host.\n--attach-url opens a client of an already running host (token from\nAGENTIC_CODING_V2_ATTACH_TOKEN, never from the command line) and never starts,\nowns or locks a second host; --route names the view to open there.",
+			"agentic-coding-v2 [--config-dir PATH] [--state-dir PATH] [--port NUMBER] [--tui | --headless]\nagentic-coding-v2 --attach-url URL [--route JSON] (client of a running host)\nIndependent local skill-task host. No legacy runs or schedules are migrated.\nDefault config: ~/.config/agentic-coding-v2/config.json (respects XDG_CONFIG_HOME and AGENTIC_CODING_V2_CONFIG_DIR).\nUser skills: CONFIG_DIR/skills/<name>/SKILL.md. System skills are embedded.\nDefault state: ~/.local/share/agentic-coding-v2\n--clear-finished-tasks removes finished task trees from inventories and exits without resuming agents; stop the host first. Orchestrator conversations and native history are retained.\nThe OpenTUI/Solid client opens by default on the same authenticated native host.\n--tui explicitly selects the default. --headless starts only the local HTTP host.\n--attach-url opens a client of an already running host (token from\nAGENTIC_CODING_V2_ATTACH_TOKEN, never from the command line) and never starts,\nowns or locks a second host; --route names the view to open there.",
 		);
 		return;
 	}
@@ -56,7 +61,12 @@ async function main() {
 	if (args.includes("--tui") && args.includes("--headless"))
 		throw new Error("Choose either --tui or --headless, not both");
 	const tui = !args.includes("--headless"),
-		valued = args.filter((arg) => arg !== "--tui" && arg !== "--headless"),
+		valued = args.filter(
+			(arg) =>
+				arg !== "--tui" &&
+				arg !== "--headless" &&
+				arg !== "--clear-finished-tasks",
+		),
 		attachUrl = option("--attach-url");
 	for (let index = 0; index < valued.length; index += 2)
 		if (
@@ -129,7 +139,15 @@ async function main() {
 			await openNodeJsonlStorage(path.join(stateDir, "native"), context, {
 				fsync: true,
 			}),
+			{ resume: !args.includes("--clear-finished-tasks") },
 		);
+		if (args.includes("--clear-finished-tasks")) {
+			const result = await dismissTasks(app);
+			console.log(
+				`Removed ${result.removed} finished tasks; kept ${result.keptActive} active tasks and all orchestrator conversations. Native history retained.`,
+			);
+			return;
+		}
 		const running = app;
 		timer = setInterval(() => {
 			void running

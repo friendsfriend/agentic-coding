@@ -31,9 +31,10 @@ test("a closed orchestrator leaves the sidebar and the checkout accepts a new on
 	await expect(app.orchestrators.conversation(created.id)).rejects.toThrow(
 		"Orchestrator is not retained",
 	);
-	await expect(app.orchestrators.close(created.id)).rejects.toThrow(
-		"Orchestrator is already closed",
-	);
+	// Idempotent close can finish cleanup after a crash or an older host closure.
+	await expect(app.orchestrators.close(created.id)).resolves.toMatchObject({
+		id: created.id,
+	});
 	// Continuing the work means creating a new orchestrator for that checkout.
 	const next = await app.orchestrators.create({ path: root, title: "mine" });
 	expect(next.id).not.toBe(created.id);

@@ -641,7 +641,11 @@ export function result<M extends Method>(
 		method === "orchestrator.profile"
 	)
 		orchestratorInfo(value);
-	else if (method === "orchestrator.close") {
+	else if (method === "task.dismiss" || method === "task.clearFinished") {
+		const data = record(value);
+		if (!integer(data.removed) || !integer(data.keptActive))
+			throw new Error("Invalid task cleanup result");
+	} else if (method === "orchestrator.close") {
 		const data = record(value);
 		if (!integer(data.id, 1) || data.closed !== true)
 			throw new Error("Invalid orchestrator closure");

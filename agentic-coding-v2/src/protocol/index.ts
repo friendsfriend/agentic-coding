@@ -377,6 +377,14 @@ export type Methods = {
 		output: EvidenceDocument;
 	};
 	"task.read": { input: { id: number }; output: TaskDetails };
+	"task.dismiss": {
+		input: { id: number };
+		output: { removed: number; keptActive: number };
+	};
+	"task.clearFinished": {
+		input: Data;
+		output: { removed: number; keptActive: number };
+	};
 	"task.cancel": { input: { id: number }; output: { requested: unknown } };
 	"review.decide": {
 		input: {
@@ -669,6 +677,8 @@ export const methods: Method[] = [
 	"evidence.read",
 	"task.read",
 	"task.cancel",
+	"task.dismiss",
+	"task.clearFinished",
 	"review.decide",
 	"schedule.delete",
 	"schedule.create",

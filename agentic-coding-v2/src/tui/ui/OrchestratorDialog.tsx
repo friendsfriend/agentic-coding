@@ -118,7 +118,9 @@ export function OrchestratorDialog(props: {
 						The session ends and leaves the sidebar: nothing can be asked,
 						reported or sent to it again. Its transcript stays on disk, and a
 						new orchestrator must be created to continue work in this checkout.
-						Running work it asked for is stopped. This cannot be undone.
+						Its task tree is stopped and removed from the sidebar, and its
+						schedules are paused. Independent workflow conversations are kept.
+						This cannot be undone.
 					</text>
 				) : (
 					<box height={1} flexDirection="row" overflow="hidden">

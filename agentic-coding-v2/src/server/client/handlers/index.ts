@@ -25,6 +25,7 @@ import {
 	workbenchWrites,
 } from "../../../providers/workbench/index.ts";
 import type { Runtime } from "../../../runtime.ts";
+import { dismissTasks } from "../../../task-retention.ts";
 import type { TraceFilterCatalog } from "../../../telemetry/contracts.ts";
 import {
 	readViewpoints,
@@ -418,6 +419,12 @@ export async function dispatch(
 		case "task.read":
 			fields(input, ["id"]);
 			return readTask(app, integer(input.id));
+		case "task.dismiss":
+			fields(input, ["id"]);
+			return dismissTasks(app, integer(input.id));
+		case "task.clearFinished":
+			fields(input, []);
+			return dismissTasks(app);
 		case "task.cancel":
 			fields(input, ["id"]);
 			return { requested: await app.cancel(integer(input.id)) };

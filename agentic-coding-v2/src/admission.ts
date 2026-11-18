@@ -11,10 +11,12 @@ import {
 	Catalog,
 	decode,
 	type Invocation,
+	type OrchestratorInfo,
 	type Schedule,
 	type TaskInfo,
 	type TaskInput,
 	type Topic,
+	values,
 } from "./state.ts";
 
 function previousAdmission(
@@ -116,6 +118,32 @@ export class TaskAdmission {
 				fingerprint,
 			);
 			if (existing !== undefined) return existing;
+			// A closing orchestrator fences the entire real task tree, including
+			// in-flight child admissions. Visual workflow siblings stay independent.
+			const infos = values<TaskInfo>(doc.tasks);
+			const byId = new Map(infos.map((info) => [info.id, info]));
+			const byConversation = new Map(
+				infos.map((info) => [info.conversationId, info]),
+			);
+			let caller = admitter?.conversationId;
+			let owner = admitter?.task == null ? undefined : byId.get(admitter.task);
+			const visited = new Set<number>();
+			while (caller !== undefined || owner) {
+				if (caller !== undefined) {
+					const raw = doc.orchestrators?.[String(caller)];
+					if (raw && decode<OrchestratorInfo>(raw).retiredAt !== undefined)
+						throw new Error("Orchestrator is closed");
+				}
+				owner ??= caller === undefined ? undefined : byConversation.get(caller);
+				if (!owner) break;
+				if (visited.has(owner.id))
+					throw new Error("Invalid task ownership cycle");
+				visited.add(owner.id);
+				if (owner.dismissedAt !== undefined)
+					throw new Error("Task was removed");
+				caller = owner.admittedBy;
+				owner = owner.parent === undefined ? undefined : byId.get(owner.parent);
+			}
 			if (slot) {
 				const raw = doc.schedules[slot.scheduleId];
 				const schedule = raw ? decode<Schedule>(raw) : null;
