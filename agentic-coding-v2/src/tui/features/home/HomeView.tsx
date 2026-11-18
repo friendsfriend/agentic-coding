@@ -71,7 +71,7 @@ export function HomeView(props: {
 		return false;
 	};
 	const unregister = useKeymap().registerLayer({
-		id: "v2.home",
+		name: "v2.home",
 		priority: 80,
 		enabled: props.active,
 		commands: [{ name: "home.handle", run: ({ event }) => handle(event) }],

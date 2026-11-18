@@ -46,7 +46,7 @@ import { ToolCard } from "./ToolCard.tsx";
 import { ToolContentParts } from "./ToolContentParts.tsx";
 import { TranscriptHeader } from "./TranscriptHeader.tsx";
 import { TranscriptRowsContext } from "./TranscriptRows.ts";
-import { turnStats } from "./turn-stats.ts";
+import { assistantFailure, turnStats } from "./turn-stats.ts";
 
 /** Local mounted-entry paging, extended by explicit native history pages the
  * reader asks for. A page is an observation appended above the retained window,
@@ -742,7 +742,7 @@ export function Transcript(props: {
 		if (!enabled()) return;
 		const unregister = untrack(() =>
 			keymap.registerLayer({
-				id: "v2.transcript",
+				name: "v2.transcript",
 				priority: 30,
 				commands: layerCommands([
 					{
@@ -984,6 +984,22 @@ export function Transcript(props: {
 											}}
 										/>
 									</Show>
+								</Show>
+								{/* Failed generations often have no content parts. The error belongs
+								    to the assistant envelope and must not disappear behind a footer. */}
+								<Show when={assistantFailure(message())}>
+									{(failure) => (
+										<box
+											flexDirection="column"
+											paddingLeft={3}
+											paddingRight={1}
+											flexShrink={0}
+										>
+											<text fg={color("error")} wrapMode="word">
+												{failure()}
+											</text>
+										</box>
+									)}
 								</Show>
 								<For each={message().role === "assistant" ? partSlots() : []}>
 									{(partSlot) => {

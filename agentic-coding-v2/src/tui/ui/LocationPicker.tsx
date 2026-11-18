@@ -82,7 +82,7 @@ export function LocationPicker(props: {
 		setIndex(0);
 	};
 	const unregister = useKeymap().registerLayer({
-		id: "v2.locationPicker",
+		name: "v2.locationPicker",
 		priority: 185,
 		enabled,
 		bindings: [
@@ -110,7 +110,7 @@ export function LocationPicker(props: {
 	// Typed characters filter the list while search mode holds; the navigation
 	// layer above keeps j/k/Enter/Escape, exactly as the shell's other lists.
 	const unregisterTyping = useKeymap().registerLayer({
-		id: "v2.locationPickerQuery",
+		name: "v2.locationPickerQuery",
 		priority: 186,
 		enabled: () => enabled() && searching(),
 		commands: [],

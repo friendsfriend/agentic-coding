@@ -166,7 +166,7 @@ export function ReadOnlyChoicePicker(props: {
 		control(name);
 	};
 	const unregister = useKeymap().registerLayer({
-		id: props.layerId,
+		name: props.layerId,
 		priority: 50,
 		enabled: () => props.active,
 		bindings: [

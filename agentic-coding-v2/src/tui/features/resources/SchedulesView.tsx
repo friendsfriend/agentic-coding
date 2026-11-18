@@ -487,7 +487,7 @@ export function SchedulesView(props: {
 			.map((key) => (key === " " ? "space" : key)),
 	];
 	const unregister = useKeymap().registerLayer({
-		id: "v2.schedules",
+		name: "v2.schedules",
 		priority: 80,
 		enabled: props.active,
 		commands: [{ name: "schedules.handle", run: ({ event }) => handle(event) }],

@@ -64,7 +64,7 @@ export function OrchestratorProfilePicker(props: {
 		props.choose(profile);
 	};
 	const unregister = useKeymap().registerLayer({
-		id: "v2.orchestratorProfile",
+		name: "v2.orchestratorProfile",
 		priority: 192,
 		enabled,
 		commands: [],

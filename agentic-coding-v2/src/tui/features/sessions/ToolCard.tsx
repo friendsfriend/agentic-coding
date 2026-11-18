@@ -135,6 +135,19 @@ export function ToolCard(props: {
 	// A family whose result has real structure projects it into its own rows and
 	// sections; a family outside the projection keeps the generic body, and its
 	// exact supplied data stays reachable either way.
+
+	const name = () => string(props.call.name) || "Unnamed native tool";
+	// Both shells share the shell card: the runtime registers `powershell` beside
+	// `bash` with the same command/timeout shape.
+	const shellSource = () => name() === "bash" || name() === "powershell";
+	const detailsValue = () =>
+		props.result ? props.result.details : props.progress?.details;
+	const details = () => object(props.result?.details);
+	const output = () =>
+		dataList(props.result?.content)
+			.filter((part) => part.type === "text")
+			.map((part) => string(part.text))
+			.join("\n");
 	const projected = createMemo(() =>
 		customToolBody({
 			name: name(),
@@ -150,18 +163,6 @@ export function ToolCard(props: {
 			pending: !props.result,
 		}),
 	);
-	const name = () => string(props.call.name) || "Unnamed native tool";
-	// Both shells share the shell card: the runtime registers `powershell` beside
-	// `bash` with the same command/timeout shape.
-	const shellSource = () => name() === "bash" || name() === "powershell";
-	const detailsValue = () =>
-		props.result ? props.result.details : props.progress?.details;
-	const details = () => object(props.result?.details);
-	const output = () =>
-		dataList(props.result?.content)
-			.filter((part) => part.type === "text")
-			.map((part) => string(part.text))
-			.join("\n");
 	const contentParts = createMemo(() => dataList(props.result?.content));
 	const diagnostics = createMemo(() =>
 		props.result

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { defaultConfigDir, loadConfig } from "./config.ts";
@@ -34,6 +35,9 @@ function attachRoute(value: string | undefined): WindowRoute | undefined {
 }
 
 async function main() {
+	// OAuth flows use variable relative imports unless explicitly embedded.
+	// Register the runtime's static loaders before any model/auth resolution.
+	registerBunOAuthFlows();
 	const args = process.argv.slice(2);
 	if (args.includes("--help")) {
 		console.log(

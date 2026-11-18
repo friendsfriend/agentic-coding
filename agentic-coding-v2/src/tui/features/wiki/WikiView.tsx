@@ -474,7 +474,7 @@ export function WikiView(props: {
 		"end",
 	];
 	const unregister = useKeymap().registerLayer({
-		id: "v2.wiki",
+		name: "v2.wiki",
 		priority: 80,
 		enabled: () => props.active(),
 		commands: [{ name: "wiki.handle", run: ({ event }) => handle(event) }],

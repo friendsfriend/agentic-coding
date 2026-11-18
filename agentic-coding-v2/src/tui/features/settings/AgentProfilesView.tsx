@@ -369,7 +369,7 @@ export function AgentProfilesView(props: {
 		return true;
 	};
 	const unregister = useKeymap().registerLayer({
-		id: "v2.settings.agent-profiles",
+		name: "v2.settings.agent-profiles",
 		priority: 80,
 		enabled: props.active,
 		commands: [

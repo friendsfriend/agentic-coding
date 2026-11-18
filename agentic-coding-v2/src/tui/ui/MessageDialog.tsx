@@ -56,7 +56,7 @@ export function MessageDialog(props: {
 			);
 	};
 	const unregister = useKeymap().registerLayer({
-		id: `v2.diagnostic.${item.id}`,
+		name: `v2.diagnostic.${item.id}`,
 		priority: 200,
 		enabled,
 		bindings: [

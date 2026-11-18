@@ -51,7 +51,7 @@ export function HelpOverlay(props: {
 		});
 	keymap.clearPendingSequence();
 	const unregister = keymap.registerLayer({
-		id: "v2.help-overlay",
+		name: "v2.help-overlay",
 		priority: 100,
 		commands: layerCommands([
 			{ id: "help.next", name: "Scroll help down", run: () => move(1) },

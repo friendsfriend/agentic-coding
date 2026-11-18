@@ -157,7 +157,7 @@ export function NativeAgentNavigation(props: {
 		if (key !== undefined) openKey(key);
 	};
 	const unregister = useKeymap().registerLayer({
-		id: "v2.native-agent-navigation",
+		name: "v2.native-agent-navigation",
 		priority: 15,
 		enabled: () => props.active && interactive(),
 		commands: layerCommands([

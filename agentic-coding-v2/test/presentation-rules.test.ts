@@ -18,6 +18,7 @@ import {
 	toolPresentation,
 } from "../src/tui/features/sessions/tool-presentation.ts";
 import {
+	assistantFailure,
 	generationSpeed,
 	modelLabel,
 	turnStats,
@@ -701,4 +702,24 @@ test("a bulk fold closes a half-open kind and keeps every other fold", () => {
 		"a:1",
 		"a:2",
 	]);
+});
+
+test("empty failed assistant messages still show the provider error", () => {
+	expect(
+		assistantFailure({
+			role: "assistant",
+			content: [],
+			stopReason: "error",
+			errorMessage: "OAuth auth derivation failed: missing module",
+		}),
+	).toBe("OAuth auth derivation failed: missing module");
+	expect(
+		assistantFailure({ role: "assistant", content: [], stopReason: "error" }),
+	).toBe("Model request failed without an error message");
+	expect(assistantFailure({ role: "assistant", stopReason: "aborted" })).toBe(
+		"Response aborted",
+	);
+	expect(
+		assistantFailure({ role: "assistant", stopReason: "stop" }),
+	).toBeNull();
 });

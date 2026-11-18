@@ -2334,7 +2334,7 @@ export function App(props: {
 	});
 	const keymap = useKeymap();
 	const unregisterCopy = keymap.registerLayer({
-		id: "v2.explicitSelectionCopy",
+		name: "v2.explicitSelectionCopy",
 		priority: 205,
 		commands: layerCommands([
 			{
@@ -2353,7 +2353,7 @@ export function App(props: {
 	// layer's enabled state is the only way to leave a key unclaimed, because a
 	// bound key is consumed before the renderable that expects to type it.
 	const unregisterQuit = keymap.registerLayer({
-		id: "v2.quitKeys",
+		name: "v2.quitKeys",
 		priority: 5,
 		enabled: () =>
 			!typingIntoText() &&
@@ -2380,7 +2380,7 @@ export function App(props: {
 	});
 	onCleanup(unregisterQuit);
 	const unregisterViewport = keymap.registerLayer({
-		id: "v2.transcriptViewport",
+		name: "v2.transcriptViewport",
 		priority: 35,
 		enabled: () =>
 			isTranscript() &&
@@ -2407,7 +2407,7 @@ export function App(props: {
 	});
 	onCleanup(unregisterViewport);
 	const unregister = keymap.registerLayer({
-		id: "v2.shell",
+		name: "v2.shell",
 		priority: 10,
 		enabled: () =>
 			messageDialog() === null &&
@@ -2645,7 +2645,7 @@ export function App(props: {
 	// (v1: the renderable handles its own keys). Only the host escape hatches
 	// stay bound, so the developer can always leave the page or quit.
 	const unregisterAgentTerminal = keymap.registerLayer({
-		id: "v2.agentTerminals",
+		name: "v2.agentTerminals",
 		priority: 30,
 		enabled: () => agentTerminalFocus() !== null,
 		commands: layerCommands([
@@ -2680,7 +2680,7 @@ export function App(props: {
 	// v1: prompt-free form/list pages route `?` to shell help except during
 	// text entry. Their own higher-priority confirmation layers keep their keys.
 	const unregisterEnvironmentHelp = keymap.registerLayer({
-		id: "v2.environment-help",
+		name: "v2.environment-help",
 		priority: 20,
 		enabled: () =>
 			contentFocused() &&
@@ -3750,7 +3750,7 @@ export function App(props: {
 	// Embedded conversations, workbenches and review/wiki/schedule bodies own Tab.
 	// Explicit breadcrumb pointer focus can always be left with Tab or Escape.
 	const unregisterSettingsTheme = keymap.registerLayer({
-		id: "v2.settings.theme-open",
+		name: "v2.settings.theme-open",
 		priority: 30,
 		enabled: () => current().page === "settings" && menuKeysActive(),
 		bindings: [
@@ -3819,7 +3819,7 @@ export function App(props: {
 		);
 	};
 	const unregisterPageFocus = keymap.registerLayer({
-		id: "v2.page-focus",
+		name: "v2.page-focus",
 		priority: 25,
 		enabled: pageFocusEnabled,
 		commands: layerCommands([
@@ -3833,7 +3833,7 @@ export function App(props: {
 		bindings: bindings(pageFocusKeybinds),
 	});
 	const unregisterBreadcrumbs = keymap.registerLayer({
-		id: "v2.breadcrumbs",
+		name: "v2.breadcrumbs",
 		priority: 25,
 		enabled: () => crumbActive() && crumbInteractionEnabled(),
 		commands: layerCommands([

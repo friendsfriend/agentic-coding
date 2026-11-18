@@ -214,7 +214,7 @@ export function WorkspaceNavigation(props: {
 		if (entry) setCursorValue(entry.value);
 	};
 	const unregister = useKeymap().registerLayer({
-		id: "v2.workspace-navigation",
+		name: "v2.workspace-navigation",
 		priority: 15,
 		enabled: () => props.active && interactive(),
 		commands: layerCommands([

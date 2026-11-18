@@ -95,3 +95,17 @@ export function turnStats(messages: Data[]): Map<string, TurnStats> {
 	flush();
 	return stats;
 }
+
+/** Provider failures live on the envelope, including when content is empty. */
+export function assistantFailure(message: Data): string | null {
+	if (
+		message.role !== "assistant" ||
+		!["error", "aborted"].includes(String(message.stopReason))
+	)
+		return null;
+	if (typeof message.errorMessage === "string" && message.errorMessage.trim())
+		return message.errorMessage;
+	return message.stopReason === "aborted"
+		? "Response aborted"
+		: "Model request failed without an error message";
+}

@@ -59,7 +59,7 @@ export function useMenuKeys(options: {
 	const run = (key: MenuKey) => () =>
 		options.active() ? options.key(key) !== false : false;
 	const unregister = keymap.registerLayer({
-		id: "v2.menu-page",
+		name: "v2.menu-page",
 		priority: 30,
 		enabled: options.active,
 		commands: layerCommands([

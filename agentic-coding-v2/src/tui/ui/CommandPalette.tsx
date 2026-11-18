@@ -72,7 +72,7 @@ export function CommandPalette(props: {
 		if (entry) setSelectedCommand(entry.command);
 	};
 	const unregister = useKeymap().registerLayer({
-		id: "v2.command-palette",
+		name: "v2.command-palette",
 		priority: 50,
 		enabled: active,
 		commands: layerCommands([
