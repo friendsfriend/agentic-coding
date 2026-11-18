@@ -50,6 +50,12 @@ test("a skill session records the skill it was opened with and runs its text", a
 	expect(agent.instructions).toContain(
 		"You work directly in the checkout this conversation was opened in",
 	);
+	// A skill replaces the orchestrator's role framing, never the delegation brief:
+	// without it a skill that spawns sub-agents would not know how to.
+	expect(agent.instructions).toContain("Use catalog to see ALL profiles");
+	expect(agent.instructions).not.toContain(
+		"You are the agentic-coding-v2 orchestrator",
+	);
 });
 
 test("an unknown skill or a stale digest is refused instead of opened", async () => {

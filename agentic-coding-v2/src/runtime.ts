@@ -29,7 +29,11 @@ import { RepositoryGit } from "./environment/repository-git.ts";
 import { TaskCollection } from "./environment/task-collection.ts";
 import { createEnvironmentTools } from "./environment/tools.ts";
 import { EnvironmentWorkbench } from "./environment/workbench.ts";
-import { createDelegation, orchestratorPrompt } from "./orchestrator.ts";
+import {
+	createDelegation,
+	delegationBrief,
+	orchestratorPrompt,
+} from "./orchestrator.ts";
 import { Orchestrators } from "./orchestrators.ts";
 import { projectState } from "./projection.ts";
 import { ProviderActions } from "./provider-actions.ts";
@@ -170,7 +174,7 @@ export class Runtime {
 			extensions: this.orchestrator.extensions as AgentChange["extensions"],
 			tools: this.orchestrator.tools,
 			instructions: chosenSkill
-				? `${chosenSkill.content}\n\n${this.orchestrator.standing}`
+				? `${chosenSkill.content}\n\n${delegationBrief}\n${this.orchestrator.standing}`
 				: this.orchestrator.instructions,
 			cwd,
 			modelTools: null,
@@ -246,7 +250,7 @@ export class Runtime {
 					...(coding.tools ?? []),
 				],
 				standing,
-				instructions: `${orchestratorPrompt}\n${standing}`,
+				instructions: `${orchestratorPrompt}\n${delegationBrief}\n${standing}`,
 			};
 			app.root = await app.harness.root(context);
 			// root's creation options do not update a previously persisted conversation.
