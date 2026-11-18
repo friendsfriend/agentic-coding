@@ -20,7 +20,9 @@ joins your children and resumes you with their outcomes. Never poll for completi
    Use openspec-verifier when checking an OpenSpec change. Give each selected agent
    the requirements, relevant scope and checks; parallelize independent reads when
    useful and avoid duplicating expensive checks. Reviewers investigate, not edit.
-2. Inspect every result. Failed or blocked reviewers are not a clean verdict. Reproduce
+2. Inspect every result. Failed or blocked reviewers are not a clean verdict. Provider
+   failures are not code defects: consider a suitable authorized alternative profile
+   with a new requestId, or report the exact blocker instead of spawning a code fix. Reproduce
    blocking findings against code and requirements; explain any finding you reject.
 3. If there are real blocking findings, spawn skill code with the exact accepted
    findings, relevant requirement/artifact paths and scope. No unrelated refactoring.

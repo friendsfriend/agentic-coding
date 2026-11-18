@@ -15,6 +15,7 @@ import {
 	type TaskInput,
 	values,
 } from "./state.ts";
+import { type TaskFailure, taskFailure } from "./task-failure.ts";
 
 export type SkillCheckpoint =
 	| { phase: "prepare" }
@@ -27,6 +28,8 @@ export type SkillCheckpoint =
 			round?: number;
 			/** The sub-agents this turn spawned and is parked on, if any. */
 			joined?: readonly number[];
+			/** Retain a failed turn while already-spawned children settle. */
+			failure?: TaskFailure;
 	  };
 export function createSkillTask(
 	config: Config,
@@ -95,6 +98,24 @@ export function createSkillTask(
 					SkillCheckpoint,
 					{ phase: "execute" }
 				>;
+				const priorFailure = checkpoint.failure;
+				if (priorFailure) {
+					const cleanup = await releaseEnvironments(Number(task.id));
+					await runtime.commit(
+						() => ({
+							status: "terminal",
+							outcome: {
+								status: "failed",
+								error: {
+									...priorFailure,
+									message: `${priorFailure.message}${cleanup ? `\n${cleanup}` : ""}`,
+								},
+							},
+						}),
+						context,
+					);
+					return;
+				}
 				const id = checkpoint.child as ConversationId;
 				const child = await runtime.conversation(id, context);
 				if (!child) throw new Error("Task child conversation is missing");
@@ -123,10 +144,28 @@ export function createSkillTask(
 				);
 				const result = await submission.wait(context);
 				let answer = "";
+				let failure =
+					result.status === "unanswered"
+						? taskFailure(
+								{ reason: result.reason, detail: result.detail },
+								task.input.profile,
+							)
+						: undefined;
 				if (result.status === "done" && result.type === "input") {
 					const entry = (await runtime.context(id, context)).entries.find(
 						(entry) => entry.id === result.answer,
 					);
+					const failed = entry?.model?.find(
+						(message) =>
+							message.role === "assistant" &&
+							(message.stopReason === "error" ||
+								message.stopReason === "aborted"),
+					);
+					if (failed?.role === "assistant")
+						failure = taskFailure(
+							{ reason: failed.stopReason, detail: failed.errorMessage },
+							task.input.profile,
+						);
 					answer =
 						entry?.model
 							?.flatMap((message) =>
@@ -152,6 +191,7 @@ export function createSkillTask(
 								...checkpoint,
 								round: round + 1,
 								joined: live.map((owned) => Number(owned.id)),
+								failure,
 							},
 						}),
 						context,
@@ -163,7 +203,7 @@ export function createSkillTask(
 					() => ({
 						status: "terminal",
 						outcome:
-							result.status === "done" && answer
+							!failure && result.status === "done" && answer
 								? {
 										status: "completed",
 										result: cleanup ? `${answer}\n\n${cleanup}` : answer,
@@ -171,7 +211,12 @@ export function createSkillTask(
 								: {
 										status: "failed",
 										error: {
-											message: `Agent did not produce an answer (${result.status})${cleanup ? `\n${cleanup}` : ""}`,
+											...(failure ??
+												taskFailure(
+													{ reason: result.status },
+													task.input.profile,
+												)),
+											message: `${failure?.message ?? `Agent did not produce an answer (${result.status})`}${cleanup ? `\n${cleanup}` : ""}`,
 										},
 									},
 					}),
