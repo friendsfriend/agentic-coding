@@ -23,16 +23,11 @@ import { CustomToolBody } from "./CustomToolBody.tsx";
 import { customToolBody } from "./custom-tool-view.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
 import {
-	type SuppliedBrowserSection,
-	ToolBrowserObservation,
-} from "./ToolBrowserObservation.tsx";
-import {
 	ToolReadBody,
 	ToolShellBody,
 	ToolWriteBody,
 } from "./ToolByteBodies.tsx";
 import { ToolContentParts } from "./ToolContentParts.tsx";
-import { ToolDialogue } from "./ToolDialogue.tsx";
 import {
 	type SuppliedEditReplacement,
 	ToolEditRequest,
@@ -133,18 +128,6 @@ export function ToolCard(props: {
 		}
 	};
 	// Icon gutter from the original tool-call header; unknown tools keep its dot.
-	const browserActions = new Set([
-		"browser_open",
-		"browser_close",
-		"browser_click",
-		"browser_fill",
-		"browser_press",
-		"browser_select",
-		"browser_hover",
-		"browser_wait",
-		"browser_snapshot",
-		"browser_find",
-	]);
 	const args = () => object(props.call.arguments);
 	// What the row says before it is opened: the family's own icon and target.
 	const presentation = () =>
@@ -168,10 +151,9 @@ export function ToolCard(props: {
 		}),
 	);
 	const name = () => string(props.call.name) || "Unnamed native tool";
-	// Original pending aliases share shell presentation, not terminal semantics.
-	const shellSource = () =>
-		name() === "bash" ||
-		(!props.result && ["shell", "execute"].includes(name()));
+	// Both shells share the shell card: the runtime registers `powershell` beside
+	// `bash` with the same command/timeout shape.
+	const shellSource = () => name() === "bash" || name() === "powershell";
 	const detailsValue = () =>
 		props.result ? props.result.details : props.progress?.details;
 	const details = () => object(props.result?.details);
@@ -285,15 +267,11 @@ export function ToolCard(props: {
 	const summary = () =>
 		name() === "codemode"
 			? scriptHeadline()
-			: ["developer_question", "agent_ask"].includes(name())
-				? dialogueHeadline()
-				: ["read", "edit", "write"].includes(name())
-					? path()
-					: shellSource() || name() === "shell"
-						? string(args().command)
-						: string(args().app) ||
-							string(args().title) ||
-							string(args().query);
+			: ["read", "edit", "write"].includes(name())
+				? path()
+				: shellSource()
+					? string(args().command)
+					: string(args().app) || string(args().title) || string(args().query);
 	// Original file-family headers name the verb, and their hint carries the extent
 	// that the supplied result actually reports. A pending call uses the pending
 	// verb, so an unreturned read is never spelled as a completed one.
@@ -395,13 +373,7 @@ export function ToolCard(props: {
 		if (projection) return projection.label;
 		const family = presentation();
 		if (family) return family.label;
-		if (!browserActions.has(name())) return summary() || name();
-		const verb = name().slice("browser_".length).replaceAll("_", " ");
-		const target =
-			["ref", "selector", "url", "text", "key"]
-				.map((key) => string(args()[key]))
-				.find((value) => value.length > 0) || summary();
-		return `${verb.charAt(0).toUpperCase()}${verb.slice(1)}${target ? ` ${target}` : ""}`;
+		return summary() || name();
 	};
 	const requestedSource = createMemo<SuppliedToolSource | null>(() => {
 		if (name() === "db_query" && typeof args().sql === "string")
@@ -410,10 +382,7 @@ export function ToolCard(props: {
 				filetype: "sql",
 				label: "Requested SQL",
 			};
-		if (
-			["browser_run_script", "browser_eval", "codemode"].includes(name()) &&
-			typeof args().code === "string"
-		)
+		if (name() === "codemode" && typeof args().code === "string")
 			return {
 				content: string(args().code),
 				filetype: "javascript",
@@ -468,61 +437,6 @@ export function ToolCard(props: {
 				: [];
 		});
 	});
-	const requestedQuestions = createMemo(() => {
-		if (!["developer_question", "agent_ask"].includes(name())) return [];
-		const value = args();
-		const items = Array.isArray(value.questions) ? value.questions : [value];
-		return items.flatMap((item: unknown, index: number) => {
-			const record = object(item);
-			const text = [record.question, record.description].find(
-				(value) => typeof value === "string",
-			);
-			const options = Array.isArray(record.options)
-				? record.options.flatMap((item: unknown, index: number) => {
-						const option = object(item);
-						const label = [option.title, option.label, option.value].find(
-							(value) => typeof value === "string",
-						);
-						if (typeof label !== "string") return [];
-						return [
-							{
-								index,
-								label,
-								recommended: option.recommended === true,
-								description:
-									typeof option.description === "string"
-										? option.description
-										: null,
-							},
-						];
-					})
-				: [];
-			const context =
-				typeof record.context === "string" ? record.context : null;
-			if (typeof text !== "string" && options.length === 0 && context === null)
-				return [];
-			return [
-				{
-					index,
-					text: typeof text === "string" ? text : null,
-					ident: typeof record.ident === "string" ? record.ident : null,
-					context,
-					options,
-				},
-			];
-		});
-	});
-	const dialogueHeadline = createMemo(() => {
-		const questions = requestedQuestions();
-		if (questions.length === 0) return "";
-		if (questions.length > 1) return `${questions.length} questions`;
-		const points = Array.from(
-			(questions[0]?.text ?? "question").replace(/\s+/g, " ").trim(),
-		);
-		return points.length > 160
-			? `${points.slice(0, 159).join("")}…`
-			: points.join("");
-	});
 	const scriptOutput = createMemo(() => {
 		const value = details().output;
 		return name() === "codemode" &&
@@ -533,19 +447,6 @@ export function ToolCard(props: {
 			typeof value === "string"
 			? { text: value }
 			: null;
-	});
-	const browserResult = createMemo(() => {
-		const value = structured();
-		return browserActions.has(name()) && value && !Array.isArray(value)
-			? object(value)
-			: null;
-	});
-	const browserSections = createMemo<readonly SuppliedBrowserSection[]>(() => {
-		const value = browserResult();
-		if (!value) return [];
-		return (["observation", "matches"] as const).flatMap((key) =>
-			Object.hasOwn(value, key) ? [{ key, value: value[key] }] : [],
-		);
 	});
 	const specialized = () =>
 		Boolean(
@@ -611,7 +512,6 @@ export function ToolCard(props: {
 							!props.result &&
 							props.progress?.status === "running"
 						}
-						browser={name().startsWith("browser_")}
 						icon={toolIcon(name())}
 						label={headerLabel()}
 						hint={
@@ -755,20 +655,6 @@ export function ToolCard(props: {
 							open={open}
 							fold={fold}
 						/>
-						<ToolDialogue
-							interactive={active()}
-							scope={observation()}
-							questions={requestedQuestions()}
-							phase={
-								props.partial
-									? "Partial generated"
-									: props.liveOnly
-										? "Live slot"
-										: "Requested"
-							}
-							open={open}
-							fold={fold}
-						/>
 						<Show when={scriptOutput()}>
 							{(script) => (
 								<>
@@ -788,13 +674,6 @@ export function ToolCard(props: {
 								</>
 							)}
 						</Show>
-						<ToolBrowserObservation
-							interactive={active()}
-							scope={observation()}
-							sections={browserSections()}
-							open={open}
-							fold={fold}
-						/>
 						<Show when={projected()}>
 							{(projection) => (
 								<CustomToolBody

@@ -253,9 +253,13 @@ const resultValue = (text: string, details: Data | null): unknown => {
 
 // The families the projection answers for. A name outside them keeps the
 // card's generic body, so nothing that already read well changes.
+//
+// Only names this build's runtime emits are listed: the browser, stage,
+// workflow, events and debug families belong to the shell's own orchestrator,
+// so their views are removed with them and return with the family if a native
+// task ever gains one.
 const FAMILIES: Readonly<Record<string, readonly string[]>> = {
-	search: ["grep", "glob", "find", "ls", "search"],
-	web: ["webfetch", "websearch", "web_fetch", "web_search", "fetch"],
+	search: ["grep", "find", "ls"],
 	environment: [
 		"env_list",
 		"env_status",
@@ -269,52 +273,10 @@ const FAMILIES: Readonly<Record<string, readonly string[]>> = {
 		"env_cluster_namespace",
 	],
 	logs: ["env_build", "env_test", "env_logs"],
-	http: ["http_request", "stage_api_request"],
+	http: ["env_http_request"],
 	database: ["db_query"],
-	// Browser actions keep the card's own browser observation, and a browser
-	// script keeps its retained script output: those two are already projections
-	// with their own sections, so they are deliberately not re-projected here.
-	telemetry: ["otel_query", "browser_console", "browser_network"],
-	stage: [
-		"stage_info",
-		"stage_token_info",
-		"stage_step",
-		"stage_journal",
-		"stage_blocks",
-		"stage_run",
-		"stage_block_save",
-		"stage_flows",
-		"stage_replay",
-	],
-	workflow: [
-		"list_projects",
-		"list_branches",
-		"list_workflows",
-		"list_changes",
-		"list_steps",
-		"list_agent_config",
-		"list_workflow_types",
-		"workflow_status",
-		"workflow_recovery_preview",
-		"workflow_recover",
-		"validate_blueprint",
-		"start_workflow",
-		"workflow_action",
-		"drain_workflow",
-	],
-	events: [
-		"subscribe_events",
-		"unsubscribe_events",
-		"list_subscriptions",
-		"read_events",
-	],
-	evidence: [
-		"attach_evidence",
-		"attach_image",
-		"evidence_attach",
-		"evidence_list",
-	],
-	debug: ["sessions_report", "opencode_session"],
+	telemetry: ["otel_query"],
+	evidence: ["attach_evidence", "attach_image"],
 	orchestrator: [
 		"catalog",
 		"start_task",
@@ -342,30 +304,8 @@ const ACTION_LABELS: Readonly<Record<string, string>> = {
 	env_draft_source: "Draft source",
 	env_cluster_status: "Cluster status",
 	env_cluster_namespace: "Cluster namespace",
-	workflow_status: "Workflow",
-	workflow_recovery_preview: "Recovery preview",
-	workflow_recover: "Recover workflow",
-	list_projects: "Projects",
-	list_workflows: "Workflows",
-	list_workflow_types: "Workflow types",
-	list_agent_config: "Agent configuration",
-	list_branches: "Branches",
-	list_changes: "Changes",
-	list_steps: "Steps",
-	validate_blueprint: "Validate blueprint",
-	start_workflow: "Start workflow",
-	workflow_action: "Workflow action",
-	drain_workflow: "Drain workflow",
-	subscribe_events: "Subscribe",
-	unsubscribe_events: "Unsubscribe",
-	list_subscriptions: "Subscriptions",
-	read_events: "Events",
-	sessions_report: "Sessions report",
-	opencode_session: "OpenCode session",
 	attach_evidence: "Attach evidence",
 	attach_image: "Attach image",
-	evidence_attach: "Attach evidence",
-	evidence_list: "Evidence",
 	catalog: "Catalog",
 	start_task: "Start task",
 	task_result: "Task result",
@@ -404,17 +344,13 @@ const readable = (
 /** The request the call carried, drawn with its own syntax where it has one. */
 const sourceSections = (args: Data): CustomSection[] => {
 	const sections: CustomSection[] = [];
-	for (const [key, syntax] of [
-		["sql", "sql"],
-		["code", "javascript"],
-		["blueprint", "json"],
-	] as const) {
+	for (const [key, syntax] of [["sql", "sql"]] as const) {
 		const value = args[key];
 		if (value === undefined) continue;
 		sections.push(
 			...section(
 				key,
-				key === "sql" ? "SQL" : title(key === "code" ? "script" : key),
+				"SQL",
 				contentRows(
 					typeof value === "string"
 						? value
@@ -464,7 +400,7 @@ const searchView = (
 	);
 	return {
 		label:
-			name === "grep" || name === "search"
+			name === "grep"
 				? `Search ${pattern ? `“${pattern}”` : path}`
 				: `${title(name)} ${pattern || path}`.trim(),
 		...(path && pattern
@@ -481,11 +417,16 @@ const searchView = (
 	};
 };
 
+/** An approved request to one declared endpoint: the verb and path name the
+ * call, the app/endpoint pair names the target it reached, and the request's own
+ * authority flags and payload stay beside the response they produced. */
 const httpView = (args: Data, value: unknown, text: string): CustomBody => {
 	const object = record(value);
 	const method = (arg(args, "method") || "GET").toUpperCase();
-	const target =
-		arg(args, "path", "url", "endpoint") || scalar(object?.url ?? "request");
+	const path = arg(args, "path") || "/";
+	const target = [arg(args, "app"), arg(args, "endpoint")]
+		.filter((part) => part)
+		.join(" · ");
 	const rows: CustomRow[] = [];
 	if (object?.status !== undefined) {
 		const status = object.status;
@@ -501,19 +442,40 @@ const httpView = (args: Data, value: unknown, text: string): CustomBody => {
 		);
 	}
 	const request = record(safeToolValue(args));
+	const body = request?.body;
 	return {
-		label: `${method} ${target}`,
-		...(object?.status === undefined
-			? {}
-			: {
-					hint: `${scalar(object.status)}${object.durationMs === undefined ? "" : ` · ${scalar(object.durationMs)}ms`}`,
-				}),
+		label: `${method} ${path}`,
+		...(target ? { hint: target } : {}),
 		rows,
 		sections: [
 			...section(
 				"request",
 				"Request",
-				metadataWithout(request, ["method", "path", "url", "endpoint"]),
+				metadataWithout(request, [
+					"method",
+					"path",
+					"url",
+					"endpoint",
+					"headers",
+					"body",
+				]),
+			),
+			...section(
+				"request-headers",
+				"Request headers",
+				record(request?.headers) === undefined
+					? []
+					: valueRows(request?.headers),
+			),
+			...section(
+				"request-body",
+				"Request body",
+				typeof body === "string"
+					? contentRows(body)
+					: body === undefined
+						? []
+						: valueRows(body),
+				{ shell: typeof body === "string" },
 			),
 			...section(
 				"headers",
@@ -523,13 +485,20 @@ const httpView = (args: Data, value: unknown, text: string): CustomBody => {
 			...section(
 				"body",
 				"Response body",
-				object?.body === undefined
-					? object
-						? []
-						: readable(value, text)
-					: typeof object.body === "string"
-						? contentRows(object.body)
-						: valueRows(object.body),
+				typeof object?.body === "string"
+					? contentRows(object.body)
+					: object?.body !== undefined
+						? valueRows(object.body)
+						: object?.bodyFormat === "omitted"
+							? [
+									{
+										text: "Omitted: not UTF-8 text, or encoded",
+										tone: "warning" as const,
+									},
+								]
+							: object
+								? []
+								: readable(value, text),
 				{ shell: typeof object?.body === "string" },
 			),
 			...detailsSection(object, [
@@ -539,6 +508,8 @@ const httpView = (args: Data, value: unknown, text: string): CustomBody => {
 				"statusText",
 				"url",
 				"durationMs",
+				"bytes",
+				"bodyFormat",
 			]),
 		],
 	};
@@ -652,39 +623,27 @@ export function customToolBody(input: CustomToolInput): CustomBody | null {
 	const value = resultValue(text, input.details);
 	const object = record(value);
 	const safeArgs = record(safeToolValue(input.args)) ?? {};
-	const argObject =
-		input.name === "browser_fill" && "value" in safeArgs
-			? { ...safeArgs, value: "[redacted]" }
-			: safeArgs;
 	const subject =
 		arg(
-			argObject,
+			safeArgs,
 			"app",
-			"stage",
-			"workflowId",
 			"requestId",
 			"goal",
 			"url",
 			"path",
-			"session",
 			"infra",
 			"traceId",
 			"repo",
 			"repository",
 			"pattern",
 			"query",
-			"role",
 			"name",
-			"event",
-			"subscriptionId",
-			"ref",
-			"selector",
 			"endpoint",
 			"command",
 			"taskId",
 		) ||
 		String(
-			Object.entries(argObject)
+			Object.entries(safeArgs)
 				.filter(
 					([key]) =>
 						!["sql", "code", "blueprint", "body", "headers"].includes(key),
@@ -728,7 +687,7 @@ export function customToolBody(input: CustomToolInput): CustomBody | null {
 				...section(
 					"arguments",
 					"Arguments",
-					metadataWithout(safeArgs, ["sql", "code", "blueprint"]),
+					metadataWithout(safeArgs, ["sql"]),
 				),
 				...(input.details?.view === undefined
 					? []
@@ -813,40 +772,6 @@ export function customToolBody(input: CustomToolInput): CustomBody | null {
 			rows: telemetryRows(value, text),
 			sections: section("filters", "Filters", valueRows(safeArgs)),
 		};
-	if (family === "web")
-		return {
-			label: `${input.name.includes("search") ? "Search web" : "Fetch"} ${subject}`,
-			hint: subject || title(input.name),
-			rows: readable(value, text, true),
-			sections: [],
-		};
-	if (family === "stage") {
-		const stepsKey = ["steps", "journal", "results"].find((key) =>
-			Array.isArray(object?.[key]),
-		);
-		const steps = stepsKey ? object?.[stepsKey] : undefined;
-		if (Array.isArray(steps))
-			return {
-				label,
-				hint: `${steps.length} steps`,
-				rows: [],
-				sections: [
-					...section("arguments", "Stage parameters", valueRows(safeArgs)),
-					...steps.map((step, index): CustomSection => {
-						const item = record(step);
-						const status = item?.status ?? item?.outcome;
-						const named = item?.label ?? item?.name ?? item?.action;
-						return {
-							id: `step:${index}`,
-							label: `Step ${index + 1}${named ? ` · ${scalar(named)}` : ""}${status === undefined ? "" : ` · ${scalar(status)}`}`,
-							...(tone(status) ? { tone: tone(status) } : {}),
-							rows: valueRows(step),
-						};
-					}),
-					...detailsSection(object, stepsKey ? [stepsKey] : []),
-				],
-			};
-	}
 	const report = object?.report;
 	const collection = Array.isArray(value)
 		? { name: "results", values: value }
@@ -869,19 +794,11 @@ export function customToolBody(input: CustomToolInput): CustomBody | null {
 			...sourceSections(safeArgs),
 			...section(
 				"result",
-				family === "debug"
-					? "Investigation"
-					: family === "evidence"
-						? "Artifacts"
-						: family === "events"
-							? "Events"
-							: family === "workflow"
-								? "Workflow"
-								: family === "environment"
-									? "Environment"
-									: family === "orchestrator"
-										? "Result"
-										: "Result",
+				family === "evidence"
+					? "Artifacts"
+					: family === "environment"
+						? "Environment"
+						: "Result",
 				report === undefined
 					? readable(value, text)
 					: typeof report === "string"
@@ -889,11 +806,7 @@ export function customToolBody(input: CustomToolInput): CustomBody | null {
 						: valueRows(report),
 			),
 			...(report === undefined ? [] : detailsSection(object, ["report"])),
-			...section(
-				"arguments",
-				"Arguments",
-				metadataWithout(safeArgs, ["code", "sql", "blueprint"]),
-			),
+			...section("arguments", "Arguments", metadataWithout(safeArgs, ["sql"])),
 		],
 	};
 }

@@ -8,45 +8,36 @@ import type { Data } from "../../../protocol/index.ts";
  * A family with a bespoke header of its own returns `null` and keeps it: the
  * file verbs spell "Read path/to/file", the shell family names its command, and
  * codemode offers its script's first line. Everything else — the orchestrator's
- * own tools, the environment tools, evidence and scheduling — is named here,
- * because those families previously read as a bare tool name twice over and no
- * icon at all. */
+ * own tools, the environment tools and evidence — is named here, because those
+ * families previously read as a bare tool name twice over and no icon at all.
+ *
+ * Only names this build's runtime can actually emit are answered for: the
+ * browser, stage, workflow, events and debug families belong to the shell's own
+ * orchestrator, not to a native task, so a name from one of them is restored
+ * with that family rather than guessed at here. */
 export type ToolPresentation = { label: string; hint?: string };
 
-/** Families the card already presents itself. */
+/** Families the card already presents itself: the file verbs, both shells, and
+ * codemode's script. */
 const owned = new Set([
 	"read",
 	"write",
 	"edit",
-	"apply_patch",
-	"patch",
 	"bash",
-	"shell",
-	"execute",
+	"powershell",
 	"codemode",
-	"developer_question",
-	"agent_ask",
 ]);
 
 const icons: Record<string, string> = {
 	read: "→",
 	write: "←",
 	edit: "←",
-	apply_patch: "←",
-	patch: "←",
-	glob: "✱",
 	grep: "✱",
 	find: "✱",
+	ls: "☰",
 	bash: "$",
-	shell: "$",
-	execute: "▶",
-	task: "✓",
-	subagent: "✓",
-	webfetch: "%",
-	websearch: "◈",
+	powershell: ">",
 	codemode: "λ",
-	developer_question: "?",
-	agent_ask: "?",
 	db_query: "!",
 	catalog: "☰",
 	start_task: "▷",
@@ -59,29 +50,14 @@ const icons: Record<string, string> = {
 };
 
 /** The icon a family is recognised by. A family prefix answers for its whole
- * group — every environment tool shares one mark, as do the workflow, stage,
- * scheduling and browser tools — so a new member of a family needs no entry. */
+ * group — every environment tool shares one mark — so a new member of a family
+ * needs no entry. An unknown name keeps the original header's dot. */
 export function toolIcon(name: string): string {
 	const exact = icons[name];
 	if (exact) return exact;
-	if (name === "browser_run_script" || name === "browser_eval") return "λ";
-	if (name === "browser_console" || name === "browser_network") return "≋";
-	if (
-		name.startsWith("browser_screenshot") ||
-		name.startsWith("browser_record_")
-	)
-		return "▧";
-	if (name.startsWith("browser_")) return "→";
 	if (name.startsWith("env_cluster")) return "☸";
 	if (name.startsWith("env_")) return "⚙";
 	if (name.startsWith("otel_")) return "≋";
-	if (name.startsWith("stage_")) return "▤";
-	if (name.startsWith("workflow_")) return "◷";
-	if (name.startsWith("evidence_")) return "▣";
-	if (name.startsWith("scheduling")) return "◷";
-	if (name.startsWith("list_") || name.startsWith("read_")) return "☰";
-	if (name.startsWith("subscribe_") || name.startsWith("unsubscribe_"))
-		return "◈";
 	return "•";
 }
 
@@ -89,8 +65,6 @@ export function toolIcon(name: string): string {
  * most specific reading first. A value the call did not supply is skipped, and a
  * list of them is named as it is. */
 const identities = [
-	"workflowId",
-	"scheduleId",
 	"topicId",
 	"title",
 	"description",
@@ -153,14 +127,17 @@ const capitalise = (value: string) =>
 	value.length === 0 ? value : `${value[0]?.toUpperCase()}${value.slice(1)}`;
 
 /** `POST /v1/requests` rather than a bare tool name: the verb and the path are
- * what a reader scanning diagnostics needs. */
+ * what a reader scanning diagnostics needs, and the app/endpoint pair is the
+ * target it reached. */
 const httpLabel = (args: Data) => {
 	const method = text(args.method) || "GET";
-	const path = text(args.path) || text(args.endpoint);
-	const app = text(args.app);
+	const path = text(args.path);
+	const target = [text(args.app), text(args.endpoint)]
+		.filter((part) => part)
+		.join(" · ");
 	return {
 		label: oneLine(`${method.toUpperCase()}${path ? ` ${path}` : ""}`, 80),
-		hint: app ? oneLine(app, 60) : undefined,
+		...(target ? { hint: oneLine(target, 80) } : {}),
 	};
 };
 
@@ -181,8 +158,8 @@ export function toolPresentation(
 	args: Data,
 	phase: "pending" | "done",
 ): ToolPresentation | null {
-	if (owned.has(name) || name.startsWith("browser_")) return null;
-	if (name === "http_request") return httpLabel(args);
+	if (owned.has(name)) return null;
+	if (name === "env_http_request") return httpLabel(args);
 	if (name === "db_query") return sqlLabel(args);
 	if (name === "attach_image" || name === "attach_evidence") {
 		// The file is the target and the caption describes it; the kind of evidence

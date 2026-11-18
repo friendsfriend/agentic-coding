@@ -278,12 +278,10 @@ test("a tool family is named by what it does and what it does it to", () => {
 		"write",
 		"edit",
 		"bash",
-		"shell",
-		"execute",
 		"codemode",
-		"developer_question",
-		"agent_ask",
-		"browser_click",
+		// Both shells are named by the card itself: the runtime registers
+		// `powershell` beside `bash` with the same command/timeout shape.
+		"powershell",
 	])
 		expect(toolPresentation(name, {}, "done")).toBe(null);
 	// A started task names the skill it runs and the checkout it runs in; an
@@ -317,15 +315,14 @@ test("a tool family is named by what it does and what it does it to", () => {
 	// database it runs against.
 	expect(
 		toolPresentation(
-			"http_request",
-			{ app: "gateway", method: "post", path: "/v1/x" },
+			"env_http_request",
+			{ app: "gateway", endpoint: "web", method: "post", path: "/v1/x" },
 			"done",
 		),
-	).toEqual({ label: "POST /v1/x", hint: "gateway" });
-	expect(toolPresentation("http_request", { app: "gateway" }, "done")).toEqual({
-		label: "GET",
-		hint: "gateway",
-	});
+	).toEqual({ label: "POST /v1/x", hint: "gateway · web" });
+	expect(
+		toolPresentation("env_http_request", { app: "gateway" }, "pending"),
+	).toEqual({ label: "GET", hint: "gateway" });
 	expect(
 		toolPresentation(
 			"db_query",
@@ -338,9 +335,6 @@ test("a tool family is named by what it does and what it does it to", () => {
 	expect(toolPresentation("frobnicate", {}, "done")).toEqual({
 		label: "frobnicate",
 	});
-	expect(
-		toolPresentation("webfetch", { url: "https://x.test/a" }, "done"),
-	).toEqual({ label: "webfetch", hint: "https://x.test/a" });
 	expect(
 		toolPresentation("task", { description: "Read the logs" }, "done"),
 	).toEqual({ label: "task", hint: "Read the logs" });
@@ -360,11 +354,9 @@ test("every family is recognised by an icon, named ones exactly", () => {
 	expect(toolIcon("start_task")).toBe("▷");
 	expect(toolIcon("env_start")).toBe("⚙");
 	expect(toolIcon("env_cluster_status")).toBe("☸");
-	expect(toolIcon("workflow_status")).toBe("◷");
-	expect(toolIcon("stage_info")).toBe("▤");
-	expect(toolIcon("browser_eval")).toBe("λ");
-	expect(toolIcon("browser_screenshot")).toBe("▧");
-	expect(toolIcon("browser_click")).toBe("→");
+	expect(toolIcon("env_http_request")).toBe("⚙");
+	expect(toolIcon("powershell")).toBe(">");
+	expect(toolIcon("otel_query")).toBe("≋");
 	expect(toolIcon("frobnicate")).toBe("•");
 });
 
@@ -400,8 +392,14 @@ test("a search groups its matches by file and counts them", () => {
 
 test("an HTTP result reports its status, headers and body", () => {
 	const body = customToolBody({
-		name: "http_request",
-		args: { app: "gateway", method: "post", path: "/v1/x" },
+		name: "env_http_request",
+		args: {
+			app: "gateway",
+			endpoint: "web",
+			method: "post",
+			path: "/v1/x",
+			authorization: "hunter2",
+		},
 		text: "",
 		details: {
 			view: {
@@ -420,7 +418,9 @@ test("an HTTP result reports its status, headers and body", () => {
 		pending: false,
 	});
 	expect(body?.label).toBe("POST /v1/x");
-	expect(body?.hint).toBe("404 · 12ms");
+	// The target is the app/endpoint pair the request was approved for; the
+	// response's own status is a row, not a duplicated hint.
+	expect(body?.hint).toBe("gateway · web");
 	expect(body?.rows).toEqual([{ text: "HTTP 404 Not Found", tone: "error" }]);
 	const headers = body?.sections.find((section) => section.id === "headers");
 	expect(headers?.rows).toEqual([
@@ -435,9 +435,70 @@ test("an HTTP result reports its status, headers and body", () => {
 		shell: true,
 		rows: [{ text: '{\n  "error": "missing"\n}', syntax: "json" }],
 	});
+	// The request keeps what the label and hint do not already say, and a
+	// credential-named argument is never drawn.
 	expect(
 		body?.sections.find((section) => section.id === "request")?.rows,
-	).toEqual([{ text: "App: gateway" }]);
+	).toEqual([{ text: "App: gateway" }, { text: "Authorization: [redacted]" }]);
+});
+
+test("a request's own payload and an omitted response body are named as such", () => {
+	const body = customToolBody({
+		name: "env_http_request",
+		args: {
+			app: "gateway",
+			endpoint: "web",
+			method: "POST",
+			path: "/v1/orders",
+			headers: { "content-type": "application/json", cookie: "session=1" },
+			body: '{"sku":"A-1"}',
+			allowWrite: true,
+			followRedirects: false,
+		},
+		text: "",
+		details: {
+			view: {
+				status: 201,
+				statusText: "Created",
+				bodyFormat: "omitted",
+				headers: { "content-type": "application/pdf" },
+			},
+		},
+		failed: false,
+		pending: false,
+	});
+	expect(body?.label).toBe("POST /v1/orders");
+	expect(body?.rows).toEqual([{ text: "HTTP 201 Created", tone: "success" }]);
+	expect(
+		body?.sections.find((section) => section.id === "request-headers")?.rows,
+	).toEqual([
+		{ text: "Content type: application/json" },
+		{ text: "Cookie: [redacted]" },
+	]);
+	expect(
+		body?.sections.find((section) => section.id === "request-body"),
+	).toEqual({
+		id: "request-body",
+		label: "Request body",
+		shell: true,
+		rows: [{ text: '{\n  "sku": "A-1"\n}', syntax: "json" }],
+	});
+	// The authority flags that made the write legal are drawn, not implied.
+	expect(
+		body?.sections.find((section) => section.id === "request")?.rows,
+	).toEqual([
+		{ text: "App: gateway" },
+		{ text: "Allow Write: true" },
+		{ text: "Follow Redirects: false" },
+	]);
+	// A response body that was not returned as UTF-8 text says so instead of
+	// presenting an empty answer as an empty body.
+	expect(body?.sections.find((section) => section.id === "body")).toEqual({
+		id: "body",
+		label: "Response body",
+		shell: false,
+		rows: [{ text: "Omitted: not UTF-8 text, or encoded", tone: "warning" }],
+	});
 });
 
 test("a query renders its columns and rows as a table, in supplied order", () => {
@@ -564,23 +625,17 @@ test("a trace keeps its children beneath their span and redacts credentials", ()
 		name: "api_key",
 		value: "[redacted]",
 	});
-	expect(
-		customToolBody({
-			name: "browser_fill",
-			args: { selector: "#pw", value: "hunter2" },
-			text: "",
-			details: null,
-			failed: false,
-			pending: false,
-		}),
-	).toBe(null);
 });
 
 test("a family outside the projection keeps the generic body", () => {
+	// Only names this build's runtime emits are projected: a browser, stage,
+	// workflow or debug family is restored with such a tool, not carried dead.
 	for (const name of [
 		"read",
 		"bash",
+		"powershell",
 		"codemode",
+		"schedule_skill",
 		"browser_click",
 		"frobnicate",
 	])

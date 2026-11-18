@@ -2260,3 +2260,53 @@ The families: search (grep/glob/find/ls), web fetches and searches, environment 
 Three properties came across unchanged, because they are the reason the module is worth having: an error envelope is never read as a domain result (a failed call renders its Error section instead of pretending the payload is a response), a `browser_fill` value and every secret-shaped field or query parameter is redacted before it reaches the screen, and the projection is *additive* — the card's "Complete retained output", retained-parts and complete-argument folds are untouched, so nothing the projection consumes becomes unreachable.
 
 The projection answers first for label and hint; `tool-presentation.ts` still names the families it does not cover and supplies every icon. Pinned in `test/presentation-rules.test.ts`: matches grouped by file with line numbers and a line the pattern does not explain left alone, an HTTP status toned by class with redacted headers and a JSON body drawn as JSON, a supplied column order preserved in a table, a failed call rendering an error section rather than a result, a log's exit code only when recorded, a span's own fields staying beside its children, and every non-projected family still returning nothing at all.
+
+## The transcript's custom views cover the tools this build can emit (and only those)
+
+The card and the projection were built from v1's tool surface, which is the
+shell's own orchestrator surface. A native task cannot call most of it: v2 emits
+27 `defineTool` names (`env_build`/`env_test` are registered dynamically from one
+factory) plus the durable runtime's nine built-ins — `read`, `write`, `edit`,
+`bash`, `powershell`, `grep`, `find`, `ls`, `codemode`. Everything else in v1's
+projection was unreachable code describing a tool nothing can call.
+
+**Four real gaps closed, one tool removed.**
+
+- `env_http_get` is gone (`src/environment/http-tools.ts`). It was the
+  credential-free, non-redirecting GET compatibility twin of
+  `env_http_request`, which already defaults to GET with no headers, no
+  redirects and no authentication; the approval, issuance fence, redaction and
+  cleanup barrier were the same code path. One endpoint contract instead of two,
+  and the README/`docs/client-server-interface.md` now describe it that way.
+- `env_http_request` gained the reading its payload deserves
+  (`custom-tool-view.ts` `httpView`): the header is `POST /v1/orders` with
+  `gateway · web` as the target pair, the response is one status row plus
+  content-type/length/location headers and a JSON body, and the *request* keeps
+  its own sections — the authority flags that made a write legal
+  (`Allow Write`, `Follow Redirects`, `Authenticate`), its headers (credential-
+  named ones redacted by `safeToolValue`), and its body drawn as JSON. A
+  response body that was not returned as UTF-8 text says `Omitted: not UTF-8
+  text, or encoded` instead of presenting an empty answer as an empty body.
+- `powershell` shares the shell card. The runtime registers it beside `bash`
+  through the same `createShellToolDefinition`, with the same `command`/
+  `timeout` arguments and the same result shape, so `shellSource()` names both
+  and `toolIcon` gives it `>`; a Windows session no longer falls through to a
+  generic card.
+- The scheduling pair (`schedule_skill`, `pause_schedule`) is deliberately still
+  unnamed: it is being redesigned, so no half-reading is pinned for it.
+
+**Pruned, ready to return with its family.** With no tool able to emit them, the
+`web`, `stage`, `workflow`, `events` and `debug` families, the browser
+observation path (`ToolBrowserObservation.tsx`, the `browser_*` card branch, the
+`browser` gutter on `ToolCallHeader`) and the question dialogue
+(`ToolDialogue.tsx`, `developer_question`/`agent_ask`) were removed rather than
+carried dead: together they were a third of the module and every one of them
+said "restored" about a reading nothing could produce. The families that remain
+are the ones with live names — search, environment, logs, http, database,
+telemetry, evidence, orchestrator — and a name outside them still keeps the
+card's generic body, so the removal is not a behaviour change for anything a
+native task can call.
+
+Verification: `bun run type-check` clean, `bun run lint` clean (762 files),
+`bun scripts/build.ts` passes, whole suite **244 pass / 0 fail / 58 files /
+12.69 s** (`test/presentation-rules.test.ts` 18 tests / 124 expects, ~240 ms).

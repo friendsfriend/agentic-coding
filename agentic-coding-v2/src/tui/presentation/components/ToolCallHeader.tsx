@@ -13,7 +13,6 @@ export function ToolCallHeader(props: {
 	scope?: unknown;
 	interactive?: boolean;
 	pending: boolean;
-	browser: boolean;
 	icon: string;
 	label: string;
 	hint?: string;
@@ -51,12 +50,7 @@ export function ToolCallHeader(props: {
 				},
 			)}
 		>
-			<box width={props.browser ? 3 : 2} flexShrink={0} flexDirection="row">
-				<Show when={props.browser}>
-					<text fg={uiColors.textMuted} flexShrink={0}>
-						{"\uf488"}
-					</text>
-				</Show>
+			<box width={2} flexShrink={0} flexDirection="row">
 				<Show
 					when={props.pending}
 					fallback={<text fg={iconFg()}>{props.icon}</text>}
