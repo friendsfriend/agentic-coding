@@ -8,6 +8,15 @@ import {
 	parseFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 import codeSkill from "../skills/code/SKILL.md" with { type: "text" };
+import codeQualityVerifierSkill from "../skills/code-quality-verifier/SKILL.md" with {
+	type: "text",
+};
+import concurrencyVerifierSkill from "../skills/concurrency-verifier/SKILL.md" with {
+	type: "text",
+};
+import migrationVerifierSkill from "../skills/migration-verifier/SKILL.md" with {
+	type: "text",
+};
 import openspecApplyChange from "../skills/openspec-apply-change/SKILL.md" with {
 	type: "text",
 };
@@ -38,14 +47,23 @@ import openspecPropose from "../skills/openspec-propose/SKILL.md" with {
 import openspecSyncSpecs from "../skills/openspec-sync-specs/SKILL.md" with {
 	type: "text",
 };
+import openspecVerifierSkill from "../skills/openspec-verifier/SKILL.md" with {
+	type: "text",
+};
 import openspecVerifyChange from "../skills/openspec-verify-change/SKILL.md" with {
 	type: "text",
 };
 import openspecWorkflowSkill from "../skills/openspec-workflow/SKILL.md" with {
 	type: "text",
 };
+import performanceVerifierSkill from "../skills/performance-verifier/SKILL.md" with {
+	type: "text",
+};
 import researchSkill from "../skills/research/SKILL.md" with { type: "text" };
 import reviewSkill from "../skills/review/SKILL.md" with { type: "text" };
+import securityVerifierSkill from "../skills/security-verifier/SKILL.md" with {
+	type: "text",
+};
 import verifyWorkflowSkill from "../skills/verify-workflow/SKILL.md" with {
 	type: "text",
 };
@@ -178,6 +196,12 @@ export function loadConfig(
 		codeSkill,
 		researchSkill,
 		reviewSkill,
+		performanceVerifierSkill,
+		codeQualityVerifierSkill,
+		migrationVerifierSkill,
+		securityVerifierSkill,
+		concurrencyVerifierSkill,
+		openspecVerifierSkill,
 		verifyWorkflowSkill,
 		...[
 			openspecWorkflowSkill,

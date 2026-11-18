@@ -119,6 +119,12 @@ test("the driver spawns skills the host actually loaded", async () => {
 	for (const id of spawns) expect(loaded.has(id)).toBe(true);
 	// The official OpenSpec workflow skills are the ones doing the work.
 	for (const id of [
+		"performance-verifier",
+		"code-quality-verifier",
+		"migration-verifier",
+		"security-verifier",
+		"concurrency-verifier",
+		"openspec-verifier",
 		"openspec-explore",
 		"openspec-propose",
 		"openspec-apply-change",
