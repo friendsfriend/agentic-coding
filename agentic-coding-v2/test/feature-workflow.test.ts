@@ -13,6 +13,11 @@ afterEach(cleanup);
 
 test("feature names have an optional ticket, never an empty prefix or path escape", () => {
 	expect(featureBranch("new-search")).toBe("feature/new-search");
+	expect(featureBranch("new-search", "")).toBe("feature/new-search");
+	expect(featureBranch("new-search", "   ")).toBe("feature/new-search");
+	expect(featureBranch("new-search", " ABC-123 ")).toBe(
+		"feature/ABC-123-new-search",
+	);
 	expect(featureBranch("new-search", "ABC-123")).toBe(
 		"feature/ABC-123-new-search",
 	);

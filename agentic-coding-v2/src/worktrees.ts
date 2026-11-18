@@ -4,6 +4,8 @@ import { git } from "./git.ts";
 export function featureBranch(name: string, ticket?: string): string {
 	if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
 		throw new Error("Branch name must be a lowercase kebab-case name");
+	// Optional tool fields may arrive blank rather than omitted. Both mean no ticket.
+	ticket = ticket?.trim() || undefined;
 	if (ticket !== undefined && !/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(ticket))
 		throw new Error("Ticket must contain letters, digits and hyphens");
 	return `feature/${ticket ? `${ticket}-` : ""}${name}`;
@@ -67,7 +69,7 @@ export async function ensureFeatureWorktree(
 		]);
 		const reply = await run([
 			"switch",
-			...(refs.trim() ? [] : ["--create", "--base", base]),
+			...(refs.trim() ? [] : ["--create", "--base", base.trim() || "HEAD"]),
 			branch,
 			"--no-cd",
 			"--no-hooks",
