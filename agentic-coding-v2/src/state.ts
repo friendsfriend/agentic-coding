@@ -51,6 +51,11 @@ export type OrchestratorInfo = {
 	/** The caller's creation identity, so a repeated request returns this same
 	 * orchestrator instead of creating a second one. */
 	requestId?: string;
+	/** The skill this session was opened with, and the digest of the text the
+	 * developer chose. The digest records informed consent, not a pin: an edited
+	 * skill is the same skill, and a removed one falls back to the orchestrator
+	 * prompt instead of configuring an empty one. */
+	skill?: { id: string; digest: string };
 	/** The profile the developer chose for this conversation. Absent means it
 	 * follows the configured default. */
 	profileOverride?: string;

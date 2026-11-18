@@ -298,12 +298,18 @@ export async function dispatch(
 		case "orchestrator.read":
 			return { orchestrators: await app.orchestrators.read() };
 		case "orchestrator.create": {
-			fields(input, ["path", "title", "requestId"]);
+			fields(input, ["path", "title", "requestId", "skill", "revision"]);
 			return app.orchestrators.create({
 				path: text(input.path, "orchestrator directory", 4096),
 				...(typeof input.title === "string" ? { title: input.title } : {}),
 				...(typeof input.requestId === "string"
 					? { requestId: text(input.requestId, "creation identity", 128) }
+					: {}),
+				...(typeof input.skill === "string"
+					? { skill: text(input.skill, "skill", 128) }
+					: {}),
+				...(typeof input.revision === "string"
+					? { revision: text(input.revision, "skill revision", 64) }
 					: {}),
 			});
 		}

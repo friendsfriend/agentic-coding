@@ -73,6 +73,8 @@ export class Runtime {
 		extensions: readonly unknown[];
 		tools: readonly ToolRegistration[];
 		instructions: string;
+		/** The rules every conversation keeps whatever it was opened for. */
+		standing: string;
 	} | null = null;
 	private timer: Scheduler | null = null;
 	private admission: TaskAdmission | null = null;
@@ -144,9 +146,20 @@ export class Runtime {
 	}
 	/** The agent change for one orchestrator conversation: configured exactly
 	 * like the root, working in `cwd` (the root works in the default checkout). */
-	orchestratorAgent(cwd: string | null, profileId?: string): AgentChange {
+	/** One conversation's agent, in one directory. A skill session swaps the
+	 * orchestrator framing for the skill's own text and keeps the standing rules,
+	 * so its tools, ownership and safety are the same as any other conversation's.
+	 */
+	orchestratorAgent(
+		cwd: string | null,
+		profileId?: string,
+		skill?: string,
+	): AgentChange {
 		if (!this.orchestrator)
 			throw new Error("Orchestrator agent is not initialized");
+		const chosenSkill = skill
+			? this.config.skills.find((item) => item.id === skill)
+			: undefined;
 		const chosen = profileId ?? this.config.orchestratorProfile;
 		const profile = this.config.profiles.find((item) => item.id === chosen);
 		return {
@@ -156,7 +169,9 @@ export class Runtime {
 			thinkingLevel: profile?.thinking ?? null,
 			extensions: this.orchestrator.extensions as AgentChange["extensions"],
 			tools: this.orchestrator.tools,
-			instructions: this.orchestrator.instructions,
+			instructions: chosenSkill
+				? `${chosenSkill.content}\n\n${this.orchestrator.standing}`
+				: this.orchestrator.instructions,
 			cwd,
 			modelTools: null,
 		};
@@ -220,6 +235,8 @@ export class Runtime {
 			// One tool surface for every agent: the orchestrator keeps no private
 			// capability and no task gets one either. What differs is ownership —
 			// whether the conversation owns a task, and which environment it acts for.
+			const standing =
+				"You work directly in the checkout this conversation was opened in and can read, write, edit and run commands there. You have the same tools a task has. Inspect env_list before proposing environment operations. Use env_discover with an explicit configured repository for read-only root manifest hints; these are not trusted or validated target definitions and grant no edit, import or execution authority. Use environment_action for direct Run/Build/Test controls without an agent/model profile: they run as a native operator task you then inspect through the same environment tools. Every target needs exact human approval. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.";
 			app.orchestrator = {
 				extensions: [delegation, environmentTools, agentTools, coding],
 				tools: [
@@ -228,7 +245,8 @@ export class Runtime {
 					...(agentTools.tools ?? []),
 					...(coding.tools ?? []),
 				],
-				instructions: `${orchestratorPrompt}\nYou work directly in the checkout this conversation was opened in and can read, write, edit and run commands there. You have the same tools a task has. Inspect env_list before proposing environment operations. Use env_discover with an explicit configured repository for read-only root manifest hints; these are not trusted or validated target definitions and grant no edit, import or execution authority. Use environment_action for direct Run/Build/Test controls without an agent/model profile: they run as a native operator task you then inspect through the same environment tools. Every target needs exact human approval. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
+				standing,
+				instructions: `${orchestratorPrompt}\n${standing}`,
 			};
 			app.root = await app.harness.root(context);
 			// root's creation options do not update a previously persisted conversation.

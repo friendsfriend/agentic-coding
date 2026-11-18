@@ -1,113 +1,120 @@
 ---
 
 name: openspec-workflow
-description: Own one OpenSpec change from exploration through proposal, apply, review and archive, spawning the agents that do the work.
+description: "Own one OpenSpec change from exploration to archive: explore with the developer, write the artifacts, and spawn the official OpenSpec skills for apply, verify and archive."
 ---
 
-You own one OpenSpec change from its first question to its archive. You explore and
-write the proposal yourself; every implementation step is a sub-agent you spawn and
-wait for. Work in the directory and repository named in your instructions, and give
-every sub-agent `workspace: "shared"` so all of you see one checkout: the change lives
-in `openspec/` of this directory, and a separate worktree would leave it behind.
+You take one OpenSpec change from a half-formed idea to an archived change. You are in a
+conversation with the developer, so you talk to them; the work itself is done by
+sub-agents you spawn, each running the official OpenSpec skill for its step.
 
-Use `this task's own` values everywhere: the `Topic:` and `Repository:` lines in your
-instructions for `topicId`/`repository`, and `catalog` to choose a `profile` — prefer
-the profile named in your instructions when it is listed. Give each spawn a stable
-`requestId` so a repeated call cannot create a second agent: `apply:<change>`,
-`review:<change>:1`, `fix:<change>:1`, `archive:<change>`.
+Work in the directory named in your instructions. Spawn every sub-agent with
+`workspace: "shared"` so all of you see the same checkout: the change lives in
+`openspec/` there, and a separate worktree would leave it behind. Reuse your own
+`Topic:` and `Repository:` for `topicId` and `repository`, choose a `profile` from
+`catalog` (prefer the one named in your instructions when it is listed), and give every
+spawn a stable `requestId` so a repeated call cannot create a second agent.
 
-You are resumed with the results of the agents you spawn once they have all finished.
-End your turn after spawning instead of waiting or polling; the results arrive as a
-new turn, and you decide from them.
+After you spawn, end your turn. You are resumed with the results once the agents you
+spawned have all finished — never poll for them.
+
+## Decide whether to interact
+
+You decide, not a rule, whether the developer's message already contains what you need.
+
+Ask when the answer would change what you write: which capability this touches, whether
+the change is one change or three, what must not change, which of two real options they
+prefer. Do not ask for permission to do the work you were asked to do, and do not ask
+what you could read from the code yourself.
+
+While you are still deciding, stay in thinking mode: read the code, read
+`openspec list`, `openspec list --specs`, `openspec show <change>`, sketch options, and
+write nothing. `openspec-explore` is that stance in full — follow it if you want the long
+form. Do not create or edit files while exploring; the only exception is artifacts the
+developer explicitly asks you to write early.
 
 ## 1. Explore
 
-Read before you write anything: `openspec list`, `openspec list --specs`, `openspec show
-<change>` for a neighbouring change, and the code the change would touch. State what
-you actually found versus what you assume, and keep proposals smaller than the problem
-looks: one change is one bounded capability.
+Read before you write: which capabilities exist, what the neighbouring specs already
+promise, and the code the change would touch. Say what you found and what you assume,
+separately. Keep the change smaller than the problem looks: one change is one bounded
+capability, and a second capability is a second change.
 
-Do not create or edit a single file in this phase. That includes `openspec/`, the
-repository, and any scratch file inside the checkout.
-
-Close the phase with exactly one `request_review`, whose `title` is the question the
-developer answers — for example "Explore: <one-line intent>. Approve to write the
-proposal." Give the findings in your own answer, not in the review. `approved` starts
-the proposal; `changes-requested` means the developer redirected you, so explore again
-with their comments and ask again; `rejected` ends the workflow — report what you
-learned and stop.
+When the shape is clear, state the intent in the developer's language — one paragraph,
+not a design — and continue. Do not stop to ask "shall I proceed" if they already told
+you to go.
 
 ## 2. Propose
 
-Create `openspec/changes/<change-id>/` with a kebab-case id and write the four
-artifacts in this order, each from the instructions OpenSpec prints for it, answering
-the developer's comments from the review as you go:
+    openspec new change "<kebab-case-id>"
+    openspec status --change "<id>" --json
 
-    openspec instructions proposal --change <change-id>
-    openspec instructions specs    --change <change-id>
-    openspec instructions design   --change <change-id>
-    openspec instructions tasks    --change <change-id>
+Then write each artifact the schema lists, from the instructions OpenSpec prints for it
+and in dependency order — proposal, then specs, then design, then tasks:
 
-Then `openspec validate <change-id>` and read `openspec status --change <change-id>`.
-Fix anything either of them reports; an artifact that does not validate is not written.
-The proposal's Capabilities section is a contract with the spec deltas — a capability
-named there needs its `specs/<name>/spec.md`, and one not named there has no business
-in the change.
+    openspec instructions <artifact> --change "<id>"
+
+`openspec-propose` is the fast single-shot version of exactly this; use it if the
+developer asked for a proposal with no discussion left. Answer in the artifact files, not
+in the chat: the proposal's Capabilities section is a contract with the spec deltas, and
+a capability named there needs its `specs/<name>/spec.md`. Finish with
+
+    openspec validate "<id>"
+
+and fix everything it reports. An artifact that does not validate is not written. Report
+the change id, its path and what each artifact now says, then continue into apply unless
+the developer asked to read the proposal first — if they did, stop and wait for them.
 
 ## 3. Apply
 
 Spawn the implementation and end your turn:
 
-    start_task({ skill: "openspec-apply", workspace: "shared", topicId: <yours>,
-                 repository: <yours>, profile: <chosen>, requestId: "apply:<change-id>",
-                 inputs: "Apply the OpenSpec change <change-id> in <directory>.
-                          Follow openspec instructions apply --change <change-id>,
-                          tick every task in tasks.md as you complete it, run the
-                          repository's gates, and validate the change." })
+    start_task({ skill: "openspec-apply-change", workspace: "shared", topicId, repository,
+                 profile, requestId: "apply:<id>",
+                 inputs: "Apply the OpenSpec change <id> in <directory>." })
 
-## 4. Review
+## 4. Verify
 
-When apply reports back, spawn one reviewer per concern you actually have. For now
-that is the generic `review` skill; a single reviewer is enough unless the change spans
-clearly separate areas:
+When apply reports back, verify before deciding anything:
 
-    start_task({ skill: "review", workspace: "shared", ...,
-                 requestId: "review:<change-id>:1",
-                 inputs: "Review the OpenSpec change <change-id> against its own
-                          requirement and spec deltas, and against the code that now
-                          implements it. Findings only, no edits." })
+    start_task({ skill: "openspec-verify-change", workspace: "shared", topicId, repository,
+                 profile, requestId: "verify:<id>:1",
+                 inputs: "Verify the OpenSpec change <id> in <directory> against its own
+                          artifacts and the code that now implements it." })
+
+Add a `review` sub-agent with the next requestId when the change touched real behaviour
+and you want an independent read of the diff; one extra reviewer, not a panel.
 
 ## 5. Decide
 
-Read every finding and decide yourself — the reviewer reports, it does not decide.
-Blocking findings get one fix sub-agent, then a fresh review with the next review
-number:
+Read every finding and decide yourself. Neither verifier decides for you: a finding you
+cannot reproduce in the code is not a finding.
 
-    start_task({ skill: "openspec-apply", workspace: "shared", ...,
-                 requestId: "fix:<change-id>:1",
-                 inputs: "Address only these findings in the OpenSpec change
-                          <change-id>: <the findings, verbatim>. Tick tasks.md, run the
-                          gates, validate." })
+Blocking findings get one fix sub-agent, then a fresh verify with the next number:
 
-Stop the cycle after two fix rounds. If findings still block, report them to the
-developer with what you tried: a change that needs a third round is a change whose
-proposal or design was wrong, and that is the developer's decision, not another
-sub-agent's work. Speculative or stylistic findings that the change did not ask for are
-not work: say you are not doing them and why.
+    start_task({ skill: "openspec-apply-change", workspace: "shared", topicId, repository,
+                 profile, requestId: "fix:<id>:1",
+                 inputs: "Address only these findings in the OpenSpec change <id>:
+                          <the findings, verbatim>" })
+
+Stop after two fix rounds. Findings that still block after that mean the proposal or the
+design was wrong, and rewriting them is the developer's decision, not another sub-agent's
+work. Refuse findings that the change never asked for — say which and why.
 
 ## 6. Archive
 
-With nothing blocking left, spawn the archive and end your turn:
+With nothing blocking left:
 
-    start_task({ skill: "openspec-apply", workspace: "shared", ...,
-                 requestId: "archive:<change-id>",
-                 inputs: "Archive the completed OpenSpec change <change-id>. Validate it,
-                          then archive it; never archive with unchecked tasks." })
+    start_task({ skill: "openspec-archive-change", workspace: "shared", topicId, repository,
+                 profile, requestId: "archive:<id>",
+                 inputs: "Archive the completed OpenSpec change <id> in <directory>." })
+
+`openspec-archive-change` refuses a change with unchecked tasks, which is the answer you
+want: that is a change that was not implemented.
 
 ## Reporting
 
-One report at the end of each phase, in the developer's language and without asking
-them to reconstruct anything: the change id and its path, which artifacts exist, what
-apply changed, the findings you accepted and refused, the archive path and the specs it
-folded in. Call `request_review` again only for a decision that is the developer's —
-never for a step you were already asked to take.
+One short report per phase, in the developer's language, and never make them reconstruct
+what happened: the change id and path, what apply changed, the findings you accepted and
+refused, the archive path and the specs it folded in. Never push, deploy, install
+services, rotate credentials or touch unrelated work.

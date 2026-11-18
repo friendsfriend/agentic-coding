@@ -20,6 +20,9 @@ export function SkillPanel(props: {
 	fresh: boolean;
 	prepare: (command: string) => void;
 	discuss: (id: string, revision: string) => void;
+	/** Open a conversation whose instructions are this skill: the interactive
+	 * path, where the skill can talk to the developer instead of working alone. */
+	open: (id: string, revision: string) => void;
 }) {
 	const syntax = SyntaxStyle.fromStyles(
 		{ default: { fg: color("text") } },
@@ -139,6 +142,18 @@ export function SkillPanel(props: {
 										}}
 									>
 										<text fg={color("accent")}>Read instructions</text>
+									</ActionHeader>
+									<ActionHeader
+										scope={source()}
+										interactive={ready(row)}
+										onActivate={() => {
+											if (ready(row))
+												props.open(String(row.id), String(row.revision));
+										}}
+									>
+										<text fg={color("accent")}>
+											Start a session with this skill
+										</text>
 									</ActionHeader>
 									<ActionHeader
 										scope={source()}

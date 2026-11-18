@@ -34,6 +34,7 @@ export class Orchestrators {
 			...(stored?.profileOverride
 				? { profileOverride: stored.profileOverride }
 				: {}),
+			...(stored?.skill ? { skill: stored.skill } : {}),
 		};
 	}
 
@@ -151,7 +152,11 @@ export class Orchestrators {
 				: {}),
 		};
 		await (root ? this.app.home : await this.conversation(id)).configure(
-			this.app.orchestratorAgent(root ? null : next.path, chosen),
+			this.app.orchestratorAgent(
+				root ? null : next.path,
+				chosen,
+				next.skill?.id,
+			),
 			context,
 		);
 		await this.save(next);
@@ -176,7 +181,11 @@ export class Orchestrators {
 				? this.app.home
 				: await this.conversation(entry.id);
 			await conversation.configure(
-				this.app.orchestratorAgent(root ? null : entry.path, chosen),
+				this.app.orchestratorAgent(
+					root ? null : entry.path,
+					chosen,
+					entry.skill?.id,
+				),
 				context,
 			);
 			await this.save({ ...entry, profile: chosen });
@@ -218,6 +227,8 @@ export class Orchestrators {
 		path: string;
 		title?: string;
 		requestId?: string;
+		skill?: string;
+		revision?: string;
 	}): Promise<OrchestratorInfo> {
 		const run = this.creating.then(() => this.createOnce(input));
 		this.creating = run.catch(() => undefined);
@@ -228,6 +239,8 @@ export class Orchestrators {
 		path: string;
 		title?: string;
 		requestId?: string;
+		skill?: string;
+		revision?: string;
 	}): Promise<OrchestratorInfo> {
 		const requestId = input.requestId
 			? text(input.requestId, "creation identity", 128)
@@ -241,8 +254,19 @@ export class Orchestrators {
 			}
 		}
 		const target = this.authorize(input.path);
+		// A session opened for a skill runs that skill as its instructions, so the
+		// developer chooses the exact text they saw: an unknown skill or a stale
+		// revision is refused rather than opened with something else.
+		const skill = input.skill
+			? this.app.config.skills.find(
+					(item) => item.id === text(input.skill, "skill", 128),
+				)
+			: undefined;
+		if (input.skill && !skill) throw new Error("Unknown skill");
+		if (skill && input.revision !== skill.digest)
+			throw new Error("Loaded skill changed since it was read");
 		const title = text(
-			input.title?.trim() || path.basename(target),
+			input.title?.trim() || skill?.id || path.basename(target),
 			"orchestrator title",
 			120,
 		);
@@ -255,7 +279,7 @@ export class Orchestrators {
 				// Ownerless: a sibling of the root, not owned or cascaded by it, so
 				// one orchestrator's cancellation never reaches another.
 				ownership: { kind: "ownerless" },
-				agent: this.app.orchestratorAgent(target),
+				agent: this.app.orchestratorAgent(target, undefined, skill?.id),
 			},
 			context,
 		);
@@ -266,6 +290,7 @@ export class Orchestrators {
 			profile: this.app.config.orchestratorProfile,
 			createdAt: Date.now(),
 			...(requestId ? { requestId } : {}),
+			...(skill ? { skill: { id: skill.id, digest: skill.digest } } : {}),
 		};
 		await this.app.home.commit(async (tx) => {
 			const doc = await tx.doc(Catalog);

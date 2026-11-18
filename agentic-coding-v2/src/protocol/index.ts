@@ -320,7 +320,14 @@ export type Methods = {
 		output: { orchestrators: OrchestratorInfo[] };
 	};
 	"orchestrator.create": {
-		input: { path: string; title?: string; requestId?: string };
+		input: {
+			path: string;
+			title?: string;
+			requestId?: string;
+			/** Open the session with one loaded skill as its instructions. */
+			skill?: string;
+			revision?: string;
+		};
 		output: OrchestratorInfo;
 	};
 	"orchestrator.rename": {

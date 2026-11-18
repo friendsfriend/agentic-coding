@@ -8,7 +8,37 @@ import {
 	parseFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 import codeSkill from "../skills/code/SKILL.md" with { type: "text" };
-import openspecApplySkill from "../skills/openspec-apply/SKILL.md" with {
+import openspecApplyChange from "../skills/openspec-apply-change/SKILL.md" with {
+	type: "text",
+};
+import openspecArchiveChange from "../skills/openspec-archive-change/SKILL.md" with {
+	type: "text",
+};
+import openspecBulkArchiveChange from "../skills/openspec-bulk-archive-change/SKILL.md" with {
+	type: "text",
+};
+import openspecContinueChange from "../skills/openspec-continue-change/SKILL.md" with {
+	type: "text",
+};
+import openspecExplore from "../skills/openspec-explore/SKILL.md" with {
+	type: "text",
+};
+import openspecFfChange from "../skills/openspec-ff-change/SKILL.md" with {
+	type: "text",
+};
+import openspecNewChange from "../skills/openspec-new-change/SKILL.md" with {
+	type: "text",
+};
+import openspecOnboard from "../skills/openspec-onboard/SKILL.md" with {
+	type: "text",
+};
+import openspecPropose from "../skills/openspec-propose/SKILL.md" with {
+	type: "text",
+};
+import openspecSyncSpecs from "../skills/openspec-sync-specs/SKILL.md" with {
+	type: "text",
+};
+import openspecVerifyChange from "../skills/openspec-verify-change/SKILL.md" with {
 	type: "text",
 };
 import openspecWorkflowSkill from "../skills/openspec-workflow/SKILL.md" with {
@@ -145,8 +175,20 @@ export function loadConfig(
 		codeSkill,
 		researchSkill,
 		reviewSkill,
-		openspecWorkflowSkill,
-		openspecApplySkill,
+		...[
+			openspecWorkflowSkill,
+			openspecExplore,
+			openspecPropose,
+			openspecNewChange,
+			openspecContinueChange,
+			openspecFfChange,
+			openspecApplyChange,
+			openspecVerifyChange,
+			openspecSyncSpecs,
+			openspecArchiveChange,
+			openspecBulkArchiveChange,
+			openspecOnboard,
+		],
 		wikiCommentSkill,
 	].map((content) => {
 		const { frontmatter } = parseFrontmatter(content);
