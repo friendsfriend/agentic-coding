@@ -34,6 +34,15 @@ export type WorkspaceEntry = {
 	/** The row's own mark; a navigation tree names each kind of row. */
 	glyph?: string;
 	task?: WorkspaceTaskObservation;
+	tone?: "primary" | "accent" | "muted" | "success" | "warning" | "error";
+	tree?: {
+		prefix: string;
+		parent?: string;
+		branch: boolean;
+		collapsed: boolean;
+		summary: string;
+		kind: "project" | "workflow" | "task";
+	};
 };
 
 export const workspaceNavigationKeybinds: Keybind[] = [
@@ -71,6 +80,18 @@ export const workspaceNavigationKeybinds: Keybind[] = [
 		key: "j",
 		cmd: "workspace.next",
 		action: "Next workspace entry",
+		standard: true,
+	},
+	{
+		key: "left",
+		cmd: "workspace.collapse",
+		action: "Collapse branch or select parent",
+		standard: true,
+	},
+	{
+		key: "right",
+		cmd: "workspace.expand",
+		action: "Expand branch or select child",
 		standard: true,
 	},
 	// Row actions belong to the caller: this panel only reports which row and
@@ -123,6 +144,7 @@ export function WorkspaceNavigation(props: {
 	/** The selected row, owned by the caller. A row move never navigates. */
 	cursor: string;
 	onCursor: (value: string) => void;
+	onToggleBranch?: (value: string) => void;
 	open: (value: string) => void;
 	focus: () => void;
 	onWidth: (width: number) => void;
@@ -145,7 +167,15 @@ export function WorkspaceNavigation(props: {
 	const setCursorValue = (value: string) => props.onCursor(value);
 	let scroll: ScrollBoxRenderable | undefined;
 	const expandedByState = () => permanent() || props.active;
-	const targetWidth = () => Math.min(34, Math.max(6, dimensions().width - 30));
+	const targetWidth = () =>
+		Math.min(
+			60,
+			Math.max(
+				6,
+				Math.floor(dimensions().width * 0.32),
+				Math.min(42, dimensions().width - 40),
+			),
+		);
 	const [animatedWidth, setAnimatedWidth] = createSignal(
 		expandedByState() ? targetWidth() : 6,
 	);
@@ -214,7 +244,6 @@ export function WorkspaceNavigation(props: {
 		if (entry) setCursorValue(entry.value);
 	};
 	const unregister = useKeymap().registerLayer({
-		name: "v2.workspace-navigation",
 		priority: 15,
 		enabled: () => props.active && interactive(),
 		commands: layerCommands([
@@ -250,6 +279,30 @@ export function WorkspaceNavigation(props: {
 			},
 			{ id: "workspace.open", name: "Open workspace entry", run: open },
 			{
+				id: "workspace.collapse",
+				name: "Collapse branch or select parent",
+				run: () => {
+					const entry = entriesByKey().get(cursorValue())?.entry;
+					if (entry?.tree?.branch && !entry.tree.collapsed)
+						props.onToggleBranch?.(entry.value);
+					else if (entry?.tree?.parent) setCursorValue(entry.tree.parent);
+				},
+			},
+			{
+				id: "workspace.expand",
+				name: "Expand branch or select child",
+				run: () => {
+					const slot = entriesByKey().get(cursorValue());
+					if (slot?.entry.tree?.branch && slot.entry.tree.collapsed)
+						props.onToggleBranch?.(slot.entry.value);
+					else if (slot) {
+						const next = entries()[slot.index + 1];
+						if (next?.tree?.parent === slot.entry.value)
+							setCursorValue(next.value);
+					}
+				},
+			},
+			{
 				id: "workspace.rename",
 				name: "Rename the selected orchestrator",
 				run: () => {
@@ -282,7 +335,15 @@ export function WorkspaceNavigation(props: {
 		if (!scroll || index < 0) return;
 		const flowing = entries().slice(pinCount());
 		const rowHeight = (entry: WorkspaceEntry) =>
-			entry.task ? 3 : expanded() ? 2 : 1;
+			entry.task
+				? 3
+				: !expanded()
+					? 1
+					: entry.tree
+						? entry.value === cursorValue() || entry.tree.summary
+							? 2
+							: 1
+						: 2;
 		const entry = flowing[index];
 		if (!entry) return;
 		const height = rowHeight(entry);
@@ -364,7 +425,26 @@ export function WorkspaceNavigation(props: {
 									meta: slot().entry.description,
 								}}
 								selected={cursorValue() === key}
-								height={expanded() ? 2 : 1}
+								height={
+									!expanded()
+										? 1
+										: slot().entry.tree
+											? cursorValue() === key || slot().entry.tree?.summary
+												? 2
+												: 1
+											: 2
+								}
+								wide={expanded()}
+								width={width() - 4}
+								tone={slot().entry.tone}
+								tree={slot().entry.tree}
+								onToggleBranch={() => {
+									if (interactive()) {
+										focus();
+										setCursorValue(key);
+										props.onToggleBranch?.(key);
+									}
+								}}
 								gesture={gesture}
 								onActivate={activate}
 							/>

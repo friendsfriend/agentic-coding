@@ -24,7 +24,6 @@ export function QuitDialog(props: {
 			});
 	};
 	const unregister = useKeymap().registerLayer({
-		name: "v2.quitConfirmation",
 		priority: 190,
 		enabled,
 		bindings: [

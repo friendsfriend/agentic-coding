@@ -91,7 +91,6 @@ export function SettingsThemePicker(props: {
 			.map((key) => (key === " " ? "space" : key)),
 	];
 	const unregister = useKeymap().registerLayer({
-		name: "v2.settings.theme-picker",
 		priority: 150,
 		enabled: props.active,
 		commands: [

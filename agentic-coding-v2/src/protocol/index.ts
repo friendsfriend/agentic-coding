@@ -27,6 +27,10 @@ import type { StandaloneMethods } from "./standalone.ts";
 import type { NativeViewpoint, UiView } from "./viewpoints.ts";
 export type Data = Record<string, unknown>;
 export type Session = {
+	/** Visual lineage of independent interactive workflows; not native ownership. */
+	spawnedBy?: number;
+	branch?: string;
+	status?: "idle" | "running";
 	id: number;
 	parent: number | null;
 	task: number | null;

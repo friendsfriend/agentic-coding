@@ -37,6 +37,9 @@ export type WorkspaceMode = "shared" | "worktree";
 /** One orchestrator: a conversation the developer talks to, with its own
  * directory. The root is implicit; created ones are recorded in the catalog. */
 export type OrchestratorInfo = {
+	/** Visual lineage only; ownerless conversations keep independent lifetimes. */
+	spawnedBy?: number;
+	branch?: string;
 	id: number;
 	title: string;
 	/** The absolute directory this orchestrator works in. */

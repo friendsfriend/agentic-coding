@@ -9,6 +9,7 @@ export function Selectable(props: {
 	selected: boolean;
 	children?: JSX.Element;
 	backgroundColor?: string;
+	selectedBackground?: string;
 	hoverBackground?: string | false;
 	indicatorColor?: string;
 	height?: number;
@@ -32,7 +33,7 @@ export function Selectable(props: {
 		const hoverFill = hover.hovered() ? hoverBackground() : undefined;
 		if (hoverFill !== undefined) return hoverFill;
 		return props.selected
-			? uiColors.bgSurface0
+			? (props.selectedBackground ?? uiColors.bgSurface0)
 			: (props.backgroundColor ?? uiColors.bgMantle);
 	};
 	return (

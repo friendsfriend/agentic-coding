@@ -36,6 +36,7 @@ export class Orchestrators {
 				? { profileOverride: stored.profileOverride }
 				: {}),
 			...(stored?.skill ? { skill: stored.skill } : {}),
+			...(stored?.branch ? { branch: stored.branch } : {}),
 		};
 	}
 
@@ -215,7 +216,7 @@ export class Orchestrators {
 			base,
 			location,
 		);
-		const next = { ...entry, path: result.path };
+		const next = { ...entry, path: result.path, branch: result.branch };
 		await this.save(next);
 		await (await this.conversation(id)).configure(
 			this.app.orchestratorAgent(next.path, next.profile, next.skill?.id),
@@ -251,6 +252,7 @@ export class Orchestrators {
 		requestId?: string;
 		skill?: string;
 		revision?: string;
+		spawnedBy?: number;
 	}): Promise<OrchestratorInfo> {
 		const run = this.creating.then(() => this.createOnce(input));
 		this.creating = run.catch(() => undefined);
@@ -263,6 +265,7 @@ export class Orchestrators {
 		requestId?: string;
 		skill?: string;
 		revision?: string;
+		spawnedBy?: number;
 	}): Promise<OrchestratorInfo> {
 		const requestId = input.requestId
 			? text(input.requestId, "creation identity", 128)
@@ -314,6 +317,7 @@ export class Orchestrators {
 			createdAt: Date.now(),
 			...(requestId ? { requestId } : {}),
 			...(skill ? { skill: { id: skill.id, digest: skill.digest } } : {}),
+			...(input.spawnedBy !== undefined ? { spawnedBy: input.spawnedBy } : {}),
 		};
 		await this.app.home.commit(async (tx) => {
 			const doc = await tx.doc(Catalog);

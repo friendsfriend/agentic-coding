@@ -175,7 +175,6 @@ export function TelemetryControls(props: {
 	const isRepository = () =>
 		["scan", "watch", "unwatch"].includes(operation() ?? "");
 	const unregister = useKeymap().registerLayer({
-		name: "v2.telemetry.controls",
 		priority: 90,
 		enabled: props.active,
 		commands: [

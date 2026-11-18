@@ -138,6 +138,7 @@ import { color } from "../ui/theme/index.ts";
 import { HelpOverlay, helpOverlayKeybinds } from "./HelpOverlay.tsx";
 import { type LocationEntry, PAGE_LOCATIONS } from "./locations.ts";
 import { Navigation, type Page, type View, view } from "./navigation.ts";
+import { sessionTree } from "./session-tree.ts";
 import { Viewpoints } from "./viewpoints.ts";
 
 // One catalog drives the Home listing, the location picker and the page-name
@@ -2334,7 +2335,6 @@ export function App(props: {
 	});
 	const keymap = useKeymap();
 	const unregisterCopy = keymap.registerLayer({
-		name: "v2.explicitSelectionCopy",
 		priority: 205,
 		commands: layerCommands([
 			{
@@ -2353,7 +2353,6 @@ export function App(props: {
 	// layer's enabled state is the only way to leave a key unclaimed, because a
 	// bound key is consumed before the renderable that expects to type it.
 	const unregisterQuit = keymap.registerLayer({
-		name: "v2.quitKeys",
 		priority: 5,
 		enabled: () =>
 			!typingIntoText() &&
@@ -2380,7 +2379,6 @@ export function App(props: {
 	});
 	onCleanup(unregisterQuit);
 	const unregisterViewport = keymap.registerLayer({
-		name: "v2.transcriptViewport",
 		priority: 35,
 		enabled: () =>
 			isTranscript() &&
@@ -2407,7 +2405,6 @@ export function App(props: {
 	});
 	onCleanup(unregisterViewport);
 	const unregister = keymap.registerLayer({
-		name: "v2.shell",
 		priority: 10,
 		enabled: () =>
 			messageDialog() === null &&
@@ -2645,7 +2642,6 @@ export function App(props: {
 	// (v1: the renderable handles its own keys). Only the host escape hatches
 	// stay bound, so the developer can always leave the page or quit.
 	const unregisterAgentTerminal = keymap.registerLayer({
-		name: "v2.agentTerminals",
 		priority: 30,
 		enabled: () => agentTerminalFocus() !== null,
 		commands: layerCommands([
@@ -2680,7 +2676,6 @@ export function App(props: {
 	// v1: prompt-free form/list pages route `?` to shell help except during
 	// text entry. Their own higher-priority confirmation layers keep their keys.
 	const unregisterEnvironmentHelp = keymap.registerLayer({
-		name: "v2.environment-help",
 		priority: 20,
 		enabled: () =>
 			contentFocused() &&
@@ -3750,7 +3745,6 @@ export function App(props: {
 	// Embedded conversations, workbenches and review/wiki/schedule bodies own Tab.
 	// Explicit breadcrumb pointer focus can always be left with Tab or Escape.
 	const unregisterSettingsTheme = keymap.registerLayer({
-		name: "v2.settings.theme-open",
 		priority: 30,
 		enabled: () => current().page === "settings" && menuKeysActive(),
 		bindings: [
@@ -3819,7 +3813,6 @@ export function App(props: {
 		);
 	};
 	const unregisterPageFocus = keymap.registerLayer({
-		name: "v2.page-focus",
 		priority: 25,
 		enabled: pageFocusEnabled,
 		commands: layerCommands([
@@ -3833,7 +3826,6 @@ export function App(props: {
 		bindings: bindings(pageFocusKeybinds),
 	});
 	const unregisterBreadcrumbs = keymap.registerLayer({
-		name: "v2.breadcrumbs",
 		priority: 25,
 		enabled: () => crumbActive() && crumbInteractionEnabled(),
 		commands: layerCommands([
@@ -3942,60 +3934,16 @@ export function App(props: {
 	// sessions, and finally the row that starts another orchestrator. Every
 	// other surface is reached through Menu, exactly as v1's destination list
 	// worked; tasks, viewpoints and pages no longer pad this list.
-	// A directory is read from its end: the leaf says which checkout a row works
-	// in, while a shared prefix says very little. The renderer shortens a long
-	// row from the right, so the shortening happens here first — with a budget
-	// that keeps the leaf — instead of throwing away the part that identifies it.
-	const elidedPath = (value: string) => {
-		// Glyph column, padding and the meta's own margin.
-		const room = Math.min(20, Math.max(10, workspaceWidth() - 12));
-		return value.length <= room
-			? value
-			: `…${value.slice(value.length - room + 1)}`;
-	};
-	const leafOf = (value: string) =>
-		value.split("/").filter(Boolean).at(-1) ?? "";
-	const sidebarOptions = () => {
-		const sessions = state()?.sessions ?? [];
-		// Two checkouts may share a leaf, and one directory may hold two
-		// orchestrators; the leaf alone is enough only when it is unambiguous.
-		const leaves = new Map<string, number>();
-		for (const session of sessions)
-			if (session.parent === null && session.path) {
-				const leaf = leafOf(session.path);
-				leaves.set(leaf, (leaves.get(leaf) ?? 0) + 1);
-			}
-		const directory = (session: (typeof sessions)[number]) => {
-			const path = session.path;
-			if (!path) return `Orchestrator ${session.id}`;
-			const leaf = leafOf(path);
-			if ((leaves.get(leaf) ?? 0) <= 1) return leaf || path;
-			const parent = leafOf(path.slice(0, path.lastIndexOf("/")));
-			return elidedPath(parent ? `${parent}/${leaf}` : path);
-		};
-		// Roots are the orchestrators; a child is listed under the orchestrator
-		// that admitted it, so the tree shows who owns what.
-		const tree = sessions
-			.filter((session) => session.parent === null)
-			.flatMap((root) => [
-				{
-					name: root.title,
-					description: directory(root),
-					value: `session:${root.id}`,
-					glyph: "∞",
-				},
-				// Every child is listed: the panel scrolls, and a fixed cap hid
-				// sessions without saying so. Creation order keeps a tree stable
-				// while new work arrives.
-				...sessions
-					.filter((session) => session.parent === root.id)
-					.map((session) => ({
-						name: session.title,
-						description: `Session ${session.id}`,
-						value: `session:${session.id}`,
-						glyph: session.writable ? "▸" : "·",
-					})),
-			]);
+	const [collapsedSessions, setCollapsedSessions] = createSignal<
+		ReadonlySet<number>
+	>(new Set());
+	const sidebarOptions = createMemo(() => {
+		const tree = sessionTree(
+			state()?.sessions ?? [],
+			state()?.tasks ?? [],
+			state()?.reviews ?? [],
+			collapsedSessions(),
+		);
 		return [
 			{
 				name: "Menu",
@@ -4023,7 +3971,7 @@ export function App(props: {
 				glyph: "+",
 			},
 		];
-	};
+	});
 
 	// The configured checkouts an orchestrator may start in: environment
 	// applications and libraries, never infrastructure, deduplicated by directory
@@ -4229,6 +4177,23 @@ export function App(props: {
 		const route = workspaceSelected();
 		if (route === syncedSidebarRoute) return;
 		syncedSidebarRoute = route;
+		if (route.startsWith("session:")) {
+			const sessions = new Map(
+				(state()?.sessions ?? []).map((session) => [session.id, session]),
+			);
+			const ancestors = new Set<number>();
+			let item = sessions.get(Number(route.slice(8)));
+			while (item) {
+				const parent = item.spawnedBy ?? item.parent;
+				if (parent === null || ancestors.has(parent)) break;
+				ancestors.add(parent);
+				item = sessions.get(parent);
+			}
+			setCollapsedSessions((previous) => {
+				if (![...ancestors].some((id) => previous.has(id))) return previous;
+				return new Set([...previous].filter((id) => !ancestors.has(id)));
+			});
+		}
 		if (sidebarOptions().some((entry) => entry.value === route))
 			setSidebarCursor(route);
 	});
@@ -4288,7 +4253,16 @@ export function App(props: {
 					current().workspace.mode === "permanent" ? "expanding" : "permanent";
 				update();
 			}}
-			pinCount={4}
+			pinCount={3}
+			onToggleBranch={(value) => {
+				const id = Number(value.slice(8));
+				setCollapsedSessions((previous) => {
+					const next = new Set(previous);
+					if (next.has(id)) next.delete(id);
+					else next.add(id);
+					return next;
+				});
+			}}
 			cursor={sidebarCursor()}
 			onCursor={setSidebarCursor}
 			active={current().focus === "sessions" && !paletteOpen() && !helpOpen()}

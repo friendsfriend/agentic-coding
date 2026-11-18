@@ -144,7 +144,6 @@ export function ReportedUsageModal(props: {
 		);
 	};
 	const unregister = useKeymap().registerLayer({
-		name: "v2.reported-usage",
 		priority: 190,
 		enabled,
 		bindings: [

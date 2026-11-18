@@ -66,6 +66,7 @@ test("the orchestrator forwards an optional idea to an interactive skill session
 		await conversation.waitForIdle(context);
 		transcripts.push(JSON.stringify(await conversation.context(context)));
 		expect(session.path).toBe(app.config.repositories[0]);
+		expect(session.spawnedBy).toBe(Number(app.home.id));
 	}
 	expect(transcripts.join("\n")).toContain("Build a faster search");
 	expect(transcripts.join("\n")).toContain("No idea has been supplied yet");

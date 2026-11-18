@@ -1,44 +1,100 @@
 /** @jsxImportSource @opentui/solid */
-// Ported from the original WorkspaceSidebar pinned-entry row. Only the
-// navigation data shape is local; row height, marker, clipping and tones stay.
-
+import { Show } from "solid-js";
 import { uiColors } from "../theme/colors.ts";
 import type { RowGestureState } from "./mouse/useRowMouse.ts";
+import { useTap } from "./mouse/useTap.ts";
 import { Selectable } from "./Selectable.tsx";
+import type { WorkspaceEntry } from "./WorkspaceNavigation.tsx";
+
 export function PinRow(props: {
 	pin: { glyph: string; label: string; meta: string };
 	selected: boolean;
 	height: number;
+	wide?: boolean;
+	width?: number;
+	tone?: WorkspaceEntry["tone"];
+	tree?: WorkspaceEntry["tree"];
+	onToggleBranch?: () => void;
 	onActivate: () => void;
 	gesture?: RowGestureState;
 }) {
-	const clip = (value: string) =>
-		value.length > 26 ? `${value.slice(0, 25)}…` : value;
+	const clip = (value: string, room = props.width ?? 30) => {
+		const points = Array.from(value);
+		return points.length > room
+			? `${points.slice(0, Math.max(0, room - 1)).join("")}…`
+			: value;
+	};
+	const tone = () =>
+		props.tone === "muted"
+			? uiColors.textMuted
+			: props.tone
+				? uiColors[props.tone]
+				: uiColors.textSecondary;
+	const labelTone = () =>
+		props.tone === "error" || props.tone === "warning"
+			? tone()
+			: props.tree?.kind === "project"
+				? uiColors.primary
+				: props.tree?.kind === "workflow"
+					? uiColors.accent
+					: props.selected
+						? uiColors.textPrimary
+						: props.tone
+							? tone()
+							: uiColors.textPrimary;
+	const disclosure = useTap(() => props.onToggleBranch?.(), {
+		enabled: () => props.tree?.branch === true,
+		stopPropagation: true,
+	});
 	return (
 		<Selectable
 			gesture={props.gesture}
 			height={props.height}
 			selected={props.selected}
 			hoverBackground={uiColors.bgHover}
+			selectedBackground={uiColors.bgSurface1}
 			onMouseUp={props.onActivate}
 		>
-			{props.height > 1 ? (
-				<box style={{ flexDirection: "column" }}>
-					<text
-						fg={props.selected ? uiColors.textPrimary : uiColors.textSecondary}
-					>
-						<strong>{props.pin.glyph}</strong>
-						{` ${clip(props.pin.label)}`}
+			<Show
+				when={props.wide ?? props.height > 1}
+				fallback={<text fg={tone()}>{props.pin.glyph}</text>}
+			>
+				<box flexDirection="row" height={1} flexShrink={0}>
+					<Show when={props.tree}>
+						<text fg={uiColors.textMuted}>{props.tree?.prefix}</text>
+						<text fg={uiColors.textMuted} {...disclosure}>
+							{props.tree?.branch ? (props.tree.collapsed ? "▸ " : "▾ ") : "  "}
+						</text>
+					</Show>
+					<text fg={tone()}>{props.pin.glyph} </text>
+					<text fg={labelTone()}>
+						<strong>
+							{clip(
+								props.pin.label,
+								Math.max(
+									4,
+									(props.width ?? 30) - (props.tree?.prefix.length ?? 0) - 5,
+								),
+							)}
+						</strong>
 					</text>
-					<text fg={uiColors.textMuted}>{clip(props.pin.meta)}</text>
 				</box>
-			) : (
-				<text
-					fg={props.selected ? uiColors.textPrimary : uiColors.textSecondary}
-				>
-					{props.pin.glyph}
-				</text>
-			)}
+				<Show when={props.height > 1}>
+					<text
+						fg={
+							props.tree?.summary
+								? tone()
+								: props.tree?.kind === "workflow"
+									? uiColors.info
+									: uiColors.textMuted
+						}
+					>
+						{clip(
+							`${props.tree ? `${" ".repeat(props.tree.prefix.length)}    ` : ""}${props.tree?.summary || props.pin.meta}`,
+						)}
+					</text>
+				</Show>
+			</Show>
 		</Selectable>
 	);
 }

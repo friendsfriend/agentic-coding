@@ -673,7 +673,6 @@ export function TelemetryFeature(props: {
 						? logs().getLogs().length
 						: topology().getServices().length;
 	const unregister = useKeymap().registerLayer({
-		name: "v2.telemetry",
 		priority: 80,
 		enabled: () =>
 			props.active() && surface() !== "home" && surface() !== "controls",

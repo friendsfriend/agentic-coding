@@ -35,7 +35,6 @@ export function OrchestratorDialog(props: {
 		props.rename({ id: props.target.id, title: next });
 	};
 	const unregister = useKeymap().registerLayer({
-		name: "v2.orchestratorDialog",
 		priority: 192,
 		enabled,
 		commands: [],

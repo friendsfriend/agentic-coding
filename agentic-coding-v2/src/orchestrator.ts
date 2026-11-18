@@ -22,6 +22,7 @@ interface OrchestratorHost {
 			requestId?: string;
 			skill?: string;
 			revision?: string;
+			spawnedBy?: number;
 		}): Promise<{ id: number }>;
 		conversation(id: number): Promise<{
 			submit(
@@ -140,6 +141,7 @@ export function createDelegation(app: OrchestratorHost) {
 						path: await app.sharedWorkspaceFor(api.conversationId),
 						skill: skill.id,
 						revision: skill.digest,
+						spawnedBy: Number(api.conversationId),
 						requestId,
 					});
 					await (await app.orchestrators.conversation(created.id)).submit(

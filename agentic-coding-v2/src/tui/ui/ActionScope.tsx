@@ -54,7 +54,6 @@ export function ActionScope(props: {
 		}
 		const unregister = untrack(() =>
 			keymap.registerLayer({
-				name: "v2.ui-controls",
 				priority: 25,
 				commands: layerCommands([
 					{

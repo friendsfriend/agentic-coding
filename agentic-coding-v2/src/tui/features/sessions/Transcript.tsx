@@ -742,7 +742,6 @@ export function Transcript(props: {
 		if (!enabled()) return;
 		const unregister = untrack(() =>
 			keymap.registerLayer({
-				name: "v2.transcript",
 				priority: 30,
 				commands: layerCommands([
 					{

@@ -113,7 +113,6 @@ export function OrchestratorChooser(props: {
 		props.create({ ...choice, requestId: submitted.id });
 	};
 	const unregister = useKeymap().registerLayer({
-		name: "v2.orchestratorChooser",
 		priority: 186,
 		enabled,
 		commands: [],

@@ -22,16 +22,26 @@ export async function sessionCatalog(
 	// ownerless siblings the developer created. A conversation the TUI can talk
 	// to is a session, so no separate listing exists.
 	const orchestrators = await app.orchestrators.read();
-	const sessions: Session[] = orchestrators.map((entry) => ({
-		id: entry.id,
-		parent: null,
-		task: null,
-		title: entry.title,
-		writable: true,
-		// Where this orchestrator works: two in one directory are distinguished by
-		// their titles, and each row can still say which checkout it is in.
-		path: entry.path,
-	}));
+	const sessions: Session[] = await Promise.all(
+		orchestrators.map(async (entry) => {
+			const live = await app.harness.snapshot(
+				LiveDoc,
+				entry.id as ConversationId,
+				context,
+			);
+			return {
+				id: entry.id,
+				parent: null,
+				task: null,
+				title: entry.title,
+				writable: true,
+				path: entry.path,
+				spawnedBy: entry.spawnedBy,
+				branch: entry.branch,
+				status: live?.run ? ("running" as const) : ("idle" as const),
+			};
+		}),
+	);
 	for (const info of state.tasks) {
 		const task = await app.taskResult(info.id);
 		if (!task) continue;
