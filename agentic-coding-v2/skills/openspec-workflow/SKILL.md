@@ -107,14 +107,21 @@ work. Refuse findings that the change never asked for — say which and why.
 
 ## 6. Archive
 
-With nothing blocking left:
+Check it yourself first — `openspec status --change "<id>"` and the boxes in `tasks.md`.
+A change with an unchecked task or an artifact that is not done is not finished, whatever
+the verifier said, and archiving it folds a spec delta into the main specs with nothing
+behind it.
+
+With nothing unchecked:
 
     start_task({ skill: "openspec-archive-change", workspace: "shared", topicId, repository,
                  profile, requestId: "archive:<id>",
-                 inputs: "Archive the completed OpenSpec change <id> in <directory>." })
+                 inputs: "Archive the completed OpenSpec change <id> in <directory>.
+                          Every task is ticked. Do not ask anyone anything: if you find
+                          something unfinished, stop and report what is missing." })
 
-`openspec-archive-change` refuses a change with unchecked tasks, which is the answer you
-want: that is a change that was not implemented.
+A task has no developer listening, so its skill's "ask the developer to confirm" branch
+would end the turn unanswered — that check is yours, before the spawn.
 
 ## Reporting
 
