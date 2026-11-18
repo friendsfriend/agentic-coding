@@ -210,8 +210,12 @@ export function loadConfig(
 		if (loaded.diagnostics.some((d) => d.type === "error"))
 			throw new Error(`Invalid skills in ${dir}`);
 		for (const skill of loaded.skills) {
-			if (skills.some((s) => s.id === skill.name))
+			const existing = skills.findIndex((entry) => entry.id === skill.name);
+			if (existing >= 0 && skills[existing]?.origin !== "system")
 				throw new Error(`Duplicate skill: ${skill.name}`);
+			// Bundled skills are defaults. A user's installed/customized copy wins;
+			// adding a bundled skill must never break an existing configuration.
+			if (existing >= 0) skills.splice(existing, 1);
 			const content = fs.readFileSync(skill.filePath, "utf8");
 			skills.push({
 				id: skill.name,
