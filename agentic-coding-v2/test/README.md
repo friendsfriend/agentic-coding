@@ -21,5 +21,5 @@ gateway, engine, database, cluster or receiver.
   already guarantees is assumed correct rather than re-proven here.
 - Do not increase timeouts, add retries, exclude files from the default run or
   enable unsafe concurrency to hide failures.
-- Keep the removal honest: when a suite is deleted, record in
-  `docs/tui-restoration.md` which guarantee is no longer directly asserted.
+- Keep the removal honest: when a suite is deleted, say in the commit message and
+  at the deletion site which guarantee is no longer directly asserted.
