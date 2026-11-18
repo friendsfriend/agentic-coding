@@ -111,10 +111,6 @@ export class HeldHttp {
 		signal?: AbortSignal,
 	) {
 		this.authority.check(owner.id, signal);
-		if (owner.policy !== "workspace-write")
-			throw new Error(
-				"Endpoint diagnostics require a workspace-write native task and separate approval",
-			);
 		const members = (await this.authority.records()).filter(
 				(run) => run.owner === owner.id,
 			),
@@ -250,8 +246,6 @@ export class HeldHttp {
 		signal?: AbortSignal,
 	) {
 		this.authority.check(owner.id, signal);
-		if (owner.policy !== "workspace-write")
-			throw new Error("HTTP receipt requires its workspace-write native owner");
 		const raw = await this.authority.store().commit(async (tx) => {
 			const task = await tx.task(owner.id as TaskId);
 			if (!task || task.abortRequested || task.state.status === "terminal")

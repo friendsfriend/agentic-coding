@@ -48,10 +48,6 @@ const known: Record<
 		...pick(args, ["taskId"]),
 		...pick(result, ["id", "state", "status", "conversationId"]),
 	],
-	cancel_task: (args, result) => [
-		...pick(args, ["taskId"]),
-		...pick(result, ["id", "state", "cancelled", "reason"]),
-	],
 	environment_action: (args, result) => [
 		...pick(args, [
 			"action",

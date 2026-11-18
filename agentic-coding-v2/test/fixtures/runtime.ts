@@ -57,7 +57,6 @@ export function createFixtures() {
 					content: "Implement the task",
 					description: "test skill",
 					digest: digest("Implement the task"),
-					readOnly: false,
 				},
 			],
 			stateDir,
@@ -91,7 +90,7 @@ export function createFixtures() {
 		};
 		const app = await open();
 		const invocation = {
-			policy: "workspace-write" as const,
+			workspace: "worktree" as const,
 			topicId: "Improve task execution",
 			skill: "code",
 			profile: "test",

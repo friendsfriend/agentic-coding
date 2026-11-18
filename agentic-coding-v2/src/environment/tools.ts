@@ -19,16 +19,6 @@ import { createQueryTools } from "./query-tools.ts";
 import type { Action, Selection } from "./selection.ts";
 import { environmentResult } from "./tool-result.ts";
 
-export const environmentInspectionTools = new Set([
-	"env_discover",
-	"env_list",
-	"env_status",
-	"env_logs",
-	"otel_query",
-	// An orchestrator owns no environment, so the one action tool it gets only
-	// admits a reviewed native action task.
-	"environment_action",
-]);
 /** Admits a Run/Build/Test action as a new native task, for a conversation that
  * owns no environment of its own. */
 export type AdmitEnvironmentAction = (
@@ -37,7 +27,12 @@ export type AdmitEnvironmentAction = (
 ) => Promise<number>;
 export function createEnvironmentTools(
 	manager: Environments,
+	/** The task this conversation *is*, or null for a conversation that owns no
+	 * task of its own: `environment_action` dispatches on exactly that. */
 	ownerOf: (id: ConversationId) => Promise<TaskInfo | null>,
+	/** Who a diagnostic acts on behalf of: the same task, or the environment task
+	 * a conversation spawned for itself. */
+	environmentOf: (id: ConversationId) => Promise<TaskInfo | null>,
 	admit?: AdmitEnvironmentAction,
 ) {
 	async function execute(
@@ -152,7 +147,7 @@ export function createEnvironmentTools(
 	return defineExtension({
 		name: "v2.environments",
 		tools: [
-			...createHttpTools(manager, ownerOf),
+			...createHttpTools(manager, environmentOf),
 			...createQueryTools(manager.database, ownerOf),
 			defineTool({
 				name: "env_discover",
@@ -177,7 +172,7 @@ export function createEnvironmentTools(
 					environmentResult(
 						manager.discover(
 							args.repository,
-							(await ownerOf(api.conversationId)) ?? undefined,
+							(await environmentOf(api.conversationId)) ?? undefined,
 							args.directory,
 						),
 					),
@@ -201,9 +196,11 @@ export function createEnvironmentTools(
 				replay: "safe",
 				executionMode: "sequential",
 				execute: async (args, api) => {
-					const owner = await ownerOf(api.conversationId);
+					const owner = await environmentOf(api.conversationId);
 					if (!owner)
-						throw new Error("Draft staging requires a native skill task");
+						throw new Error(
+							"Draft staging requires a task or an environment it spawned",
+						);
 					const staged = await manager.drafts.save(
 						{
 							requestId: args.requestId,
@@ -244,9 +241,11 @@ export function createEnvironmentTools(
 				replay: "safe",
 				executionMode: "sequential",
 				execute: async (args, api) => {
-					const owner = await ownerOf(api.conversationId);
+					const owner = await environmentOf(api.conversationId);
 					if (!owner)
-						throw new Error("Source staging requires a native skill task");
+						throw new Error(
+							"Source staging requires a task or an environment it spawned",
+						);
 					const sourced = await manager.drafts.saveSource(
 						{
 							requestId: args.requestId,
@@ -279,9 +278,11 @@ export function createEnvironmentTools(
 				replay: "safe",
 				executionMode: "sequential",
 				execute: async (args, api, context) => {
-					const owner = await ownerOf(api.conversationId);
+					const owner = await environmentOf(api.conversationId);
 					if (!owner)
-						throw new Error("Cluster inspection requires a native skill task");
+						throw new Error(
+							"Cluster inspection requires a task or an environment it spawned",
+						);
 					const inspection = manager.prepareCluster(owner, args.cluster),
 						snapshot = JSON.stringify(
 							{
@@ -327,9 +328,11 @@ export function createEnvironmentTools(
 				replay: "safe",
 				executionMode: "sequential",
 				execute: async (args, api, context) => {
-					const owner = await ownerOf(api.conversationId);
+					const owner = await environmentOf(api.conversationId);
 					if (!owner)
-						throw new Error("Cluster operation requires a native skill task");
+						throw new Error(
+							"Cluster operation requires a task or an environment it spawned",
+						);
 					// Reserved and malformed names are refused before any review.
 					namespaceName(args.namespace);
 					const inspection = manager.prepareCluster(owner, args.cluster),
@@ -381,7 +384,7 @@ export function createEnvironmentTools(
 				parameters: Type.Object({}),
 				replay: "safe",
 				execute: async (_args, api) => {
-					const owner = await ownerOf(api.conversationId);
+					const owner = await environmentOf(api.conversationId);
 					if (owner) manager.idle.touch(owner.id);
 					return environmentResult(await manager.snapshot());
 				},
@@ -393,7 +396,7 @@ export function createEnvironmentTools(
 				parameters: Type.Object({ app: Type.Optional(Type.String()) }),
 				replay: "safe",
 				execute: async (args, api) => {
-					const owner = await ownerOf(api.conversationId);
+					const owner = await environmentOf(api.conversationId);
 					if (owner) manager.idle.touch(owner.id, args.app);
 					return environmentResult(await manager.snapshot(args.app));
 				},
@@ -420,7 +423,7 @@ export function createEnvironmentTools(
 					return environmentResult(
 						await manager.selectedLogs(
 							id,
-							(await ownerOf(api.conversationId))?.id,
+							(await environmentOf(api.conversationId))?.id,
 							{
 								...args,
 								...(args.infra ? { kind: "infrastructure" as const } : {}),
@@ -477,7 +480,7 @@ export function createEnvironmentTools(
 					return environmentResult(
 						await manager.queryTelemetry(
 							app,
-							(await ownerOf(api.conversationId))?.id,
+							(await environmentOf(api.conversationId))?.id,
 							options,
 						),
 					);

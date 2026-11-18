@@ -194,9 +194,7 @@ export class Environments {
 		this.providers = new ProviderApis(config, () => this.store);
 	}
 	async resolvePlans(
-		owner: Pick<TaskInfo, "policy" | "repository" | "workspace"> & {
-			id?: number;
-		},
+		owner: Pick<TaskInfo, "repository" | "workspace"> & { id?: number },
 		apps: string[],
 		action: Action,
 		selection?: string | Selection,
@@ -1434,7 +1432,6 @@ export class Environments {
 					apps?.length !== 1 ||
 					apps[0] !== run.plan.app ||
 					task?.kind !== "operator-environment" ||
-					task.policy !== "workspace-write" ||
 					run.cleanupRetention ||
 					!this.hasLiveAuthority(run) ||
 					!this.live.has(run.id) ||

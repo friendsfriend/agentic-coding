@@ -103,6 +103,16 @@ export function contained(root: string, requested: string): string {
 		throw new Error("Symlink leaves task workspace");
 	return target;
 }
+/** The directory a `shared` spawn works in, resolved and checked; nothing is
+ * created and no worktree identity is claimed for it. */
+export function sharedWorkspace(directory: string | undefined): string {
+	if (directory === undefined)
+		throw new Error("A shared agent needs the directory it was admitted with");
+	const target = fs.realpathSync(directory);
+	if (!fs.statSync(target).isDirectory())
+		throw new Error("Shared workspace is not a directory");
+	return target;
+}
 export async function prepareWorkspace(
 	repository: string,
 	stateDir: string,

@@ -136,7 +136,6 @@ export class Acquisitions {
 		if (!raw) throw new Error("Unknown interrupted acquisition");
 		const receipt = decode<WaitReceipt>(raw);
 		if (
-			owner.policy !== "workspace-write" ||
 			receipt.owner !== owner.id ||
 			!receipt.retained ||
 			receipt.state !== "interrupted" ||
@@ -202,10 +201,6 @@ export class Acquisitions {
 		signal?: AbortSignal,
 	) {
 		this.authority.check(owner.id, signal, batch);
-		if (owner.policy !== "workspace-write")
-			throw new Error(
-				"Queue continuation requires the original workspace-write native owner",
-			);
 		const state = await this.authority
 				.store()
 				.snapshot(EnvironmentState, background),
@@ -280,15 +275,8 @@ export class Acquisitions {
 				const task = await tx.task(owner.id as TaskId),
 					doc = await tx.doc(EnvironmentState);
 				this.authority.check(owner.id, signal, batch);
-				if (
-					!task ||
-					task.abortRequested ||
-					task.state.status === "terminal" ||
-					owner.policy !== "workspace-write"
-				)
-					throw new Error(
-						"Environment task has ended or lacks write authority",
-					);
+				if (!task || task.abortRequested || task.state.status === "terminal")
+					throw new Error("Environment task has ended");
 				doc.waits ??= {};
 				doc.waitPolls ??= {};
 				let receipt = doc.waits[batch]

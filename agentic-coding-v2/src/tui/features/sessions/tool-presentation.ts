@@ -43,7 +43,6 @@ const icons: Record<string, string> = {
 	start_task: "▷",
 	environment_action: "▷",
 	task_result: "◇",
-	cancel_task: "⊘",
 	request_review: "✓",
 	attach_evidence: "▣",
 };
@@ -124,7 +123,6 @@ const actionVerbs: Record<string, { pending: string; done: string }> = {
 const verbs: Record<string, { pending: string; done: string }> = {
 	start_task: { pending: "Starting", done: "Started" },
 	environment_action: { pending: "Preparing", done: "Prepared" },
-	cancel_task: { pending: "Cancelling", done: "Cancelled" },
 	request_review: { pending: "Review", done: "Reviewed" },
 	env_cluster_status: { pending: "Cluster", done: "Cluster" },
 };
@@ -182,14 +180,20 @@ export function toolPresentation(
 		const verb = verbs.start_task?.[phase] ?? "Start";
 		const skill = text(args.skill) || text(args.repository);
 		const repository = text(args.repository);
-		const policy = text(args.policy);
+		// The row says whether the new agent shares this directory or gets its own
+		// worktree: that is the choice the caller made and the one worth reading.
+		const mode =
+			text(args.workspace) === "shared"
+				? "shared here"
+				: text(args.workspace)
+					? "own worktree"
+					: "";
 		return {
 			label: oneLine(
 				`${verb}${skill ? ` ${skill}` : " task"}`,
 				skill ? 80 : 40,
 			),
-			hint:
-				[repository, policy].filter((part) => part).join(" · ") || undefined,
+			hint: [repository, mode].filter((part) => part).join(" · ") || undefined,
 		};
 	}
 	if (name === "environment_action") {

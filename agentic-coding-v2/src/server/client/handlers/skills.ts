@@ -16,7 +16,6 @@ function summary(skill: Skill): SkillSummary {
 		origin: skill.origin,
 		description: skill.description.slice(0, 2048),
 		revision: skill.digest,
-		readOnly: skill.readOnly,
 	};
 }
 export function listSkills(app: Runtime): SkillSummary[] {

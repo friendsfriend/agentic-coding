@@ -292,13 +292,13 @@ test("a tool family is named by what it does and what it does it to", () => {
 			{
 				skill: "review-runner",
 				repository: "agentic-coding",
-				policy: "read-only",
+				workspace: "worktree" as const,
 			},
 			"pending",
 		),
 	).toEqual({
 		label: "Starting review-runner",
-		hint: "agentic-coding · read-only",
+		hint: "agentic-coding · own worktree",
 	});
 	expect(
 		toolPresentation("start_task", { skill: "review-runner" }, "done"),

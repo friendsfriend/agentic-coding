@@ -183,7 +183,7 @@ test("native skill task completes in a separate worktree; admission is idempoten
 		requestId: "successor",
 		relatedTo: id,
 		baseRef,
-		policy: "read-only",
+		workspace: "worktree" as const,
 	});
 	await git(workspace, ["tag", "-f", baseRef, "HEAD~1"]);
 	expect(

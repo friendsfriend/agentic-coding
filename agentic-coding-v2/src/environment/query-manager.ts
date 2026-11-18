@@ -115,10 +115,6 @@ export class DatabaseDiagnostics {
 		requiringApp?: string,
 	) {
 		this.authority.check(owner.id, signal);
-		if (owner.policy !== "workspace-write")
-			throw new Error(
-				"SQL diagnostics require a workspace-write native task and separate approval",
-			);
 		const runs = (await this.authority.records()).filter(
 				(run) => run.owner === owner.id && belongsToOwner(run.plan, owner),
 			),
@@ -387,8 +383,6 @@ export class DatabaseDiagnostics {
 		signal?: AbortSignal,
 	) {
 		this.authority.check(owner.id, signal);
-		if (owner.policy !== "workspace-write")
-			throw new Error("SQL receipt requires its workspace-write native owner");
 		const raw = await this.authority.store().commit(async (tx) => {
 			const task = await tx.task(owner.id as TaskId);
 			if (!task || task.abortRequested || task.state.status === "terminal")

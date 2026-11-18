@@ -16,7 +16,7 @@ export function invocationFingerprint(
 			repository: path.resolve(invocation.repository),
 			inputs: invocation.inputs,
 			relatedTo: invocation.relatedTo ?? null,
-			policy: invocation.policy,
+			workspace: invocation.workspace,
 			occurrence,
 			...(invocation.baseRef !== undefined && invocation.baseRef !== "HEAD"
 				? { baseRef: invocation.baseRef }

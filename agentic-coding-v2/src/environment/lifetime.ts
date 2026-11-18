@@ -194,10 +194,7 @@ export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 		);
 	if (!plans.some(scopedRoot)) return;
 	if (plans.some(operatorInfrastructure)) {
-		if (
-			owner.kind !== "operator-environment" ||
-			owner.policy !== "workspace-write"
-		)
+		if (owner.kind !== "operator-environment")
 			throw new Error(
 				"Operator infrastructure lifetime requires its original protected native operator, never an agent owner",
 			);
@@ -227,8 +224,7 @@ export function validateLifetime(plans: Plan[], owner: TaskInfo) {
 		unsupported ||
 		new Set(plans.map((plan) => plan.lifetime)).size > 1 ||
 		owner.kind !== undefined ||
-		!owner.skill ||
-		owner.policy !== "workspace-write"
+		!owner.skill
 	)
 		throw new Error(
 			"Lifetimes require one approved request of agent-owned app roots and declared prerequisites on shell, Docker/Podman or Compose run targets without Kubernetes resources; modes cannot be mixed",

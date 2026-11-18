@@ -31,7 +31,9 @@ export const Catalog = defineDoc<{
 	checkpointWhen: () => true,
 });
 export type Topic = { id: string; title: string; createdAt: number };
-export type ExecutionPolicy = "read-only" | "workspace-write";
+/** Whether a spawned agent works in the caller's own directory or in a separate
+ * worktree of the same repository. The spawning agent decides; nothing infers it. */
+export type WorkspaceMode = "shared" | "worktree";
 /** One orchestrator: a conversation the developer talks to, with its own
  * directory. The root is implicit; created ones are recorded in the catalog. */
 export type OrchestratorInfo = {
@@ -57,10 +59,14 @@ export type TaskInfo = {
 	id: number;
 	kind?: "operator-environment";
 	conversationId?: number;
-	/** The orchestrator conversation that admitted this task. */
-	orchestrator?: number;
+	/** The conversation that admitted this task: an orchestrator's, or the agent
+	 * conversation of the task that spawned it. Its report goes there. */
+	admittedBy?: number;
+	/** The native task that spawned this one, when a task spawned it. */
+	parent?: number;
 	baseCommit?: string;
-	policy: ExecutionPolicy;
+	/** The choice the spawner made: share the caller's directory or its own worktree. */
+	workspaceMode?: WorkspaceMode;
 	topicId: string;
 	skill: string;
 	profile: string;
@@ -72,7 +78,7 @@ export type TaskInfo = {
 };
 export type Invocation = {
 	baseRef?: string;
-	policy: ExecutionPolicy;
+	workspace: WorkspaceMode;
 	topicId: string;
 	skill: string;
 	profile: string;
@@ -83,7 +89,13 @@ export type Invocation = {
 };
 export type TaskInput = {
 	baseCommit: string;
-	policy: ExecutionPolicy;
+	/** The native task that spawned this one; absent when a conversation did. */
+	parent?: number;
+	workspace: WorkspaceMode;
+	/** The caller's own directory, when `workspace` is `shared`; resolved at
+	 * admission from the calling conversation, so an agent chooses *whether* to
+	 * share, never *which* directory. Absent for a separate worktree. */
+	workspacePath?: string;
 	topicId: string;
 	skill: Skill;
 	profile: Profile;

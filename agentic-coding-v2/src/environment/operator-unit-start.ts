@@ -47,7 +47,6 @@ export class OperatorUnitStarts {
 			!renewableOperator(unit.plan) ||
 			unit.plan.operatorRoot !== true ||
 			task?.kind !== "operator-environment" ||
-			task.policy !== "workspace-write" ||
 			!topology ||
 			topology.owner !== saved.owner ||
 			topology.plan.lifetime !== unit.plan.lifetime ||

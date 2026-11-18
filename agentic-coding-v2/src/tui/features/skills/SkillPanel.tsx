@@ -121,7 +121,6 @@ export function SkillPanel(props: {
 								<text wrapMode="word">{String(row.description)}</text>
 								<text wrapMode="word" fg={color("textMuted")}>
 									{String(row.revision)}
-									{row.readOnly === true ? " · read-only tasks" : ""}
 								</text>
 								<Show when={!safe(row)}>
 									<text fg={color("warning")}>

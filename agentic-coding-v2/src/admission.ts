@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
-import type { Conversation, Harness } from "@earendil-works/pi-durable";
+import type { Conversation, Harness, TaskId } from "@earendil-works/pi-durable";
 import { type Config, text } from "./config.ts";
 import { git } from "./git.ts";
 import { invocationFingerprint } from "./identity.ts";
@@ -27,6 +27,10 @@ function previousAdmission(
 		throw new Error("Request ID was already used for a different invocation");
 	return saved.id;
 }
+/** Who asked for a task: the conversation its report returns to, and the native
+ * task whose directory a `shared` spawn works in. Both are resolved by the
+ * runtime, never by the model. */
+export type Admitter = { conversationId: number; task: number | null };
 export class TaskAdmission {
 	constructor(
 		private readonly config: Config,
@@ -34,10 +38,17 @@ export class TaskAdmission {
 		private readonly harness: Harness,
 		private readonly home: Conversation,
 		private readonly definition: ReturnType<typeof createSkillTask>,
+		/** The calling conversation's own directory, for a `shared` spawn. */
+		private readonly sharedWorkspace: (
+			conversationId: number,
+		) => Promise<string>,
 	) {}
 	async validate(invocation: Invocation): Promise<TaskInput> {
-		if (!["read-only", "workspace-write"].includes(invocation.policy))
-			throw new Error("An explicit execution policy is required");
+		if (
+			invocation.workspace !== "shared" &&
+			invocation.workspace !== "worktree"
+		)
+			throw new Error("An explicit workspace mode is required");
 		text(invocation.topicId, "topic", 160);
 		text(invocation.requestId, "request ID", 256);
 		text(invocation.inputs, "inputs", 64000);
@@ -71,14 +82,13 @@ export class TaskAdmission {
 					`${text(invocation.baseRef ?? "HEAD", "Git base ref", 512)}^{commit}`,
 				])
 			).trim(),
-			policy: skill.readOnly ? "read-only" : invocation.policy,
+			workspace: invocation.workspace,
 		};
 	}
 	async start(
 		invocation: Invocation,
 		slot: ScheduleSlot | null = null,
-		/** The orchestrator conversation that asked for this task. */
-		orchestrator?: number,
+		admitter?: Admitter,
 	): Promise<number> {
 		const occurrence = slot ? `${slot.scheduleId}:${slot.due}` : null;
 		const fingerprint = invocationFingerprint(invocation, occurrence);
@@ -91,6 +101,14 @@ export class TaskAdmission {
 		if (previous !== undefined) return previous;
 		const input = await this.validate(invocation);
 		input.occurrence = occurrence;
+		if (admitter?.task != null) input.parent = admitter.task;
+		if (input.workspace === "shared") {
+			if (!admitter)
+				throw new Error("A shared workspace needs the conversation that asked");
+			input.workspacePath = await this.sharedWorkspace(admitter.conversationId);
+			if (!fs.statSync(input.workspacePath).isDirectory())
+				throw new Error("The calling conversation has no directory to share");
+		}
 		const id = await this.home.commit(async (tx) => {
 			const doc = await tx.doc(Catalog);
 			const existing = previousAdmission(
@@ -116,15 +134,26 @@ export class TaskAdmission {
 				)
 					throw new Error("Related task must exist in the same topic");
 			}
+			// A task a task spawned is owned by it: the engine's own tree nests it,
+			// an abort of the parent cascades to it, and its completion is reported
+			// to the conversation that asked. Only a conversation-owned task may be
+			// background, and only a spawned one is never background.
+			const spawner = admitter?.task ?? null;
 			const created = await tx.createTask(this.definition, input, {
-				ownership: { kind: "conversation" },
-				background: true,
+				ownership:
+					spawner === null
+						? { kind: "conversation" }
+						: { kind: "task", taskId: spawner as TaskId },
+				...(spawner === null ? { background: true } : {}),
 			});
 			const info: TaskInfo = {
 				id: Number(created),
-				...(orchestrator !== undefined ? { orchestrator } : {}),
+				...(admitter === undefined
+					? {}
+					: { admittedBy: admitter.conversationId }),
+				...(admitter?.task == null ? {} : { parent: admitter.task }),
 				baseCommit: input.baseCommit,
-				policy: input.policy,
+				workspaceMode: input.workspace,
 				topicId: invocation.topicId,
 				skill: input.skill.id,
 				profile: input.profile.id,

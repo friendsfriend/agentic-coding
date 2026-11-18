@@ -7,6 +7,7 @@ import {
 	type ConversationId,
 	configure,
 	createRegistry,
+	defineExtension,
 	Harness,
 	type Storage,
 	type TaskId,
@@ -26,12 +27,9 @@ import {
 } from "./environment/operator.ts";
 import { RepositoryGit } from "./environment/repository-git.ts";
 import { TaskCollection } from "./environment/task-collection.ts";
-import {
-	createEnvironmentTools,
-	environmentInspectionTools,
-} from "./environment/tools.ts";
+import { createEnvironmentTools } from "./environment/tools.ts";
 import { EnvironmentWorkbench } from "./environment/workbench.ts";
-import { createOrchestrator, orchestratorPrompt } from "./orchestrator.ts";
+import { createDelegation, orchestratorPrompt } from "./orchestrator.ts";
 import { Orchestrators } from "./orchestrators.ts";
 import { projectState } from "./projection.ts";
 import { ProviderActions } from "./provider-actions.ts";
@@ -175,28 +173,34 @@ export class Runtime {
 		const app = new Runtime(config, models);
 		const registry = createRegistry();
 		const coding = createCodingTools();
-		const agentTools = createAgentTools(config, (id) => app.ownerOf(id));
-		// Every orchestrator conversation — the root and each created sibling —
-		// inspects environments without owning a task; only a task's own
-		// conversation resolves to an owner.
+		const agentTools = createAgentTools(config, (id) =>
+			app.ownerOfConversation(id),
+		);
 		const environmentTools = createEnvironmentTools(
 			app.environments,
 			(id) => app.taskOwnerOrNull(id),
+			(id) => app.environmentOwnerFor(id),
 			(request, conversationId) =>
 				app.startEnvironmentAction(request, false, conversationId),
 		);
+		// Delegation is a tool surface every agent selects; the skill task definition
+		// it spawns is a registry-level definition, so the two do not chase each other.
+		const delegation = createDelegation(app);
 		const skillTask = createSkillTask(
 			config,
 			coding,
 			agentTools,
 			environmentTools,
+			delegation,
 			(id) => app.environments.releaseOwner(id),
 		);
-		const orchestrator = createOrchestrator(app, skillTask);
 		registry.install(coding);
 		registry.install(agentTools);
 		registry.install(environmentTools);
-		registry.install(orchestrator);
+		registry.install(delegation);
+		registry.install(
+			defineExtension({ name: "v2.skill-task", tasks: [skillTask] }),
+		);
 		registry.install(app.operatorEnvironments.extension);
 		app.engine = await Harness.open(
 			storage,
@@ -213,16 +217,18 @@ export class Runtime {
 			await app.environments.initialize(app.harness);
 			// One orchestrator agent, shared by the root and every created
 			// orchestrator: they differ only in the directory they work in.
+			// One tool surface for every agent: the orchestrator keeps no private
+			// capability and no task gets one either. What differs is ownership —
+			// whether the conversation owns a task, and which environment it acts for.
 			app.orchestrator = {
-				extensions: [orchestrator, environmentTools, coding],
+				extensions: [delegation, environmentTools, agentTools, coding],
 				tools: [
-					...(orchestrator.tools ?? []),
-					...(environmentTools.tools ?? []).filter((tool) =>
-						environmentInspectionTools.has(tool.name),
-					),
+					...(delegation.tools ?? []),
+					...(environmentTools.tools ?? []),
+					...(agentTools.tools ?? []),
 					...(coding.tools ?? []),
 				],
-				instructions: `${orchestratorPrompt}\nYou work directly in the checkout this conversation was opened in and can read, write, edit and run commands there. Inspect env_list before proposing environment operations. Use env_discover with an explicit configured repository for read-only root manifest hints; these are not trusted or validated target definitions and grant no edit, import or execution authority. Use environment_action for direct Run/Build/Test controls without an agent/model profile. Workspace-write skill tasks may also use their own environment tools. Both require exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
+				instructions: `${orchestratorPrompt}\nYou work directly in the checkout this conversation was opened in and can read, write, edit and run commands there. You have the same tools a task has. Inspect env_list before proposing environment operations. Use env_discover with an explicit configured repository for read-only root manifest hints; these are not trusted or validated target definitions and grant no edit, import or execution authority. Use environment_action for direct Run/Build/Test controls without an agent/model profile: they run as a native operator task you then inspect through the same environment tools. Every target needs exact human approval. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
 			};
 			app.root = await app.harness.root(context);
 			// root's creation options do not update a previously persisted conversation.
@@ -239,6 +245,7 @@ export class Runtime {
 				app.harness,
 				app.home,
 				skillTask,
+				(id) => app.sharedWorkspaceFor(id as ConversationId),
 			);
 			app.timer = new Scheduler(
 				app.harness,
@@ -264,13 +271,37 @@ export class Runtime {
 	async startTask(
 		invocation: Invocation,
 		slot: ScheduleSlot | null = null,
-		/** The orchestrator that asked for the task; schedules stay runtime-owned
-		 * and therefore root-owned. */
-		orchestrator?: number,
+		/** The conversation that asked for the task: an orchestrator's, or the
+		 * agent conversation of the task spawning a sub-agent. Schedules stay
+		 * runtime-owned and therefore root-owned. */
+		asked?: number,
 	) {
 		if (this.closed || !this.admission)
 			throw new Error("Runtime is not accepting work");
-		return this.admission.start(invocation, slot, orchestrator);
+		return this.admission.start(
+			invocation,
+			slot,
+			asked === undefined ? undefined : await this.admitter(asked),
+		);
+	}
+	/** Who is asking: the conversation, and the native task whose directory a
+	 * `shared` spawn works in when that conversation belongs to one. */
+	private async admitter(
+		conversationId: number,
+	): Promise<{ conversationId: number; task: number | null }> {
+		const owner = await this.taskOwnerOrNull(conversationId as ConversationId);
+		return { conversationId, task: owner?.id ?? null };
+	}
+	/** The directory a conversation itself works in, handed to a `shared` spawn:
+	 * a task's own workspace, else an orchestrator's configured directory. The
+	 * model chooses whether to share; it never chooses the directory. */
+	async sharedWorkspaceFor(id: ConversationId): Promise<string> {
+		const owner = await this.taskOwnerOrNull(id);
+		if (owner?.workspace) return owner.workspace;
+		const entry = (await this.orchestrators.read()).find(
+			(item) => item.id === Number(id),
+		);
+		return entry?.path ?? this.config.repositories[0];
 	}
 	/** `interactive` is set only by the authenticated TUI gateway: a direct
 	 * developer action there is its own approval. */
@@ -333,6 +364,44 @@ export class Runtime {
 		);
 		if (!conversation?.owner) return null;
 		return this.ownerOf(id);
+	}
+	/** The owner a review or an attachment belongs to. A conversation that owns no
+	 * task of its own is still a place work happens, so it is its own owner: the
+	 * directory it works in is the one its files must stay inside. */
+	async ownerOfConversation(id: ConversationId): Promise<TaskInfo> {
+		const owner = await this.taskOwnerOrNull(id);
+		if (owner) return owner;
+		const workspace = await this.sharedWorkspaceFor(id);
+		const entry = (await this.orchestrators.read()).find(
+			(item) => item.id === Number(id),
+		);
+		return {
+			id: Number(id),
+			topicId: entry?.title ?? "orchestrator",
+			skill: "orchestrator",
+			profile: entry?.profile ?? this.config.orchestratorProfile,
+			repository: workspace,
+			workspace,
+			relatedTo: null,
+			createdAt: 0,
+			reported: true,
+		};
+	}
+	/** The environment a conversation acts for: the task it is, or the operator
+	 * environment it spawned for itself. An environment is exclusive because it
+	 * has exactly one owner; a second conversation can never adopt it. */
+	async environmentOwnerFor(id: ConversationId): Promise<TaskInfo | null> {
+		const own = await this.taskOwnerOrNull(id);
+		if (own) return own;
+		const doc = await this.harness.snapshot(Catalog, context);
+		const admitted = values<TaskInfo>(doc?.tasks)
+			.filter(
+				(task) =>
+					task.kind === "operator-environment" &&
+					task.admittedBy === Number(id),
+			)
+			.sort((left, right) => right.createdAt - left.createdAt);
+		return admitted[0] ?? null;
 	}
 	async ownerOf(id: ConversationId): Promise<TaskInfo> {
 		const owner = await this.harness.commit(
@@ -443,7 +512,7 @@ export class Runtime {
 				// The orchestrator that admitted the task hears about it; one that
 				// is gone (closed, or never recorded) cannot swallow the report, so
 				// the root is the fallback rather than a dropped completion.
-				const admitting = info.orchestrator ?? Number(this.home.id);
+				const admitting = info.admittedBy ?? Number(this.home.id);
 				const target =
 					admitting === Number(this.home.id)
 						? this.home

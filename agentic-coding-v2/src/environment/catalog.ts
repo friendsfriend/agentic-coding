@@ -706,19 +706,13 @@ function refuseBatchCollisions(plans: Plan[]) {
 }
 export async function resolvePlans(
 	projects: Project[],
-	owner: Pick<TaskInfo, "policy" | "repository" | "workspace"> & {
-		id?: number;
-	},
+	owner: Pick<TaskInfo, "repository" | "workspace"> & { id?: number },
 	apps: string[],
 	action: Action,
 	target?: string | Selection,
 	stateDir?: string,
 	workspaces?: DependencyWorkspaces,
 ): Promise<Plan[]> {
-	if (owner.policy !== "workspace-write")
-		throw new Error(
-			"Environment execution requires a workspace-write task and separate human approval",
-		);
 	if (!apps.length || apps.length > 16 || new Set(apps).size !== apps.length)
 		throw new Error("Choose 1–16 distinct environment apps");
 	const selection = typeof target === "string" ? { target } : (target ?? {});

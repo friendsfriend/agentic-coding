@@ -234,7 +234,7 @@ export class Wiki {
 			const skill = this.app.config.skills.find(
 				(skill) => skill.id === "wiki-comment",
 			);
-			if (skill?.origin !== "system" || !skill.readOnly)
+			if (skill?.origin !== "system")
 				throw new Error("Native read-only wiki-comment skill unavailable");
 			const invocation: Invocation = {
 				topicId: `wiki-${pageId}`,
@@ -242,7 +242,7 @@ export class Wiki {
 				profile,
 				repository,
 				baseRef,
-				policy: "read-only",
+				workspace: "worktree",
 				inputs: JSON.stringify({
 					page,
 					comment,

@@ -227,12 +227,9 @@ export function prepareCluster(
 	owner: TaskInfo,
 	cluster: Cluster,
 ): ClusterRequest {
-	if (
-		owner.policy !== "workspace-write" ||
-		!cluster.repositories.includes(owner.repository)
-	)
+	if (!cluster.repositories.includes(owner.repository))
 		throw new Error(
-			"Cluster inspection requires this repository's workspace-write task and separate human approval",
+			"Cluster inspection requires a task of this repository and separate human approval",
 		);
 	return clusterRequest(config, cluster, owner.workspace);
 }

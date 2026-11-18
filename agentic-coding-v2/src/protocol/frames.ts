@@ -529,8 +529,7 @@ export function result<M extends Method>(
 				entry.description.length > 2048 ||
 				typeof entry.revision !== "string" ||
 				entry.revision.length !== 64 ||
-				!/^[a-f0-9]{64}$/.test(entry.revision) ||
-				typeof entry.readOnly !== "boolean"
+				!/^[a-f0-9]{64}$/.test(entry.revision)
 			)
 				throw new Error("Invalid skill metadata");
 			if (

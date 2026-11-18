@@ -27,7 +27,6 @@ export type Skill = {
 	description: string;
 	content: string;
 	digest: string;
-	readOnly: boolean;
 	/** Native-only source identity; never a client path selector. */
 	sourceFile?: string;
 };
@@ -135,21 +134,18 @@ export function loadConfig(
 	const repositories = (
 		Array.isArray(data.repositories) ? data.repositories : [cwd]
 	).map((item) => fs.realpathSync(text(item, "repository", 4096)));
-	const skills: Skill[] = [
-		{ content: codeSkill, readOnly: false },
-		{ content: researchSkill, readOnly: true },
-		{ content: wikiCommentSkill, readOnly: true },
-	].map(({ content, readOnly }) => {
-		const { frontmatter } = parseFrontmatter(content);
-		return {
-			id: text(frontmatter.name, "system skill name"),
-			description: text(frontmatter.description, "system skill description"),
-			content,
-			readOnly,
-			origin: "system",
-			digest: digest(content),
-		};
-	});
+	const skills: Skill[] = [codeSkill, researchSkill, wikiCommentSkill].map(
+		(content) => {
+			const { frontmatter } = parseFrontmatter(content);
+			return {
+				id: text(frontmatter.name, "system skill name"),
+				description: text(frontmatter.description, "system skill description"),
+				content,
+				origin: "system" as const,
+				digest: digest(content),
+			};
+		},
+	);
 	const dir = path.join(configDir, "skills");
 	if (fs.existsSync(dir)) {
 		const loaded = loadSkillsFromDir({ dir, source: "user" });
@@ -166,7 +162,6 @@ export function loadConfig(
 				sourceFile: fs.realpathSync(skill.filePath),
 				content,
 				digest: digest(content),
-				readOnly: false,
 			});
 		}
 	}

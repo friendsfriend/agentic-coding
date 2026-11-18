@@ -454,7 +454,7 @@ export async function dispatch(
 			return app.scheduler.create(
 				{
 					...invocation,
-					policy: "read-only",
+					workspace: "worktree",
 				} as unknown as Parameters<typeof app.scheduler.create>[0],
 				(kind === "once"
 					? { kind, at: integer(timing.at) }

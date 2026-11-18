@@ -41,9 +41,10 @@ export async function sessionCatalog(
 		if (typeof child !== "number") continue;
 		sessions.push({
 			id: child,
-			// A task belongs to the orchestrator that admitted it; tasks admitted
+			// A task belongs to the conversation that admitted it: an orchestrator's,
+			// or the agent conversation of the task that spawned it. Tasks admitted
 			// before attribution existed stay with the root.
-			parent: info.orchestrator ?? Number(app.home.id),
+			parent: info.admittedBy ?? Number(app.home.id),
 			task: info.id,
 			title: `${info.skill} · ${info.topicId} · #${info.id}`,
 			writable: task.state.status !== "terminal" && !task.abortRequested,

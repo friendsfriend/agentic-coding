@@ -156,8 +156,8 @@ export function TaskObservation(props: {
 			</text>
 			<text wrapMode="word">
 				Skill {String(saved.metadata.skill ?? "not supplied")} · profile{" "}
-				{String(saved.metadata.profile ?? "not supplied")} · policy{" "}
-				{String(saved.metadata.policy ?? "not supplied")}
+				{String(saved.metadata.profile ?? "not supplied")} · workspace{" "}
+				{String(saved.metadata.workspaceMode ?? "not recorded")}
 			</text>
 			<text wrapMode="word">
 				Topic {String(saved.metadata.topicId ?? "not supplied")} · related task{" "}

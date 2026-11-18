@@ -259,7 +259,10 @@ test("read-only skill discovery uses its captured worktree and refuses another c
 			return fauxAssistantMessage("Inspected only this task workspace.");
 		},
 	]);
-	const task = await app.startTask({ ...invocation, policy: "read-only" });
+	const task = await app.startTask({
+		...invocation,
+		workspace: "worktree" as const,
+	});
 	await app.harness.waitForTask(task as TaskId, context);
 	expect(observed).toBe(true);
 	expect((await app.snapshot()).reviews).toHaveLength(0);

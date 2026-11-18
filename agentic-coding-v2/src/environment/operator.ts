@@ -43,7 +43,7 @@ export class OperatorEnvironments {
 		request: OperatorAction,
 		interactive = false,
 		checkout?: string,
-		orchestrator?: number,
+		admittedBy?: number,
 	) {
 		if (
 			Object.keys(request).some(
@@ -111,14 +111,14 @@ export class OperatorEnvironments {
 			projects.some((project) => project.repository !== repository)
 		)
 			throw new Error("Environment apps must share one authorized repository");
-		// The asking orchestrator is part of the request identity: the same
+		// The asking conversation is part of the request identity: the same
 		// requestId from another conversation is a conflict, not a replay. It is
 		// only added when it is not the root, so the identity of every existing
 		// request — including one saved before this field existed — is unchanged.
 		const identity: Record<string, unknown> = interactive
 			? { request, interactive, checkout }
 			: { ...request };
-		if (orchestrator !== undefined) identity.orchestrator = orchestrator;
+		if (admittedBy !== undefined) identity.admittedBy = admittedBy;
 		const fingerprint = digest(JSON.stringify(identity)),
 			key = `environment:${request.requestId}`;
 		const previous = (raw: string | undefined) => {
@@ -149,7 +149,7 @@ export class OperatorEnvironments {
 		// Validate selection before admitting a native task or creating its worktree.
 		operatorInfrastructurePlans(
 			await this.manager.resolvePlans(
-				{ policy: "workspace-write", repository, workspace },
+				{ repository, workspace },
 				request.apps,
 				request.action,
 				request,
@@ -168,7 +168,7 @@ export class OperatorEnvironments {
 				createdAt: Date.now(),
 				...(interactive ? { interactive: true as const } : {}),
 				...(workspace !== repository ? { checkout: workspace } : {}),
-				...(orchestrator !== undefined ? { orchestrator } : {}),
+				...(admittedBy !== undefined ? { admittedBy } : {}),
 			};
 			const id = Number(
 				await tx.createTask(this.definition, input, {

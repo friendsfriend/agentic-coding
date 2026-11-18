@@ -7,7 +7,7 @@ import type { Environments } from "./manager.ts";
 import { environmentResult } from "./tool-result.ts";
 export function createHttpTools(
 	manager: Environments,
-	ownerOf: (id: ConversationId) => Promise<TaskInfo | null>,
+	environmentOf: (id: ConversationId) => Promise<TaskInfo | null>,
 ) {
 	return [
 		defineTool({
@@ -40,9 +40,11 @@ export function createHttpTools(
 			replay: "safe",
 			executionMode: "sequential",
 			execute: async (args, api, context) => {
-				const owner = await ownerOf(api.conversationId);
+				const owner = await environmentOf(api.conversationId);
 				if (!owner)
-					throw new Error("Endpoint diagnostics require a native skill task");
+					throw new Error(
+						"Endpoint diagnostics require a task or an environment it spawned",
+					);
 				const options = httpOptions({
 					method: args.method,
 					headers: args.headers,

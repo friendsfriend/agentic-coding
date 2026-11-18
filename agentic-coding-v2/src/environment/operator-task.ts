@@ -41,8 +41,8 @@ type Input = {
 	/** Server-derived active linked worktree of a direct UI action. */
 	checkout?: string;
 	baseCommit: string;
-	/** The orchestrator the action was taken from; absent means the root. */
-	orchestrator?: number;
+	/** The conversation the action was taken from; absent means the root. */
+	admittedBy?: number;
 };
 type ActiveCheckpoint<P extends string> = {
 	phase: P;
@@ -74,7 +74,6 @@ export function operatorOwner(
 		id,
 		kind: "operator-environment",
 		baseCommit: input.baseCommit,
-		policy: "workspace-write",
 		topicId: "environments",
 		skill: `environment ${input.request.action}`,
 		profile: "operator (no model)",
@@ -83,9 +82,7 @@ export function operatorOwner(
 		relatedTo: null,
 		createdAt: input.createdAt,
 		reported: true,
-		...(input.orchestrator !== undefined
-			? { orchestrator: input.orchestrator }
-			: {}),
+		...(input.admittedBy !== undefined ? { admittedBy: input.admittedBy } : {}),
 	};
 }
 

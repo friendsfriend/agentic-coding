@@ -275,13 +275,7 @@ const FAMILIES: Readonly<Record<string, readonly string[]>> = {
 	database: ["db_query"],
 	telemetry: ["otel_query"],
 	evidence: ["attach_evidence"],
-	orchestrator: [
-		"catalog",
-		"start_task",
-		"task_result",
-		"cancel_task",
-		"request_review",
-	],
+	orchestrator: ["catalog", "start_task", "task_result", "request_review"],
 };
 
 const families = new Map<string, string>(
@@ -302,7 +296,6 @@ const ACTION_LABELS: Readonly<Record<string, string>> = {
 	catalog: "Catalog",
 	start_task: "Start task",
 	task_result: "Task result",
-	cancel_task: "Cancel task",
 	request_review: "Review",
 };
 

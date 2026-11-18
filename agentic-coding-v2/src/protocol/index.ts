@@ -121,7 +121,6 @@ export type SkillSummary = {
 	origin: "system" | "user";
 	description: string;
 	revision: string;
-	readOnly: boolean;
 };
 export type SkillDocument = SkillSummary & { content: string };
 export type SkillFileDocument = {

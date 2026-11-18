@@ -8,13 +8,12 @@ import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
-test("native wiki saves exact revision-fenced snapshots and binds one read-only comment task durably", async () => {
+test("native wiki saves exact revision-fenced snapshots and binds one comment task durably", async () => {
 	const { app, config, fake, open } = await fixture(true, (config) =>
 		config.skills.push({
 			id: "wiki-comment",
 			description: "Comment review",
 			origin: "system",
-			readOnly: true,
 			content: wikiSkill,
 			digest: digest(wikiSkill),
 		}),
@@ -104,7 +103,7 @@ test("native wiki saves exact revision-fenced snapshots and binds one read-only 
 		await expect(
 			client.call("wiki.comment", { ...comment, pageRevision: 1 }),
 		).rejects.toThrow();
-		const extraComment = { ...comment, policy: "workspace-write" };
+		const extraComment = { ...comment, workspace: "worktree" as const };
 		await expect(client.call("wiki.comment", extraComment)).rejects.toThrow();
 		expect((await client.call("state.read", {})).tasks).toEqual([]);
 		fake.setResponses([
@@ -121,7 +120,6 @@ test("native wiki saves exact revision-fenced snapshots and binds one read-only 
 		);
 		expect(info).toMatchObject({
 			skill: "wiki-comment",
-			policy: "read-only",
 			topicId: "wiki-guide",
 		});
 		await eventually(
