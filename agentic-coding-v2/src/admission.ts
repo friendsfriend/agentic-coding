@@ -5,6 +5,7 @@ import type { Conversation, Harness, TaskId } from "@earendil-works/pi-durable";
 import { type Config, text } from "./config.ts";
 import { git } from "./git.ts";
 import { invocationFingerprint } from "./identity.ts";
+import { taskRepositories } from "./repository-access.ts";
 import { finishSlot, type ScheduleSlot } from "./scheduler.ts";
 import type { createSkillTask } from "./skill-task.ts";
 import {
@@ -66,8 +67,18 @@ export class TaskAdmission {
 				"Profile model is not available in the configured provider catalog",
 			);
 		const repository = fs.realpathSync(invocation.repository);
-		if (!this.config.repositories.includes(repository))
-			throw new Error("Repository is not authorized by v2 configuration");
+		if (!this.config.repositories.includes(repository)) {
+			const doc = await this.harness.snapshot(Catalog, context);
+			if (
+				!taskRepositories(
+					this.config.repositories,
+					values<OrchestratorInfo>(doc?.orchestrators),
+				).includes(repository)
+			)
+				throw new Error(
+					"Repository is not authorized; open it as a workspace or configure it in v2",
+				);
+		}
 		return {
 			topicId: invocation.topicId,
 			skill,
@@ -118,6 +129,17 @@ export class TaskAdmission {
 				fingerprint,
 			);
 			if (existing !== undefined) return existing;
+			// Recheck on the admission line: the final granting workspace may have
+			// closed while validation resolved the repository/base commit.
+			if (
+				!taskRepositories(
+					this.config.repositories,
+					values<OrchestratorInfo>(doc.orchestrators),
+				).includes(input.repository)
+			)
+				throw new Error(
+					"Repository workspace was closed before task admission",
+				);
 			// A closing orchestrator fences the entire real task tree, including
 			// in-flight child admissions. Visual workflow siblings stay independent.
 			const infos = values<TaskInfo>(doc.tasks);

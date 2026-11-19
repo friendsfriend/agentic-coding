@@ -3,6 +3,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
 import { digest, text } from "./config.ts";
+import { git } from "./git.ts";
 import type { Runtime } from "./runtime.ts";
 import { Catalog, decode, type OrchestratorInfo } from "./state.ts";
 import { cleanupOrchestratorTasks } from "./task-retention.ts";
@@ -38,6 +39,7 @@ export class Orchestrators {
 				: {}),
 			...(stored?.skill ? { skill: stored.skill } : {}),
 			...(stored?.branch ? { branch: stored.branch } : {}),
+			...(stored?.repository ? { repository: stored.repository } : {}),
 		};
 	}
 
@@ -174,6 +176,12 @@ export class Orchestrators {
 	async reconcile(): Promise<void> {
 		const entries = await this.read();
 		for (const entry of entries) {
+			// Backfill already-open custom workspaces through the native catalog.
+			// No configuration edits and no repository ancestry guessed by strings.
+			const repository =
+				entry.repository ?? (await this.repositoryAt(entry.path));
+			if (repository && repository !== entry.repository)
+				await this.save({ ...entry, repository });
 			// Reapply persisted cwd and skill too: the root is reset by harness startup.
 			const chosen = this.effective(entry);
 			// A stored choice whose profile has since been removed from the
@@ -189,7 +197,11 @@ export class Orchestrators {
 				this.app.orchestratorAgent(entry.path, chosen, entry.skill?.id),
 				context,
 			);
-			await this.save({ ...entry, profile: chosen });
+			await this.save({
+				...entry,
+				...(repository ? { repository } : {}),
+				profile: chosen,
+			});
 		}
 	}
 
@@ -223,7 +235,14 @@ export class Orchestrators {
 			base,
 			location,
 		);
-		const next = { ...entry, path: result.path, branch: result.branch };
+		const repository =
+			entry.repository ?? (await this.repositoryAt(entry.path));
+		const next = {
+			...entry,
+			...(repository ? { repository } : {}),
+			path: result.path,
+			branch: result.branch,
+		};
 		await this.save(next);
 		await (await this.conversation(id)).configure(
 			this.app.orchestratorAgent(next.path, next.profile, next.skill?.id),
@@ -316,10 +335,18 @@ export class Orchestrators {
 			},
 			context,
 		);
+		const parent =
+			input.spawnedBy === undefined
+				? undefined
+				: (await this.read()).find(
+						(entry) => entry.id === input.spawnedBy && entry.path === target,
+					);
+		const repository = parent?.repository ?? (await this.repositoryAt(target));
 		const info: OrchestratorInfo = {
 			id: Number(conversation.id),
 			title,
 			path: target,
+			...(repository ? { repository } : {}),
 			profile: this.app.config.orchestratorProfile,
 			createdAt: Date.now(),
 			...(requestId ? { requestId } : {}),
@@ -335,6 +362,18 @@ export class Orchestrators {
 			};
 		}, context);
 		return info;
+	}
+
+	private async repositoryAt(directory: string): Promise<string | undefined> {
+		try {
+			return fs.realpathSync(
+				(await git(directory, ["rev-parse", "--show-toplevel"])).trim(),
+			);
+		} catch {
+			// Interactive conversations may legitimately start outside Git. Their
+			// exact selected path is retained; Git-backed tasks still require Git.
+			return undefined;
+		}
 	}
 
 	/** A directory this process may work in: absolute, existing, a directory,

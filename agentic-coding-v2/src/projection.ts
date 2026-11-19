@@ -4,8 +4,10 @@ import type { Conversation, Harness, TaskId } from "@earendil-works/pi-durable";
 import { taskActivities } from "./activity.ts";
 import type { Config } from "./config.ts";
 import { gitOverview } from "./git.ts";
+import { taskRepositories } from "./repository-access.ts";
 import {
 	Catalog,
+	type OrchestratorInfo,
 	type Review,
 	type Schedule,
 	type TaskInfo,
@@ -106,7 +108,10 @@ export async function projectState(
 				revision,
 			}),
 		),
-		repositories: config.repositories,
+		repositories: taskRepositories(
+			config.repositories,
+			values<OrchestratorInfo>(doc?.orchestrators),
+		),
 		topics: values<Topic>(doc?.topics),
 		tasks,
 		reviews: values<Review>(doc?.reviews),

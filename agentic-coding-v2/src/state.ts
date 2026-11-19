@@ -44,6 +44,9 @@ export type OrchestratorInfo = {
 	title: string;
 	/** The absolute directory this orchestrator works in. */
 	path: string;
+	/** Source repository explicitly opened by the developer, retained across
+	 * feature-worktree moves so descendants can still delegate from that source. */
+	repository?: string;
 	profile: string;
 	createdAt: number;
 	/** Set when the developer closes it: still retained natively, no longer

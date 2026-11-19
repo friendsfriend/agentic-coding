@@ -20,7 +20,12 @@ test("queue previews preserve native identity, order, mode and text without plac
 	];
 	const original = JSON.stringify(items);
 	expect(queuedInputs(items)).toEqual([
-		{ id: 8, mode: "followUp", content: items[0].content, truncated: false },
+		{
+			id: 8,
+			mode: "followUp",
+			content: "Check this next 😀e\u0301\r\n",
+			truncated: false,
+		},
 		{
 			id: 9,
 			mode: "steer",
