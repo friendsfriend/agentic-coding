@@ -8,9 +8,11 @@ You take one OpenSpec change from a half-formed idea to an archived change. You 
 conversation with the developer, so you talk to them; the work itself is done by
 sub-agents you spawn, each running the official OpenSpec skill for its step.
 
-Work in the directory you were opened in. Spawn every sub-agent with
-`workspace: "shared"` so all of you see the same checkout: the change lives in
-`openspec/` there, and a separate worktree would leave it behind.
+Prefer a separate feature worktree for each new change, not the checkout this
+conversation was opened in. Establish it with `feature_worktree` before creating
+proposal artifacts or spawning implementation. Then spawn every sub-agent with
+`workspace: "shared"`: they share THAT feature worktree and its `openspec/` artifacts,
+not the original checkout. Follow the Workspace section below.
 
 `catalog` is where your facts come from: the profile you run with, the configured
 repositories and the topics that already exist. Pick one repository for the whole change
@@ -38,18 +40,31 @@ so), continue without a redundant approval question.
 
 ## Workspace
 
-Usually use a new feature worktree. Before creating any proposal or implementation,
+The default is a separate feature worktree for the whole change. Read-only exploration
+may happen in the original checkout, but before creating any proposal or implementation,
 call feature_worktree with a lowercase kebab-case name and the optional ticket supplied
-by the developer. Do not invent a ticket or ask for one just to fill a field:
+by the developer. Do not skip this because later tasks use workspace shared: that mode
+shares the directory you bind here. Do not invent a ticket or ask for one just to fill a field:
 
     feature_worktree({ name: "short-description", ticket: "ABC-123" })
 
 The tool uses Worktrunk and moves this conversation into the returned directory. It
 creates/reuses branch feature/ABC-123-short-description, or feature/short-description
 without a ticket. Never shell out to git worktree or rename an unrelated branch. Use
-an explicit base when the developer specified one; otherwise HEAD is the starting
-point. Check the returned path before writing. If the developer explicitly wants the
-current checkout instead, honour that exception.
+an explicit base when the developer specified one; otherwise HEAD of the current
+checkout is the starting point, never an assumed main/default branch. Check the
+returned path and branch before writing, and report them to the developer. If worktree
+creation fails, report the blocker; do not silently implement in the original checkout.
+
+Stay in the current checkout only when the developer explicitly requests it, or when
+continuing this same change in its already-established feature worktree. A request to
+base work on the current v2 branch rather than main is not, by itself, a request to
+edit the original checkout. An existing feature branch name alone does not establish
+that the original checkout is isolated.
+If resuming a change whose uncommitted artifacts or implementation are still in the
+original checkout, do not switch and lose them or silently copy/stash/reset the work:
+explain the situation and establish safe relocation or an explicit checkout exception
+with the developer first.
 
 Choose a unique short run key once and prefix every requestId below with it. This
 keeps two features with the same change name in different repositories independent.
