@@ -2,6 +2,8 @@
 // engine. These replace the screenshots-and-stack tests that used to prove them.
 import { expect, test } from "bun:test";
 import { readKubernetes } from "../src/environment/kubernetes-config.ts";
+import type { Session } from "../src/protocol/index.ts";
+import { followUpSession } from "../src/session-access.ts";
 import { bulkFold, foldAll } from "../src/tui/features/sessions/card-folds.ts";
 import {
 	customToolBody,
@@ -722,4 +724,40 @@ test("empty failed assistant messages still show the provider error", () => {
 	expect(
 		assistantFailure({ role: "assistant", stopReason: "stop" }),
 	).toBeNull();
+});
+
+test("follow-up navigation chooses an observed writable owner, never a sibling or guessed root", () => {
+	const session = (
+		id: number,
+		parent: number | null,
+		writable: boolean,
+	): Session => ({
+		id,
+		parent,
+		writable,
+		task: parent === null ? null : id,
+		title: "Conversation",
+	});
+	const sessions = [
+		session(1, null, true),
+		session(2, 1, false),
+		session(3, 2, false),
+		session(4, null, true),
+	];
+	expect(followUpSession(sessions, 3)?.id).toBe(1);
+	expect(
+		followUpSession(
+			sessions.map((s) => (s.id === 2 ? { ...s, writable: true } : s)),
+			3,
+		)?.id,
+	).toBe(2);
+	expect(
+		followUpSession(
+			sessions.filter((s) => s.id !== 2),
+			3,
+		),
+	).toBeUndefined();
+	expect(
+		followUpSession([session(2, 3, false), session(3, 2, false)], 3),
+	).toBeUndefined();
 });

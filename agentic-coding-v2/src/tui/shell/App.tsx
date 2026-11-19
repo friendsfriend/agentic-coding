@@ -40,6 +40,7 @@ import {
 	uiView,
 	uiWorkspaceFilter,
 } from "../../protocol/viewpoints.ts";
+import { followUpSession } from "../../session-access.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { EmbeddedAgentView } from "../features/agents/EmbeddedAgentView.tsx";
 import {
@@ -53,6 +54,7 @@ import { ProfilePanel } from "../features/profiles/ProfilePanel.tsx";
 import { ProviderPanel } from "../features/providers/ProviderPanel.tsx";
 import { ProviderWritePanel } from "../features/providers/ProviderWritePanel.tsx";
 import { SchedulesView } from "../features/resources/SchedulesView.tsx";
+import { ConversationNotice } from "../features/sessions/ConversationNotice.tsx";
 import { foldAll } from "../features/sessions/card-folds.ts";
 import { DraftHistory } from "../features/sessions/history.ts";
 import {
@@ -1108,6 +1110,27 @@ export function App(props: {
 			: current().page === "session"
 				? Number(current().resource)
 				: null;
+	const selectedNativeSession = createMemo(() =>
+		state()?.sessions.find((session) => session.id === sessionId()),
+	);
+	const readOnlyNativeSession = createMemo(() => {
+		const session = selectedNativeSession();
+		return session && !session.writable ? session : undefined;
+	});
+	const followUpOwner = createMemo(() => {
+		const session = readOnlyNativeSession();
+		return session
+			? followUpSession(state()?.sessions ?? [], session.id)
+			: undefined;
+	});
+	const pendingSessionReviews = createMemo(() => {
+		const task = selectedNativeSession()?.task;
+		return task == null
+			? []
+			: (state()?.reviews ?? []).filter(
+					(review) => review.taskId === task && review.state === "pending",
+				);
+	});
 	const available = () => {
 		const id = sessionId();
 		return (
@@ -3645,6 +3668,12 @@ export function App(props: {
 				const id = sessionId();
 				if (id === null || !available())
 					throw new Error("Select a current native conversation to send input");
+				if (readOnlyNativeSession()) {
+					const owner = followUpOwner();
+					throw new Error(
+						`This task transcript is read-only. ${owner ? `Open owning conversation #${owner.id} to follow up.` : "Select an open orchestrator to continue."} Your draft remains unsent.`,
+					);
+				}
 				const result = await client.call("session.send", {
 					id,
 					content: content.startsWith("//") ? content.slice(1) : content,
@@ -4428,6 +4457,14 @@ export function App(props: {
 											</text>
 										}
 									>
+										<ConversationNotice
+											session={selectedNativeSession()}
+											owner={followUpOwner()}
+											reviews={pendingSessionReviews()}
+											fresh={snapshotFresh()}
+											openSession={(id) => go("session", String(id))}
+											openTask={(id) => go("tasks", String(id))}
+										/>
 										<Transcript
 											scope={workspaceScope()}
 											interactive={!busy() && !helpOpen() && !paletteOpen()}
@@ -5088,15 +5125,17 @@ export function App(props: {
 								onThinking={() => openProfilePicker("thinking")}
 								meter={promptUsage()}
 								role={
-									current().page === "orchestrator"
-										? "Orchestrator"
-										: current().page === "pi"
-											? "Pi"
-											: current().page === "opencode"
-												? "OpenCode"
-												: isTranscript()
-													? "Agent"
-													: "Command"
+									readOnlyNativeSession()
+										? "Agent · read-only"
+										: current().page === "orchestrator"
+											? "Orchestrator"
+											: current().page === "pi"
+												? "Pi"
+												: current().page === "opencode"
+													? "OpenCode"
+													: isTranscript()
+														? "Agent"
+														: "Command"
 								}
 								model={
 									isTranscript() && typeof transcript()?.model === "string"
@@ -5131,11 +5170,13 @@ export function App(props: {
 									}
 									initialValue={current().draft}
 									placeholder={
-										isTranscript() ||
-										current().page === "pi" ||
-										current().page === "opencode"
-											? "Ask anything…"
-											: "Prompt command (/help)…"
+										readOnlyNativeSession()
+											? "Read-only task · open its owning conversation to follow up (/help for commands)"
+											: isTranscript() ||
+													current().page === "pi" ||
+													current().page === "opencode"
+												? "Ask anything…"
+												: "Prompt command (/help)…"
 									}
 									keyBindings={textareaBindings(promptKeybinds)}
 									onKeyDown={(event) => {

@@ -272,13 +272,21 @@ test("terminal native child context remains inspectable but never grants child w
 				content: "Not admitted",
 				requestId: "refused-context-child",
 			}),
-		).rejects.toThrow("Native operation refused");
+		).rejects.toThrow(`Send follow-ups in owning conversation #${app.home.id}`);
 		const aliased = { id: "standalone-opaque-uuid" };
 		// Intentionally malformed boundary input, not a local target conversion.
 		await expect(
 			client.call("session.context", aliased as unknown as { id: number }),
 		).rejects.toThrow("Native operation refused");
 		expect(fake.state.callCount).toBe(reads);
+		// The task remains immutable, but its actual owner still accepts input.
+		await client.call("session.send", {
+			id: Number(app.home.id),
+			content: "Follow up in the owning conversation",
+			requestId: "owner-follow-up",
+		});
+		await app.home.waitForIdle(context);
+		expect(fake.state.callCount).toBe(reads + 1);
 	} finally {
 		client.close();
 		host.stop();

@@ -13,6 +13,8 @@ import type {
 import { record } from "../../../protocol/index.ts";
 import { queuedInputs } from "../../../queued-inputs.ts";
 import type { Runtime } from "../../../runtime.ts";
+import { followUpSession } from "../../../session-access.ts";
+import { Refusal } from "../../refusal.ts";
 
 export async function sessionCatalog(
 	app: Runtime,
@@ -81,11 +83,17 @@ export async function clientSession(app: Runtime, id: number, writable = true) {
 	if (!Number.isSafeInteger(id) || id < 0)
 		throw new Error("Invalid session identity");
 	if (id === Number(app.home.id)) return app.home;
-	const session = (await sessionCatalog(app)).find((item) => item.id === id);
+	const sessions = await sessionCatalog(app);
+	const session = sessions.find((item) => item.id === id);
 	if (session && session.parent === null && session.task === null)
 		return app.orchestrators.conversation(id);
-	if (!session || (writable && !session.writable))
-		throw new Error("Session is unavailable or no longer writable");
+	if (!session) throw new Error("Session is unavailable or no longer writable");
+	if (writable && !session.writable) {
+		const owner = followUpSession(sessions, id);
+		throw new Refusal(
+			`Task conversation #${id} is read-only because its task ended or was cancelled. ${owner ? `Send follow-ups in owning conversation #${owner.id}.` : "Select an open orchestrator to continue."} Your draft was not sent.`,
+		);
+	}
 	const native = await app.harness.conversation(id as ConversationId, context);
 	if (!native) throw new Error("Native session is unavailable");
 	return native;
