@@ -15,10 +15,10 @@
 		"format": "biome check --write ."
 	},
 	"dependencies": {
-		"@earendil-works/chord": "1.4.0",
-		"@earendil-works/pi-ai": "1.4.0",
-		"@earendil-works/pi-coding-agent": "1.4.0",
-		"@earendil-works/pi-durable": "1.4.0",
+		"@earendil-works/chord": "1.5.2",
+		"@earendil-works/pi-ai": "1.5.2",
+		"@earendil-works/pi-coding-agent": "1.5.2",
+		"@earendil-works/pi-durable": "1.5.2",
 		"@grpc/grpc-js": "^1.14.6",
 		"@grpc/proto-loader": "^0.8.1",
 		"@js-temporal/polyfill": "0.5.1",

@@ -1,5 +1,4 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { watchEvents } from "@earendil-works/pi-durable";
 import type { Transcript } from "../../protocol/index.ts";
 import type { Runtime } from "../../runtime.ts";
 import { clientSession, readSession } from "./handlers/sessions.ts";
@@ -15,7 +14,7 @@ export async function watchSession(
 	onUnavailable: () => void,
 ): Promise<SessionWatch> {
 	const session = await clientSession(app, id, false);
-	const stream = await watchEvents(app.harness, session.id, context);
+	const stream = await session.watch(context, { min: 1, max: 1 });
 	let closed = false,
 		dirty = false;
 	let timer: ReturnType<typeof setTimeout> | null = null;
@@ -64,8 +63,9 @@ export async function watchSession(
 	});
 	try {
 		// Registration already exists, so commits during the initial projection
-		// cannot be lost. Native overflow snapshots also invalidate the projection.
-		await stream.start(async () => schedule());
+		// cannot be lost. The native structural watch folds bursts and includes
+		// transcript, queue and streamed progress revisions, even before persistence.
+		stream.start(async () => schedule());
 		await launch();
 	} catch (error) {
 		await retire();

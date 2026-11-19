@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import type { Transcript } from "../src/protocol/index.ts";
 import { serve } from "../src/server/index.ts";
 import { ClientConnection } from "../src/tui/client/connection.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
@@ -28,6 +29,19 @@ test("authenticated context reads do not place a supplied native inbox, resume g
 		client.connect();
 		await eventually(async () => client.stateFresh, Boolean);
 		const id = Number(app.home.id);
+		const whenObserved = (predicate: (value: Transcript) => boolean) =>
+			new Promise<Transcript>((resolve) => {
+				const check = () => {
+					const value = client.transcript;
+					if (value && predicate(value)) {
+						unsubscribe();
+						resolve(value);
+					}
+				};
+				const unsubscribe = client.onChange(check);
+				check();
+			});
+		client.selectSession(id);
 		await client.call("session.send", {
 			id,
 			content: "Active input before fixture gate",
@@ -46,6 +60,12 @@ test("authenticated context reads do not place a supplied native inbox, resume g
 			});
 			expect(admitted.queued).toBe(true);
 		}
+		// A native structural watch must deliver busy-queue changes without
+		// another read, model request, or input-placement operation.
+		const streamed = await whenObserved(
+			(value) => value.progress.inbox.length === 27,
+		);
+		expect(streamed.progress.inbox[0]?.content).toBe("Queued-0 😀e\u0301\r\n");
 		const supplied = await client.call("session.read", { id });
 		expect(supplied.progress.inbox).toHaveLength(27);
 		expect(supplied.progress.inbox[0]).toMatchObject({
@@ -72,12 +92,12 @@ test("authenticated context reads do not place a supplied native inbox, resume g
 		expect(after.progress.run).toEqual(supplied.progress.run);
 		expect(after.progress.generation).toEqual(supplied.progress.generation);
 		expect(fake.state.callCount).toBe(1);
-		release();
-		const settled = await eventually(
-			() => client.call("session.read", { id }),
+		const delivered = whenObserved(
 			(value) =>
 				value.progress.run === null && value.progress.inbox.length === 0,
 		);
+		release();
+		const settled = await delivered;
 		expect(settled.progress.generation).toBeNull();
 		expect(
 			JSON.stringify((await client.call("session.context", { id })).messages),

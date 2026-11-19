@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import { digest, text } from "./config.ts";
 import { Catalog, decode, type Review, type TaskInfo } from "./state.ts";
@@ -61,8 +61,10 @@ export async function waitForReview(
 		if (initial && decode<Review>(initial).state !== "pending")
 			return decode<Review>(initial);
 		return await new Promise<Review>((resolve, reject) => {
-			watch.start(async (value) => {
-				const raw = value?.reviews[id];
+			watch.start(async (call) => {
+				// Failed frames keep the last value; only a new document is a decision.
+				if (call.kind !== "value" || call.retired) return;
+				const raw = call.value.reviews[id];
 				if (raw && decode<Review>(raw).state !== "pending")
 					resolve(decode<Review>(raw));
 			});

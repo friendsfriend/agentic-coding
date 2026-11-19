@@ -30,7 +30,7 @@ function describeWork(
 			detail: `blocked native work (${blocked.join(", ")})`,
 		};
 	if (running) return { activity: "running", detail: "executing" };
-	if (leaves.some((node) => node.state.kind === "ready"))
+	if (leaves.some((node) => node.state.kind === "pending"))
 		return { activity: "idle", detail: "queued" };
 	const sleeping = leaves.flatMap((node) =>
 		node.state.kind === "sleeping" ? [node.state.until] : [],

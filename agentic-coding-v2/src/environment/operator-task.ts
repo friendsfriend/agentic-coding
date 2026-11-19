@@ -492,8 +492,9 @@ export function createOperatorTask(config: Config, manager: Environments) {
 					if (!outcome)
 						outcome = await new Promise<NonNullable<ReturnType<typeof ended>>>(
 							(resolve, reject) => {
-								watch.start(async (value) => {
-									const result = ended(value);
+								watch.start(async (call) => {
+									if (call.kind !== "value" || call.retired) return;
+									const result = ended(call.value);
 									if (result) resolve(result);
 								});
 								void watch.closed.then(() =>

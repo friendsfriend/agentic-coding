@@ -28,7 +28,7 @@ test("uncertain promotion blocks retries across reopen until explicit acknowledg
 	let armed = false;
 	// One public storage fault: reject receipt persistence after the filesystem
 	// publication. All native data reads/writes otherwise use real JSONL storage.
-	const commit: Storage["commit"] = async (writes, ctx) => {
+	const commit: Storage["commit"] = async (batches, receive, ctx) => {
 		if (
 			armed &&
 			fs.existsSync(live) &&
@@ -37,7 +37,7 @@ test("uncertain promotion blocks retries across reopen until explicit acknowledg
 			armed = false;
 			throw new Error("Injected receipt persistence failure");
 		}
-		return native.commit(writes, ctx);
+		return native.commit(batches, receive, ctx);
 	};
 	const storage = new Proxy(native, {
 		get(target, property) {
