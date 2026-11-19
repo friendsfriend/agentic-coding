@@ -39,6 +39,7 @@ import { SuppliedObservation } from "../../ui/SuppliedObservation.tsx";
 import { color } from "../../ui/theme/index.ts";
 import { bulkFold } from "./card-folds.ts";
 import { NativeProgress } from "./NativeProgress.tsx";
+import { QueuedInputs } from "./QueuedInputs.tsx";
 import { ResponseFooter } from "./ResponseFooter.tsx";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import type { PromptTimelineRow } from "./TimelinePicker.tsx";
@@ -1241,7 +1242,8 @@ export function Transcript(props: {
 						/>
 					)}
 				</For>
-				<Show when={!messages().length}>
+				<QueuedInputs items={progress()?.inbox ?? []} />
+				<Show when={!messages().length && !progress()?.inbox.length}>
 					<text fg={color("textMuted")}>No retained transcript entries.</text>
 				</Show>
 			</box>

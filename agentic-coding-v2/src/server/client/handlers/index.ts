@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { InboxDoc } from "@earendil-works/pi-durable";
 import { text } from "../../../config.ts";
 import {
 	type ClusterOperation,
@@ -345,23 +346,31 @@ export async function dispatch(
 			const session = await clientSession(app, integer(input.id));
 			const content = text(input.content, "message", 64000),
 				requestId = text(input.requestId, "submission identity", 128);
-			if (session.id === app.home.id)
-				return { submissionId: await app.chat(content, requestId) };
-			return {
-				submissionId: Number(
-					(
-						await session.submit(
-							{
-								type: "input",
-								content,
-								requestId: `client:${requestId}`,
-								whenBusy: "followUp",
-							},
-							context,
-						)
-					).id,
-				),
-			};
+			const submissionId =
+				session.id === app.home.id
+					? await app.chat(content, requestId)
+					: Number(
+							(
+								await session.submit(
+									{
+										type: "input",
+										content,
+										requestId: `client:${requestId}`,
+										whenBusy: "followUp",
+									},
+									context,
+								)
+							).id,
+						);
+			// Submission already committed. A failed feedback read must not turn
+			// accepted input into an apparent failed send and invite a duplicate.
+			const queued = await app.harness
+				.snapshot(InboxDoc, session.id, context)
+				.then((inbox) =>
+					inbox?.items.some((item) => Number(item.id) === submissionId),
+				)
+				.catch(() => undefined);
+			return { submissionId, ...(queued === undefined ? {} : { queued }) };
 		}
 		case "session.abort":
 			fields(input, ["id"]);

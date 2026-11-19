@@ -79,7 +79,12 @@ export type Progress = {
 	nestedTools: ToolProgress[];
 	compactions: Data[];
 	compactionFailure: Data | null;
-	inbox: { id: number; mode: "steer" | "followUp" | "write" }[];
+	inbox: {
+		id: number;
+		mode: "steer" | "followUp" | "write";
+		content?: string;
+		truncated?: boolean;
+	}[];
 };
 /** Explicit read-only native context projection; no approval revision or token estimate. */
 export type SessionContext = {
@@ -361,7 +366,7 @@ export type Methods = {
 	};
 	"session.send": {
 		input: { id: number; content: string; requestId: string };
-		output: { submissionId: number };
+		output: { submissionId: number; queued?: boolean };
 	};
 	"session.abort": { input: { id: number }; output: { aborted: true } };
 	"session.compact": {

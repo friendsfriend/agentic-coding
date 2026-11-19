@@ -160,7 +160,10 @@ function progress(value: unknown) {
 	for (const item of list(data.inbox))
 		if (
 			!integer(item.id) ||
-			!["steer", "followUp", "write"].includes(String(item.mode))
+			!["steer", "followUp", "write"].includes(String(item.mode)) ||
+			(item.content !== undefined &&
+				(typeof item.content !== "string" || item.content.length > 2048)) ||
+			(item.truncated !== undefined && typeof item.truncated !== "boolean")
 		)
 			throw new Error("Invalid native inbox");
 }
@@ -864,6 +867,12 @@ export function result<M extends Method>(
 			throw new Error("Invalid server acknowledgement");
 		if (method === "session.send" && !integer(data.submissionId))
 			throw new Error("Invalid submission identity");
+		if (
+			method === "session.send" &&
+			data.queued !== undefined &&
+			typeof data.queued !== "boolean"
+		)
+			throw new Error("Invalid submission queue observation");
 		if (
 			(method === "session.compact" || method === "environment.action") &&
 			!integer(data.taskId)

@@ -38,14 +38,20 @@ test("authenticated context reads do not place a supplied native inbox, resume g
 			(value) =>
 				value.progress.generation !== null && fake.state.callCount === 1,
 		);
-		for (let index = 0; index < 27; index++)
-			await client.call("session.send", {
+		for (let index = 0; index < 27; index++) {
+			const admitted = await client.call("session.send", {
 				id,
 				content: `Queued-${index} 😀e\u0301\r\n`,
 				requestId: `context-queued-${index}`,
 			});
+			expect(admitted.queued).toBe(true);
+		}
 		const supplied = await client.call("session.read", { id });
 		expect(supplied.progress.inbox).toHaveLength(27);
+		expect(supplied.progress.inbox[0]).toMatchObject({
+			content: "Queued-0 😀e\u0301\r\n",
+			truncated: false,
+		});
 		expect(new Set(supplied.progress.inbox.map((item) => item.id)).size).toBe(
 			27,
 		);

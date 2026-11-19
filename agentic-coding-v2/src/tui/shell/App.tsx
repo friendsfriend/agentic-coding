@@ -3656,7 +3656,9 @@ export function App(props: {
 					writePrompt("");
 				}
 				if (navigation.current === origin)
-					setNotice(`Admitted submission #${result.submissionId}`);
+					setNotice(
+						`${result.queued ? "Queued follow-up" : "Submitted message"} · #${result.submissionId}`,
+					);
 			}
 		} catch (error) {
 			const message =

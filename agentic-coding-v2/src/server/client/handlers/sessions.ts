@@ -11,6 +11,7 @@ import type {
 	Transcript,
 } from "../../../protocol/index.ts";
 import { record } from "../../../protocol/index.ts";
+import { queuedInputs } from "../../../queued-inputs.ts";
 import type { Runtime } from "../../../runtime.ts";
 
 export async function sessionCatalog(
@@ -185,10 +186,7 @@ export async function readSession(
 			nestedTools: live?.nestedTools ?? [],
 			compactions: live?.compactions ?? [],
 			compactionFailure: live?.compactionFailure ?? null,
-			inbox: (inbox?.items ?? []).map(({ id, mode }) => ({
-				id: Number(id),
-				mode,
-			})),
+			inbox: queuedInputs(inbox?.items ?? []),
 		},
 		// Reported provider usage in the returned history window, not a lifetime estimate.
 		usage: visible
