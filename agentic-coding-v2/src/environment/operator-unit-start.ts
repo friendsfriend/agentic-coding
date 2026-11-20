@@ -1,13 +1,16 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { digest, text } from "../config.ts";
-import { Catalog, decode, type TaskInfo, values } from "../state.ts";
+import { decode, values } from "../state.ts";
 import {
 	hostOperatorLifetime,
 	renewableOperator,
 	sameApprovedPlan,
 } from "./lifetime.ts";
 import type { Plan } from "./model.ts";
+import type {
+	EnvironmentOwner,
+	EnvironmentPersistence,
+} from "./persistence.ts";
 import {
 	type EnvironmentRun,
 	EnvironmentState,
@@ -16,7 +19,7 @@ import {
 } from "./state.ts";
 
 type Authority = {
-	store: () => Harness;
+	store: () => EnvironmentPersistence;
 	live: (run: EnvironmentRun) => boolean;
 	check: (owner: number) => void;
 	pending: (owner: number) => boolean;
@@ -28,7 +31,7 @@ export class OperatorUnitStarts {
 	private scope(
 		saved: Pick<OperatorUnitStart, "owner" | "runId" | "revision" | "topology">,
 		runs: EnvironmentRun[],
-		task: TaskInfo | undefined,
+		task: EnvironmentOwner | undefined,
 	) {
 		this.authority.check(saved.owner);
 		const unit = runs.find((run) => run.id === saved.runId),
@@ -110,8 +113,7 @@ export class OperatorUnitStarts {
 		if (!Number.isSafeInteger(input.revision) || Number(input.revision) < 1)
 			throw new Error("A current integer released-unit revision is required");
 		return this.authority.store().commit(async (tx) => {
-			const doc = await tx.doc(EnvironmentState),
-				catalog = await tx.doc(Catalog);
+			const doc = await tx.doc(EnvironmentState);
 			doc.unitStarts ??= {};
 			const old = doc.unitStarts[id];
 			if (old) {
@@ -132,14 +134,8 @@ export class OperatorUnitStarts {
 			const runs = values<EnvironmentRun>(doc.runs),
 				unit = runs.find((run) => run.id === runId);
 			if (!unit) throw new Error("Unknown released operator unit");
-			const raw = catalog.tasks[String(unit.owner)],
-				task = raw ? decode<TaskInfo>(raw) : undefined,
-				native = await tx.task(unit.owner as TaskId);
-			if (
-				!native ||
-				native.abortRequested ||
-				native.state.status === "terminal"
-			)
+			const task = await tx.ownerInfo(unit.owner);
+			if (!(await tx.ownerActive(unit.owner)))
 				throw new Error("Original operator is not live");
 			if (
 				values<OperatorUnitStart>(doc.unitStarts).some(
@@ -179,19 +175,14 @@ export class OperatorUnitStarts {
 	async context(id: string, owner: number) {
 		return this.authority.store().commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState),
-				raw = doc.unitStarts?.[id],
-				catalog = await tx.doc(Catalog);
+				raw = doc.unitStarts?.[id];
 			if (!raw) throw new Error("Unknown operator unit request");
 			const saved = decode<OperatorUnitStart>(raw),
-				taskRaw = catalog.tasks[String(owner)];
+				task = await tx.ownerInfo(owner);
 			if (saved.owner !== owner || !["pending", "review"].includes(saved.state))
 				throw new Error("Unit re-add request is no longer reviewable");
 			return {
-				...this.scope(
-					saved,
-					values<EnvironmentRun>(doc.runs),
-					taskRaw ? decode<TaskInfo>(taskRaw) : undefined,
-				),
+				...this.scope(saved, values<EnvironmentRun>(doc.runs), task),
 				request: saved,
 			};
 		}, background);

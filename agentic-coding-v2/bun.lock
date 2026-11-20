@@ -12,6 +12,8 @@
         "@grpc/grpc-js": "^1.14.6",
         "@grpc/proto-loader": "^0.8.1",
         "@js-temporal/polyfill": "0.5.1",
+        "@modelcontextprotocol/client": "2.4.0",
+        "@modelcontextprotocol/server": "2.4.0",
         "@opentui/core": "0.7.0",
         "@opentui/keymap": "0.7.0",
         "@opentui/solid": "0.7.0",
@@ -19,6 +21,7 @@
         "solid-js": "1.9.17",
         "typebox": "^1.0.0",
         "ws-client": "npm:ws@8.22.1",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@biomejs/biome": "^2.6.3",
@@ -197,6 +200,12 @@
 
     "@js-temporal/polyfill": ["@js-temporal/polyfill@0.5.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@js-temporal/polyfill/-/polyfill-0.5.1.tgz", { "dependencies": { "jsbi": "^4.3.0" } }, "sha512-hloP58zRVCRSpgDxmqCWJNlizAlUgJFqG2ypq79DCvyv9tHjRYMDOcPFjzfl/A1/YxDvRCZz8wvZvmapQnKwFQ=="],
 
+    "@modelcontextprotocol/client": ["@modelcontextprotocol/client@2.4.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@modelcontextprotocol/client/-/client-2.4.0.tgz", { "dependencies": { "@modelcontextprotocol/core": "2.4.0", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.8", "jose": "^6.1.3", "pkce-challenge": "^5.0.0", "zod": "^4.2.0" } }, "sha512-LgrD2OphHuG12vfKFKz6SOnq7bKHQmhGJIAYdD+MZBn2npHEyry6uD8zvktodtl5CQM85MO0anUyD9JwmUmxww=="],
+
+    "@modelcontextprotocol/core": ["@modelcontextprotocol/core@2.4.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@modelcontextprotocol/core/-/core-2.4.0.tgz", { "dependencies": { "zod": "^4.2.0" } }, "sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q=="],
+
+    "@modelcontextprotocol/server": ["@modelcontextprotocol/server@2.4.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@modelcontextprotocol/server/-/server-2.4.0.tgz", { "dependencies": { "@modelcontextprotocol/core": "2.4.0", "zod": "^4.2.0" } }, "sha512-rgR9yxSaAJ+bcsi/XroT/S2AfPiIWloXAnrdfYSCms9ivVju0ishu/wW0J21Ho6+ZOR1r7RyeRbjiRuF87ix5Q=="],
+
     "@opentui/core": ["@opentui/core@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core/-/core-0.7.0.tgz", { "dependencies": { "bun-ffi-structs": "0.3.1", "diff": "9.0.0", "marked": "17.0.1", "string-width": "7.2.0" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.7.0", "@opentui/core-darwin-x64": "0.7.0", "@opentui/core-linux-arm64": "0.7.0", "@opentui/core-linux-arm64-musl": "0.7.0", "@opentui/core-linux-x64": "0.7.0", "@opentui/core-linux-x64-musl": "0.7.0", "@opentui/core-win32-arm64": "0.7.0", "@opentui/core-win32-x64": "0.7.0" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-2iWBw9oo+ZJfPbOWeTLXfDV63yTDRfclxltI4IgTa6n7OB90x5xplLMH3y9DXhnWibzTui00GbK3ZCwKfUU1SQ=="],
 
     "@opentui/core-darwin-arm64": ["@opentui/core-darwin-arm64@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-darwin-arm64/-/core-darwin-arm64-0.7.0.tgz", { "os": "darwin", "cpu": "arm64" }, "sha512-meEyZVUeCIauqHLWo/IsSlKzZPTnGIEjRLigefSZbrSAcOiMryd3OcUWvSByIXpYb9UPOpW0YxKKfVwepb9u2A=="],
@@ -369,6 +378,10 @@
 
     "escalade": ["escalade@3.2.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/escalade/-/escalade-3.2.0.tgz", {}, "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA=="],
 
+    "eventsource": ["eventsource@3.0.7", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/eventsource/-/eventsource-3.0.7.tgz", { "dependencies": { "eventsource-parser": "^3.0.1" } }, "sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA=="],
+
+    "eventsource-parser": ["eventsource-parser@3.1.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/eventsource-parser/-/eventsource-parser-3.1.1.tgz", {}, "sha512-EKN1vKAMcZ8MlYMpaNuxN6R9yakzH6uajHcHVTqWJzvu5pWw9DyhbP35HH8MVBQ+dZjAfDxk+A8NiR9KWaXiyQ=="],
+
     "extend": ["extend@3.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/extend/-/extend-3.0.2.tgz", {}, "sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g=="],
 
     "fast-sha256": ["fast-sha256@1.3.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/fast-sha256/-/fast-sha256-1.3.0.tgz", {}, "sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ=="],
@@ -424,6 +437,8 @@
     "isexe": ["isexe@2.0.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/isexe/-/isexe-2.0.0.tgz", {}, "sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw=="],
 
     "jiti": ["jiti@2.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/jiti/-/jiti-2.7.0.tgz", { "bin": { "jiti": "lib/jiti-cli.mjs" } }, "sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ=="],
+
+    "jose": ["jose@6.2.18", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/jose/-/jose-6.2.18.tgz", {}, "sha512-doV4thUwgkrycJH4yLeqwTGIIZphHl+pk7CPReuMIhYhncmgzdko85MaCG4YQFTxqMFr1/oEH32tZuKKovcDEg=="],
 
     "js-tokens": ["js-tokens@4.0.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/js-tokens/-/js-tokens-4.0.0.tgz", {}, "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ=="],
 
@@ -490,6 +505,8 @@
     "path-scurry": ["path-scurry@1.11.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/path-scurry/-/path-scurry-1.11.1.tgz", { "dependencies": { "lru-cache": "^10.2.0", "minipass": "^5.0.0 || ^6.0.2 || ^7.0.0" } }, "sha512-Xa4Nw17FS9ApQFJ9umLiJS4orGjm7ZzwUrwamcGQuHSzDyth9boKDaycYdDcZDuqYATXw4HFXgaqWTctW/v1HA=="],
 
     "picocolors": ["picocolors@1.1.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/picocolors/-/picocolors-1.1.1.tgz", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
+
+    "pkce-challenge": ["pkce-challenge@5.0.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/pkce-challenge/-/pkce-challenge-5.0.1.tgz", {}, "sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ=="],
 
     "pkg-up": ["pkg-up@3.1.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/pkg-up/-/pkg-up-3.1.0.tgz", { "dependencies": { "find-up": "^3.0.0" } }, "sha512-nDywThFk1i4BQK4twPQ6TA4RT8bDY96yeuCVBWL3ePARCiEKDRSrNGbFIgUJpLp+XeIR65v8ra7WuJOFUBtkMA=="],
 
@@ -570,6 +587,8 @@
     "yargs": ["yargs@17.7.3", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/yargs/-/yargs-17.7.3.tgz", { "dependencies": { "cliui": "^8.0.1", "escalade": "^3.1.1", "get-caller-file": "^2.0.5", "require-directory": "^2.1.1", "string-width": "^4.2.3", "y18n": "^5.0.5", "yargs-parser": "^21.1.1" } }, "sha512-GZtjxm/J/4TSxuL3FNYjCmLktBTnIw/rVmKSIyKeYAZpmJB2ig9VauCC5xsa82GNKVKDAqpOn3KVzNt0zmrU0g=="],
 
     "yargs-parser": ["yargs-parser@21.1.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/yargs-parser/-/yargs-parser-21.1.1.tgz", {}, "sha512-tVpsJW7DdjecAiFpbIB1e3qxIQsE6NoPc5/eTdrbbIC4h0LVsWhnoa3g+m2HclBIujHzsxZ4VJVA+GUuc2/LBw=="],
+
+    "zod": ["zod@4.4.3", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/zod/-/zod-4.4.3.tgz", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "@aws-sdk/client-bedrock-runtime/@smithy/node-http-handler": ["@smithy/node-http-handler@4.14.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@smithy/node-http-handler/-/node-http-handler-4.14.1.tgz", { "dependencies": { "@smithy/core": "^3.38.1", "@smithy/types": "^4.19.0", "tslib": "^2.6.2" } }, "sha512-/T6E1jzCL0fErS9uq8JqES/5yYQQ4ppVmmYHwXw2nlov8KFzLb+3QqHR5iAun1BsuAB50IPxZliV8YMgghLwhA=="],
 

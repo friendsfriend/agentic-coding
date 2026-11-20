@@ -50,6 +50,12 @@ export function useModalContentLines(): (() => number) | undefined {
 	return useContext(ModalContentLinesContext);
 }
 
+/** An unchanged ported view can inherit its controlling surface's footer.
+ * That controller also owns keyboard dispatch and the complete `?` catalog. */
+export const ModalFooterContext = createContext<
+	(() => JSX.Element) | undefined
+>(undefined);
+
 export interface SummaryEntry {
 	label: string;
 	value: string;
@@ -241,6 +247,7 @@ export interface GenericModalProps {
  * callers; this component only owns framing.
  */
 export function GenericModal(props: GenericModalProps) {
+	const controllerFooter = useContext(ModalFooterContext);
 	const dimensions = useTerminalDimensions();
 	const chips = useKeybindChips();
 	const width = () =>
@@ -580,7 +587,9 @@ export function GenericModal(props: GenericModalProps) {
 								<SummaryTable entries={props.summary ?? []} full />
 							</box>
 						</Show>
-						{props.customFooter ? (
+						{controllerFooter ? (
+							controllerFooter()
+						) : props.customFooter ? (
 							props.customFooter
 						) : (
 							<box

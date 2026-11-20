@@ -1,5 +1,8 @@
 # agentic-coding-v2
 
+For the shared environment MCP daemon, stdio bridge, read-only inspection mode
+and staged migration, see [Environment MCP](MCP.md). Custom UI integration is deferred.
+
 Independent Bun application built on `@earendil-works/pi-durable` 1.4.0. No imports from the previous application, workflow engine, presets, or classification stages. This is a new implementation, not a live-state migration.
 
 ## Run

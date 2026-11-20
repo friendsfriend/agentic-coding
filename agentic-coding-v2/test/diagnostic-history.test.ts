@@ -71,6 +71,28 @@ test("a diagnostic window keeps newest issuance first, reports omissions and pag
 			.map((row) => row.id)
 			.sort(),
 	).toEqual(ids(records));
+	const small = diagnosticHistory(
+		records,
+		run,
+		{ limit: 50 },
+		"HTTP",
+		all,
+		describe,
+	);
+	const next = diagnosticHistory(
+		records,
+		run,
+		{ limit: 50, cursor: String(small.nextCursor) },
+		"HTTP",
+		all,
+		describe,
+	);
+	expect(small.returned).toBe(50);
+	expect(next.newer).toBe(50);
+	expect(
+		Number(small.records?.at(-1)?.issuedAt) -
+			Number(next.records?.[0]?.issuedAt),
+	).toBe(1);
 });
 
 test("an exact diagnostic ID stays readable outside the window but only in its own run and owner scope", () => {

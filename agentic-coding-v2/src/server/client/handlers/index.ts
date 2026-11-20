@@ -437,6 +437,79 @@ export async function dispatch(
 		case "task.cancel":
 			fields(input, ["id"]);
 			return { requested: await app.cancel(integer(input.id)) };
+		case "human.read":
+			fields(input, ["id"]);
+			return app.readHuman(text(input.id, "human request", 128));
+		case "human.draft.read":
+			fields(input, ["id"]);
+			return app.humanDraft(text(input.id, "human request", 128));
+		case "human.draft.save":
+			fields(input, ["id", "digest", "version", "content"]);
+			if (typeof input.content !== "string")
+				throw new Error("Expected draft content");
+			return app.humanDraft(text(input.id, "human request", 128), {
+				digest: text(input.digest, "snapshot digest", 128),
+				version: integer(input.version),
+				content: input.content,
+			});
+		case "approval.submit": {
+			fields(input, [
+				"id",
+				"digest",
+				"revision",
+				"requestId",
+				"decision",
+				"comments",
+			]);
+			const decision = input.decision;
+			if (
+				decision !== "approved" &&
+				decision !== "rejected" &&
+				decision !== "changes-requested"
+			)
+				throw new Error("Expected explicit approval decision");
+			if (typeof input.comments !== "string")
+				throw new Error("Expected approval comments");
+			return app.submitApproval({
+				id: text(input.id, "human request", 128),
+				digest: text(input.digest, "snapshot digest", 128),
+				revision: integer(input.revision),
+				requestId: text(input.requestId, "submission identity", 256),
+				decision,
+				comments: input.comments,
+			});
+		}
+		case "question.submit":
+			fields(input, [
+				"id",
+				"digest",
+				"revision",
+				"requestId",
+				"answers",
+				"globalNote",
+			]);
+			if (!Array.isArray(input.answers) || typeof input.globalNote !== "string")
+				throw new Error("Expected question answers");
+			return app.submitQuestions({
+				id: text(input.id, "human request", 128),
+				digest: text(input.digest, "snapshot digest", 128),
+				revision: integer(input.revision),
+				requestId: text(input.requestId, "submission identity", 256),
+				answers: input.answers,
+				globalNote: input.globalNote,
+			});
+		case "review.submit": {
+			fields(input, ["id", "revision", "digest", "requestId", "comments"]);
+			if (!Array.isArray(input.comments))
+				throw new Error("Expected review comments");
+			return app.submitReview({
+				id: text(input.id, "review identity", 128),
+				revision: integer(input.revision),
+				digest: text(input.digest, "snapshot digest", 128),
+				requestId: text(input.requestId, "submission identity", 256),
+				comments: input.comments,
+			});
+		}
 		case "review.decide": {
 			fields(input, ["id", "revision", "decision", "comments"]);
 			const decision = input.decision;

@@ -1,8 +1,8 @@
-import { defineDoc } from "@earendil-works/pi-durable";
 import type { Plan } from "./model.ts";
+import { environmentDocument } from "./persistence.ts";
 import type { LogTiming, RuntimeStatus, ServiceLog } from "./process.ts";
 
-export const EnvironmentState = defineDoc<{
+export const EnvironmentState = environmentDocument<{
 	runs: Record<string, string>;
 	operatorRevocations?: Record<string, string>;
 	unitStarts?: Record<string, string>;
@@ -17,9 +17,7 @@ export const EnvironmentState = defineDoc<{
 }>({
 	kind: "v2.environments",
 	version: 1,
-	scope: "session",
 	initial: () => ({ runs: {}, stops: {}, reuses: {}, httpOperations: {} }),
-	checkpointWhen: () => true,
 });
 export type ReuseReceipt = {
 	owner: number;

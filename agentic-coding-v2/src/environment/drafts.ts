@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import { defineDoc, type Harness } from "@earendil-works/pi-durable";
 import { type Config, digest, text } from "../config.ts";
 import { validateProjects } from "./catalog.ts";
 import { inspectStagedCandidate } from "./definition-candidate.ts";
@@ -68,23 +67,23 @@ import {
 	treeCleanupHistory,
 } from "./definition-tree-cleanup.ts";
 import { within } from "./path-within.ts";
+import {
+	type EnvironmentPersistence,
+	environmentDocument,
+} from "./persistence.ts";
 
-const DraftState = defineDoc<DraftData>({
+const DraftState = environmentDocument<DraftData>({
 	kind: "v2.environment-drafts",
 	version: 1,
-	scope: "session",
 	initial: () => ({ drafts: {}, receipts: {} }),
-	checkpointWhen: () => true,
 });
-const Preflights = defineDoc<{
+const Preflights = environmentDocument<{
 	reports: Record<string, string>;
 	requests: Record<string, string>;
 }>({
 	kind: "v2.environment-definition-preflights",
 	version: 1,
-	scope: "session",
 	initial: () => ({ reports: {}, requests: {} }),
-	checkpointWhen: () => true,
 });
 type Preflight = (
 	| ReturnType<typeof inspectDefinition>
@@ -180,7 +179,7 @@ export class DefinitionDrafts {
 	}
 	constructor(
 		private config: Config,
-		private engine: () => Harness,
+		private engine: () => EnvironmentPersistence,
 	) {}
 	async list() {
 		privateState(this.config);

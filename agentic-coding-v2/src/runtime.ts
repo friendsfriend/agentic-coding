@@ -12,15 +12,18 @@ import {
 	type Storage,
 	type TaskId,
 	type ToolRegistration,
+	ToolTask,
+	type Tx,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { TaskAdmission } from "./admission.ts";
 import { createAgentTools, createCodingTools } from "./agent-tools.ts";
-import { type Config, text } from "./config.ts";
+import { type Config, digest, text } from "./config.ts";
 import { AppRegistry } from "./environment/app-registry.ts";
 import { ClusterOperator } from "./environment/cluster-operator.ts";
 import { LogAnalysis } from "./environment/log-analysis.ts";
 import { Environments } from "./environment/manager.ts";
+import { nativeEnvironmentPersistence } from "./environment/native-persistence.ts";
 import {
 	type OperatorAction,
 	OperatorEnvironments,
@@ -38,6 +41,12 @@ import { Orchestrators } from "./orchestrators.ts";
 import { projectState } from "./projection.ts";
 import { ProviderActions } from "./provider-actions.ts";
 import { ProviderWorkbench } from "./providers/workbench/index.ts";
+import { type QuestionSubmission, questionReceipt } from "./questions.ts";
+import {
+	prepareReviewSubmission,
+	ReviewFeedbackError,
+	type ReviewSubmission,
+} from "./review-feedback.ts";
 import { Scheduler, type ScheduleSlot } from "./scheduler.ts";
 import { Refusal } from "./server/refusal.ts";
 import { Settings } from "./settings.ts";
@@ -234,7 +243,9 @@ export class Runtime {
 			context,
 		);
 		try {
-			await app.environments.initialize(app.harness);
+			await app.environments.initialize(
+				nativeEnvironmentPersistence(app.harness),
+			);
 			// One orchestrator agent, shared by the root and every created
 			// orchestrator: they differ only in the directory they work in.
 			// One tool surface for every agent: the orchestrator keeps no private
@@ -450,6 +461,79 @@ export class Runtime {
 		await this.environments.releaseOwner(id);
 		return requested;
 	}
+	private async recoverHumanIdentity(tx: Tx, review: Review) {
+		if (
+			review.conversationId !== undefined &&
+			review.nativeToolTaskId !== undefined &&
+			typeof review.callId === "string" &&
+			review.ownerKind !== undefined
+		)
+			return;
+		const match = /^review-(\d+)$/.exec(review.id);
+		if (!match) return;
+		const task = await tx.task(nativeTaskId(Number(match[1])));
+		if (!task || task.kind !== ToolTask.definition.name) return;
+		const input =
+			task.input && typeof task.input === "object" && !Array.isArray(task.input)
+				? task.input
+				: {};
+		const nested =
+			input.call && typeof input.call === "object" && !Array.isArray(input.call)
+				? input.call
+				: {};
+		const callId = input.kind === "model" ? input.callId : nested.id;
+		if (typeof callId !== "string") return;
+		const doc = await tx.doc(Catalog);
+		review.nativeToolTaskId = Number(task.id);
+		review.conversationId = Number(task.conversationId);
+		review.callId = callId;
+		review.ownerKind = doc.tasks[String(review.taskId)]
+			? "task"
+			: "conversation";
+		// Deliberately do not infer a review kind. Legacy gates remain explicit.
+	}
+	private async assertHumanPending(tx: Tx, review: Review) {
+		await this.recoverHumanIdentity(tx, review);
+		if (
+			review.nativeToolTaskId === undefined ||
+			review.conversationId === undefined ||
+			!review.callId
+		)
+			throw new Refusal(
+				"Native requesting tool identity is unavailable; immutable legacy request retained",
+			);
+		if (review.state !== "pending")
+			throw new Refusal("Human request is already settled; draft retained");
+		if (review.nativeToolTaskId !== undefined) {
+			const tool = await tx.task(nativeTaskId(review.nativeToolTaskId));
+			if (
+				!tool ||
+				tool.kind !== ToolTask.definition.name ||
+				tool.abortRequested ||
+				tool.state.status === "terminal" ||
+				(review.conversationId !== undefined &&
+					tool.conversationId !== review.conversationId)
+			)
+				throw new Refusal(
+					"Requesting tool ended or was cancelled; draft retained",
+				);
+		}
+		if (review.ownerKind === "conversation") {
+			if (
+				review.conversationId === undefined ||
+				!(await tx.conversation(review.conversationId as ConversationId))
+			)
+				throw new Refusal("Requesting conversation is unavailable");
+			const doc = await tx.doc(Catalog);
+			const raw = doc.orchestrators?.[String(review.conversationId)];
+			if (raw && decode<{ retiredAt?: number }>(raw).retiredAt)
+				throw new Refusal("Requesting conversation was closed; draft retained");
+		} else {
+			const task = await tx.task(nativeTaskId(review.taskId));
+			if (!task || task.abortRequested || task.state.status === "terminal")
+				throw new Refusal("Owning task ended or was cancelled; draft retained");
+		}
+	}
 	async decide(
 		id: string,
 		revision: number,
@@ -462,21 +546,189 @@ export class Runtime {
 		await this.harness.commit(async (tx) => {
 			const doc = await tx.doc(Catalog);
 			const raw = doc.reviews[id];
-			if (!raw) throw new Error("Review not found");
+			if (!raw) throw new Refusal("Review not found");
 			const review = decode<Review>(raw);
-			const task = await tx.task(nativeTaskId(review.taskId));
-			if (
-				!task ||
-				task.abortRequested ||
-				task.state.status === "terminal" ||
-				review.state !== "pending" ||
-				review.revision !== revision
-			)
-				throw new Error("Review is stale or task cancelled");
+			await this.assertHumanPending(tx, review);
+			if (review.kind === "question")
+				throw new Refusal("Use Submit answers for this questionnaire");
+			if (review.kind === "code-review")
+				throw new Refusal(
+					"Open the requesting transcript and submit snapshot-bound review feedback",
+				);
+			if (review.revision !== revision)
+				throw new Refusal("Review revision changed; draft retained");
+			// Only legacy/explicit gates use this compatibility entry point.
 			review.state = decision;
 			review.comments = comments;
 			review.revision++;
 			doc.reviews[id] = JSON.stringify(review);
+		}, context);
+	}
+	/** Acknowledges only the durable receipt; never waits for the resumed model. */
+	async submitReview(input: ReviewSubmission) {
+		return this.harness.commit(async (tx) => {
+			const doc = await tx.doc(Catalog);
+			const raw = doc.reviews[input.id];
+			if (!raw) throw new Refusal("Review not found");
+			const review = decode<Review>(raw);
+			let receipt: ReturnType<typeof prepareReviewSubmission>;
+			try {
+				receipt = prepareReviewSubmission(review, input);
+			} catch (error) {
+				if (error instanceof ReviewFeedbackError)
+					throw new Refusal(error.message);
+				throw error;
+			}
+			if (review.receipt?.requestId === receipt.requestId) {
+				if (review.receipt.fingerprint !== receipt.fingerprint)
+					throw new Refusal(
+						"Review submission identity was reused with different feedback",
+					);
+				return review.receipt;
+			}
+			await this.assertHumanPending(tx, review);
+			if (review.revision !== input.revision)
+				throw new Refusal(
+					"Review is stale or task cancelled; drafts were not submitted",
+				);
+			review.state = receipt.decision;
+			review.comments = receipt.comments
+				.map((comment) => comment.body)
+				.join("\n\n");
+			review.receipt = receipt;
+			review.revision++;
+			doc.reviews[review.id] = JSON.stringify(review);
+			return receipt;
+		}, context);
+	}
+	async submitApproval(input: {
+		id: string;
+		revision: number;
+		digest: string;
+		requestId: string;
+		decision: "approved" | "changes-requested" | "rejected";
+		comments: string;
+	}) {
+		return this.harness.commit(async (tx) => {
+			const doc = await tx.doc(Catalog);
+			const raw = doc.reviews[input.id];
+			if (!raw) throw new Refusal("Approval request not found");
+			const review = decode<Review>(raw);
+			if (
+				(review.kind !== undefined && review.kind !== "approval") ||
+				review.digest !== input.digest
+			)
+				throw new Refusal("Not an approval request for this snapshot");
+			if (
+				!input.requestId.trim() ||
+				input.requestId.length > 256 ||
+				input.comments.length > 16000 ||
+				!["approved", "changes-requested", "rejected"].includes(input.decision)
+			)
+				throw new Refusal("Invalid explicit approval response");
+			const fingerprint = digest(
+				JSON.stringify({
+					id: input.id,
+					digest: input.digest,
+					revision: input.revision,
+					decision: input.decision,
+					comments: input.comments,
+				}),
+			);
+			if (review.approvalReceipt?.requestId === input.requestId) {
+				if (review.approvalReceipt.fingerprint !== fingerprint)
+					throw new Refusal(
+						"Submission identity reused with different approval response",
+					);
+				return review.approvalReceipt;
+			}
+			await this.assertHumanPending(tx, review);
+			if (review.revision !== input.revision)
+				throw new Refusal("Approval revision changed; draft retained");
+			const receipt = {
+				requestId: input.requestId,
+				fingerprint,
+				revision: input.revision,
+				decision: input.decision,
+				comments: input.comments,
+			};
+			review.approvalReceipt = receipt;
+			review.state = input.decision;
+			review.comments = input.comments;
+			review.revision++;
+			doc.reviews[review.id] = JSON.stringify(review);
+			return receipt;
+		}, context);
+	}
+	async submitQuestions(input: QuestionSubmission) {
+		return this.harness.commit(async (tx) => {
+			const doc = await tx.doc(Catalog);
+			const raw = doc.reviews[input.id];
+			if (!raw) throw new Refusal("Human request not found");
+			const review = decode<Review>(raw);
+			if (
+				review.kind !== "question" ||
+				!review.questions ||
+				review.digest !== input.digest
+			)
+				throw new Refusal("Question snapshot changed; draft retained");
+			let receipt: ReturnType<typeof questionReceipt>;
+			try {
+				receipt = questionReceipt(review.questions, input);
+			} catch (error) {
+				if (error instanceof ReviewFeedbackError)
+					throw new Refusal(error.message);
+				throw error;
+			}
+			if (review.answerReceipt?.requestId === input.requestId) {
+				if (review.answerReceipt.fingerprint !== receipt.fingerprint)
+					throw new Refusal(
+						"Submission identity reused with different answers",
+					);
+				return review.answerReceipt;
+			}
+			await this.assertHumanPending(tx, review);
+			if (review.revision !== input.revision)
+				throw new Refusal("Question revision changed; draft retained");
+			review.answerReceipt = receipt;
+			review.state = "answered";
+			review.revision++;
+			doc.reviews[review.id] = JSON.stringify(review);
+			return receipt;
+		}, context);
+	}
+	async readHuman(id: string) {
+		const raw = (await this.harness.snapshot(Catalog, context))?.reviews[id];
+		if (!raw) throw new Refusal("Human request not found");
+		if (Buffer.byteLength(raw) > 970000)
+			throw new Refusal(
+				"Legacy human request exceeds the client transport limit; immutable content retained but unavailable here",
+			);
+		return decode<Review>(raw);
+	}
+	async humanDraft(
+		id: string,
+		value?: { digest: string; version: number; content: string },
+	) {
+		return this.harness.commit(async (tx) => {
+			const doc = await tx.doc(Catalog);
+			if (!doc.reviews[id]) throw new Refusal("Human request not found");
+			const review = decode<Review>(doc.reviews[id]);
+			const raw = doc.humanDrafts?.[id];
+			const draft = raw
+				? decode<{ digest: string; version: number; content: string }>(raw)
+				: { digest: review.digest, version: 0, content: "" };
+			if (!value) return draft;
+			if (value.digest !== review.digest || value.version !== draft.version)
+				throw new Refusal(
+					"Draft changed elsewhere or snapshot changed; local draft retained",
+				);
+			if (Buffer.byteLength(value.content) > 128000)
+				throw new Refusal("Human draft exceeds 128 KB; local draft retained");
+			const next = { ...value, version: value.version + 1 };
+			doc.humanDrafts ??= {};
+			doc.humanDrafts[id] = JSON.stringify(next);
+			return next;
 		}, context);
 	}
 	async attachment(id: string): Promise<Attachment | null> {
@@ -571,13 +823,38 @@ export class Runtime {
 		}
 	}
 	private async closeEndedReviews(reviews: Review[]) {
+		const legacy = reviews.filter(
+			(review) =>
+				review.conversationId === undefined ||
+				review.nativeToolTaskId === undefined ||
+				!review.callId ||
+				review.ownerKind === undefined,
+		);
+		if (legacy.length)
+			await this.harness.commit(async (tx) => {
+				const doc = await tx.doc(Catalog);
+				for (const previous of legacy) {
+					const raw = doc.reviews[previous.id];
+					if (!raw) continue;
+					const current = decode<Review>(raw);
+					await this.recoverHumanIdentity(tx, current);
+					if (current.conversationId !== undefined)
+						doc.reviews[current.id] = JSON.stringify(current);
+				}
+			}, context);
+		const currentReviews = legacy.length
+			? values<Review>((await this.harness.snapshot(Catalog, context))?.reviews)
+			: reviews;
 		const ended: Review[] = [];
-		for (const review of reviews.filter((item) => item.state === "pending")) {
+		for (const review of currentReviews.filter(
+			(item) => item.state === "pending",
+		)) {
 			const task = await this.harness.getTask(
-				nativeTaskId(review.taskId),
+				nativeTaskId(review.nativeToolTaskId ?? review.taskId),
 				context,
 			);
-			if (task?.state.status === "terminal") ended.push(review);
+			if (task?.state.status === "terminal" || task?.abortRequested)
+				ended.push(review);
 		}
 		if (!ended.length) return;
 		await this.harness.commit(async (tx) => {

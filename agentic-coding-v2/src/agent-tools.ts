@@ -14,7 +14,8 @@ import {
 import { Type } from "typebox";
 import type { Config } from "./config.ts";
 import { captureAttachment } from "./evidence-capture.ts";
-import { captureReview } from "./git.ts";
+import { captureReview, git } from "./git.ts";
+import { QuestionParameters, validateQuestions } from "./questions.ts";
 import { requestReview } from "./reviews.ts";
 import type { TaskInfo } from "./state.ts";
 
@@ -54,22 +55,57 @@ export function createAgentTools(config: Config, ownerOf: OwnerLookup) {
 		name: "v2.agent-tools",
 		tools: [
 			defineTool({
+				name: "ask_user_question",
+				description:
+					"Ask the human 1–4 structured questions with 2–4 described options each, optional Recommended and Markdown/code/config/ASCII previews. The human can select one or several options (multiSelect), type a custom multiline answer and attach notes. Waits durably for explicit Submit answers; conversation follow-ups are not answers. Do not author Other, Next or Type something options; the UI adds custom entry. All durable agents can ask; standalone chat remains tool-free.",
+				parameters: QuestionParameters,
+				replay: "safe",
+				executionMode: "sequential",
+				execute: async (args, api, context) => {
+					validateQuestions(args.questions);
+					const request = await requestReview(
+						await ownerOf(api.conversationId),
+						{
+							kind: "question",
+							questions: args.questions,
+							title: args.questions.map((q) => q.header).join(" · "),
+							path: "",
+							snapshot: JSON.stringify(args.questions),
+						},
+						api,
+						context,
+					);
+					return toolResult(
+						request.answerReceipt ?? {
+							cancelled: true,
+							reason: request.comments,
+						},
+					);
+				},
+			}),
+			defineTool({
 				name: "request_review",
 				description:
-					"Capture a path's Git diff and wait for an authenticated human decision. Approval is for the immutable snapshot only.",
+					"Capture a path's immutable Git diff and wait durably for authenticated human feedback in the requesting transcript. Explicit submission with zero nonempty comments approves this snapshot only; any surviving file/line/range/general comment requests changes. This is code review, not authority to execute side effects.",
 				parameters: Type.Object({ path: Type.String(), title: Type.String() }),
 				replay: "safe",
 				executionMode: "sequential",
 				execute: async (args, api, context) => {
 					const owner = await ownerOf(api.conversationId);
+					const baseCommit = (
+						await git(owner.workspace, ["rev-parse", "HEAD"])
+					).trim();
 					return toolResult(
 						await requestReview(
 							owner,
 							{
+								kind: "code-review",
+								baseCommit,
 								path: args.path,
 								title: args.title,
 								snapshot: async () =>
-									(await captureReview(owner.workspace, args.path)).snapshot,
+									(await captureReview(owner.workspace, args.path, baseCommit))
+										.snapshot,
 							},
 							api,
 							context,

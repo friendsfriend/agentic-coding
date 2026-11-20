@@ -2,6 +2,7 @@ import { type ConversationId, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { requestReview } from "../reviews.ts";
 import type { TaskInfo } from "../state.ts";
+import { httpDiagnosticAuthority } from "./diagnostic-approval.ts";
 import { httpOptions } from "./http-options.ts";
 import type { Environments } from "./manager.ts";
 import { environmentResult } from "./tool-result.ts";
@@ -80,8 +81,7 @@ export function createHttpTools(
 				const snapshot = JSON.stringify(
 					{
 						request,
-						authority:
-							"One direct HTTP operation or explicitly requested bounded same-origin redirect chain to this exact held ready shell, health-ready owned Docker/Podman, Compose-service or single-replica Pod endpoint. A durable native issuance marker is written before dispatch; replay returns only a completed original response or refuses uncertain issuance, never resends it. This is not a server-side transaction or exactly-once effect guarantee. The displayed method, headers and body are authorized; non-read methods require allowWrite:true. Writes, GET and redirect replay may cause irreversible server-side effects; cancellation/timeout is not rollback. At most three redirects and ten seconds total: POST 301/302 and non-HEAD 303 become GET without body/content-type; 307/308 preserve method/body. Every hop rechecks owner/live handle and approved public CA source; no different origin, insecure TLS, cookies, proxies, caller credentials, transport headers or shared/external binding. Container admission requires the exact declared loopback TCP publication and bounded fresh health/creation-identity observation. Optional Basic/Bearer authentication uses only the displayed configured secret-variable references frozen in the live app, over verified HTTPS; referenced credentials are not expanded into this review; known literal secrets and the derived Basic header/base64 value are redacted from results, not arbitrary transformations or encodings. Redirect bodies are omitted; final source is capped at 64 KiB with text-only bounded output and incomplete-line withholding. No socket-to-process ownership proof.",
+						authority: httpDiagnosticAuthority,
 					},
 					null,
 					2,

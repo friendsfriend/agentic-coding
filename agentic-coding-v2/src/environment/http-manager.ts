@@ -1,5 +1,4 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
@@ -36,7 +35,7 @@ export class HeldHttp {
 		private config: Config,
 		private authority: LiveEnvironmentAuthority,
 	) {}
-	/** Developer history only: never prepares an endpoint or restores a lease.
+	/** Historical read only; callers authorize the exact run/owner. Never prepares an endpoint or restores a lease.
 	 * Approved request bodies/headers, URLs and secret references are withheld. */
 	async history(runId: string, selection: DiagnosticSelection = {}) {
 		const run = (await this.authority.records()).find(
@@ -247,8 +246,7 @@ export class HeldHttp {
 	) {
 		this.authority.check(owner.id, signal);
 		const raw = await this.authority.store().commit(async (tx) => {
-			const task = await tx.task(owner.id as TaskId);
-			if (!task || task.abortRequested || task.state.status === "terminal")
+			if (!(await tx.ownerActive(owner.id)))
 				throw new Error("HTTP native owner has ended");
 			return (await tx.doc(EnvironmentState)).httpOperations?.[id];
 		}, background);
@@ -318,10 +316,9 @@ export class HeldHttp {
 		const operation = (async () => {
 			if (issuance) {
 				const previous = await this.authority.store().commit(async (tx) => {
-					const task = await tx.task(owner.id as TaskId);
+					const active = await tx.ownerActive(owner.id);
 					this.authority.check(owner.id, signal, run.batch, run);
-					if (!task || task.abortRequested || task.state.status === "terminal")
-						throw new Error("HTTP native owner has ended");
+					if (!active) throw new Error("HTTP native owner has ended");
 					const doc = await tx.doc(EnvironmentState);
 					this.authority.check(owner.id, signal, run.batch, run);
 					doc.httpOperations ??= {};
@@ -410,9 +407,9 @@ export class HeldHttp {
 			};
 			if (issuance)
 				await this.authority.store().commit(async (tx) => {
-					const task = await tx.task(owner.id as TaskId);
+					const active = await tx.ownerActive(owner.id);
 					this.authority.check(owner.id, signal, run.batch, run);
-					if (!task || task.abortRequested || task.state.status === "terminal")
+					if (!active)
 						throw new Error("HTTP native owner ended; response discarded");
 					const doc = await tx.doc(EnvironmentState);
 					this.authority.check(owner.id, signal, run.batch, run);

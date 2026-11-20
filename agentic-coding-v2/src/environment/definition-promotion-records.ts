@@ -1,4 +1,3 @@
-import { defineDoc } from "@earendil-works/pi-durable";
 import { type Config, digest, text } from "../config.ts";
 import {
 	type Draft,
@@ -8,6 +7,7 @@ import {
 } from "./definition-draft-data.ts";
 import { promoteDefinition } from "./definition-promotion.ts";
 import { stagedTreeIdentity } from "./definition-staged-tree.ts";
+import { environmentDocument } from "./persistence.ts";
 
 export type PromotionData = {
 	records: Record<string, string>;
@@ -15,12 +15,10 @@ export type PromotionData = {
 	attempts?: Record<string, string>;
 	acknowledgements?: Record<string, string>;
 };
-export const Promotions = defineDoc<PromotionData>({
+export const Promotions = environmentDocument<PromotionData>({
 	kind: "v2.environment-definition-promotions",
 	version: 1,
-	scope: "session",
 	initial: () => ({ records: {}, requests: {}, attempts: {} }),
-	checkpointWhen: () => true,
 });
 
 export function promotionRequest(body: Record<string, unknown>) {

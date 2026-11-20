@@ -1,15 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
-import fs from "node:fs";
-import { serve } from "../src/server/index.ts";
-import { createFixtures } from "./fixtures/runtime.ts";
+import { expect, test } from "bun:test";
+import { environmentSchema } from "./fixtures/environment-schema.ts";
 
-const { fixture, cleanup } = createFixtures();
-afterEach(cleanup);
-// Shell targets admit one bounded command string, a relative workspace,
-// explicit readiness for queries, and telemetry only on ready shell runs.
-// Draft creation stores content unvalidated; schema inspection refuses the rest
-// before approval. Details stay withheld by design, so this proves the
-// boundary, not the messages.
+// Rule tables exercise the schema directly. The authenticated draft scenario in
+// container-subset-fences.test.ts covers stored-valid/stored-invalid inspection;
+// no model, persistence or listener is needed for each declaration.
 const refusedTargets: Array<
 	[string, Record<string, unknown>, ("app" | "library" | "infrastructure")?]
 > = [
@@ -90,125 +84,32 @@ const refusedTargets: Array<
 	["duplicate target IDs", { command: "serve", readyText: "ready" }],
 ];
 test.each(refusedTargets)(
-	"schema inspection refuses %s",
-	async (label, override, kind = "app") => {
-		void label;
-		const { app, config } = await fixture(true, (config) => {
-			fs.chmodSync(config.stateDir, 0o700);
-			fs.mkdirSync(config.configDir, { mode: 0o700 });
-		});
-		const host = serve(app);
-		try {
-			const headers = {
-				Authorization: `Bearer ${new URLSearchParams(new URL(host.url).hash.slice(1)).get("token")}`,
-				"Content-Type": "application/json",
-			};
-			const targets: Array<Record<string, unknown>> = [
-				{
-					id: "run",
-					action: "run",
-					runtime: "shell",
-					...override,
-				},
-			];
-			if (label === "duplicate target IDs")
-				targets.push({
-					id: "run",
-					action: "run",
-					runtime: "shell",
-					command: "serve",
-					readyText: "ready",
-				});
-			const created = await (
-				await fetch(new URL("/api/environments/drafts", host.url), {
-					method: "POST",
-					headers,
-					body: JSON.stringify({
-						requestId: "stored-unvalidated",
-						content: JSON.stringify({
-							version: 1,
-							projects: [
-								{
-									id: "api",
-									kind,
-									repository: config.repositories[0] ?? "",
-									targets,
-								},
-							],
-						}),
-					}),
-				})
-			).json();
-			const loaded = await (
-				await fetch(
-					new URL(`/api/environments/drafts?id=${created.id}`, host.url),
-					{
-						headers,
-					},
-				)
-			).json();
-			expect(loaded.schema.valid).toBe(false);
-		} finally {
-			host.stop();
-			await app.close();
-		}
+	"schema refuses %s",
+	(label, override, kind = "app") => {
+		const target = { id: "run", action: "run", runtime: "shell", ...override };
+		const targets =
+			label === "duplicate target IDs" ? [target, { ...target }] : [target];
+		expect(() => environmentSchema(targets, kind)).toThrow();
 	},
 );
-test("schema inspection admits a ready shell run with loopback telemetry", async () => {
-	const { app, config } = await fixture(true, (config) => {
-		fs.chmodSync(config.stateDir, 0o700);
-		fs.mkdirSync(config.configDir, { mode: 0o700 });
-	});
-	const host = serve(app);
-	try {
-		const headers = {
-			Authorization: `Bearer ${new URLSearchParams(new URL(host.url).hash.slice(1)).get("token")}`,
-			"Content-Type": "application/json",
-		};
-		const created = await (
-			await fetch(new URL("/api/environments/drafts", host.url), {
-				method: "POST",
-				headers,
-				body: JSON.stringify({
-					requestId: "ready-shell",
-					content: JSON.stringify({
-						version: 1,
-						projects: [
-							{
-								id: "api",
-								kind: "app",
-								repository: config.repositories[0] ?? "",
-								targets: [
-									{
-										id: "run",
-										action: "run",
-										runtime: "shell",
-										command: "serve --port 8080",
-										readyText: "listening",
-										cwd: "work",
-										telemetry: {
-											protocol: "otlp-http-json",
-											listen: "127.0.0.1:0",
-										},
-									},
-								],
-							},
-						],
-					}),
-				}),
-			})
-		).json();
-		const loaded = await (
-			await fetch(
-				new URL(`/api/environments/drafts?id=${created.id}`, host.url),
+test("schema inspection admits a ready shell run with loopback telemetry", () => {
+	expect(
+		environmentSchema(
+			[
 				{
-					headers,
+					id: "run",
+					action: "run",
+					runtime: "shell",
+					command: "serve --port 8080",
+					readyText: "listening",
+					cwd: "work",
+					telemetry: {
+						protocol: "otlp-http-json",
+						listen: "127.0.0.1:0",
+					},
 				},
-			)
-		).json();
-		expect(loaded.schema.valid).toBe(true);
-	} finally {
-		host.stop();
-		await app.close();
-	}
+			],
+			"app",
+		),
+	).toHaveLength(1);
 });

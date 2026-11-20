@@ -1,18 +1,19 @@
 /** @jsxImportSource @opentui/solid */
 import { For, Show } from "solid-js";
 import type { Data, Session } from "../../../protocol/index.ts";
+import type { Review } from "../../../state.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
 import { color } from "../../ui/theme/index.ts";
+import { HumanInteractionCard } from "./HumanInteractionCard.tsx";
 
-/** Observed state, not permission: navigation opens the exact owner/review and
- * native admission/decision checks remain authoritative. Never submits a draft. */
+/** Navigation only. Human authority stays in the exact snapshot-bound submit. */
 export function ConversationNotice(props: {
 	session: Session | undefined;
 	owner: Session | undefined;
 	reviews: Data[];
 	fresh: boolean;
 	openSession: (id: number) => void;
-	openTask: (id: number) => void;
+	jump: (review: Data) => void;
 }) {
 	return (
 		<box flexDirection="column">
@@ -37,30 +38,29 @@ export function ConversationNotice(props: {
 			</Show>
 			<For each={props.reviews}>
 				{(review) => (
-					<box
-						flexDirection="column"
-						border={["left"]}
-						borderColor={color("warning")}
-						paddingLeft={1}
-					>
-						<text fg={color("warning")} wrapMode="word">
-							Last observed: human review pending · request_review waits for
-							your decision, not a model response.
-						</text>
+					<box flexDirection="column">
 						<ActionHeader
-							scope={`${props.session?.id}:${review.id}:${review.revision}`}
-							interactive={props.fresh}
-							onActivate={() => {
-								const task = props.session?.task;
-								if (typeof task === "number" && task === review.taskId)
-									props.openTask(task);
-							}}
+							scope={`${review.id}:${review.revision}`}
+							onActivate={() => props.jump(review)}
 						>
-							<text fg={color("accent")}>
-								Inspect {String(review.id)} · task #{String(review.taskId)} ·
-								then approve, reject or request changes
+							<text fg={color("warning")} wrapMode="word">
+								{props.fresh ? "Awaiting you" : "Last observed input needed"} ·{" "}
+								{String(review.title)} · jump to requesting transcript/card
 							</text>
 						</ActionHeader>
+						<Show
+							when={
+								!review.callId &&
+								(review.conversationId === props.session?.id ||
+									review.taskId === props.session?.task)
+							}
+						>
+							<text fg={color("textMuted")}>
+								Legacy request · exact call location was not retained. Recovered
+								human controls; no review kind inferred.
+							</text>
+							<HumanInteractionCard request={review as Review} />
+						</Show>
 					</box>
 				)}
 			</For>

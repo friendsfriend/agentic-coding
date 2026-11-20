@@ -669,6 +669,7 @@ export function result<M extends Method>(
 				typeof review.comments !== "string" ||
 				![
 					"pending",
+					"answered",
 					"approved",
 					"rejected",
 					"changes-requested",

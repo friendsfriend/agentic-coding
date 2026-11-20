@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { Harness } from "@earendil-works/pi-durable";
 import { text } from "../config.ts";
 import { decode } from "../state.ts";
+import type { EnvironmentPersistence } from "./persistence.ts";
 import {
 	type EnvironmentRun,
 	EnvironmentState,
@@ -19,7 +19,7 @@ export type OperatorRevocation = {
 	inspectionRequired: boolean;
 };
 type Authority = {
-	store: () => Harness;
+	store: () => EnvironmentPersistence;
 	live: (run: EnvironmentRun) => boolean;
 	latch: (owner: number) => void;
 	release: (owner: number) => Promise<string | null>;

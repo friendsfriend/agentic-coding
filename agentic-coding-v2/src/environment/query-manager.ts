@@ -1,5 +1,4 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { TaskId } from "@earendil-works/pi-durable";
 import { type Config, digest } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
@@ -32,7 +31,7 @@ import { batchApproved } from "./reference-scope.ts";
 import { ShellProcess } from "./shell.ts";
 import { type EnvironmentRun, EnvironmentState } from "./state.ts";
 
-type QueryRequest = {
+export type QueryRequest = {
 	input: QueryInput;
 	run: string;
 	app: string;
@@ -384,8 +383,7 @@ export class DatabaseDiagnostics {
 	) {
 		this.authority.check(owner.id, signal);
 		const raw = await this.authority.store().commit(async (tx) => {
-			const task = await tx.task(owner.id as TaskId);
-			if (!task || task.abortRequested || task.state.status === "terminal")
+			if (!(await tx.ownerActive(owner.id)))
 				throw new Error("SQL native owner has ended");
 			return (await tx.doc(EnvironmentState)).queryOperations?.[id];
 		}, background);
@@ -441,10 +439,9 @@ export class DatabaseDiagnostics {
 						);
 			};
 			const previous = await this.authority.store().commit(async (tx) => {
-				const task = await tx.task(owner.id as TaskId);
+				const active = await tx.ownerActive(owner.id);
 				check();
-				if (!task || task.abortRequested || task.state.status === "terminal")
-					throw new Error("SQL native owner has ended");
+				if (!active) throw new Error("SQL native owner has ended");
 				const doc = await tx.doc(EnvironmentState);
 				check();
 				doc.queryOperations ??= {};
@@ -494,9 +491,9 @@ export class DatabaseDiagnostics {
 				observedAt: Date.now(),
 			};
 			await this.authority.store().commit(async (tx) => {
-				const task = await tx.task(owner.id as TaskId);
+				const active = await tx.ownerActive(owner.id);
 				check();
-				if (!task || task.abortRequested || task.state.status === "terminal")
+				if (!active)
 					throw new Error("SQL native owner ended; response discarded");
 				const doc = await tx.doc(EnvironmentState);
 				check();

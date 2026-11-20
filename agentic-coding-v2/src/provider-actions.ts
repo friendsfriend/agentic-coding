@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { digest, text } from "./config.ts";
+import { nativeEnvironmentPersistence } from "./environment/native-persistence.ts";
 import { type Data, record } from "./protocol/index.ts";
 import type {
 	ProviderActionCandidate,
@@ -304,7 +305,7 @@ export class ProviderActions {
 		try {
 			const api = new ProviderApis(
 					{ ...this.app.config, providers: [candidate.providerConfig] },
-					() => this.app.harness,
+					() => nativeEnvironmentPersistence(this.app.harness),
 				),
 				payload = candidate.intent.payload;
 			const result = await api[methods[candidate.intent.operation]](

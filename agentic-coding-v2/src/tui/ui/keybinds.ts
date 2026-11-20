@@ -204,6 +204,12 @@ export const breadcrumbKeybinds: Keybind[] = [
 ];
 export const transcriptViewportKeybinds: Keybind[] = [
 	{
+		key: "alt+u",
+		cmd: "transcript.humanInput",
+		action: "Jump to pending human input",
+		short: "input",
+	},
+	{
 		key: "pageup",
 		cmd: "transcript.scrollUp",
 		action: "Scroll supplied transcript up",
@@ -438,22 +444,26 @@ export type LayerCommand = {
 export const layerCommands = (commands: readonly LayerCommand[]) =>
 	commands.map(({ id, name, ...rest }) => ({ ...rest, name: id, label: name }));
 export const keyLabel = (key: string) =>
-	key
-		.split("+")
-		.map(
-			(value) =>
-				({
-					ctrl: "Ctrl",
-					alt: "Alt",
-					shift: "Shift",
-					return: "Enter",
-					escape: "Escape",
-				})[value] ??
-				(value.length === 1
-					? value.toUpperCase()
-					: value[0]?.toUpperCase() + value.slice(1)),
-		)
-		.join("+");
+	key.length === 1
+		? key
+		: /^shift\+[a-z]$/.test(key)
+			? key.slice(-1).toUpperCase()
+			: key
+					.split("+")
+					.map(
+						(value) =>
+							({
+								ctrl: "Ctrl",
+								alt: "Alt",
+								shift: "Shift",
+								return: "Enter",
+								escape: "Escape",
+							})[value] ??
+							(value.length === 1
+								? value.toUpperCase()
+								: value[0]?.toUpperCase() + value.slice(1)),
+					)
+					.join("+");
 export const keybindFooter = (catalog: Keybind[]) =>
 	catalog
 		.filter((binding) => !binding.standard)

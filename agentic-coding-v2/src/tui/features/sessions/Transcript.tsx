@@ -63,6 +63,7 @@ export type LocalTranscriptPaging = {
 };
 
 type Link = {
+	humanAnchor: boolean;
 	result: Data | null;
 	pairing: "matched" | "missing" | "ambiguous";
 };
@@ -558,6 +559,12 @@ export function Transcript(props: {
 						? candidate
 						: null;
 			links.set(identity, {
+				humanAnchor:
+					slot?.taskId !== undefined ||
+					(typeof part.id === "string" &&
+						callCounts.get(part.id) === 1 &&
+						candidates.length <= 1 &&
+						(!candidate || candidate.toolName === part.name)),
 				result: matched,
 				pairing: matched
 					? "matched"
@@ -836,6 +843,8 @@ export function Transcript(props: {
 				})),
 		);
 	});
+	const standaloneSlots = createKeyedItems(standalone, (row) => row.identity);
+
 	return (
 		<TranscriptRowsContext.Provider
 			value={{
@@ -1138,6 +1147,10 @@ export function Transcript(props: {
 														result={
 															associations().links.get(identity)?.result ?? null
 														}
+														humanAnchor={
+															associations().links.get(identity)
+																?.humanAnchor === true
+														}
 														pairing={
 															associations().links.get(identity)?.pairing ??
 															"missing"
@@ -1218,29 +1231,32 @@ export function Transcript(props: {
 						);
 					}}
 				</For>
-				<For each={standalone()}>
-					{(row) => (
-						<ToolCard
-							scope={props.scope}
-							interactive={active()}
-							identity={row.identity}
-							selected={props.selected === row.identity}
-							select={props.select}
-							anchor={anchor(row.identity)}
-							call={{
-								id: row.slot.callId,
-								name: row.slot.name,
-								arguments: row.slot.arguments,
-							}}
-							progress={row.slot}
-							liveOnly={true}
-							result={null}
-							pairing="missing"
-							expanded={props.expanded}
-							toggle={props.toggle}
-							syntax={syntax}
-						/>
-					)}
+				<For each={standaloneSlots()}>
+					{(item) => {
+						const row = item.value;
+						return (
+							<ToolCard
+								scope={props.scope}
+								interactive={active()}
+								identity={row().identity}
+								selected={props.selected === row().identity}
+								select={props.select}
+								anchor={anchor(row().identity)}
+								call={{
+									id: row().slot.callId,
+									name: row().slot.name,
+									arguments: row().slot.arguments,
+								}}
+								progress={row().slot}
+								liveOnly={true}
+								result={null}
+								pairing="missing"
+								expanded={props.expanded}
+								toggle={props.toggle}
+								syntax={syntax}
+							/>
+						);
+					}}
 				</For>
 				<QueuedInputs items={progress()?.inbox ?? []} />
 				<Show when={!messages().length && !progress()?.inbox.length}>

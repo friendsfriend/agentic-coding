@@ -41,6 +41,7 @@ import {
 	uiWorkspaceFilter,
 } from "../../protocol/viewpoints.ts";
 import { followUpSession } from "../../session-access.ts";
+import type { Review } from "../../state.ts";
 import { type ClientConnection, dataList } from "../client/connection.ts";
 import { EmbeddedAgentView } from "../features/agents/EmbeddedAgentView.tsx";
 import {
@@ -57,6 +58,7 @@ import { SchedulesView } from "../features/resources/SchedulesView.tsx";
 import { ConversationNotice } from "../features/sessions/ConversationNotice.tsx";
 import { foldAll } from "../features/sessions/card-folds.ts";
 import { DraftHistory } from "../features/sessions/history.ts";
+import { HumanContext } from "../features/sessions/human-context.ts";
 import {
 	NativeAgentNavigation,
 	nativeAgentNavigationKeybinds,
@@ -104,6 +106,7 @@ import {
 } from "../presentation/components/WorkspaceNavigation.tsx";
 import { BreadcrumbRow } from "../presentation/navigation/BreadcrumbRow.tsx";
 import { type Route, routeKey } from "../presentation/routes.ts";
+import { ActionHeader } from "../ui/ActionHeader.tsx";
 import { ActionScope } from "../ui/ActionScope.tsx";
 import { CommandPalette } from "../ui/CommandPalette.tsx";
 import { type ClipboardResult, copyToClipboard } from "../ui/clipboard.ts";
@@ -315,9 +318,16 @@ export function App(props: {
 	const [homeCatalog, setHomeCatalog] = createSignal<
 		import("../ui/index.ts").KeybindSection[]
 	>([]);
+	const [humanActive, setHumanActive] = createSignal<string | null>(null);
+	const [humanCatalog, setHumanCatalog] = createSignal<
+		import("../ui/keybinds.ts").Keybind[]
+	>([]);
+	const humanAnchors = new Map<string, BoxRenderable>();
+	const [humanAnchorVersion, setHumanAnchorVersion] = createSignal(0);
+	const [humanJump, setHumanJump] = createSignal<string | null>(null);
 	// Existing helpOpen guards are shell interaction fences, including the two
 	// higher-priority local dialogs. Actual help rendering uses helpRequested.
-	const helpOpen = () =>
+	const externalModalOpen = () =>
 		helpRequested() ||
 		locationRequested() ||
 		themeRequested() ||
@@ -327,6 +337,7 @@ export function App(props: {
 		messageDialog() !== null ||
 		quitConfirmation() ||
 		usageWindow() !== null;
+	const helpOpen = () => externalModalOpen() || humanActive() !== null;
 	const notifications = createNotifications(() =>
 		`${navigation.current.page} ${navigation.current.resource ?? ""}`.trim(),
 	);
@@ -1123,13 +1134,99 @@ export function App(props: {
 			? followUpSession(state()?.sessions ?? [], session.id)
 			: undefined;
 	});
-	const pendingSessionReviews = createMemo(() => {
-		const task = selectedNativeSession()?.task;
-		return task == null
-			? []
-			: (state()?.reviews ?? []).filter(
-					(review) => review.taskId === task && review.state === "pending",
-				);
+	const humanRequests = createMemo(
+		() =>
+			(state()?.reviews ?? []).filter(
+				(review) =>
+					review.conversationId === sessionId() ||
+					(!review.conversationId &&
+						selectedNativeSession()?.task != null &&
+						review.taskId === selectedNativeSession()?.task),
+			) as Review[],
+	);
+	const pendingSessionReviews = createMemo(() =>
+		(state()?.reviews ?? []).filter((review) => {
+			if (review.state !== "pending") return false;
+			const target = state()?.sessions.find(
+				(session) =>
+					session.id === review.conversationId ||
+					(!review.conversationId && session.task === review.taskId),
+			);
+			if (!target) return false;
+			if (target.id === sessionId()) return true;
+			const seen = new Set<number>();
+			let parent = target.parent;
+			while (parent !== null && parent !== undefined && !seen.has(parent)) {
+				if (parent === sessionId()) return true;
+				seen.add(parent);
+				parent =
+					state()?.sessions.find((session) => session.id === parent)?.parent ??
+					null;
+			}
+			return false;
+		}),
+	);
+	const humanContext = {
+		requests: humanRequests,
+		client,
+		fresh: () => snapshotFresh(),
+		active: humanActive,
+		focus: (id: string | null) => {
+			setHumanActive(id);
+			if (id === null) setHumanCatalog([]);
+		},
+		catalog: setHumanCatalog,
+		reveal: (node: BoxRenderable) => {
+			reveal(node);
+		},
+		register: (id: string, node: BoxRenderable) => {
+			humanAnchors.set(id, node);
+			setHumanAnchorVersion((v) => v + 1);
+			return () => {
+				if (humanAnchors.get(id) === node) {
+					humanAnchors.delete(id);
+					setHumanAnchorVersion((v) => v + 1);
+				}
+			};
+		},
+	};
+	const jumpHuman = (review: Data) => {
+		setHumanActive(null);
+		setHumanCatalog([]);
+		const target = state()?.sessions.find(
+			(session) =>
+				session.id === review.conversationId ||
+				(!review.conversationId && session.task === review.taskId),
+		);
+		if (!target) return;
+		if (target.id !== sessionId()) go("session", String(target.id));
+		navigation.current.focus = "content";
+		setBreadcrumbFocused(false);
+		update();
+		jumpToLatest();
+		localPaging?.expandAll();
+		setHumanJump(String(review.id));
+	};
+	createEffect(() => {
+		humanAnchorVersion();
+		const id = humanJump();
+		if (!id) return;
+		transcript();
+		localPaging?.expandAll();
+		const node = humanAnchors.get(id);
+		if (!node && awayFromBottom()) {
+			jumpToLatest();
+			localPaging?.expandAll();
+		}
+		if (node && reveal(node)) setHumanJump(null);
+	});
+	let humanSession: number | null | undefined;
+	createEffect(() => {
+		const target = sessionId();
+		if (target === humanSession) return;
+		humanSession = target;
+		setHumanActive(null);
+		setHumanCatalog([]);
 	});
 	const available = () => {
 		const id = sessionId();
@@ -2413,6 +2510,14 @@ export function App(props: {
 			!helpOpen() &&
 			!paletteOpen(),
 		commands: layerCommands([
+			{
+				id: "transcript.humanInput",
+				name: "Jump to the requesting human-input card",
+				run: () => {
+					const next = pendingSessionReviews()[0];
+					if (next) jumpHuman(next);
+				},
+			},
 			{
 				id: "transcript.scrollUp",
 				name: "Scroll supplied transcript up",
@@ -4347,7 +4452,7 @@ export function App(props: {
 		<LocalChoiceContext.Provider
 			value={{
 				choose: openLocalChoice,
-				interactive: () => !busy() && !helpOpen() && !paletteOpen(),
+				interactive: () => !busy() && !externalModalOpen() && !paletteOpen(),
 				scope: workspaceScope,
 			}}
 		>
@@ -4457,76 +4562,82 @@ export function App(props: {
 											</text>
 										}
 									>
-										<ConversationNotice
-											session={selectedNativeSession()}
-											owner={followUpOwner()}
-											reviews={pendingSessionReviews()}
-											fresh={snapshotFresh()}
-											openSession={(id) => go("session", String(id))}
-											openTask={(id) => go("tasks", String(id))}
-										/>
-										<Transcript
-											scope={workspaceScope()}
-											interactive={!busy() && !helpOpen() && !paletteOpen()}
-											onReadIntent={() => {
-												const id = sessionId();
-												if (id !== null && isTranscript()) {
-													markReaderMotion(id, true);
-													pendingReaderHold = { id, view: navigation.current };
+										<HumanContext.Provider value={humanContext}>
+											<ConversationNotice
+												session={selectedNativeSession()}
+												owner={followUpOwner()}
+												reviews={pendingSessionReviews()}
+												fresh={snapshotFresh()}
+												openSession={(id) => go("session", String(id))}
+												jump={jumpHuman}
+											/>
+											<Transcript
+												scope={workspaceScope()}
+												interactive={!busy() && !helpOpen() && !paletteOpen()}
+												onReadIntent={() => {
+													const id = sessionId();
+													if (id !== null && isTranscript()) {
+														markReaderMotion(id, true);
+														pendingReaderHold = {
+															id,
+															view: navigation.current,
+														};
+													}
+												}}
+												value={transcript()}
+												history={(() => {
+													const id = sessionId();
+													if (id === null || !isTranscript()) return null;
+													return {
+														client,
+														id,
+														connected: status() === "connected",
+													};
+												})()}
+												freezeWindow={awayFromBottom()}
+												observation={observation()}
+												observationError={observationError()}
+												enabled={transcriptKeys()}
+												selected={
+													typeof current().detail.transcriptSelection ===
+													"string"
+														? String(current().detail.transcriptSelection)
+														: null
 												}
-											}}
-											value={transcript()}
-											history={(() => {
-												const id = sessionId();
-												if (id === null || !isTranscript()) return null;
-												return {
-													client,
-													id,
-													connected: status() === "connected",
-												};
-											})()}
-											freezeWindow={awayFromBottom()}
-											observation={observation()}
-											observationError={observationError()}
-											enabled={transcriptKeys()}
-											selected={
-												typeof current().detail.transcriptSelection === "string"
-													? String(current().detail.transcriptSelection)
-													: null
-											}
-											select={(id) => {
-												navigation.current.detail = {
-													...current().detail,
-													transcriptSelection: id,
-												};
-												update();
-											}}
-											reveal={(node, key) => {
-												if (readingRows)
-													reveal(node, { key, registry: readingRows });
-											}}
-											registerReadingRows={registerReadingRows}
-											registerLocalPaging={registerLocalPaging}
-											onPromptTimeline={(rows, items) => {
-												if (readingRows === rows) setPromptTimeline(items);
-											}}
-											expanded={current().expanded}
-											setExpanded={(ids, open) => {
-												navigation.current.expanded = foldAll(
-													current().expanded,
-													ids,
-													open,
-												);
-												update();
-											}}
-											toggle={(id) => {
-												navigation.current.expanded =
-													current().expanded.includes(id)
-														? current().expanded.filter((key) => key !== id)
-														: [...current().expanded, id];
-												update();
-											}}
-										/>
+												select={(id) => {
+													navigation.current.detail = {
+														...current().detail,
+														transcriptSelection: id,
+													};
+													update();
+												}}
+												reveal={(node, key) => {
+													if (readingRows)
+														reveal(node, { key, registry: readingRows });
+												}}
+												registerReadingRows={registerReadingRows}
+												registerLocalPaging={registerLocalPaging}
+												onPromptTimeline={(rows, items) => {
+													if (readingRows === rows) setPromptTimeline(items);
+												}}
+												expanded={current().expanded}
+												setExpanded={(ids, open) => {
+													navigation.current.expanded = foldAll(
+														current().expanded,
+														ids,
+														open,
+													);
+													update();
+												}}
+												toggle={(id) => {
+													navigation.current.expanded =
+														current().expanded.includes(id)
+															? current().expanded.filter((key) => key !== id)
+															: [...current().expanded, id];
+													update();
+												}}
+											/>
+										</HumanContext.Provider>
 									</Show>
 								</Show>
 								<Show when={current().page === "home"}>
@@ -4970,6 +5081,20 @@ export function App(props: {
 								</Show>
 							</ActionScope>
 						</scrollbox>
+						<Show when={isTranscript() && pendingSessionReviews().length > 0}>
+							<ActionHeader
+								interactive={!externalModalOpen()}
+								onActivate={() => {
+									const next = pendingSessionReviews()[0];
+									if (next) jumpHuman(next);
+								}}
+							>
+								<text fg={color("warning")} wrapMode="word">
+									{pendingSessionReviews().length} awaiting you · Jump to
+									requesting card
+								</text>
+							</ActionHeader>
+						</Show>
 						<Show when={isTranscript()}>
 							<JumpToLatest
 								visible={awayFromBottom()}
@@ -5265,7 +5390,13 @@ export function App(props: {
 				</box>
 				<StatusBar
 					keybinds={[
-						...((settingsThemeOpen() ||
+						...(transcriptKeys() && pendingSessionReviews().length
+							? transcriptViewportKeybinds
+									.filter((b) => b.cmd === "transcript.humanInput")
+									.map((b) => ({ ...b, key: keyLabel(b.key) }))
+							: []),
+						...((humanActive() !== null ||
+							settingsThemeOpen() ||
 							(current().page === "settings" && settingsCatalog().length > 0) ||
 							(current().page === "wiki" && wikiCatalog().length > 0) ||
 							(current().page === "schedules" &&
@@ -5300,7 +5431,9 @@ export function App(props: {
 												...(transcriptKeys()
 													? [
 															...transcriptKeybinds,
-															...transcriptViewportKeybinds,
+															...transcriptViewportKeybinds.filter(
+																(b) => b.cmd !== "transcript.humanInput",
+															),
 														]
 													: []),
 												...(contentFocused() &&
@@ -5322,6 +5455,9 @@ export function App(props: {
 										...binding,
 										key: keyLabel(binding.key),
 									}))),
+						...humanCatalog()
+							.filter((binding) => !binding.standard)
+							.map((binding) => ({ ...binding, key: keyLabel(binding.key) })),
 						...(current().page === "settings" &&
 						contentFocused() &&
 						!paletteOpen() &&
@@ -5354,7 +5490,9 @@ export function App(props: {
 							? environmentCatalog().flatMap((section) => section.keybinds)
 							: []),
 					]}
-					showHelp={!paletteOpen() && !settingsThemeOpen()}
+					showHelp={
+						humanActive() === null && !paletteOpen() && !settingsThemeOpen()
+					}
 				/>
 				<Show when={connectionError()}>
 					<text height={1} fg={color("warning")} truncate>
@@ -5451,6 +5589,17 @@ export function App(props: {
 							...(current().page === "environments"
 								? environmentCatalog()
 								: []),
+							...(isTranscript()
+								? [
+										{
+											title: "Transcript",
+											keybinds: keybindCatalogs.Transcript.map((binding) => ({
+												...binding,
+												key: keyLabel(binding.key),
+											})),
+										},
+									]
+								: []),
 							{
 								title: "Prompt commands",
 								keybinds: help.map((line) => {
@@ -5464,13 +5613,15 @@ export function App(props: {
 								Workspaces: workspaceNavigationKeybinds,
 								Agents: nativeAgentNavigationKeybinds,
 								Help: helpOverlayKeybinds,
-							}).map(([title, catalog]) => ({
-								title,
-								keybinds: catalog.map((binding) => ({
-									...binding,
-									key: keyLabel(binding.key),
+							})
+								.filter(([title]) => title !== "Transcript" || !isTranscript())
+								.map(([title, catalog]) => ({
+									title,
+									keybinds: catalog.map((binding) => ({
+										...binding,
+										key: keyLabel(binding.key),
+									})),
 								})),
-							})),
 						]}
 					/>
 				</Show>

@@ -391,6 +391,34 @@ export type Methods = {
 		output: { removed: number; keptActive: number };
 	};
 	"task.cancel": { input: { id: number }; output: { requested: unknown } };
+	"human.read": { input: { id: string }; output: import("../state.ts").Review };
+	"human.draft.read": {
+		input: { id: string };
+		output: { digest: string; version: number; content: string };
+	};
+	"human.draft.save": {
+		input: { id: string; digest: string; version: number; content: string };
+		output: { digest: string; version: number; content: string };
+	};
+	"approval.submit": {
+		input: {
+			id: string;
+			revision: number;
+			digest: string;
+			requestId: string;
+			decision: "approved" | "changes-requested" | "rejected";
+			comments: string;
+		};
+		output: NonNullable<import("../state.ts").Review["approvalReceipt"]>;
+	};
+	"question.submit": {
+		input: import("../questions.ts").QuestionSubmission;
+		output: import("../questions.ts").QuestionReceipt;
+	};
+	"review.submit": {
+		input: import("../review-feedback.ts").ReviewSubmission;
+		output: import("../review-feedback.ts").ReviewReceipt;
+	};
 	"review.decide": {
 		input: {
 			id: string;
@@ -685,6 +713,12 @@ export const methods: Method[] = [
 	"task.dismiss",
 	"task.clearFinished",
 	"review.decide",
+	"review.submit",
+	"question.submit",
+	"approval.submit",
+	"human.read",
+	"human.draft.read",
+	"human.draft.save",
 	"schedule.delete",
 	"schedule.create",
 	"schedule.state",

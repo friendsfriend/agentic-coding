@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { Harness } from "@earendil-works/pi-durable";
 import { type Config, digest, object, text } from "../config.ts";
+import type { EnvironmentPersistence } from "../environment/persistence.ts";
 import { boundedFetch } from "../http/admission.ts";
 import {
 	type Change,
@@ -35,7 +35,7 @@ export type FileChange = {
 };
 export type Version = { id: string; sha: string; message: string };
 
-type Store = () => Harness;
+type Store = () => EnvironmentPersistence;
 const isList = (value: unknown): value is Record<string, unknown>[] =>
 	Array.isArray(value);
 const pick = (raw: Record<string, unknown> | null, keys: readonly string[]) => {

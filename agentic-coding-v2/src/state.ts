@@ -7,6 +7,8 @@ export const Catalog = defineDoc<{
 	tasks: Record<string, string>;
 	launches: Record<string, string>;
 	reviews: Record<string, string>;
+	/** Human drafts never enter tool results or count as decisions. */
+	humanDrafts?: Record<string, string>;
 	attachments: Record<string, string>;
 	schedules: Record<string, string>;
 	/** Orchestrator conversations created after the root, keyed by identity. */
@@ -118,6 +120,23 @@ export type TaskInput = {
 	occurrence: string | null;
 };
 export type Review = {
+	/** Legacy records may omit kind; never infer code-review semantics from a title. */
+	kind?: "code-review" | "question" | "approval";
+	approvalReceipt?: {
+		requestId: string;
+		fingerprint: string;
+		revision: number;
+		decision: "approved" | "changes-requested" | "rejected";
+		comments: string;
+	};
+	ownerKind?: "task" | "conversation";
+	callId?: string;
+	questions?: import("./questions.ts").Question[];
+	answerReceipt?: import("./questions.ts").QuestionReceipt;
+	conversationId?: number;
+	nativeToolTaskId?: number;
+	baseCommit?: string;
+	receipt?: import("./review-feedback.ts").ReviewReceipt;
 	id: string;
 	taskId: number;
 	topicId: string;
@@ -127,6 +146,7 @@ export type Review = {
 	digest: string;
 	state:
 		| "pending"
+		| "answered"
 		| "approved"
 		| "changes-requested"
 		| "rejected"

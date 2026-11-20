@@ -1,5 +1,10 @@
 # Agentic Coding
 
+The independent environment-server extraction lives in
+[`environment-mcp/`](environment-mcp/README.md). It has its own dependencies,
+build, configuration and tests; its current foundation is inspection-only.
+It does not replace the existing application commands or OpenCode connections yet.
+
 `agentic-coding` combines a transactional workflow engine and an OpenTUI shell. The bundled durable agent host runs every managed agent; the engine alone owns workflow state, and the shell's workspace sidebar is the workspace surface.
 
 ## Install

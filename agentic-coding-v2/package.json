@@ -8,6 +8,7 @@
 	},
 	"scripts": {
 		"start": "bun src/cli.ts",
+		"mcp": "bun src/mcp/cli.ts",
 		"build": "bun scripts/build.ts",
 		"test": "bun test",
 		"type-check": "tsc --noEmit",
@@ -22,13 +23,16 @@
 		"@grpc/grpc-js": "^1.14.6",
 		"@grpc/proto-loader": "^0.8.1",
 		"@js-temporal/polyfill": "0.5.1",
+		"@modelcontextprotocol/client": "2.4.0",
+		"@modelcontextprotocol/server": "2.4.0",
 		"@opentui/core": "0.7.0",
 		"@opentui/keymap": "0.7.0",
 		"@opentui/solid": "0.7.0",
 		"marked": "^18.1.1",
 		"solid-js": "1.9.17",
 		"typebox": "^1.0.0",
-		"ws-client": "npm:ws@8.22.1"
+		"ws-client": "npm:ws@8.22.1",
+		"zod": "4.4.3"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.6.3",

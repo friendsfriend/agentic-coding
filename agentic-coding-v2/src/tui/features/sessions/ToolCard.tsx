@@ -22,6 +22,8 @@ import { color } from "../../ui/theme/index.ts";
 import { CustomToolBody } from "./CustomToolBody.tsx";
 import { customToolBody } from "./custom-tool-view.ts";
 import { FileContent, ToolSurfaceHoverContext } from "./FileContent.tsx";
+import { HumanInteractionCard } from "./HumanInteractionCard.tsx";
+import { HumanContext } from "./human-context.ts";
 import {
 	ToolReadBody,
 	ToolShellBody,
@@ -62,12 +64,31 @@ export function ToolCard(props: {
 	partial?: boolean;
 	progress?: ToolProgress;
 	liveOnly?: boolean;
+	humanAnchor?: boolean;
 	result: Data | null;
 	pairing: "matched" | "missing" | "ambiguous";
 	expanded: string[];
 	toggle: (id: string) => void;
 	syntax: SyntaxStyle;
 }) {
+	const humanContext = useContext(HumanContext);
+	const human = createMemo(() => {
+		const matches =
+			humanContext
+				?.requests()
+				.filter(
+					(request) =>
+						request.callId &&
+						request.callId === props.call.id &&
+						(props.progress?.taskId === undefined ||
+							request.nativeToolTaskId === props.progress.taskId) &&
+						(request.kind !== "question" ||
+							props.call.name === "ask_user_question") &&
+						(request.kind !== "code-review" ||
+							props.call.name === "request_review"),
+				) ?? [];
+		return matches.length === 1 ? matches[0] : undefined;
+	});
 	const hover = useHover(),
 		choices = useContext(LocalChoiceContext),
 		reading = useContext(TranscriptRowsContext);
@@ -509,6 +530,7 @@ export function ToolCard(props: {
 						interactive={props.interactive}
 						failed={props.result?.isError === true}
 						pending={
+							!human() &&
 							!props.partial &&
 							!props.result &&
 							props.progress?.status === "running"
@@ -534,7 +556,11 @@ export function ToolCard(props: {
 						}
 						wrapMode="word"
 					>
-						{status()}
+						{human()
+							? human()?.state === "pending"
+								? "Awaiting you · durable human input"
+								: `Human response · ${human()?.state}`
+							: status()}
 					</text>
 					<Show when={props.liveOnly}>
 						<text fg={color("textMuted")}>
@@ -547,6 +573,20 @@ export function ToolCard(props: {
 						</text>
 					</Show>
 				</TranscriptHeader>
+				<Show when={props.liveOnly && human()}>
+					<text fg={color("textMuted")}>
+						Awaiting retained requesting transcript anchor…
+					</text>
+				</Show>
+				<Show when={!props.liveOnly && human() && !props.humanAnchor}>
+					<text fg={color("textMuted")}>
+						Human request retained; ambiguous requesting call identity. Expand
+						requesting history to resolve; no controls are bound here.
+					</text>
+				</Show>
+				<Show when={!props.liveOnly && props.humanAnchor && human()}>
+					{(request) => <HumanInteractionCard request={request()} />}
+				</Show>
 				<Show
 					when={
 						shellSource() &&

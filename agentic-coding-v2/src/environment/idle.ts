@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { Harness } from "@earendil-works/pi-durable";
 import { type TaskInfo, values } from "../state.ts";
 import {
 	hostOperatorLifetime,
@@ -10,6 +9,7 @@ import {
 	referenceRoot,
 	scopedRoot,
 } from "./lifetime.ts";
+import type { EnvironmentPersistence } from "./persistence.ts";
 import {
 	type EnvironmentRun,
 	EnvironmentState,
@@ -25,7 +25,7 @@ type Activity = {
 	sequence: number;
 };
 type Ports = {
-	store(): Harness;
+	store(): EnvironmentPersistence;
 	eligible(run: EnvironmentRun): boolean;
 	pending(owner: number, runId?: string): boolean;
 	latch(runs: EnvironmentRun[], batches: string[]): void;

@@ -70,7 +70,25 @@ export async function clientSnapshot(app: Runtime): Promise<Snapshot> {
 	return {
 		telemetryRevision: app.telemetryRevision,
 		tasks: state.tasks,
-		reviews: state.reviews,
+		// Catalog publications are navigation/status, not repeated diff documents.
+		// The exact immutable request is read on demand at its transcript card.
+		reviews: state.reviews.map(
+			({
+				snapshot: _snapshot,
+				questions: _questions,
+				receipt: _receipt,
+				answerReceipt: _answers,
+				approvalReceipt: _approval,
+				comments: _comments,
+				...meta
+			}) => ({
+				...meta,
+				title: meta.title.slice(0, 80),
+				path: "",
+				topicId: "",
+				comments: "",
+			}),
+		),
 		schedules: state.schedules,
 		profiles: state.profiles,
 		topics: state.topics,

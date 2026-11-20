@@ -9,17 +9,23 @@ type DiagnosticReceipt = {
 	state: "issued" | "completed";
 	result?: { observedAt: number };
 };
-export type DiagnosticSelection = { operation?: string; cursor?: string };
+export type DiagnosticSelection = {
+	operation?: string;
+	cursor?: string;
+	limit?: number;
+};
 /** Retained native observations only. Projection never returns approval payloads.
  * Exact-ID reads deliberately precede windowing, but never bypass run/owner scope. */
 export function diagnosticHistory<Receipt extends DiagnosticReceipt>(
 	records: Record<string, string> | undefined,
 	run: { id: string; owner: number },
-	{ operation, cursor }: DiagnosticSelection,
+	{ operation, cursor, limit = 200 }: DiagnosticSelection,
 	kind: "HTTP" | "SQL",
 	matches: (receipt: Receipt) => boolean,
 	describe: (receipt: Receipt) => Record<string, string>,
 ) {
+	if (!Number.isInteger(limit) || limit < 1 || limit > 200)
+		throw new Error("Diagnostic history limit must be 1..200");
 	if (
 		cursor !== undefined &&
 		(operation !== undefined || !/^[a-f0-9]{64}$/.test(cursor))
@@ -62,7 +68,6 @@ export function diagnosticHistory<Receipt extends DiagnosticReceipt>(
 	const entries = Object.entries(records ?? {})
 			.map(([id, raw]) => ({ id, receipt: decode<Receipt>(raw) }))
 			.filter(({ receipt }) => inScope(receipt)),
-		limit = 200,
 		// An opaque boundary selector, not a permission or a frozen snapshot.
 		cursorFor = (id: string) =>
 			digest(

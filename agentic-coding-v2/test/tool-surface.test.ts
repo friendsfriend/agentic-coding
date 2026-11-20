@@ -20,6 +20,7 @@ test("a task carries its own tools and an unwrapped copy of the runtime's", () =
 	// `attach_image` was the image case of the same store: one name remains, and
 	// `kind` says which artifact the caller is retaining.
 	expect((extension.tools ?? []).map((tool) => tool.name)).toEqual([
+		"ask_user_question",
 		"request_review",
 		"attach_evidence",
 	]);

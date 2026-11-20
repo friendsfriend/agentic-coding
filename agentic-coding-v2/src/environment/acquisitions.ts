@@ -1,9 +1,9 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { decode, type TaskInfo, values } from "../state.ts";
 import { belongsToOwner } from "./dependency-workspaces.ts";
 import { referenceRoot, sameApprovedPlan, sharedRoot } from "./lifetime.ts";
 import type { Plan } from "./model.ts";
+import type { EnvironmentPersistence } from "./persistence.ts";
 import { captureReferenceGraph } from "./reference-journal.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
 import {
@@ -14,7 +14,7 @@ import {
 import { type WaitPoll, type WaitReceipt, waitingResult } from "./wait.ts";
 
 type AcquisitionAuthority = {
-	store: () => Harness;
+	store: () => EnvironmentPersistence;
 	check: (owner: number, signal?: AbortSignal, batch?: string) => void;
 	receipt: (batch: string, owner: number, request: string) => Promise<unknown>;
 	execute: (
@@ -272,11 +272,10 @@ export class Acquisitions {
 					'Continue the existing retained acquisition with environment_action (action: "wait"), or cancel it before acquiring another batch',
 				);
 			const receipt = await this.authority.store().commit(async (tx) => {
-				const task = await tx.task(owner.id as TaskId),
+				const active = await tx.ownerActive(owner.id),
 					doc = await tx.doc(EnvironmentState);
 				this.authority.check(owner.id, signal, batch);
-				if (!task || task.abortRequested || task.state.status === "terminal")
-					throw new Error("Environment task has ended");
+				if (!active) throw new Error("Environment task has ended");
 				doc.waits ??= {};
 				doc.waitPolls ??= {};
 				let receipt = doc.waits[batch]
@@ -344,10 +343,9 @@ export class Acquisitions {
 				this.authority.check(owner.id, signal, batch);
 				const generation = this.generation;
 				reserved = await this.authority.store().commit(async (tx) => {
-					const task = await tx.task(owner.id as TaskId);
+					const ownerActive = await tx.ownerActive(owner.id);
 					this.authority.check(owner.id, signal, batch);
-					if (!task || task.abortRequested || task.state.status === "terminal")
-						throw new Error("Environment task has ended");
+					if (!ownerActive) throw new Error("Environment task has ended");
 					const doc = await tx.doc(EnvironmentState),
 						active = values<EnvironmentRun>(doc.runs).filter(holdsResource);
 					if (running) {
@@ -476,16 +474,10 @@ export class Acquisitions {
 					if (Date.now() >= deadline) {
 						if (retainQueue && currentWaiter) {
 							const result = await this.authority.store().commit(async (tx) => {
-								const task = await tx.task(owner.id as TaskId),
+								const active = await tx.ownerActive(owner.id),
 									doc = await tx.doc(EnvironmentState);
 								this.authority.check(owner.id, signal, batch);
-								if (
-									!task ||
-									task.abortRequested ||
-									task.state.status === "terminal" ||
-									!doc.waits ||
-									!doc.waitPolls
-								)
+								if (!active || !doc.waits || !doc.waitPolls)
 									throw new Error("Environment task has ended");
 								const receipt = decode<WaitReceipt>(doc.waits[batch]);
 								if (receipt.state !== "waiting")

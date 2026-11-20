@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { ServerWebSocket, WebSocketHandler } from "bun";
 import {
 	type Frame,
@@ -7,6 +8,7 @@ import {
 	request,
 } from "../../protocol/index.ts";
 import type { Runtime } from "../../runtime.ts";
+import { Catalog } from "../../state.ts";
 import { Refusal } from "../refusal.ts";
 import { dispatch } from "./handlers/index.ts";
 import { clientSession, clientSnapshot } from "./handlers/sessions.ts";
@@ -41,7 +43,10 @@ export function clientGateway(app: Runtime) {
 		void end.finally(() => closing.delete(end));
 	}
 	let stopped = false,
-		polling = false;
+		polling = false,
+		dirty = false;
+	let publication: Promise<void> | null = null;
+	let catalogSubscription: Promise<SessionWatch | null> | null = null;
 	function send(socket: ServerWebSocket<Connection>, frame: Frame) {
 		if (stopped || !sockets.has(socket)) return;
 		const bytes = JSON.stringify(frame);
@@ -55,25 +60,24 @@ export function clientGateway(app: Runtime) {
 		socket.send(bytes);
 	}
 	let timer: ReturnType<typeof setInterval> | null = null;
-	const poll = async () => {
-		if (
-			stopped ||
-			polling ||
-			![...sockets].some((socket) => socket.data.subscribed)
-		)
+	const publish = async () => {
+		if (stopped || ![...sockets].some((socket) => socket.data.subscribed))
 			return;
 		polling = true;
 		try {
-			const value = await clientSnapshot(app);
-			if (!stopped)
-				for (const socket of sockets)
-					if (socket.data.subscribed)
-						send(socket, {
-							version: 1,
-							type: "state",
-							sequence: ++socket.data.sequence,
-							value,
-						});
+			do {
+				dirty = false;
+				const value = await clientSnapshot(app);
+				if (!stopped)
+					for (const socket of sockets)
+						if (socket.data.subscribed)
+							send(socket, {
+								version: 1,
+								type: "state",
+								sequence: ++socket.data.sequence,
+								value,
+							});
+			} while (dirty && !stopped);
 		} catch {
 			for (const socket of sockets)
 				if (socket.data.subscribed)
@@ -88,6 +92,45 @@ export function clientGateway(app: Runtime) {
 			polling = false;
 		}
 	};
+	const poll = () => {
+		if (polling) {
+			dirty = true;
+			return publication ?? Promise.resolve();
+		}
+		publication = publish();
+		return publication;
+	};
+	// Human requests live in the existing native Catalog. Publish their committed
+	// changes directly; draft keystrokes and other catalog edits do not invalidate
+	// this projection. The existing timer still refreshes non-catalog observations.
+	const subscribeCatalog = () =>
+		(catalogSubscription ??= (async () => {
+			const watch = await app.harness.watchDoc(Catalog, context);
+			if (!watch) return null;
+			if (stopped) {
+				await watch.stop();
+				return null;
+			}
+			let previous: Record<string, string> | null = null;
+			watch.start(async (event) => {
+				if (event.kind !== "value" || event.retired) return;
+				const next = { ...event.value.reviews };
+				if (
+					previous &&
+					Object.keys(previous).length === Object.keys(next).length &&
+					Object.keys(next).every((id) => previous?.[id] === next[id])
+				)
+					return;
+				previous = next;
+				void poll();
+			});
+			return {
+				stop: async () => {
+					previous = null;
+					await watch.stop();
+				},
+			};
+		})());
 	const websocket: WebSocketHandler<Connection> = {
 		maxPayloadLength: maxFrameBytes,
 		open(socket) {
@@ -190,6 +233,8 @@ export function clientGateway(app: Runtime) {
 					} else result = await dispatch(app, value);
 					if (value.method === "state.subscribe") {
 						socket.data.subscribed = true;
+						await subscribeCatalog();
+						void poll();
 						send(socket, {
 							version: 1,
 							type: "response",
@@ -218,10 +263,16 @@ export function clientGateway(app: Runtime) {
 					socket.data.pending.delete(value.id);
 				}
 			};
-			// Only cancellation interrupts an awaited standalone send/compaction.
-			// It still uses validated ingress, bounded pending IDs and normal dispatch
-			// ownership checks. All admissions/configuration retain ordered execution.
-			if (value.method === "standalone.abort") {
+			// Human replies must not wait behind unrelated model execution on this
+			// socket. These short transactions and cancellation share the existing
+			// bounded, shutdown-tracked lane; validated dispatch still checks ownership.
+			// General admissions/configuration retain ordered execution.
+			if (
+				value.method === "standalone.abort" ||
+				value.method === "question.submit" ||
+				value.method === "review.submit" ||
+				value.method === "approval.submit"
+			) {
 				const interrupt = execute();
 				socket.data.interrupts.add(interrupt);
 				void interrupt.then(
@@ -259,6 +310,9 @@ export function clientGateway(app: Runtime) {
 				retire(socket);
 			}
 			await Promise.all([...closing]);
+			await (await catalogSubscription)?.stop();
+			catalogSubscription = null;
+			await publication;
 		},
 	};
 }

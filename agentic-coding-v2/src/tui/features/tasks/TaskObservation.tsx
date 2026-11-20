@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { SyntaxStyle } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { EvidenceDocument } from "../../../protocol/evidence.ts";
 import type { Data, TaskDetails } from "../../../protocol/index.ts";
 import { ActionHeader } from "../../ui/ActionHeader.tsx";
@@ -322,31 +322,15 @@ export function TaskObservation(props: {
 								!saved.native?.abortRequested
 							}
 						>
-							<text fg={color("textMuted")}>
-								Prepare only; edit comments in the prompt and explicitly submit.
-								Native ownership/revision checks remain final.
-							</text>
-							<For each={["approve", "changes", "reject"]}>
-								{(decision) => (
-									<ActionHeader
-										scope={controls()}
-										interactive={live() && reviewMember(review)}
-										onActivate={() => {
-											if (
-												live() &&
-												reviewMember(review) &&
-												review.state === "pending" &&
-												!saved.native?.abortRequested
-											)
-												prepare(
-													`/${decision} ${String(review.id)}@${String(review.revision)} `,
-												);
-										}}
-									>
-										<text fg={color("accent")}>Prepare {decision} command</text>
-									</ActionHeader>
-								)}
-							</For>
+							<ActionHeader
+								scope={controls()}
+								interactive={props.openSession !== null}
+								onActivate={() => props.openSession?.()}
+							>
+								<text fg={color("accent")}>
+									Open requesting transcript to inspect and respond inline
+								</text>
+							</ActionHeader>
 						</Show>
 					</box>
 				)}

@@ -1,8 +1,7 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import { type Config, text } from "../config.ts";
 import { ProviderApis } from "../providers/providers.ts";
-import { Catalog, decode, type TaskInfo, values } from "../state.ts";
+import { decode, type TaskInfo, values } from "../state.ts";
 import { Acquisitions } from "./acquisitions.ts";
 import type { LiveEnvironmentAuthority } from "./authority.ts";
 import { loadProjects, projectView, resolvePlans } from "./catalog.ts";
@@ -51,12 +50,18 @@ import {
 	validateLifetime,
 } from "./lifetime.ts";
 import { type LogOptions, logView } from "./logs.ts";
-import { isShellRuntime, type Plan, type TelemetryOptions } from "./model.ts";
+import {
+	isShellRuntime,
+	type Plan,
+	type Project,
+	type TelemetryOptions,
+} from "./model.ts";
 import {
 	type OperatorRevocation,
 	OperatorRevocations,
 } from "./operator-revocation.ts";
 import { OperatorUnitStarts } from "./operator-unit-start.ts";
+import type { EnvironmentPersistence } from "./persistence.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { DatabaseDiagnostics, type QueryReceipt } from "./query-manager.ts";
 import {
@@ -108,7 +113,7 @@ export class Environments {
 	readonly unitStarts: OperatorUnitStarts;
 	readonly providers: ProviderApis;
 	readonly idle: IdleLifecycle;
-	private engine: Harness | null = null;
+	private engine: EnvironmentPersistence | null = null;
 	private live = new Map<string, EnvironmentProcess>();
 	private revoked = new Set<number>();
 	private closed = false;
@@ -127,8 +132,11 @@ export class Environments {
 	get stateDir() {
 		return this.config.stateDir;
 	}
-	constructor(private config: Config) {
-		this.projects = loadProjects(config);
+	constructor(
+		private config: Config,
+		projects?: readonly Project[],
+	) {
+		this.projects = projects ? [...projects] : loadProjects(config);
 		this.dependencyWorkspaces = new DependencyWorkspaces(config.stateDir);
 		this.drafts = new DefinitionDrafts(config, () => this.store);
 		this.idle = new IdleLifecycle(config.configDir, {
@@ -246,8 +254,7 @@ export class Environments {
 		const operation = (async () => {
 			await this.store.commit(async (tx) => {
 				this.check(owner.id, signal, batch);
-				const task = await tx.task(owner.id as TaskId);
-				if (!task || task.abortRequested || task.state.status === "terminal")
+				if (!(await tx.ownerActive(owner.id)))
 					throw new Error("Cluster inspection task has ended");
 			}, background);
 			this.check(owner.id, signal, batch);
@@ -269,8 +276,7 @@ export class Environments {
 		const operation = (async () => {
 			await this.store.commit(async (tx) => {
 				this.check(owner.id, signal, batch);
-				const task = await tx.task(owner.id as TaskId);
-				if (!task || task.abortRequested || task.state.status === "terminal")
+				if (!(await tx.ownerActive(owner.id)))
 					throw new Error("Cluster operation task has ended");
 			}, background);
 			this.check(owner.id, signal, batch);
@@ -317,7 +323,7 @@ export class Environments {
 		if (!this.engine) throw new Error("Environment manager not initialized");
 		return this.engine;
 	}
-	async initialize(engine: Harness) {
+	async initialize(engine: EnvironmentPersistence) {
 		this.engine = engine;
 		await this.store.commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState);
@@ -418,10 +424,9 @@ export class Environments {
 	) {
 		return this.store.commit(async (tx) => {
 			this.check(owner, signal, batch);
-			const task = await tx.task(owner as TaskId);
+			const active = await tx.ownerActive(owner);
 			this.check(owner, signal, batch);
-			if (!task || task.abortRequested || task.state.status === "terminal")
-				throw new Error("Environment task has ended");
+			if (!active) throw new Error("Environment task has ended");
 			const doc = await tx.doc(EnvironmentState);
 			const previous = doc.reuses?.[batch];
 			if (previous) {
@@ -566,6 +571,31 @@ export class Environments {
 			...(services
 				? { serviceLogs: this.live.get(run.id)?.serviceLogs ?? storedServices }
 				: {}),
+		};
+	}
+	/** Operator metadata only: saved identities are never cleanup capabilities. */
+	async recoveryRuns(id?: string) {
+		const all = await this.records();
+		const selected = id
+			? all.filter((run) => run.id === id)
+			: recentRuns(all, 200);
+		if (id && !selected.length) throw new Error("Unknown environment run");
+		return {
+			total: all.length,
+			runs: selected.map((run) => ({
+				id: run.id,
+				owner: run.owner,
+				app: run.plan.app,
+				state: run.state,
+				revision: run.revision,
+				canRevoke:
+					holdsResource(run) &&
+					run.state !== "interrupted" &&
+					this.hasLiveAuthority(run),
+				canAcknowledge: run.state === "interrupted",
+			})),
+			authority:
+				"Observation only; revocation requires original live handles; acknowledgement requires manual inspection and does not clean or adopt resources",
 		};
 	}
 	async snapshot(app?: string) {
@@ -1416,9 +1446,7 @@ export class Environments {
 			if (operatorUnit) {
 				const raw = doc.runs[operatorUnit.runId],
 					run = raw ? decode<EnvironmentRun>(raw) : undefined,
-					catalog = await tx.doc(Catalog),
-					ownerRaw = catalog.tasks[String(owner)],
-					task = ownerRaw ? decode<TaskInfo>(ownerRaw) : undefined;
+					task = await tx.ownerInfo(owner);
 				if (
 					!run ||
 					run.owner !== owner ||
@@ -1696,10 +1724,14 @@ export class Environments {
 			return true;
 		}
 	}
-	async releaseOwner(owner: number) {
+	/** One-way live revocation latch; cleanup may follow after durable intent commits. */
+	fenceOwner(owner: number) {
 		this.idle.forget(owner);
 		this.revoked.add(owner);
 		this.acquisitions.notify();
+	}
+	async releaseOwner(owner: number) {
+		this.fenceOwner(owner);
 		const runs = (await this.records()).filter(
 			(run) => run.owner === owner && holdsResource(run),
 		);

@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { digest } from "./config.ts";
 
-async function runGit(cwd: string, args: string[], overrides: string[] = []) {
+async function runGit(
+	cwd: string,
+	args: string[],
+	overrides: string[] = [],
+	maxOutputBytes?: number,
+) {
 	// These helpers are automatic, not shell-authorized: never run repository hooks,
 	// filesystem monitor programs, recursive submodule updates or auto-maintenance.
 	const settings = [
@@ -48,23 +53,55 @@ async function runGit(cwd: string, args: string[], overrides: string[] = []) {
 			env: { ...environment, GIT_TERMINAL_PROMPT: "0" },
 		},
 	);
+	const readOutput = async () => {
+		if (maxOutputBytes === undefined) return new Response(child.stdout).text();
+		const reader = child.stdout.getReader();
+		const chunks: Uint8Array[] = [];
+		let bytes = 0;
+		try {
+			while (true) {
+				const next = await reader.read();
+				if (next.done) break;
+				bytes += next.value.length;
+				if (bytes > maxOutputBytes) {
+					child.kill();
+					throw new Error(
+						"Review Git output exceeds its size limit; select a smaller path",
+					);
+				}
+				chunks.push(next.value);
+			}
+			return Buffer.concat(chunks).toString("utf8");
+		} finally {
+			reader.releaseLock();
+		}
+	};
 	const [output, error, code] = await Promise.all([
-		new Response(child.stdout).text(),
+		readOutput(),
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
 	return { output, error, code };
 }
-export async function git(cwd: string, args: string[]): Promise<string> {
+export async function git(
+	cwd: string,
+	args: string[],
+	maxOutputBytes?: number,
+): Promise<string> {
 	// Read names, not values; git config itself does not execute filter programs.
 	// Discover on every call so a newly configured driver is not silently trusted.
-	const drivers = await runGit(cwd, [
-		"config",
-		"--null",
-		"--name-only",
-		"--get-regexp",
-		"^filter\\..*\\.(clean|smudge|process)$",
-	]);
+	const drivers = await runGit(
+		cwd,
+		[
+			"config",
+			"--null",
+			"--name-only",
+			"--get-regexp",
+			"^filter\\..*\\.(clean|smudge|process)$",
+		],
+		[],
+		maxOutputBytes,
+	);
 	if (drivers.code !== 0 && drivers.code !== 1)
 		throw new Error(
 			`Cannot inspect Git filter configuration: ${drivers.error.trim()}`,
@@ -81,7 +118,12 @@ export async function git(cwd: string, args: string[]): Promise<string> {
 		`${prefix}.process=`,
 		`${prefix}.required=false`,
 	]);
-	const { output, error, code } = await runGit(cwd, args, overrides);
+	const { output, error, code } = await runGit(
+		cwd,
+		args,
+		overrides,
+		maxOutputBytes,
+	);
 	if (code !== 0) throw new Error(`git ${args[0]} failed: ${error.trim()}`);
 	return output;
 }
@@ -158,27 +200,35 @@ export async function gitOverview(workspace: string) {
 export async function captureReview(
 	workspace: string,
 	requested: string,
+	baseCommit = "HEAD",
 ): Promise<{ snapshot: string; digest: string }> {
 	const target = contained(workspace, requested);
 	const relative = path.relative(workspace, target) || ".";
-	let snapshot = await git(workspace, [
-		"diff",
-		"--no-ext-diff",
-		"--no-textconv",
-		"--binary",
-		"HEAD",
-		"--",
-		relative,
-	]);
-	const untracked = await git(workspace, [
-		"ls-files",
-		"--others",
-		"--exclude-standard",
-		"-z",
-		"--",
-		relative,
-	]);
-	for (const name of untracked.split("\0").filter(Boolean).sort()) {
+	let snapshot = await git(
+		workspace,
+		[
+			"diff",
+			"--no-ext-diff",
+			"--no-textconv",
+			"--binary",
+			baseCommit,
+			"--",
+			relative,
+		],
+		1_000_000,
+	);
+	const untracked = await git(
+		workspace,
+		["ls-files", "--others", "--exclude-standard", "-z", "--", relative],
+		650_000,
+	);
+	const untrackedFiles = untracked.split("\0").filter(Boolean).sort();
+	if (
+		(snapshot.match(/^diff --git /gm)?.length ?? 0) + untrackedFiles.length >
+		2000
+	)
+		throw new Error("Review exceeds 2000 files; select a smaller path");
+	for (const name of untrackedFiles) {
 		const file = contained(workspace, name);
 		if (fs.lstatSync(file).isSymbolicLink())
 			throw new Error(
@@ -187,17 +237,34 @@ export async function captureReview(
 		if (fs.statSync(file).size > 512_000)
 			throw new Error("Review file exceeds 512 KB limit");
 		const bytes = fs.readFileSync(file);
-		if (bytes.includes(0))
-			throw new Error(
-				"Untracked binary review is not supported; use attach_evidence with an image kind for screenshots",
-			);
-		snapshot += `\n--- /dev/null\n+++ ${name}\n${bytes
-			.toString("utf8")
-			.split("\n")
-			.map((line) => `+${line}`)
-			.join("\n")}\n`;
+		const content = bytes.toString("utf8");
+		const lines = content ? content.split("\n") : [];
+		if (content.endsWith("\n")) lines.pop();
+		// Use a real unified hunk so old/new-side anchors refer to captured
+		// lines, including an honest empty file and missing final newline.
+		const newPath = `b/${name}`;
+		const nameHeader = /[\t\n"\\\\]/.test(newPath)
+			? JSON.stringify(newPath)
+			: newPath;
+		const mode = fs.statSync(file).mode & 0o111 ? "100755" : "100644";
+		snapshot += `\ndiff --git ${JSON.stringify(`a/${name}`)} ${JSON.stringify(newPath)}\nnew file mode ${mode}\n--- /dev/null\n+++ ${nameHeader}\n`;
+		if (bytes.includes(0) || !Buffer.from(content).equals(bytes)) {
+			snapshot += `Binary files /dev/null and ${nameHeader} differ\nBinary source unavailable · ${bytes.length} bytes · sha256 ${digest(bytes)}\n`;
+			if (Buffer.byteLength(snapshot) > 1_000_000)
+				throw new Error("Review exceeds 1 MB; select a smaller path");
+			continue;
+		}
+		if (lines.length) {
+			snapshot += `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}\n`;
+			if (!content.endsWith("\n")) snapshot += "\\ No newline at end of file\n";
+		}
+		if (Buffer.byteLength(snapshot) > 1_000_000)
+			throw new Error("Review exceeds 1 MB; select a smaller path");
 	}
-	if (!snapshot) snapshot = `No changes against HEAD for ${relative}.\n`;
+	if (!snapshot)
+		snapshot = `No changes against ${baseCommit} for ${relative}.\n`;
+	if ((snapshot.match(/^diff --git /gm)?.length ?? 0) > 2000)
+		throw new Error("Review exceeds 2000 files; select a smaller path");
 	if (Buffer.byteLength(snapshot) > 1_000_000)
 		throw new Error("Review exceeds 1 MB; select a smaller path");
 	return { snapshot, digest: digest(snapshot) };

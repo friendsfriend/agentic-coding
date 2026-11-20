@@ -2,6 +2,10 @@ import { type ConversationId, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { requestReview } from "../reviews.ts";
 import type { TaskInfo } from "../state.ts";
+import {
+	sqlDiagnosticAuthority,
+	sqlRootScopeAuthority,
+} from "./diagnostic-approval.ts";
 import { queryInput } from "./query-config.ts";
 import type { DatabaseDiagnostics } from "./query-manager.ts";
 import { environmentResult } from "./tool-result.ts";
@@ -57,11 +61,9 @@ export function createQueryTools(
 							...(input.app === undefined
 								? {}
 								: {
-										rootScope:
-											"This exact requiring application run and its immutable transitive infrastructure generations, not another app with access to the same database. All existing coupled-batch liveness, pending-operation and cleanup fences remain mandatory. Root binding is attribution/liveness, not database row or credential isolation. No managed reference lease, partial release or scoped dependency idle permission is granted.",
+										rootScope: sqlRootScopeAuthority,
 									}),
-							authority:
-								"One exact SQL diagnostic through this task's live required infrastructure and held application. The SELECT/WITH shape check is not a permission grant or complete effect classifier: the database READ ONLY transaction fences database writes, but privileged functions can have nontransactional/external effects. Inspect the SQL and configure a least-privileged database role. TLS must verify the numeric loopback certificate identity with system trust or this digest-pinned public CA; credentials are only the displayed variable references, frozen in the live process. No caller credentials, other database/host/port, TLS downgrade, owner, saved-lease adoption or socket-to-process identity proof. The driver requires a positional row-cap binding to force the single-statement extended protocol; caller $digits text is refused conservatively, including in literals/comments. The user statement is wrapped as a bound single prepared query with LIMIT+1 lookahead and a 1025-character JSON row projection. Over-1024-UTF-16-unit rows are entirely withheld; returned complete JSON rows share an 8192-byte budget. Database numeric values become exact lexical strings; nested data beyond eight levels is omitted. Literal frozen secrets in complete row strings/keys are redacted; arbitrary encodings/transformations are not. One read-only transaction is always rolled back before accepting a successful result, with a ten-second total deadline. Cancellation/failure may leave rollback unconfirmed; its durable issued receipt prevents automatic resend. Successful replay is only a historical diagnostic, not new connection or execution authority.",
+							authority: sqlDiagnosticAuthority,
 						},
 						null,
 						2,
