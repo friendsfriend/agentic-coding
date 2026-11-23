@@ -1,5 +1,229 @@
 # Standalone foundation (tasks 0.1–0.4)
 
+## Live installer-space Mocked attempt (task 3.2)
+
+The old v2 temporary controller is stopped; its pending plans were never approved
+and cannot be approved (no access file), so they are inert rather than rearmed.
+A private copy of the v2-shaped configuration was used with:
+- explicit `serviceBindings.postgres` for the running document-service-mocked
+  container (identity/network frozen, `cleanup: never`);
+- a Mocked Compose source owning only Redis + installer-space-mw on the existing
+  `document-service-mocked_devenv-local` external network;
+- the v2 `.env` mechanism for three declared references (build credentials and
+  the application master password), values never printed.
+
+Results through the real shared MCP/operator boundary:
+- Build plan reviewed/approved, built via `docker-build` and **succeeded**:
+  image `devenv-installer-space-mw:latest`, exit 0. The first attempt exposed and
+  fixed two server defects: output-bound truncation killed the child (now drains
+  without killing and keeps the tail), and long `env_run` was tied to the request
+  socket (now returns after durable issuance; `env_wait` provides a bounded wait).
+  The build also initially failed on a genuine Artifactory **403** for the
+  Maven surefire site descriptor; the private config added
+  `-DskipSurefireReport=true -Dmaven.site.skip=true` to get past that repository
+  permission issue. This is a local config deviation, recorded here.
+- Mocked plan reviewed/approved; compose started Redis + app, recorded both exact
+  container IDs as owned, reported Docker `ready`; PostgreSQL was verified as a
+  borrowed observation and never entered the owned ledger.
+- The application container then **exited (1)**: its logs show Azure Key Vault
+  credential discovery failing (Environment/Workload/Managed Identity/CLI all
+  unavailable). This is application/profile configuration, not an MCP defect;
+  application readiness was **not** achieved. Docker running-state readiness is
+  not application health, as documented.
+- `env_stop` removed exactly the two owned containers; the borrowed PostgreSQL
+  remained running (now subsequently removed by the operator).
+- The operator then removed the old document-service containers. The private v2
+  configuration now owns PostgreSQL + Redis + the app under one Compose project
+  and network, **`environment-mcp`**, with container names `environment-mcp-*`.
+  A fresh start created all three containers with
+  `com.docker.compose.project=environment-mcp`: PostgreSQL and Redis stayed up;
+  the app again exited (1) on the same Azure Key Vault credential failure. The
+  group/naming requirement is implemented and verified; application readiness
+  still needs Key Vault/profile credentials.
+
+This closes the live exercise honestly: build and dependency-reusing startup work,
+but a successful application start still needs the app's Key Vault/profile
+credentials. The generated image remains in the local Docker engine.
+
+
+## V2 configuration reuse (post-review pivot)
+
+The user directed that the configuration structure stay the same as v2. The
+standalone package therefore reads `CONFIG_DIR/environments.json` and
+`CONFIG_DIR/config.json` directly as its public runtime configuration. The
+internal strict manifest and metadata-only catalog reader remain only as fixture/
+inspection formats behind explicit `--config FILE`/`--format` options.
+
+Mapping (no file-shape conversion required): v2 shell/systemshell targets become
+fixed `/bin/sh -lc <configured command>` executions with literal `environment`,
+`secretRefs`, and timeout; v2 Docker build targets with `container.dockerfileSource`
+become BuildKit builds with the configured `buildSecrets` templates and references;
+v2 Compose run targets become `docker compose` over the declared file or inline
+source with project/services read from YAML; Podman is provider-aware and
+Kubernetes Helm releases are executable, without a live cluster claim. The optional additive `serviceBindings` section declares explicit
+borrowed Docker identities for targets that name `requires`; without it the
+dependency review refuses instead of guessing from a name. Compose connectivity is
+exactly what the reviewed source declares; nothing attaches or reconfigures an
+existing service.
+
+Secrets use the v1/v2 UI mechanism: `CONFIG_DIR/.env` is parsed once with Node's
+`parseEnv`, process environment is the fallback, and only declared references are
+resolved at dispatch. Values are never written to plans/state/tools and are
+redacted from command/build/log output. Dockerfile and Compose inline sources are
+materialized only in private mode-0700 temporary directories and removed after use.
+
+Verification: standalone complete suite **11 pass, 0 fail, 0.589 s** (136
+assertions) including direct v2-structure mapping and `.env`/template tests; lint
+and whole-project type-check are clean. This batch did not run the unfiltered v2
+suite again because no v2 source changed; the preceding saved run remains 289
+pass, 0 fail, 16.13 s. Live installer-space acceptance (3.2) remains open: the
+image is absent and the build/start still require an exact reviewed plan and the
+application/Redis secret references. No live container was started or modified.
+
+## Durable approval, shared serving and executable ledger (2.2–2.4, 3.1)
+
+Implemented private standalone SQLite (`environment.sqlite`, own application/
+schema identity) with synchronous `BEGIN IMMEDIATE`/rollback, one exclusive
+directory lock, environment-native scopes and a single strict document. Startup
+interrupts prior active scopes and pending/approved/issued operations; only prior
+issued work is inspection-required, and no saved container/process authority is
+restored. Exact digest/revision/serialized decision records are content-bound;
+replayed decisions and admissions return original receipts rather than resolving
+today's resources.
+
+Added separate authenticated operator HTTP inspection/decision endpoints, bounded
+bodies/in-flight work, Host/Origin/credential checks and sanitized errors. Added
+one shared MCP HTTP listener whose client definitions and credential references
+are validated before state opens and whose per-request SDK factories receive
+fixed principal/scope sessions. Added explicit shared CLI mode, exclusive mode-
+0600 operator-access publication, and shutdown that joins listeners and removes
+only the original unchanged option file/lock. Agent keys cannot authenticate to
+the operator API; the operator key cannot authenticate to MCP.
+
+Added frozen executable reviews for configured command build/test/run targets and
+Compose run targets. A command is a fixed absolute program + argv with declared
+environment references; a Compose plan names socket, canonical file, project and
+services. Admission never executes. The internal runtime boundary re-observes
+frozen borrowed dependencies, durably issues once, then dispatches through a
+fixed-argv process adapter. Nonzero command exits are failed receipts. Compose
+startup claims only the exact container IDs it created and waits at most 60 s for
+Docker running state; it reports `starting`/`running`, never application health.
+Configured secret values are redacted from command receipts and owned-container
+logs. `env_stop` removes exact owned container IDs only. Borrowed PostgreSQL/Redis
+are structurally absent from the owned ledger, so stop/close cannot reach them.
+
+Added the owned-resource ledger with append-under-issued-permit and two-phase
+scope close. Confirmed cleanup deletes only its own records; uncertain cleanup
+retains them and marks the scope interrupted. A copied permit, foreign scope or
+previous host cannot claim or complete resources. This completes the current
+v1-compatible execution surface: shared-dependency start and automatic
+last-lease cleanup, Compose collector telemetry and Kubernetes Helm are implemented;
+idle scope closure, network-only Compose, restart adoption, a dedicated trace
+browser and slot-queue acquisition remain pending.
+
+### Verification and boundaries
+
+- Standalone complete unfiltered suite: **9 pass, 0 fail, 0.601 s** (123
+  assertions) across 6 files. Latest saved pre-batch JUnit was **7 pass, 0.497 s**;
+  an intermediate owned-ledger run was 8 pass, 0.426 s. These are sequential
+  development measurements, not a portable timing threshold or a claimed speedup.
+- New fake-runtime execution scenario covers approval-gated dispatch, one-time
+  command/Compose execution, nonzero-exit failure, environment-reference
+  redaction, owned status/logs/stop, and asserts that no borrowed-service name
+  reaches a stop/cleanup call. It uses no real Docker, Compose project or database.
+- Existing copied-artifact stdio/shared scenarios still pass; the shared CLI
+  fixture verifies credential separation and removal of only its own access file.
+- Existing V2 complete unfiltered suite (unchanged by this batch): **289 pass,
+  0 fail, 16.13 s**. Its unchanged 12–15 s working target is still exceeded; no
+  timeout/retry/exclusion/concurrency setting was altered. Against the saved
+  preceding batch (17.46 s) this is measurement variation, not a performance claim.
+- Original-package lint/boundaries/type gate: **71 pass, 0 fail, 6.87 s**.
+- All three packages pass Biome and whole-project `tsc --noEmit`.
+- Strict OpenSpec validation passes; `git diff --check` is clean.
+- No live installer-space build/start was attempted, no existing container or
+  volume was modified, and no OpenCode connection was switched. Read-only
+  prerequisite inspection found: the `devenv-installer-space-mw:latest` image is
+  absent; only the existing PostgreSQL container is running on
+  `document-service-mocked_devenv-local`; Redis is not running; Maven exists on
+  PATH; the v1 `.env` contains Artifactory variable names (values were never
+  read or printed). The old temporary v2 controller is stopped and its pending
+  plans were never approved; its access file is gone, so they cannot be approved
+  now. The live acceptance task 3.2 remains open and needs an explicit build-
+  credential reference, an owned Redis decision and the application secret
+  reference before any plan can be approved.
+
+Artifacts: `standalone-execution-after`, `standalone-execution-v2-after`,
+`standalone-approval-after` and `standalone-approval-v2-after` JUnit/log pairs in
+the approved temporary directory.
+
+## MCP naming refactor and dependency bindings (0.5, 1.1–1.2, 2.1)
+
+Refactored standalone package identity to `environment-mcp`; renamed internal
+symbols and organized modules into MCP registration, CLI options, configuration,
+compatibility import, domain, services and runtime adapters. CLI flags, tool
+names/outputs and existing refusal behavior were not changed by the refactor.
+The original unfiltered suite passed before the refactor (**3 pass, 0 fail,
+0.295s**) and again after the naming-only phase (**3 pass, 0 fail, 0.204s**),
+before the separate implementation increment below.
+
+Added trusted Docker dependency binding descriptors for exact socket, container,
+image, expected labels, network/alias and explicit running/healthy readiness.
+These are server configuration, not MCP caller arguments. Added a narrow read-
+only container inspection port/Unix-socket Engine adapter and repository-bound
+dependency service. Ready shared/external observations become immutable review
+bytes/digest binding container/image/network IDs and creation/start identity;
+revalidation compares fresh observations without replacing the original review.
+Inspector Env, mounts, command arguments and health logs do not enter the
+projection. Owned prerequisites cannot obtain handles by observation. Only a
+404 is absence; transport/server/JSON/size failures remain unavailable/unknown.
+No create/attach/start/stop/delete endpoints exist in this adapter.
+
+This increment later became durable human approval and issuance in the batch
+above; at the time it verified observation/preparation only. Shared creation,
+owned dependency reference counting, the live acceptance case and richer
+diagnostics remain pending. It deliberately advertised no mutation tools and
+changed no OpenCode connection.
+
+The source-backed v1 parity matrix and actual Mocked configuration trace are in
+`environment-mcp/docs/architecture.md`. Inspection established that the v1 app
+template includes Redis/PostgreSQL/network files and uses depends_on, but does
+not declare the existing document-service project's network as external. The
+service/network mapping must therefore be explicit in the new reviewed plan;
+the trace does not certify that cross-project borrowing already works in v1.
+No `.env` was read or secret reference expanded; no real runtime was invoked for
+this batch. Existing PostgreSQL and its volume remain untouched.
+
+### Gates and measurements
+
+- Independent frozen install, build, lint and whole-project type-check pass.
+- New package complete unfiltered suite: **5 pass, 0 fail, 0.280s** (43
+  assertions). The copied-bundle stdio scenario remains one public boundary;
+  new schema/lifecycle cases remain direct, and the borrowed-service scenario
+  uses one disposable Unix-socket HTTP fixture, not Docker or PostgreSQL.
+- JUnit: the new binding test file costs **0.016s**; its direct schema case costs
+  **0.0004s**, combined read-only adapter/service case **0.0115s**. Existing file
+  costs **0.246s**, with its stdio scenario **0.175s**. Timing differences from
+  the initial/refactor runs are not claimed as speedups or portable assertions.
+- The socket fixture exposed Bun/macOS realpath failure on socket files; the
+  adapter now resolves directory identities and explicit symlink hops without
+  opening a socket as a regular file. This was fixed rather than excluding the
+  transport test, changing a timeout or adding retries.
+- Existing packages retain clean lint and whole-project type-check. Original-
+  package boundary gate: **71 pass, 0 fail, 12.24s**.
+- Existing V2 complete unfiltered suite: **289 pass, 0 fail, 17.85s**. No V2
+  source/tests were changed by this batch; the separate package is not imported
+  into that suite. Its unchanged 12–15s working target remains exceeded. Against
+  the saved earlier `mcp-parity-after` batch (**16.14s**, not a fresh pre-edit
+  baseline), largest existing-file changes were source-base +1.075s,
+  mermaid-vendor +0.253s, runtime +0.191s, HTTP requests +0.057s and daemon
+  +0.055s. Concurrent unrelated work/load and the older comparison limit
+  attribution; no slower budget is accepted. No timeout/retry/exclusion/
+  concurrency settings were changed.
+- Strict OpenSpec validation passes. Changes remain uncommitted.
+
+Final logs/JUnit artifacts use `standalone-bindings-after` and
+`standalone-bindings-v2-after` in the approved OpenCode temporary directory.
+
 The user's revised architecture is implemented as a fresh `environment-mcp/`
 package, not an adapter importing either coding application. Its own package/
 lockfile, official MCP SDK, Zod, Bun build, TypeScript and Biome configuration
@@ -55,3 +279,691 @@ point at the old implementation. The temporary old shared controller holds two
 unexecuted installer-space plans; neither has human approval. The existing
 PostgreSQL remains untouched. No old implementation files were deleted, no
 connection was switched, no native state was imported and no commit was made.
+
+## Capability/UI architecture (task 3.4)
+
+Added `src/interface/capabilities.ts` as the single action registry (name,
+description, Zod input/output, MCP annotations, neutral UI label, handler). MCP
+registration (`src/mcp/tool-surface.ts` + `create-server.ts`) and the
+server-independent OpenTUI API (`src/ui/capability-api.ts`) both derive from it.
+`test/capability-parity.test.ts` asserts equal names, identical input-schema
+identity, nonempty UI labels, and fails if either entry point embeds its own
+`env_*` table. A standalone TUI injects an in-process registry; an OpenCode plugin
+can inject the same interface over RPC/HTTP. Operator approval remains a separate
+human-only surface and is not an agent MCP/UI action. The TUI renderer and plugin
+transport are not implemented yet; the interface they require is.
+
+Standalone suite: **13 pass, 0 fail, 0.553 s** (181 assertions); lint and
+whole-project type-check clean. No runtime/transport behavior changed by this
+refactor; existing shared-server and execution tests still pass.
+
+## OpenTUI/capability transport and readiness (task 3.5)
+
+Added the authenticated capability transport on the shared loopback listener:
+`GET /capabilities` and `POST /capabilities/<name>` call the same
+`EnvironmentCapabilities` registry as MCP. The standalone OpenTUI uses
+`createHttpUiCapabilityApi`, renders fields from each action's JSON Schema, and
+invokes the same handlers. `mountEnvironmentTui` accepts an existing renderer
+root for embedding; `runEnvironmentTui` owns the terminal for standalone use.
+
+PTY smoke evidence (fixture server, no real application): the TUI listed all
+`env_*` actions, opened `env_status`, invoked it through the capability endpoint,
+rendered the structured scope/owned result and quit with `q`. This proves the
+UI/server/registry path, not application readiness or production deployment.
+
+Readiness now has an explicit source. Compose receipts report `endpoint`,
+`docker-health` or `docker-running`; configured loopback `endpoints` are probed
+with the v1 2xx/3xx rule, Docker healthchecks are observed through `docker
+inspect`, and a declared-but-unprobeable endpoint reports `unknown`. BuildKit
+secrets now resolve v2 template, absolute-file and declared-environment modes at
+dispatch without serializing values into plans/receipts; file secrets are
+no-follow, regular/nonlinked and bounded to 64 KiB.
+
+Standalone suite: **17 pass, 0 fail** (214 assertions); lint and whole-project
+type-check clean. The architecture test also scans `src/ui/**` and rejects imports
+of MCP, services, operator, persistence or a Bun listener. Tests cover UI controller typing/defaults, real MCP-vs-HTTP-UI
+parity over the copied CLI, endpoint probing, and v2 template/file secret
+resolution. Live installer-space app readiness remains blocked by missing Azure
+Key Vault/profile credentials and the absence of a configured app health endpoint.
+
+## Operator approval TUI and acknowledgement (task 3.6)
+
+Added `src/operator/client.ts`, `controller.ts` and `opentui.ts`: a human-only
+OpenTUI over the authenticated operator API. It lists operations, inspects the
+exact frozen plan, submits approve/reject decisions fenced by digest/revision, and
+acknowledges an inspection-required interrupted revision. `--operator-ui` accepts
+the private mode-0600 access file or an explicit loopback URL plus token-env. The
+built `environment-mcp/operator-ui` entry is separate from `environment-mcp/ui`
+and is never in the agent capability registry.
+
+The journal now persists exact acknowledgement receipts (`acknowledgements`) and
+clears `inspectionRequired` only for an interrupted operation at the reviewed
+revision. Replay is idempotent; a stale digest/revision is refused. It never
+re-arms approval/issuance, restarts work or restores handles.
+
+PTY smoke evidence (fixture executable review, no real build): the operator TUI
+listed the awaiting-approval operation, inspected the exact plan, confirmed
+approval and displayed `approved` at revision 2. The agent capability list remained
+unchanged and did not expose any approval action.
+
+Standalone suite: **19 pass, 0 fail** (231 assertions); lint and whole-project
+type-check clean. The v2 suite was last run at **289 pass, 0 fail** (16.35 s) and no
+v2 source changed in this task batch.
+
+## Local stdio bridge (task 3.7)
+
+Added `--connect --url <loopback>/mcp` with `--token-env` or a private absolute
+`--token-file`. The bridge uses the official MCP client over authenticated HTTP
+and the low-level stdio server to forward `tools/list` and `tools/call`; it opens
+no journal, scope, listener, service or cleanup authority and never prints the
+token. The copied-artifact shared scenario now spawns the bridge as a real stdio
+MCP server, lists the same tools, invokes `env_list`, and closes it. This provides
+a local OpenCode cutover path while leaving the existing OpenCode entries
+unchanged for explicit operator approval.
+
+Standalone suite: **19 pass, 0 fail** (233 assertions).
+
+## Bounded operation/log history (task 3.8)
+
+Added `env_history({offset,limit})` as a read-only capability over the durable
+journal. It returns only this authenticated scope's summaries (state, revision,
+createdAt, inspectionRequired, historical, hasResult) and omits plans, identities,
+credentials and owned handles. MCP and OpenTUI derive it from the same registry.
+
+A successful `env_stop` now captures the last 200 redacted log lines before
+removing owned containers and retains them in memory for the controller lifetime.
+A later `env_logs` returns `historical: true` with `retainedAt`; it never reads a
+borrowed service and is explicitly not durable across restart. Tests cover the
+history shape/scope fence and retained-log redaction.
+
+Standalone suite: **19 pass, 0 fail** (244 assertions). Durable diagnostics and
+telemetry remain open.
+
+## Safe scope retention (task 3.9)
+
+At the 64-scope cap, scope creation now evicts one oldest inactive scope only when
+it has no owned resources, no awaiting/approved/issued operation and no
+inspection-required uncertainty. Active/closing scopes and uncertain work are
+never evicted; if no safe scope exists, creation still refuses with
+`journal-capacity`. Eviction removes the scope's operation/request/decision/
+acknowledgement records together. Direct tests cover active refusal and oldest
+inactive eviction. This is bounded retention, not idle expiry.
+
+Standalone suite: **21 pass, 0 fail** (247 assertions).
+
+## Idle owned-app cleanup (task 3.10)
+
+Added `--idle-timeout-sec N` (default 0/disabled). Every capability invocation
+touches the client activity stamp through both MCP and the UI transport. The
+reaper runs on a timer, skips a client with an active operation, stops only apps
+from the owned ledger, never touches borrowed services, and leaves the scope
+active. Failed cleanup retains the owned record and is retried. This is not full
+idle scope closure/rebinding, which remains pending.
+
+Direct tests cover stale/fresh/busy/empty clients and failed-cleanup retention.
+Standalone suite: **23 pass, 0 fail** (257 assertions).
+
+## Shell-process ownership (task 3.11)
+
+V2 shell/systemshell run targets now normalize to an owned process executable
+instead of a one-shot command. The runtime adapter starts a detached `/bin/sh -lc`
+process group, captures bounded output, waits for optional loopback `readyUrl` or
+`readyText`, and exposes PID/log/stop. Stop signals the process group, escalates
+to SIGKILL after a bound, and confirms only exact owned records. `env_stop`,
+`env_logs` and idle cleanup include process-owned apps; operation receipts name
+the PID, readiness and source.
+
+A real adapter test starts a sleeping shell process, observes `readyText`, and
+stops its group. A shared-server fixture exercised the real path end-to-end:
+`env_execute` -> operator approval -> `env_run` -> `env_wait` -> `env_status`
+(`kind: process`, `pid: …`) -> `env_logs` -> `env_stop` -> retained historical
+logs. A separate shutdown fixture confirmed SIGTERM to the controller stops the
+tracked process group. A fake-handle execution test covers the same service path.
+No saved PID is adopted after restart; a process that survives a controller crash
+is inspection-only and is never killed by PID reuse.
+
+Standalone suite: **25 pass, 0 fail** (270 assertions).
+
+## Execution issue diagnostics (task 3.12)
+
+Unsupported v2 targets now remain catalog-visible with a sanitized
+`executionIssue` code instead of silently lacking an executable. A direct test
+covers `container-name-prefix`. A read-only pass over the real v2 configuration
+reports 31 `container-name-prefix` Compose targets, 2 Kubernetes targets, 2
+unsupported Docker targets and 1 Compose service-count issue. No user
+configuration was changed; the group-prefix migration remains an explicit
+operator step.
+
+Also raised the shell-command argument budget to 64 KiB per argument and 128 KiB
+total, which makes the real long-form shell run targets executable. Standalone
+suite: **25 pass, 0 fail** (271 assertions).
+
+## Crash-safe process supervision (task 3.13)
+
+Shell process runs now start under a detached Bun supervisor that owns the app
+process group and relays output. When the controller disappears without a graceful
+stop, the supervisor detects parent death and signals its group. A direct test
+starts a controller child, lets it exit without stopping, and verifies the app PID
+is gone. Saved PIDs are still never adopted by a later controller.
+
+Standalone suite: **26 pass, 0 fail** (273 assertions).
+
+## Durable controller diagnostics (task 3.14)
+
+Added private mode-0600 `STATE_DIR/diagnostics.jsonl`, capped at 1 MiB with one
+rotated segment. Events are limited to `startup`, `capability`, `shutdown` and
+`error`; only allowlisted action/code/scope/operation/count fields are stored,
+never arguments, plans, credentials or free text. Startup, capability
+touch/error and shutdown are recorded. `GET /operator/diagnostics?tail=N` serves
+the bounded tail only with operator authentication.
+
+Direct tests cover sanitization, private mode, rotation and tail. The shared CLI
+scenario verifies operator-only access, startup/capability events, no agent or
+operator token leakage and mode-0600 storage.
+
+Standalone suite: **27 pass, 0 fail** (283 assertions).
+
+## Configuration doctor (task 3.15)
+
+Added `--doctor --config-dir` for a read-only v2 configuration report: app/target
+counts, executable counts by descriptor kind, unavailable targets and sanitized
+migration hints. It creates no state/listener and does not print commands, plans,
+credentials or repository paths. A direct report test covers counts and the
+container-prefix hint. A real-v2 run reports 41 apps, 117 targets, 81 executable
+(17 docker-build, 52 command, 12 process) and 36 unavailable.
+
+Standalone suite: **28 pass, 0 fail** (287 assertions).
+
+## Real configuration migration and scoped cutover (task 3.16)
+
+With explicit operator authorization, the real v2 configuration was migrated:
+
+- `environments.json` backups: `environments.json.bak-20261122-145144` and
+  `environments.json.bak-20261122-145427` (mode 0600).
+- 76 explicit `container_name` values in inline Compose sources were prefixed
+  with `environment-mcp-` (already-prefixed names untouched).
+- The installer-space Mocked source was replaced with the reviewed owned stack
+  (group network/volume, no borrowed-service mutation) and its declared
+  `ICON_APPLICATION_MASTERPASSWORD` envRef was added.
+- A private `.env` (0600) was created in the v2 config directory containing only
+  the declared Artifactory/application references copied from the existing v1
+  secret file; no secret values were printed.
+- Doctor result improved from 81/117 to 112/117 executable targets; remaining:
+  2 Kubernetes, 2 Docker-run, 1 network-only Compose target.
+
+The standalone shared service is installed as launchd agent
+`dev.environment-mcp` with fixed loopback ports 38471/38472, a dedicated
+mode-0600 client token file and a private state directory. The bridge listed all
+10 tools and `env_list` succeeded. The scoped OpenCode entry was replaced with
+`environment-mcp` using `--connect` and `--token-file`; the config was backed up
+as `opencode.json.bak-20261122-145506`. The global `agentic-environments` entry
+remains because this controller's authority is one repository/scope.
+
+No application approval or run was performed during cutover. One awaiting-approval
+review for `installer-space-mw`/`run-compose-mocked` was created for operator
+inspection only.
+
+## Podman and single-container run (task 3.17)
+
+Added provider-aware build/Compose execution and a single-container run descriptor
+for Docker and Podman. Podman uses the `podman`/`podman-compose` binaries with
+`--url`/`CONTAINER_HOST`, provider-specific inspect/stop/log calls and the same
+exact owned-ID ledger. Single-container runs publish only declared loopback
+ports, pass environment names rather than secret values on argv, and verify
+Docker/Podman running or health readiness. Two real `run-docker` targets now
+normalize as executable, bringing the doctor to 114/117.
+
+Tests cover Podman build argv, podman-compose project argv, container-run argv
+without secret values, v2 normalization, and the approved execution/stop/log
+path. Podman was not installed locally, so no live Podman runtime compatibility
+is claimed.
+
+Standalone suite: **32 pass, 0 fail** (308 assertions).
+
+## Controller-wide shared-service leases (task 3.18)
+
+Added an optional `serviceBindings.<id>.start: {app,target}` descriptor. A
+successful owned start of that exact infrastructure target verifies the binding
+identity and installs a controller-wide shared-service record. `env_services`
+exposes the binding/start/shared state; dependent executable runs acquire leases
+at dispatch. Stopping the service-owner app is refused while any lease exists;
+stopping a dependent releases its leases, and scope close also releases them.
+Restart marks shared records uncertain and clears leases without adoption.
+
+A cross-scope test starts PostgreSQL through an infrastructure target, runs a
+dependent app from another scope, verifies the lease and refuses owner cleanup.
+Stopping the dependent releases the last lease, automatically stops the exact
+started containers, deletes their owned records and marks the shared service
+released. A dedicated start/stop capability remains open.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Native shell telemetry (task 3.19)
+
+Added a loopback OTLP/HTTP JSON receiver per approved shell process telemetry
+target. It accepts only `/v1/traces` and `/v1/logs` with a per-run bearer token,
+stores bounded spans/log summaries in memory, redacts declared secrets, and
+injects standard `OTEL_*` variables into the process. `env_telemetry({app,
+traceId?})` exposes the capture; the receiver closes on stop while its snapshot
+remains readable for the controller lifetime.
+
+The live OpenCode bridge was reloaded and `environment-mcp` connected. Direct
+OpenCode MCP calls to `env_services` and `env_status` succeeded after the shared
+service/lease changes. The native telemetry receiver is covered by direct OTLP
+and process-execution tests. Compose collector telemetry is implemented; a
+dedicated trace browser and container-run telemetry remain pending.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Compose secret reference merging (task 3.20)
+
+Compose service `x-secret-refs` and target `secretRefs` remain per-service
+container environment references; explicit `compose.envRefs` remains the Compose
+process interpolation reference. Conflicting references or literal service
+environment keys refuse the target. Values resolve only at dispatch and are
+injected through a private Compose override file, with `$` escaped for Compose
+interpolation. Missing values still refuse before any container starts.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Compose collector telemetry (task 3.21)
+
+The exact v2 TLS host-gateway collector declaration is now executable. The
+controller creates a fresh ephemeral certificate, starts a host-gateway receiver
+with bearer authentication, emits `OTEL_COLLECTOR_CONFIG`, and mounts only the
+public CA into the declared collector through a private Compose override. The
+private key is never written to disk. Received spans/logs use the same bounded
+redaction as shell telemetry and remain readable through `env_telemetry` after
+the receiver closes.
+
+The real doctor now reports 117 executable targets out of 117. The
+`grid-allocation-backend/run-compose-default`, both Helm targets and the
+network-only bridge target are executable. The receiver and injection paths are
+fake-backed tests; no live Compose
+collector run is claimed. A live run still requires the image, Docker secrets
+and the missing v2 `.env` references.
+
+After restarting the launchd service on the new build and reloading OpenCode,
+`environment-mcp` connected. A direct OpenCode `env_list` filtered to the
+grid-allocation repository returned `run-compose-default` as a Compose
+executable with `collectorService: "otel-collector"` and per-service secret
+references for `postgres` and `grid-allocation-backend`. Direct `env_services`
+and `env_status` calls also succeeded. No run was dispatched.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Telemetry trace rendering (task 3.22)
+
+The shared OpenTUI result view formats `env_telemetry` summaries and trace
+responses as bounded terminal text. Trace IDs render an indented parent/child
+tree with duration, status and a few attributes; snapshots render bounded log
+and trace lists. The formatter filters control characters, caps nodes/lines and
+falls back to JSON for an unknown shape. It remains inside the capability
+registry and adds no UI-only action.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Kubernetes Helm execution (task 3.23)
+
+The two real `helm-release-v1` targets are now executable descriptors. Charts are
+bounded, no-follow-walked, hashed at startup and rechecked at admission and
+dispatch. The v1-compatible default cluster is `devenv` with context
+`kind-devenv`; optional `clusters.json` entries provide a config-contained
+kubeconfig digest, context, authorized repositories and a bounded client
+environment. No kind provisioning or kubeconfig rewriting is performed.
+
+Installation is a fresh `helm install` only. Before any cluster effect, an
+offline `helm template` render must contain only namespaced objects and at least
+one `apps/v1` Deployment; CRDs, subcharts, hooks, resource policies and `lookup`
+are refused. The per-operation release label and revision are verified through
+`helm get metadata`, the installed manifest must match the offline render, and
+readiness waits for the rendered Deployments to become Available. Cleanup
+re-observes the exact revision/label before `helm uninstall`; a changed or
+missing release is retained for inspection. Chart workload logs are explicitly
+reported as unavailable rather than inferred from selectors.
+
+Offline verification against both real repositories rendered:
+`icon-customer-external-api-deployment` and
+`icon-grid-allocation-backend-deployment`; chart digests were obtained without
+printing chart contents. No live cluster was available, so no install, readiness
+or uninstall against a real cluster is claimed. Fake helm/kubectl binaries cover
+fresh install, readiness, metadata verification and uninstall; a service-level
+test covers approval, ownership, native-log refusal and exact cleanup.
+
+The real doctor now reports **117 executable / 117 targets**; no descriptor is
+unavailable.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Multi-repository client authority (task 3.24)
+
+A shared client may now declare `repositories` instead of one `repository`.
+Each canonical repository gets its own scope, execution session, dependency
+session and owned ledger. The composite session routes by an explicit
+`repository` argument or by an app identity that exists in exactly one authorized
+repository; ambiguous app actions refuse with `repository-ambiguous`.
+`env_status` and `env_history` accept a repository filter and aggregate across
+scopes when it is omitted. `env_stop`, `env_logs` and `env_telemetry` accept the
+same filter and never clean another repository's scope.
+
+A direct composite-session test covers unambiguous routing, explicit-repository
+routing, ambiguity refusal, scoped status, stop/log/telemetry routing and
+aggregate history. A shared-server test starts the real listener with one client
+bound to two repositories and verifies partitioned `env_status` and the
+repository filter. The single-repository `repository` field remains accepted.
+
+The local OpenCode client was changed from the installer-space-only repository
+to all 35 authorized repositories. Backups:
+`clients.json.bak-20261123-095129` and
+`opencode.json.bak-20261123-095200`. The launchd service restarted successfully;
+OpenCode `environment-mcp` reconnected. A direct `env_list` returned all 41
+applications and `env_status` returned 35 partitioned scopes. The legacy
+`agentic-environments` entry was then removed; `opencode mcp list` showed only
+`environment-mcp` connected. No operation was approved or dispatched by this
+change.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Compose network-only bridges (task 3.25)
+
+The real `host-infra-network` network-only descriptor is now executable, and the
+six `host-infra-*` members carry an exact `networkFrom` reference. A network-only
+target requires exactly empty services and creates one owned bridge with a
+deterministic app/target name. Members inspect the bridge labels, start their own
+Compose stack, then attach only their newly created container IDs. The bridge
+owner refuses removal while any container remains attached; members never own or
+remove the bridge. Controller shutdown stops member apps before network owners.
+
+Fake Docker tests cover network create/inspect/connect/remove and a service-level
+test covers bridge ownership, member attachment, member stop, empty-bridge
+removal and the network-only log response. No live Docker bridge creation or
+member attachment is claimed. The real doctor now reports **117 executable
+targets and no unavailable targets**.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Prerequisite visibility and secret gaps (task 3.26)
+
+Normalized targets now retain their declared v2 `prerequisites` and expose them
+in `env_list`. A `networkFrom` member is refused at admission with
+`network-prerequisite-unavailable` until the exact labelled bridge exists;
+admission never creates it. The fake network service test covers the refusal
+before bridge creation and success afterward.
+
+The doctor now reports `secretGaps`: declared environment references absent from
+the config `.env` and process fallback. Only reference names are emitted, never
+values. The real report has 117/117 executable descriptors and still lists
+missing `V2_*`/portal references for some Compose targets; those runs refuse at
+dispatch rather than starting with an incomplete environment.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Automatic network-only prerequisites (task 3.27)
+
+A member whose target declares a matching `networkOnly` prerequisite is admitted
+even when the bridge is absent. The approved descriptor now carries that exact
+prerequisite executable. Dispatch inspects the bridge first; if present it is
+borrowed, and if absent the member operation creates and owns it before
+attaching the member containers. Cleanup stops containers before removing the
+empty bridge, so shared members retain it while attached. Other prerequisite
+kinds remain explicit operations.
+
+The network service test now covers admission with an approved prerequisite,
+automatic creation, member attachment, member-owned bridge cleanup and a later
+network-only target run. No live Docker bridge was exercised.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Idle scope closure and rebinding (task 3.28)
+
+Repository scopes are now backed by a runtime that keeps the current scope and
+closed historical scopes. The idle reaper stops owned apps, then asks each clean
+scope to close. Closure is refused while the scope is busy, has owned resources,
+has an awaiting/approved/issued operation, or has an inspection-required record.
+A closed scope remains visible to status/history and its historical operations/
+logs/telemetry remain readable; observation never reopens it. The next execution
+or dependency action opens a fresh scope and retains the old scope for history.
+
+Direct tests cover clean closure, historical scope lookup, reopened scope
+identity and the idle-reaper close call after owned cleanup. The shared-server
+suite continues to exercise the composite runtime. No live idle expiry was
+waited out.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Container telemetry and trace browser (task 3.29)
+
+Container-run targets can now declare `otlp-http-json` / `0.0.0.0:0`
+telemetry. The controller starts the same TLS host-gateway receiver used by
+Compose, injects standard OTLP exporter variables and the public CA path, adds
+the host gateway and read-only CA mount to the container run, and stores bounded
+redacted spans/logs for `env_telemetry`. This is not an image-specific
+instrumentation claim; only standard OTEL environment support is assumed.
+
+The OpenTUI now provides a selectable trace browser. An `env_telemetry` snapshot
+with traces opens a trace list; selecting a trace invokes the same capability
+with its ID and renders the parent/child tree. No UI-only action or additional
+approval authority was added.
+
+Tests cover receiver container environment, container runtime mount/extra-host
+arguments, service-level receiver injection, and controller trace selection/back
+navigation. No live container telemetry source was exercised.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Live Docker network and Compose verification (task 3.30)
+
+A disposable live Docker check used the real runtime executor:
+- created `environment-mcp-live-verify-*` bridge and inspected its exact ID,
+- started a temporary `redis:7-alpine` container and attached its ID,
+- confirmed attached-container removal refusal,
+- stopped/removed the container and bridge,
+- then created another temporary bridge and started a one-service Compose
+  project (`redis:7-alpine`),
+- attached the exact Compose container, confirmed attached removal refusal,
+- stopped the service, removed the Compose project and bridge.
+
+Both checks returned `attached: 1`, `refusedWhileAttached: true` and
+`removed: true`. Post-check inspection found no surviving `environment-mcp-live`
+network or container. This verifies live Docker network create/inspect/connect/
+remove and Compose container attachment; it does not claim Kubernetes, Podman or
+application telemetry compatibility.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Live Compose collector telemetry (task 3.31)
+
+A disposable live Docker/Compose check started the real
+`otel/opentelemetry-collector-contrib:0.162.0` service with a generated
+`OTEL_COLLECTOR_CONFIG`, the ephemeral public CA mount and a host-gateway mapping.
+Synthetic OTLP JSON was posted to the collector's HTTP receiver, and the
+receiver captured the collector-exported trace (`traceId` matched, one trace).
+The temporary Compose project and receiver were removed; no surviving
+`environment-mcp-live-otel` container or network was found. This validates the
+collector/TLS receiver path, not application-specific instrumentation.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Secret preflight (task 3.32)
+
+Executable admission now resolves every declared environment reference through
+the same private secret source used at dispatch. A missing reference refuses with
+`secret-reference-unavailable` before review, so an operator does not approve a
+target that would fail immediately for incomplete configuration. The error does
+not include the reference value.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Live kind/Helm verification (task 3.33)
+
+A disposable kind cluster (`kindest/node:v1.33.1`) was created with a private
+temporary kubeconfig. A temporary repository/chart declared one `nginx`/`pause`
+Deployment. Through the real execution service and executor, the controller:
+
+- admitted and approved a Helm release,
+- installed the chart into `environment-mcp-live`,
+- observed the rendered Deployment,
+- waited for it to become Available,
+- reported `status: completed`, `readiness: ready`,
+- uninstalled the exact release and confirmed `remaining: 0`,
+- deleted the namespace and kind cluster.
+
+The live run exposed and fixed two compatibility issues: Helm v4 rejects the
+legacy `helm list --all` flag, and image pull/startup can exceed the previous
+60-second Deployment readiness window. The executor now omits `--all` and waits
+up to 300 seconds (bounded by target timeout). The suite asserts `--all` is not
+emitted. The real customer/grid charts and cluster-specific images were not live
+verified; the kind run used a minimal chart.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Local secret completion (task 3.34)
+
+The private v2 `.env` was backed up as
+`.env.bak-20261123-131155`. Known local-only values were added without printing
+them: the local Redis password used by the customer-external local profile, a
+Postgres trust-auth placeholder, and the existing v1 customer-portal master
+password. The file remains mode 0600. No existing database was started, stopped,
+recreated or reconfigured.
+
+Doctor `secretGaps` dropped from 21 targets to 4: Eon installer directory
+(MySQL/datasource), grid Entra client secret, hwportal/EFIX Postgres/API DB
+passwords, and the remaining EFIX external credentials. Those targets refuse
+admission until the operator supplies the external values.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Live Podman verification (task 3.35)
+
+Podman 6.2.0 and its krunkit machine were installed and started for a disposable
+live check. A locally loaded `redis:7-alpine` image avoided the environment's
+TLS-intercepting registry path. The real executor then:
+
+- created and inspected a Podman bridge,
+- ran the container through the Podman provider,
+- attached the exact container ID,
+- confirmed network removal is refused while attached,
+- stopped/removed the container and bridge.
+
+Result: `attached: 1`, `refusedWhileAttached: true`, `removed: true`; no
+surviving test container or network. The machine was stopped afterward. The live
+run exposed that Podman's low-level `network rm` could remove an attached
+bridge; the executor now pre-inspects attachments and refuses removal, with a
+dedicated regression test. Podman build and Compose were not live-verified.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Live Podman build/Compose (task 3.36)
+
+The Podman machine was restarted and `podman-compose` 1.6.0 installed. A
+disposable build used a locally loaded `redis:7-alpine` base to avoid the
+environment's TLS-intercepting registry path, producing a local image. The real
+executor then started a Podman Compose project, resolved exactly one container
+ID, and cleaned up the project and image.
+
+The live run exposed that `podman-compose ps` does not accept service names after
+`-q`. The executor now omits service names for the Podman provider while keeping
+them for Docker; a direct fake-runtime test asserts the Podman argv. Podman
+network/container attach and attached-removal refusal were previously verified.
+All test images, containers, projects and networks were removed; the Podman
+machine was stopped.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Real chart live attempt (not claimed)
+
+A disposable kind cluster was prepared with minimal CRDs for ExternalSecret,
+HTTPRoute and ScaledObject. The real customer-external chart rendered and its
+resources were accepted with the private app image retagged to a local pause
+image. The Deployment could not become ready because the chart requires its
+private image, ExternalSecret-materialized credentials and HTTP probes on the
+application port. The test was cleaned up (namespace, CRDs and kind cluster
+deleted) and no live real-chart claim is made. Real chart verification requires
+the private registry image and its secret material.
+
+## Additional local secret completion (task 3.37)
+
+Backed up `.env` again as `.env.bak-20261123-135831`. Added known local values
+from the reviewed local compose/application configuration: Eon MySQL root and
+datasource password, hwportal Postgres and API DB password, and the grid mock
+Entra client secret. The file remains mode 0600; no existing database was
+started or modified.
+
+Doctor `secretGaps` dropped to three targets: Eon installer `EIV_JASYPT_PASSWORD`,
+hwportal/EFIX external credentials, and the Efix frontend AEM endpoint. Those
+remain operator-supplied external values.
+
+## Live idle closure/rebinding (task 3.38)
+
+A shared-server integration test started a one-repository client with a 1-second
+idle timeout. After the reaper ran, `env_status` reported the scope closed.
+Calling `env_list` and `env_status` again did not reopen it. A subsequent
+`env_execute` created a fresh active scope and returned an awaiting-approval
+operation. The test uses the real shared server, journal, reaper and HTTP
+capability transport; no external runtime was needed.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## Real chart live install (task 3.39)
+
+A disposable kind cluster was prepared with minimal ExternalSecret, HTTPRoute and
+ScaledObject CRDs, a local HTTP substitute image retagged as the chart's private
+application image, dummy secret material and the chart's required node label.
+The real customer-external chart then:
+
+- installed successfully,
+- reported its rendered Deployment,
+- became `readiness: ready`,
+- uninstalled and confirmed `remaining: 0`.
+
+The live run exposed that `helm install -o json` output can exceed the executor's
+64 KiB output bound because it embeds chart files. The executor now runs install
+without `-o json` and takes the created release revision/label from the small
+`helm get metadata` response. All cluster, CRDs, namespace and substitute image
+were removed. The real private application image and ExternalSecret material
+were not available, so application behavior is not claimed.
+
+Standalone suite: **50 pass, 0 fail** (446 assertions).
+
+## OpenCode TUI plugin (task 3.40)
+
+Added a local OpenCode 2.0.22 TUI plugin under `environment-mcp/opencode-plugin/`.
+It registers a full-screen `environment` route, `/environment`/`/env` and
+`<leader>v`, and renders the existing `UiCapabilityApi`/controller states with
+Solid/OpenTUI components: a searchable Inspect/Operate/Observe capability list,
+schema forms, result scrolling, telemetry trace drill-down, a two-column `?` help
+dialog and a special-key footer. It reads the same authenticated loopback URL and
+client token file and does not import MCP registration, listeners, journals,
+runtime adapters or the operator surface.
+
+The plugin's structural TUI contract types are a local copy of the OpenCode
+2.0.22 `packages/plugin/src/tui` shape; provenance is recorded in `PROVENANCE.md`.
+The UI follows the agentic-coding v1/v2 keybind/footer/help conventions (plain
+keybind data, standard navigation hidden from the footer, full catalog in `?`).
+
+Live verification used a disposable OpenCode 2.0.22 TUI (`--standalone`, temporary
+config directory with a symlink to the plugin) against the running shared
+environment-mcp service:
+
+- The home footer showed the clickable `● Environment` chip.
+- `/environment` and `<leader>v` opened the route; `Esc` returned home.
+- The list showed 12 registry capabilities; filtering `telemetry` narrowed to
+  one match and `status` to `Show scope status`.
+- `env_list` ran from its form and returned the configured repository catalog.
+- `env_status` ran from its form and returned the active scopes.
+- `env_services` ran with no inputs via Enter and returned `{ "services": [] }`.
+- A missing telemetry app produced `operation-unavailable`; the error view
+  showed `Request failed`, `r` refreshed the capability list, and `Esc` returned.
+- `?` opened the two-column help dialog from list/traces/result/error; in a form,
+  `?` typed into the focused input instead of opening help.
+- `env_execute` prefilled a fresh `requestId` UUID.
+
+The global config symlink is installed at
+`~/.config/opencode/plugins/environment-mcp`; `opencode plugin list` resolves it
+as a local plugin and the running OpenCode log shows a 13-plugin reconciliation
+with no plugin error. The disposable TUI was closed after verification. No
+engine, cluster or container was started.
+
+The controller now prefills `requestId` form fields with a UUID; a focused UI
+test covers it. Standalone suite: **57 pass, 0 fail** (479 assertions, 28 files,
+8.44s). `bun run lint` and `bun run type-check` are clean.

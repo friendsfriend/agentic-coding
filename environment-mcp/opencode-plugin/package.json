@@ -1,0 +1,21 @@
+{
+	"name": "environment-mcp-opencode",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "OpenCode TUI surface for the environment-mcp capability registry",
+	"exports": {
+		"./tui": "./tui.tsx"
+	},
+	"scripts": {
+		"type-check": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"devDependencies": {
+		"@opentui/core": "0.5.14",
+		"@opentui/solid": "0.5.14",
+		"@types/bun": "1.4.4",
+		"solid-js": "1.9.15",
+		"typescript": "7.0.2"
+	}
+}

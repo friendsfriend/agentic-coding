@@ -1,0 +1,157 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "environment-mcp",
+      "dependencies": {
+        "@modelcontextprotocol/server": "2.4.0",
+        "@opentui/core": "0.7.0",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "@biomejs/biome": "2.6.4",
+        "@modelcontextprotocol/client": "2.4.0",
+        "@types/bun": "1.4.4",
+        "typescript": "7.0.2",
+      },
+    },
+  },
+  "packages": {
+    "@biomejs/biome": ["@biomejs/biome@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/biome/-/biome-2.6.4.tgz", { "optionalDependencies": { "@biomejs/cli-android-arm64": "2.6.4", "@biomejs/cli-android-x64": "2.6.4", "@biomejs/cli-darwin-arm64": "2.6.4", "@biomejs/cli-darwin-x64": "2.6.4", "@biomejs/cli-linux-arm64": "2.6.4", "@biomejs/cli-linux-arm64-musl": "2.6.4", "@biomejs/cli-linux-x64": "2.6.4", "@biomejs/cli-linux-x64-musl": "2.6.4", "@biomejs/cli-win32-arm64": "2.6.4", "@biomejs/cli-win32-x64": "2.6.4" }, "bin": { "biome": "bin/biome" } }, "sha512-8sKKwaNW4ot22awZ3lBjwWLHnUFXgXnrBPYS2gNlBAXRbDC++7kqjK2H7dR/FgCDtPvO1xfKpgEhJkGxAKYkxA=="],
+
+    "@biomejs/cli-android-arm64": ["@biomejs/cli-android-arm64@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-android-arm64/-/cli-android-arm64-2.6.4.tgz", { "os": "android", "cpu": "arm64" }, "sha512-jwrwigP4tBcHxzuV8izioX/BOUhJL/4e2rNSOE5nCjBkVC018LQAQUGiH+CNkFYvLtQ1dcZo5/xXERmaAGc7JQ=="],
+
+    "@biomejs/cli-android-x64": ["@biomejs/cli-android-x64@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-android-x64/-/cli-android-x64-2.6.4.tgz", { "os": "android", "cpu": "x64" }, "sha512-HdGInPJ4nZFwHxzvEtcp2nmSBtUyJrurmtIK43upFckuS3+ZqVM05HtsxQWnqGsuy/pxckIAjyKWlEKRlBXUyA=="],
+
+    "@biomejs/cli-darwin-arm64": ["@biomejs/cli-darwin-arm64@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-darwin-arm64/-/cli-darwin-arm64-2.6.4.tgz", { "os": "darwin", "cpu": "arm64" }, "sha512-0VvcUz46wbg59Q4TZ59KkIjDJrxEyu4Eoe79+F4SChxoWe+W7AEyIp6F5r72C9+p6MsB6dIovnZt1D30lGM3XA=="],
+
+    "@biomejs/cli-darwin-x64": ["@biomejs/cli-darwin-x64@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-darwin-x64/-/cli-darwin-x64-2.6.4.tgz", { "os": "darwin", "cpu": "x64" }, "sha512-fxmvkF81srlS3DiMyfm+aG3J0eG+6/BjaxRyjy57KbLSafnq0PO+hHfVWmtH2ty0S7nm6yDXBRwySfFeaRJKRQ=="],
+
+    "@biomejs/cli-linux-arm64": ["@biomejs/cli-linux-arm64@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-linux-arm64/-/cli-linux-arm64-2.6.4.tgz", { "os": "linux", "cpu": "arm64", "libc": "glibc" }, "sha512-6+bK1Y/evmIUiJr7auertuMbiaYVicJhqA1bZyL47lCMWugv8l0gFQCqvR/gN1vZMHYm+HwoTKgeMxdNFCoQTg=="],
+
+    "@biomejs/cli-linux-arm64-musl": ["@biomejs/cli-linux-arm64-musl@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.6.4.tgz", { "os": "linux", "cpu": "arm64", "libc": "musl" }, "sha512-31ZaH/MHqPX+O+evRwRrCHQ8W5/9adY+/eMytGGWZnRx1T41QsWIF09+/WujynLBhWZUxNGS5CtsWLwgOFTAyg=="],
+
+    "@biomejs/cli-linux-x64": ["@biomejs/cli-linux-x64@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-linux-x64/-/cli-linux-x64-2.6.4.tgz", { "os": "linux", "cpu": "x64", "libc": "glibc" }, "sha512-tbFZMdL6dP/ws4edXxYG9WhvaVa1ZDzL4G5DzahnWW7Psib9H+VTdyU4XXVxpJk5j/nYZroSbvSNyYlpW3yCIw=="],
+
+    "@biomejs/cli-linux-x64-musl": ["@biomejs/cli-linux-x64-musl@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-linux-x64-musl/-/cli-linux-x64-musl-2.6.4.tgz", { "os": "linux", "cpu": "x64", "libc": "musl" }, "sha512-bomSa2XdQAGGj6Cwdm4M13qE+lN9+AOlW8KtI4hdyVyRRF/Z71qPAi95T4wtdZK0QpBbkTW8hgbZZCwPi4xzIw=="],
+
+    "@biomejs/cli-win32-arm64": ["@biomejs/cli-win32-arm64@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-win32-arm64/-/cli-win32-arm64-2.6.4.tgz", { "os": "win32", "cpu": "arm64" }, "sha512-eCsqt8Ma3eVap+oyJCDnJZH60SIU464B66n3y38EUTJdM1T/HfZol1FJC9vb+sHToX0ix8XzqPcwJnOzyAJz0g=="],
+
+    "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.6.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@biomejs/cli-win32-x64/-/cli-win32-x64-2.6.4.tgz", { "os": "win32", "cpu": "x64" }, "sha512-pYsMy5AThiHFOZAsngg8qN4PurM6nInKBhVX7sbj3eNpRQqo1Hb0MgCwPL7VqVMrmcEEMj9Ks3qbkallR65e8g=="],
+
+    "@modelcontextprotocol/client": ["@modelcontextprotocol/client@2.4.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@modelcontextprotocol/client/-/client-2.4.0.tgz", { "dependencies": { "@modelcontextprotocol/core": "2.4.0", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.8", "jose": "^6.1.3", "pkce-challenge": "^5.0.0", "zod": "^4.2.0" } }, "sha512-LgrD2OphHuG12vfKFKz6SOnq7bKHQmhGJIAYdD+MZBn2npHEyry6uD8zvktodtl5CQM85MO0anUyD9JwmUmxww=="],
+
+    "@modelcontextprotocol/core": ["@modelcontextprotocol/core@2.4.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@modelcontextprotocol/core/-/core-2.4.0.tgz", { "dependencies": { "zod": "^4.2.0" } }, "sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q=="],
+
+    "@modelcontextprotocol/server": ["@modelcontextprotocol/server@2.4.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@modelcontextprotocol/server/-/server-2.4.0.tgz", { "dependencies": { "@modelcontextprotocol/core": "2.4.0", "zod": "^4.2.0" } }, "sha512-rgR9yxSaAJ+bcsi/XroT/S2AfPiIWloXAnrdfYSCms9ivVju0ishu/wW0J21Ho6+ZOR1r7RyeRbjiRuF87ix5Q=="],
+
+    "@opentui/core": ["@opentui/core@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core/-/core-0.7.0.tgz", { "dependencies": { "bun-ffi-structs": "0.3.1", "diff": "9.0.0", "marked": "17.0.1", "string-width": "7.2.0" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.7.0", "@opentui/core-darwin-x64": "0.7.0", "@opentui/core-linux-arm64": "0.7.0", "@opentui/core-linux-arm64-musl": "0.7.0", "@opentui/core-linux-x64": "0.7.0", "@opentui/core-linux-x64-musl": "0.7.0", "@opentui/core-win32-arm64": "0.7.0", "@opentui/core-win32-x64": "0.7.0" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-2iWBw9oo+ZJfPbOWeTLXfDV63yTDRfclxltI4IgTa6n7OB90x5xplLMH3y9DXhnWibzTui00GbK3ZCwKfUU1SQ=="],
+
+    "@opentui/core-darwin-arm64": ["@opentui/core-darwin-arm64@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-darwin-arm64/-/core-darwin-arm64-0.7.0.tgz", { "os": "darwin", "cpu": "arm64" }, "sha512-meEyZVUeCIauqHLWo/IsSlKzZPTnGIEjRLigefSZbrSAcOiMryd3OcUWvSByIXpYb9UPOpW0YxKKfVwepb9u2A=="],
+
+    "@opentui/core-darwin-x64": ["@opentui/core-darwin-x64@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-darwin-x64/-/core-darwin-x64-0.7.0.tgz", { "os": "darwin", "cpu": "x64" }, "sha512-hZQ4OfAua5CtUv3hpZ81zhNTTLULbg0leQ/3eupjefityGP6163eS56IzymTWuiM/mVD/7Ad5bicH0I2JXhr1g=="],
+
+    "@opentui/core-linux-arm64": ["@opentui/core-linux-arm64@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-linux-arm64/-/core-linux-arm64-0.7.0.tgz", { "os": "linux", "cpu": "arm64" }, "sha512-/u+Kalzkz8NntUW5zjypgt9fnzeKohLG9YMEas7n98KvyaYScrtO4Mdj5iv/STNB3IfocJOChzYAbO6C8TmlPQ=="],
+
+    "@opentui/core-linux-arm64-musl": ["@opentui/core-linux-arm64-musl@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-linux-arm64-musl/-/core-linux-arm64-musl-0.7.0.tgz", { "os": "linux", "cpu": "arm64", "libc": "musl" }, "sha512-BkTn+WLf9OPR4KhBnuOki+R/cgk2qwbL49eQn5fEYPeiJD4HPalGbEZDea59UjwNEJ7rqKq2yuPAXQjkDZ6y3w=="],
+
+    "@opentui/core-linux-x64": ["@opentui/core-linux-x64@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-linux-x64/-/core-linux-x64-0.7.0.tgz", { "os": "linux", "cpu": "x64" }, "sha512-OD2tGl1r27zcgCsuc+TYU5e+qhrbsRSI0YUBEb0ebQo8P6Ps2FL9LFenH9om4fddCh06G9Zd45ekJMhlDrGD3Q=="],
+
+    "@opentui/core-linux-x64-musl": ["@opentui/core-linux-x64-musl@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-linux-x64-musl/-/core-linux-x64-musl-0.7.0.tgz", { "os": "linux", "cpu": "x64", "libc": "musl" }, "sha512-HrJbcAIuayzQmWVzv+cjez37fNHL9FDoHmjwxAb4iK5GTjl89FZCxeKopyua14RA6WpP8/zUJQi8U16mm6XptA=="],
+
+    "@opentui/core-win32-arm64": ["@opentui/core-win32-arm64@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-win32-arm64/-/core-win32-arm64-0.7.0.tgz", { "os": "win32", "cpu": "arm64" }, "sha512-8yqBoRsDbvKl2kGX0O8t5kpnVEnbzs+2qUZlJ8sbeA3Z+73WFj36G+clUIMVxpspOu78iKXlD84NIwTxjZUPKw=="],
+
+    "@opentui/core-win32-x64": ["@opentui/core-win32-x64@0.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@opentui/core-win32-x64/-/core-win32-x64-0.7.0.tgz", { "os": "win32", "cpu": "x64" }, "sha512-OfNAX7fNFHhOiiojUkIjhVOZf+IDjpbpT5G7HrxGqhlZ+n4jITrrJzACHctteWbMUYcibieJzIIoKuLdmD5I+w=="],
+
+    "@types/bun": ["@types/bun@1.4.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@types/bun/-/bun-1.4.4.tgz", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
+
+    "@types/node": ["@types/node@26.6.6", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@types/node/-/node-26.6.6.tgz", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog=="],
+
+    "@typescript/typescript-aix-ppc64": ["@typescript/typescript-aix-ppc64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-aix-ppc64/-/typescript-aix-ppc64-7.0.2.tgz", { "os": "aix", "cpu": "ppc64" }, "sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ=="],
+
+    "@typescript/typescript-darwin-arm64": ["@typescript/typescript-darwin-arm64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-darwin-arm64/-/typescript-darwin-arm64-7.0.2.tgz", { "os": "darwin", "cpu": "arm64" }, "sha512-gowzar9MwS/aRWp6f3a4KUqzRjAZjOsmGNCM6LcTgXum+dBfgsBVMN+AgvOCCbguXyick6LJhpBszxMebJ8syA=="],
+
+    "@typescript/typescript-darwin-x64": ["@typescript/typescript-darwin-x64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-darwin-x64/-/typescript-darwin-x64-7.0.2.tgz", { "os": "darwin", "cpu": "x64" }, "sha512-SZ9xZInqApNlNGc9s0W1VSsktYSOe9cFqNOIqmN1Gs8SmkjKZYFt017G4VwPxASInODuAdbTW7sXiFUf893RgA=="],
+
+    "@typescript/typescript-freebsd-arm64": ["@typescript/typescript-freebsd-arm64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-freebsd-arm64/-/typescript-freebsd-arm64-7.0.2.tgz", { "os": "freebsd", "cpu": "arm64" }, "sha512-W5NH4y/J0plIIS5b2xvTEkU7JFxyqdMAOgf+Ilhl0vHQXKO5dZoxd+C/jEtq56c4F3wk71RB4BMRQ2XdI+bwYQ=="],
+
+    "@typescript/typescript-freebsd-x64": ["@typescript/typescript-freebsd-x64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-freebsd-x64/-/typescript-freebsd-x64-7.0.2.tgz", { "os": "freebsd", "cpu": "x64" }, "sha512-UMGDx5sTpzNw3WiPebH7l90IWfJggEd+egHt/q6p7/Cm3zqoV7VxkGXt+3DxPIw8CcmvAB0j3sVVfbhX+M4Tpw=="],
+
+    "@typescript/typescript-linux-arm": ["@typescript/typescript-linux-arm@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-linux-arm/-/typescript-linux-arm-7.0.2.tgz", { "os": "linux", "cpu": "arm" }, "sha512-gffT3xPz9sR7j/YJExkyPntrI0P2EP9XbOyWzth2/Gs0RstK+90RBcO0ncXoXy/beYll1SXw846Nf2zdnEz0QQ=="],
+
+    "@typescript/typescript-linux-arm64": ["@typescript/typescript-linux-arm64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-linux-arm64/-/typescript-linux-arm64-7.0.2.tgz", { "os": "linux", "cpu": "arm64" }, "sha512-Qh4eU4/y3yDjnfjjyPYihMj5/ODIlmt+Bzu17OI+fiSRDW57QmU5SiN63exPRNJPKUzcc1INa1NXdrJ+MqHjUQ=="],
+
+    "@typescript/typescript-linux-loong64": ["@typescript/typescript-linux-loong64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-linux-loong64/-/typescript-linux-loong64-7.0.2.tgz", { "os": "linux", "cpu": "none" }, "sha512-uEHck9i8hoAzXPiYRib1O7miOnz23SxIeVl6F4LXox+qov1K35jHcEW6VHKvZI+pyvl7fZEP4MCU5LYvIq1GuQ=="],
+
+    "@typescript/typescript-linux-mips64el": ["@typescript/typescript-linux-mips64el@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-linux-mips64el/-/typescript-linux-mips64el-7.0.2.tgz", { "os": "linux", "cpu": "none" }, "sha512-R4KvAMnE43W5Qeqb0Ly56O3mWMWIAgsMyz36DCaycd5nbg/9kzm0liw3JocfRqyJY0KPmzFjbswozXyW0DnIYA=="],
+
+    "@typescript/typescript-linux-ppc64": ["@typescript/typescript-linux-ppc64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-linux-ppc64/-/typescript-linux-ppc64-7.0.2.tgz", { "os": "linux", "cpu": "ppc64" }, "sha512-DORx5b3sd/4S7eayxm4FQv+A7CrkUIGRaHiwI8oiHTAI1fAPWhF4J0vAlkC8biAlHSVVwxMQ3tjZ2/DVbnQiiA=="],
+
+    "@typescript/typescript-linux-riscv64": ["@typescript/typescript-linux-riscv64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-linux-riscv64/-/typescript-linux-riscv64-7.0.2.tgz", { "os": "linux", "cpu": "none" }, "sha512-wf0jqEDOjrPRnKwYRyyJDRo11KMbvMFrU+q4zqKyChODBzvlkbhNQfKvLxQCcwTpdDaXSHZTVuh0JoCrKCUMHQ=="],
+
+    "@typescript/typescript-linux-s390x": ["@typescript/typescript-linux-s390x@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-linux-s390x/-/typescript-linux-s390x-7.0.2.tgz", { "os": "linux", "cpu": "s390x" }, "sha512-IkwJc3L7yhytWd/ewjyxNDfOmswCm9GWMJT/ue/dU4aZNbwZeYAetq42VyLmsmSjvoX7z74X6ZaYCtzAr0EuGw=="],
+
+    "@typescript/typescript-linux-x64": ["@typescript/typescript-linux-x64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-linux-x64/-/typescript-linux-x64-7.0.2.tgz", { "os": "linux", "cpu": "x64" }, "sha512-EYdf2cNg7rgCWJnxCdJ+F3V39O8ihb37eHAu1LK8oAFizgTQbPOK7zHHXbPt8rX24COqODXeI3sIf0fCXG7H/A=="],
+
+    "@typescript/typescript-netbsd-arm64": ["@typescript/typescript-netbsd-arm64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-netbsd-arm64/-/typescript-netbsd-arm64-7.0.2.tgz", { "os": "none", "cpu": "arm64" }, "sha512-+polYF4MF04aPpO5FTkHran9yUQDSXqy5GiSDKpsll5jy3l3+g9QLhpf39T+ePtefhXLOGrLl0QIjkQP6VnelA=="],
+
+    "@typescript/typescript-netbsd-x64": ["@typescript/typescript-netbsd-x64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-netbsd-x64/-/typescript-netbsd-x64-7.0.2.tgz", { "os": "none", "cpu": "x64" }, "sha512-8YIT0EHM/3dq10ZOVF/A7pc/YSMtbcecct4rWtexrnSCHOPcpC2KTLXfTCR6vDpnSiY12heNb1GiN/wu+T/FyA=="],
+
+    "@typescript/typescript-openbsd-arm64": ["@typescript/typescript-openbsd-arm64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-openbsd-arm64/-/typescript-openbsd-arm64-7.0.2.tgz", { "os": "openbsd", "cpu": "arm64" }, "sha512-APT8+ClYnuYm1u9+kgGXoMj2VzWzcymwh2gNSQVySHfkRDGOTVkoWLjCmOQSaO+PoqQ57B0flRp9SA+7GnnkzQ=="],
+
+    "@typescript/typescript-openbsd-x64": ["@typescript/typescript-openbsd-x64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-openbsd-x64/-/typescript-openbsd-x64-7.0.2.tgz", { "os": "openbsd", "cpu": "x64" }, "sha512-yX7s+Q0Dln0Dt9tEzZsAjXXR/+ytBM7AlglaqyeMPxQszJ1JhlJdZ6jLA+IzldHtflX81em7lDao1xXu+aRRkg=="],
+
+    "@typescript/typescript-sunos-x64": ["@typescript/typescript-sunos-x64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-sunos-x64/-/typescript-sunos-x64-7.0.2.tgz", { "os": "sunos", "cpu": "x64" }, "sha512-dLJDGaLZ1D4HPQn62u1n8mBDkJREwMsAkCdkwd4Ieqw+x3TUyTsqY0YiBCtE6H6OzzgGk3iuZ3vFWRS+E8/d1g=="],
+
+    "@typescript/typescript-win32-arm64": ["@typescript/typescript-win32-arm64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-win32-arm64/-/typescript-win32-arm64-7.0.2.tgz", { "os": "win32", "cpu": "arm64" }, "sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ=="],
+
+    "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@typescript/typescript-win32-x64/-/typescript-win32-x64-7.0.2.tgz", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
+
+    "ansi-regex": ["ansi-regex@6.6.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/ansi-regex/-/ansi-regex-6.6.0.tgz", {}, "sha512-XZ5apbzreCbXSKwPjJstu8R0zOi247w3XYwWxtwBXgpZrCyc1Ka7p9/xY0A9/diMewmHbEKz+FIraWaEWjlN5g=="],
+
+    "bun-ffi-structs": ["bun-ffi-structs@0.3.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/bun-ffi-structs/-/bun-ffi-structs-0.3.1.tgz", { "peerDependencies": { "typescript": "^5" } }, "sha512-3gM7PpVWLyrwxWjcilSiGuhWanhZivvo6l0u573NziPH6f/gwk6McbaYgn7oJWov6pKGRTDbrg94W5DcJsKTtQ=="],
+
+    "bun-types": ["bun-types@1.4.4", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/bun-types/-/bun-types-1.4.4.tgz", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ=="],
+
+    "cross-spawn": ["cross-spawn@7.0.6", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/cross-spawn/-/cross-spawn-7.0.6.tgz", { "dependencies": { "path-key": "^3.1.0", "shebang-command": "^2.0.0", "which": "^2.0.1" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
+
+    "diff": ["diff@9.0.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/diff/-/diff-9.0.0.tgz", {}, "sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw=="],
+
+    "emoji-regex": ["emoji-regex@10.6.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/emoji-regex/-/emoji-regex-10.6.0.tgz", {}, "sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A=="],
+
+    "eventsource": ["eventsource@3.0.7", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/eventsource/-/eventsource-3.0.7.tgz", { "dependencies": { "eventsource-parser": "^3.0.1" } }, "sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA=="],
+
+    "eventsource-parser": ["eventsource-parser@3.1.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/eventsource-parser/-/eventsource-parser-3.1.1.tgz", {}, "sha512-EKN1vKAMcZ8MlYMpaNuxN6R9yakzH6uajHcHVTqWJzvu5pWw9DyhbP35HH8MVBQ+dZjAfDxk+A8NiR9KWaXiyQ=="],
+
+    "get-east-asian-width": ["get-east-asian-width@1.7.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/get-east-asian-width/-/get-east-asian-width-1.7.0.tgz", {}, "sha512-XjH1AECxf0giL2V1aU8vKyRR2ppRUb5c0EvT7zuJTokQ74bNo52zOtghqdWIqrhUD79fo3x0WfKZdOqxF6LG1Q=="],
+
+    "isexe": ["isexe@2.0.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/isexe/-/isexe-2.0.0.tgz", {}, "sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw=="],
+
+    "jose": ["jose@6.2.18", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/jose/-/jose-6.2.18.tgz", {}, "sha512-doV4thUwgkrycJH4yLeqwTGIIZphHl+pk7CPReuMIhYhncmgzdko85MaCG4YQFTxqMFr1/oEH32tZuKKovcDEg=="],
+
+    "marked": ["marked@17.0.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/marked/-/marked-17.0.1.tgz", { "bin": { "marked": "bin/marked.js" } }, "sha512-boeBdiS0ghpWcSwoNm/jJBwdpFaMnZWRzjA6SkUMYb40SVaN1x7mmfGKp0jvexGcx+7y2La5zRZsYFZI6Qpypg=="],
+
+    "path-key": ["path-key@3.1.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/path-key/-/path-key-3.1.1.tgz", {}, "sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q=="],
+
+    "pkce-challenge": ["pkce-challenge@5.0.1", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/pkce-challenge/-/pkce-challenge-5.0.1.tgz", {}, "sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ=="],
+
+    "shebang-command": ["shebang-command@2.0.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/shebang-command/-/shebang-command-2.0.0.tgz", { "dependencies": { "shebang-regex": "^3.0.0" } }, "sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA=="],
+
+    "shebang-regex": ["shebang-regex@3.0.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/shebang-regex/-/shebang-regex-3.0.0.tgz", {}, "sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A=="],
+
+    "string-width": ["string-width@7.2.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/string-width/-/string-width-7.2.0.tgz", { "dependencies": { "emoji-regex": "^10.3.0", "get-east-asian-width": "^1.0.0", "strip-ansi": "^7.1.0" } }, "sha512-tsaTIkKW9b4N+AEj+SVA+WhJzV7/zMhcSu78mLKWSk7cXMOSHsBKFWUs0fWwq8QyK3MgJBQRX6Gbi4kYbdvGkQ=="],
+
+    "strip-ansi": ["strip-ansi@7.2.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/strip-ansi/-/strip-ansi-7.2.0.tgz", { "dependencies": { "ansi-regex": "^6.2.2" } }, "sha512-yDPMNjp4WyfYBkHnjIRLfca1i6KMyGCtsVgoKe/z1+6vukgaENdgGBZt+ZmKPc4gavvEZ5OgHfHdrazhgNyG7w=="],
+
+    "typescript": ["typescript@7.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/typescript/-/typescript-7.0.2.tgz", { "optionalDependencies": { "@typescript/typescript-aix-ppc64": "7.0.2", "@typescript/typescript-darwin-arm64": "7.0.2", "@typescript/typescript-darwin-x64": "7.0.2", "@typescript/typescript-freebsd-arm64": "7.0.2", "@typescript/typescript-freebsd-x64": "7.0.2", "@typescript/typescript-linux-arm": "7.0.2", "@typescript/typescript-linux-arm64": "7.0.2", "@typescript/typescript-linux-loong64": "7.0.2", "@typescript/typescript-linux-mips64el": "7.0.2", "@typescript/typescript-linux-ppc64": "7.0.2", "@typescript/typescript-linux-riscv64": "7.0.2", "@typescript/typescript-linux-s390x": "7.0.2", "@typescript/typescript-linux-x64": "7.0.2", "@typescript/typescript-netbsd-arm64": "7.0.2", "@typescript/typescript-netbsd-x64": "7.0.2", "@typescript/typescript-openbsd-arm64": "7.0.2", "@typescript/typescript-openbsd-x64": "7.0.2", "@typescript/typescript-sunos-x64": "7.0.2", "@typescript/typescript-win32-arm64": "7.0.2", "@typescript/typescript-win32-x64": "7.0.2" }, "bin": { "tsc": "bin/tsc" } }, "sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA=="],
+
+    "undici-types": ["undici-types@8.9.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/undici-types/-/undici-types-8.9.0.tgz", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+
+    "web-tree-sitter": ["web-tree-sitter@0.25.10", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/web-tree-sitter/-/web-tree-sitter-0.25.10.tgz", { "peerDependencies": { "@types/emscripten": "^1.40.0" }, "optionalPeers": ["@types/emscripten"] }, "sha512-Y09sF44/13XvgVKgO2cNDw5rGk6s26MgoZPXLESvMXeefBf7i6/73eFurre0IsTW6E14Y0ArIzhUMmjoc7xyzA=="],
+
+    "which": ["which@2.0.2", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/which/-/which-2.0.2.tgz", { "dependencies": { "isexe": "^2.0.0" }, "bin": { "node-which": "./bin/node-which" } }, "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA=="],
+
+    "zod": ["zod@4.4.3", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/zod/-/zod-4.4.3.tgz", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+  }
+}

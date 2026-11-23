@@ -1,0 +1,36 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+	"files": {
+		"includes": [
+			"src/**",
+			"test/**",
+			"opencode-plugin/src/**",
+			"opencode-plugin/test/**",
+			"opencode-plugin/tui.tsx",
+			"package.json",
+			"opencode-plugin/package.json",
+			"tsconfig.json",
+			"opencode-plugin/tsconfig.json",
+			"biome.json"
+		]
+	},
+	"formatter": { "indentStyle": "tab" },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"style": { "noNonNullAssertion": "error" }
+		}
+	},
+	"assist": { "actions": { "source": { "organizeImports": "on" } } },
+	"overrides": [
+		{
+			"includes": ["opencode-plugin/**"],
+			"linter": {
+				"rules": {
+					"a11y": { "noStaticElementInteractions": "off" }
+				}
+			}
+		}
+	]
+}

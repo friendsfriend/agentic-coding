@@ -1,0 +1,38 @@
+{
+	"name": "environment-mcp",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"environment-mcp": "./dist/cli.js"
+	},
+	"scripts": {
+		"start": "bun src/cli.ts",
+		"build": "bun build src/cli.ts --target=bun --outdir=dist --external @opentui/core && bun build src/ui/index.ts --target=bun --outdir=dist/ui --external @opentui/core && bun build src/operator/index.ts --target=bun --outdir=dist/operator --external @opentui/core",
+		"test": "bun run build && bun test",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/server": "2.4.0",
+		"@opentui/core": "0.7.0",
+		"zod": "4.4.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.6.4",
+		"@modelcontextprotocol/client": "2.4.0",
+		"@types/bun": "1.4.4",
+		"typescript": "7.0.2"
+	},
+	"exports": {
+		"./ui": {
+			"types": "./src/ui/index.ts",
+			"import": "./dist/ui/index.js"
+		},
+		"./operator-ui": {
+			"types": "./src/operator/index.ts",
+			"import": "./dist/operator/index.js"
+		}
+	}
+}

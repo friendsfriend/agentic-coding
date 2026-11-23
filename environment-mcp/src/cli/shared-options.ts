@@ -1,0 +1,58 @@
+import path from "node:path";
+
+export function parseSharedServerOptions(args: string[]) {
+	if (args[0] !== "--serve") throw new Error("Explicit shared mode required");
+	const values = new Map<string, string>();
+	for (let index = 1; index < args.length; index += 2) {
+		const key = args[index],
+			value = args[index + 1];
+		if (
+			!key ||
+			!value ||
+			![
+				"--config-dir",
+				"--state-dir",
+				"--clients",
+				"--port",
+				"--operator-port",
+				"--idle-timeout-sec",
+			].includes(key) ||
+			values.has(key)
+		)
+			throw new Error("Invalid shared server option");
+		values.set(key, value);
+	}
+	const configDir = values.get("--config-dir"),
+		directory = values.get("--state-dir"),
+		clients = values.get("--clients");
+	if (
+		!configDir ||
+		!directory ||
+		!clients ||
+		![configDir, directory, clients].every(path.isAbsolute)
+	)
+		throw new Error("Explicit absolute paths required");
+	const port = Number(values.get("--port") ?? 0),
+		operatorPort = Number(values.get("--operator-port") ?? 0),
+		idleTimeoutSec = Number(values.get("--idle-timeout-sec") ?? 0);
+	if (
+		[port, operatorPort].some(
+			(value) => !Number.isInteger(value) || value < 0 || value > 65535,
+		)
+	)
+		throw new Error("Invalid shared server port");
+	if (
+		!Number.isInteger(idleTimeoutSec) ||
+		idleTimeoutSec < 0 ||
+		idleTimeoutSec > 86_400
+	)
+		throw new Error("Invalid idle timeout");
+	return {
+		configDir,
+		directory,
+		clients,
+		port,
+		operatorPort,
+		idleTimeoutSec,
+	};
+}

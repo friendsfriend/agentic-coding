@@ -4,21 +4,59 @@
 - [x] 0.2 Define a strict versioned environment-native configuration and separate read-only v2 catalog adapter; retain bounded input/output and explicit repository authority.
 - [x] 0.3 Copy/adapt v1 shared/external/owned lifecycle decision rules with provenance and direct functional tests; advertise only inspection tools until mutation authority is implemented.
 - [x] 0.4 Verify real stdio MCP against a built artifact copied outside the checkout, independent install/build/type/lint/test gates, and document supported/deferred surfaces without changing active OpenCode bindings.
+- [x] 0.5 Refactor package/module/symbol naming around standalone MCP boundaries without changing existing CLI or tool behavior; verify the refactor before adding functionality.
 
 ## 1. Establish the v1 reference
 
-- [ ] 1.1 Trace v1 build/start/stop, target/profile selection, shared/external/owned dependencies, readiness and network resolution; record a source-backed MCP parity matrix and the smallest reusable service boundary.
-- [ ] 1.2 Trace the actual installer-space Mocked configuration and existing PostgreSQL mapping without disclosing secrets; select the integration seam and record authority/state compatibility before runtime changes.
+- [x] 1.1 Trace v1 build/start/stop, target/profile selection, shared/external/owned dependencies, readiness and network resolution; record a source-backed MCP parity matrix and the smallest reusable service boundary.
+- [x] 1.2 Trace the actual installer-space Mocked configuration and existing PostgreSQL mapping without disclosing secrets; select the integration seam and record authority/state compatibility before runtime changes.
 
 ## 2. Implement shared dependency semantics
 
-- [ ] 2.1 Add configured shared/external identity and connectivity descriptors through the selected existing environment boundary, keeping operator configuration distinct from model intent.
-- [ ] 2.2 Resolve/freeze readiness and network bindings for exact approval; revalidate before startup and refuse replacement, ambiguity or inspection failure without duplicate creation.
-- [ ] 2.3 Implement shared already-running reuse and readiness-only external behavior; retain owned-only cleanup authority and prevent stop/cancel/expiry from touching borrowed services/data.
-- [ ] 2.4 Expose the resulting v1-compatible start/build/test/status/log/stop behavior through MCP with authenticated scope/issuance fences and explicit retained wait/result semantics.
+- [x] 2.1 Add configured shared/external identity and connectivity descriptors through the selected existing environment boundary, keeping operator configuration distinct from model intent.
+- [x] 2.2 Resolve/freeze readiness and network bindings for exact approval; revalidate before startup and refuse replacement, ambiguity or inspection failure without duplicate creation.
+- [x] 2.3 Implement shared already-running reuse and readiness-only external behavior; retain owned-only cleanup authority and prevent stop/cancel/expiry from touching borrowed services/data.
+- [x] 2.4 Expose the resulting v1-compatible start/build/test/status/log/stop behavior through MCP with authenticated scope/issuance fences and explicit retained wait/result semantics.
 
 ## 3. Verify and try the requested application
 
-- [ ] 3.1 Add direct selection/identity/lifecycle rule tests and one lightweight public-boundary scenario covering reuse, refusal and shared-resource preservation; retain the full-suite before/after cost baseline.
-- [ ] 3.2 Supersede the old pending installer-space plans, present the new exact plans for approval, and exercise the user-requested Mocked build/start/log/readiness flow only after approval; record live results and any real blocker honestly.
-- [ ] 3.3 Update setup/parity/lifecycle documentation, run both packages' lint and whole-project type gates, the unfiltered v2 suite and strict OpenSpec validation; record verification limits without claiming unsupported runtime parity.
+- [x] 3.1 Add direct selection/identity/lifecycle rule tests and one lightweight public-boundary scenario covering reuse, refusal and shared-resource preservation; retain the full-suite before/after cost baseline.
+- [x] 3.2 Supersede the old pending installer-space plans, present the new exact plans for approval, and exercise the user-requested Mocked build/start/log/readiness flow only after approval; record live results and any real blocker honestly.
+- [x] 3.3 Update setup/parity/lifecycle documentation, run both packages' lint and whole-project type gates, the unfiltered v2 suite and strict OpenSpec validation; record verification limits without claiming unsupported runtime parity.
+- [x] 3.4 Add one capability registry with MCP and server-independent OpenTUI entry points, plus an architecture parity test; document standalone/OpenCode UI injection.
+- [x] 3.5 Implement the authenticated capability/UI transport and standalone OpenTUI, verify the real list/invoke path in a PTY, and add endpoint/health readiness plus file/env build-secret resolution.
+- [x] 3.6 Add a separate operator OpenTUI for exact inspect/approve/reject and recovery acknowledgement, plus an operator-only acknowledgement route; verify the approval flow in a PTY and keep the surface out of the agent capability registry.
+- [x] 3.7 Add a tested stdio-to-authenticated-HTTP MCP bridge for local host cutover without creating a second environment authority; document the OpenCode config and leave the existing entries unchanged pending explicit approval.
+- [x] 3.8 Add bounded per-scope operation history and in-memory redacted log retention after stop, with agent/UI capability parity and direct tests.
+- [x] 3.9 Add safe journal scope retention at capacity: evict only the oldest inactive scope with no owned resources, live review/issuance or inspection-required uncertainty; refuse otherwise.
+- [x] 3.10 Add opt-in idle cleanup that stops only owned apps after capability inactivity, exempts busy clients, preserves borrowed resources and retains failed cleanup for retry; document that scope closure/rebinding is still pending.
+- [x] 3.11 Add owned shell-process run targets with detached process groups, optional readyText/readyUrl, owned-ledger stop/logs, graceful shutdown cleanup and no restart adoption; test the real process adapter and service ledger path.
+- [x] 3.12 Keep unsupported targets visible with a sanitized executionIssue code and record the real v2 container-name-prefix migration count without changing the user configuration.
+- [x] 3.13 Supervise shell process groups so a controller crash kills the group, without adopting saved PIDs; test parent-death cleanup.
+- [x] 3.14 Add a private bounded diagnostics event log with allowlisted fields, rotation and an operator-only tail route; exclude credentials, plans and tool arguments.
+- [x] 3.15 Add a read-only configuration doctor with executable counts, sanitized executionIssue hints and no credentials/plans/paths.
+- [x] 3.16 Migrate the real v2 Compose container names to the environment-mcp group with backups, add declared installer-space envRefs/.env inputs, start the standalone shared service, and cut over the scoped OpenCode entry through the stdio bridge.
+- [x] 3.17 Add Podman build/compose providers and provider-specific single-container run support, with argv/fake-runtime tests and no live Podman claim.
+- [x] 3.18 Implement controller-wide shared-service records and leases: explicit infrastructure start mapping, identity verification on successful start, cross-scope dependent leases, owner-stop refusal and scope-close release.
+- [x] 3.19 Add native shell OTLP/HTTP JSON telemetry capture with bounded redaction, process environment injection and an env_telemetry read capability; verify the MCP surface through the live OpenCode bridge.
+- [x] 3.20 Merge Compose service x-secret-refs and target secretRefs into declared execution references with conflict refusal, and automatically stop shared services on the last lease release.
+- [x] 3.21 Inject Compose service secret references through a private override, add v2 TLS host-gateway collector telemetry with an ephemeral certificate, and verify the exact collector shape is executable.
+- [x] 3.22 Render bounded telemetry summaries and trace trees in the shared OpenTUI result view without adding a UI-only action or bypassing the capability registry.
+- [x] 3.23 Add safe Kubernetes helm-release-v1 execution: optional clusters.json/default devenv connection, bounded frozen chart digest, offline namespaced-manifest validation, fresh install, deployment readiness and exact revision/label uninstall; prove offline renders and fake-binary paths without claiming a live cluster.
+- [x] 3.24 Add multi-repository client authority: one token binds several canonical scopes, explicit/unique-app routing, ambiguous refusal, repository filters for status/history and partitioned cleanup, then cut OpenCode over to the single all-repository client.
+- [x] 3.25 Add network-only Compose bridge execution and label-verified networkFrom member attachment with empty-only cleanup, deterministic names and member-before-network shutdown ordering; reach 117/117 executable descriptors.
+- [x] 3.26 Expose v2 target prerequisites, refuse networkFrom admission before the exact bridge exists, and report declared secret-reference gaps in the doctor without values.
+- [x] 3.27 Auto-start approved network-only prerequisites during member dispatch when the bridge is absent, borrow an existing labelled bridge, and retain empty-only member cleanup.
+- [x] 3.28 Close clean idle repository scopes after owned cleanup, retain historical scope reads, and lazily reopen a fresh scope only for execution actions; keep busy/pending/inspection work open.
+- [x] 3.29 Add container-run TLS host-gateway telemetry with standard OTEL injection and CA mount, plus a selectable OpenTUI trace browser using the existing env_telemetry capability.
+- [x] 3.30 Perform disposable live Docker network/Compose verification: create an owned bridge, start a temporary Compose Redis service, attach the exact container, refuse removal while attached, and remove all resources.
+- [x] 3.31 Perform a disposable live Compose OpenTelemetry collector verification with synthetic OTLP JSON, generated TLS receiver configuration and complete cleanup.
+- [x] 3.32 Refuse executable admission when a declared secret reference is absent, before human review, without exposing the missing value.
+- [x] 3.33 Perform a disposable live kind/Helm verification: install a tiny chart, wait for Deployment availability, uninstall the exact release, and delete the cluster; fix Helm v4 list compatibility and extend readiness budget.
+- [x] 3.34 Add the known local Redis/Postgres/portal values to the private v2 `.env` with a backup, without modifying existing databases; leave external Eon/grid/hwportal/EFIX credentials unresolved.
+- [x] 3.35 Perform a disposable live Podman network/container verification with a locally loaded image, attached-container removal refusal and full cleanup; stop the machine afterward.
+- [x] 3.36 Perform disposable live Podman build and Compose verification, fix podman-compose ps service-name incompatibility, and clean up images, containers and networks.
+- [x] 3.37 Fill known local Eon MySQL/datasource, hwportal Postgres/API DB and grid mock values in the private v2 `.env`; retain only external EIV Jasypt/EFIX gaps.
+- [x] 3.38 Exercise live idle scope closure and rebinding through the shared server: wait for the reaper, verify observation keeps the scope closed, then execute and verify a fresh active scope.
+- [x] 3.39 Install, ready-wait and uninstall the real customer-external Helm chart on a disposable kind cluster using a local substitute image, dummy secret material and minimal CRDs; fix oversized install-output parsing by reading release metadata.
+- [x] 3.40 Add a local OpenCode 2.0.22 TUI plugin over the existing authenticated capability HTTP API, with a searchable grouped list, schema forms, result/trace views, two-column help and footer parity; verify it live in a disposable TUI and install the global plugin symlink.

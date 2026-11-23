@@ -21,8 +21,18 @@ Reference modules:
 
 Create a source-backed behavioral matrix before extending adapters. The user has selected a fresh `environment-mcp/` package, not an in-process adapter to either existing application. Copy/adapt the smallest required v1/v2 domain rules and runtime adapters into package-local modules, recording their origins; do not import old source, alias old packages, initialize a coding-agent host or proxy to an old host. Environment owners/scopes use environment-native records, not fake coding tasks. Missing behavior must be explicit, not relabeled parity.
 
-### Independent server standard and incremental cutover
+The user subsequently required that the configuration structure stay identical
+to v2. The standalone package now consumes `CONFIG_DIR/environments.json` plus
+`config.json` directly and normalizes that data internally; the earlier bespoke
+manifest survives only as an explicit package-fixture/inspection format. V2
+target descriptors map to the same execution model (shell command, Docker build
+with Dockerfile/build-secret templates, Compose file/source). The only additive
+section is `serviceBindings`, which supplies explicit borrowed Docker identity
+for targets that declare `requires`; it does not change any v2 app/target shape
+and is never inferred from a container name. Secrets use the v2 UI mechanism:
+`CONFIG_DIR/.env` parsed once, process fallback, declared references only.
 
+### Independent server standard and incremental cutover
 The new package owns its scripts, lockfile, TypeScript/Biome gates, tests, build and official MCP SDK dependency. Start with a strict versioned configuration for explicit repositories, applications, targets and shared/external/owned dependencies. Compatibility inspection of v2 definitions is a separately selected read-only reader; successfully listing them does not grant execution validity or import native state. Credentials remain references. Only implemented tools are advertised. Add new operator and shared-controller transports within this package before enabling mutations; catalog stdio must never grow into competing per-client execution authorities.
 
 Keep the old OpenCode entries and both existing source trees intact during construction. A standalone artifact must run with a fixture after copying only its built output outside the checkout. The first package milestone intentionally provides inspection/policy only and is not the final build/start migration. Existing controller startup-limit fix was separately verified (289 tests, 0 failures, 16.17s; both packages lint/type gates clean) and is not evidence that the new package executes live apps.
@@ -57,5 +67,24 @@ Leave the existing PostgreSQL and v1 durable state untouched. Develop/verify the
 
 ## Open Questions
 
-- Which smallest v1 service/domain boundary can be reused without pulling in its workflow host or assuming v1's broad credentials?
-- Which configured dependency declaration authoritatively maps the existing PostgreSQL to Mocked, including its network and readiness evidence? Resolve from v1 source/configuration rather than guessing from the container name.
+Resolved reference/seam questions are recorded in `environment-mcp/docs/architecture.md`.
+V1 Mocked includes shared infrastructure templates, but those templates do not
+declare an external network for borrowing the existing document-service project's
+PostgreSQL. The standalone server therefore uses explicit configured image/label/
+network/alias/readiness bindings rather than inferring authority from an occupied
+name/port. Pure rules and observation adapters are the package-local extraction
+boundary, not the v1 workflow-integrated composition root.
+
+The requested naming refactor places MCP registration in `src/mcp/`, service
+orchestration in `src/services/`, trusted schemas/readers in `src/configuration/`,
+legacy metadata import in `src/compatibility/`, pure rules/ports in `src/domain/`
+and concrete I/O in `src/adapters/`. Package identity is `environment-mcp`.
+Existing CLI/tool wire names and outputs were verified unchanged before the
+separate binding implementation increment.
+
+Read-only Docker observation and host-bound immutable dependency preparation/
+revalidation are implemented; they do not complete the exact human approval or
+durable issuance requirements. Those remain the next controller boundary before
+any build/start/stop tools can be exposed. First bindings deliberately support
+Docker only; other runtime bindings must be implemented explicitly, never guessed
+through a fallback adapter.
