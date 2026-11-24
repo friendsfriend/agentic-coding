@@ -7,7 +7,7 @@ import type { ExecutionPort } from "../src/domain/execution.ts";
 import { createExecutionService } from "../src/services/execution-service.ts";
 import { openOperationJournal } from "../src/services/operation-journal.ts";
 
-test("exact-approved command/compose execution is one-use, fails closed and stops only owned containers", async () => {
+test("direct command/compose execution is one-use, fails closed and stops only owned containers", async () => {
 	const root = fs.realpathSync(
 		fs.mkdtempSync(path.join(os.tmpdir(), "mcp-exec-")),
 	);
@@ -205,7 +205,6 @@ test("exact-approved command/compose execution is one-use, fails closed and stop
 		},
 	};
 	const journal = openOperationJournal(state, [repository]);
-	const operator = journal.operator();
 	const scope = journal.createScope("client", repository, "scope");
 	const service = createExecutionService(
 		manifest,
@@ -217,16 +216,6 @@ test("exact-approved command/compose execution is one-use, fails closed and stop
 	);
 	const agent = service.bind("client", scope.id);
 	const signal = new AbortController().signal;
-	const approve = (
-		operation: { id: string; digest: string; revision: number },
-		requestId: string,
-	) =>
-		operator.decide(operation.id, {
-			requestId,
-			digest: operation.digest,
-			revision: operation.revision,
-			decision: "approved",
-		});
 	try {
 		expect(() => manifest.apps[0]?.targets[0]?.executable).not.toThrow();
 		await expect(
@@ -242,7 +231,6 @@ test("exact-approved command/compose execution is one-use, fails closed and stop
 			signal,
 		);
 		expect((await agent.execute(build.id, signal)).receipt).toBeNull();
-		await approve(build, "approve-build");
 		expect(await agent.execute(build.id, signal)).toMatchObject({
 			receipt: null,
 		});
@@ -262,7 +250,6 @@ test("exact-approved command/compose execution is one-use, fails closed and stop
 			{ app: "api", target: "failed" },
 			signal,
 		);
-		await approve(failed, "approve-failed");
 		await agent.execute(failed.id, signal);
 		const failedReceipt = (await agent.wait(failed.id, 5, signal)).receipt;
 		expect(failedReceipt).toMatchObject({
@@ -277,10 +264,6 @@ test("exact-approved command/compose execution is one-use, fails closed and stop
 			{ app: "api", target: "mocked" },
 			signal,
 		);
-		const inspected = operator.inspect(run.id);
-		expect(inspected.plan).toContain("existing-mocked_devenv-local");
-		expect(inspected.plan).not.toContain(secret);
-		await approve(run, "approve-run");
 		await agent.execute(run.id, signal);
 		const started = await agent.wait(run.id, 5, signal);
 		expect(started.receipt).toMatchObject({
@@ -344,6 +327,18 @@ test("exact-approved command/compose execution is one-use, fails closed and stop
 		expect(JSON.stringify(agent.history())).not.toContain("plan");
 		// Borrowed PostgreSQL is never in the owned ledger or stop list.
 		expect(calls.some((call) => call.includes("postgres"))).toBe(false);
+		const next = structuredClone(manifest);
+		const command = next.apps[0]?.targets[0]?.executable;
+		if (command?.kind !== "command") throw new Error("Missing command fixture");
+		command.args = ["refreshed-command"];
+		service.refresh(next);
+		const refreshed = await agent.executeIntent(
+			"refreshed-build",
+			{ app: "api", target: "build" },
+			signal,
+		);
+		const completed = await agent.wait(refreshed.operation.id, 5, signal);
+		expect(completed.receipt?.output).toContain("refreshed-command");
 		const closed = agent.closeScope(scope.revision);
 		expect(agent.finishClose(closed.scope.revision, true).state).toBe("closed");
 	} finally {

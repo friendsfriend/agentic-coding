@@ -153,6 +153,7 @@ export function createRuntimeExecutor(
 			timeoutSec: number;
 			signal: AbortSignal;
 			redact: (value: string) => string;
+			onOutput?: (chunk: string) => void;
 		},
 	): Promise<RunResult> => {
 		const timeout = AbortSignal.timeout(options.timeoutSec * 1000);
@@ -178,13 +179,17 @@ export function createRuntimeExecutor(
 		let buffer = Buffer.alloc(0);
 		let truncated = false;
 		const collect = async (stream: ReadableStream<Uint8Array>) => {
+			const decoder = new TextDecoder();
 			for await (const chunk of stream) {
 				buffer = Buffer.concat([buffer, chunk]);
 				if (buffer.length > outputLimit) {
 					buffer = buffer.subarray(buffer.length - outputLimit);
 					truncated = true;
 				}
+				options.onOutput?.(decoder.decode(chunk, { stream: true }));
 			}
+			const tail = decoder.decode();
+			if (tail) options.onOutput?.(tail);
 		};
 		try {
 			await Promise.all([
@@ -539,15 +544,23 @@ export function createRuntimeExecutor(
 				truncated: result.truncated,
 			};
 		},
-		command: ({ executable, cwd, env, redact, signal }) =>
+		command: ({ executable, cwd, env, redact, onOutput, signal }) =>
 			run(executable.program, executable.args, {
 				cwd,
 				env,
 				timeoutSec: executable.timeoutSec,
 				signal,
 				redact,
+				onOutput,
 			}),
-		dockerBuild: async ({ executable, cwd, secrets, redact, signal }) => {
+		dockerBuild: async ({
+			executable,
+			cwd,
+			secrets,
+			redact,
+			onOutput,
+			signal,
+		}) => {
 			const provider = executable.provider ?? "docker";
 			const command = engine(provider);
 			if (!command)
@@ -589,6 +602,7 @@ export function createRuntimeExecutor(
 					timeoutSec: executable.timeoutSec,
 					signal,
 					redact,
+					onOutput,
 				});
 			} finally {
 				fs.rmSync(temp, { recursive: true, force: true });

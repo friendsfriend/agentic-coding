@@ -26,7 +26,6 @@ test("cleanup fences only report resources created under an issued operation and
 	fs.mkdirSync(state, { mode: 0o700 });
 	const journal = openOperationJournal(state, [repository]);
 	try {
-		const operator = journal.operator();
 		const scope = journal.createScope("client", repository, "scope");
 		const session = journal.bind("client", scope.id);
 		const operation = session.admit(
@@ -34,15 +33,9 @@ test("cleanup fences only report resources created under an issued operation and
 			JSON.stringify({ label: "owned" }),
 			digestPlan(scope, "owned"),
 		);
-		operator.decide(operation.id, {
-			requestId: "approve",
-			digest: operation.digest,
-			revision: operation.revision,
-			decision: "approved",
-		});
 		const issued = session.issue(operation.id, {
 			digest: operation.digest,
-			revision: operation.revision + 1,
+			revision: operation.revision,
 		});
 		if (!issued.permit) throw new Error("Missing fixture permit");
 		expect(session.owned()).toEqual([]);
@@ -95,15 +88,9 @@ test("cleanup fences only report resources created under an issued operation and
 				"second",
 			),
 		);
-		operator.decide(secondOperation.id, {
-			requestId: "approve-second",
-			digest: secondOperation.digest,
-			revision: secondOperation.revision,
-			decision: "approved",
-		});
 		const secondIssued = another.issue(secondOperation.id, {
 			digest: secondOperation.digest,
-			revision: secondOperation.revision + 1,
+			revision: secondOperation.revision,
 		});
 		if (!secondIssued.permit) throw new Error("Missing second permit");
 		another.claimOwned(secondIssued.permit, "web", [

@@ -119,9 +119,24 @@ export type Dialog = {
 	clear(): void;
 };
 
+export type PanelPresentation = "panel" | "fullscreen";
+
+/** The host-owned session panel input. A plugin panel renders inside
+ * `session.panel` and uses these controls for focus and fullscreen. */
+export type PanelInput = {
+	readonly name: string;
+	readonly sessionID: string;
+	readonly width: number;
+	readonly presentation: PanelPresentation;
+	readonly focused: boolean;
+	readonly focus: () => void;
+	readonly close: () => void;
+	readonly toggleFullscreen: () => void;
+};
+
 export type SlotClaim = {
 	readonly append: string;
-	readonly render: () => JSX.Element;
+	readonly render: (input: PanelInput) => JSX.Element;
 };
 
 export type Context = {
@@ -139,6 +154,16 @@ export type Context = {
 			register(page: Page): () => void;
 			navigate(destination: Destination): void;
 			current(): Route;
+		};
+		readonly panel: {
+			open(
+				name: string,
+				options?: { readonly presentation?: PanelPresentation },
+			): boolean;
+			close(): void;
+			current():
+				| { readonly name: string; readonly sessionID: string }
+				| undefined;
 		};
 		slot(claim: SlotClaim): () => void;
 	};

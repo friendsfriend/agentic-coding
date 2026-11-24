@@ -9,7 +9,7 @@ import {
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { createHttpUiCapabilityApi } from "../src/ui/http-capability-api.ts";
 
-test("the copied standalone CLI shares private state and publishes only a separate operator capability", async () => {
+test("the copied standalone CLI shares private state and one direct capability surface", async () => {
 	const root = fs.realpathSync(
 		fs.mkdtempSync(path.join(os.tmpdir(), "mcp-shared-")),
 	);
@@ -90,13 +90,6 @@ test("the copied standalone CLI shares private state and publishes only a separa
 	const bridge = new Client({ name: "bridge-fixture", version: "1.0.0" });
 	try {
 		const url = await ready.promise;
-		const accessFile = path.join(directory, "operator-access.json");
-		expect(fs.statSync(accessFile).mode & 0o077).toBe(0);
-		const access = JSON.parse(fs.readFileSync(accessFile, "utf8")) as {
-			url: string;
-			token: string;
-		};
-		expect(access.token).not.toBe(token);
 		await client.connect(
 			new StreamableHTTPClientTransport(new URL(url), {
 				requestInit: { headers: { authorization: `Bearer ${token}` } },
@@ -105,31 +98,33 @@ test("the copied standalone CLI shares private state and publishes only a separa
 		const ui = createHttpUiCapabilityApi({ url, token });
 		const actions = await ui.list();
 		const tools = await client.listTools();
-		expect(actions.map((action) => action.name)).toEqual(
-			tools.tools.map((tool) => tool.name),
-		);
+		const names = tools.tools.map((tool) => tool.name);
+		expect(actions.map((action) => action.name)).toEqual(names);
+		expect(names).toContain("env_execute");
+		expect(names).toContain("env_refresh");
+		expect(await ui.invoke("env_refresh", {})).toMatchObject({
+			refreshed: true,
+			authorizationChanged: false,
+		});
+		expect(names).not.toContain("env_run");
+		expect(names).not.toContain("env_prepare_dependencies");
 		expect(await ui.invoke("env_list", { limit: 1 })).toMatchObject({
 			mode: "inspection-only",
 			executionAvailable: true,
 		});
-		const diagnosticsResponse = await fetch(
-			`${access.url}/operator/diagnostics?tail=20`,
-			{ headers: { authorization: `Bearer ${access.token}` } },
-		);
-		expect(diagnosticsResponse.status).toBe(200);
-		const diagnosticEvents = (await diagnosticsResponse.json()) as {
-			events: { event: string; action?: string }[];
-		};
-		expect(diagnosticEvents.events).toEqual(
+		const diagnosticsFile = path.join(directory, "diagnostics.jsonl");
+		const events = fs
+			.readFileSync(diagnosticsFile, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { event: string; action?: string });
+		expect(events).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ event: "startup" }),
 				expect.objectContaining({ event: "capability", action: "env_list" }),
 			]),
 		);
-		expect(JSON.stringify(diagnosticEvents)).not.toContain(token);
-		expect(JSON.stringify(diagnosticEvents)).not.toContain(access.token);
-		const diagnosticsFile = path.join(directory, "diagnostics.jsonl");
-		expect(fs.statSync(diagnosticsFile).mode & 0o077).toBe(0);
+		expect(JSON.stringify(events)).not.toContain(token);
 		await bridge.connect(
 			new StdioClientTransport({
 				command: process.execPath,
@@ -153,7 +148,7 @@ test("the copied standalone CLI shares private state and publishes only a separa
 		);
 		expect(
 			(await bridge.listTools()).tools.map((tool) => tool.name).sort(),
-		).toEqual(tools.tools.map((tool) => tool.name).sort());
+		).toEqual(names.sort());
 		expect(
 			(
 				await bridge.callTool({
@@ -162,26 +157,10 @@ test("the copied standalone CLI shares private state and publishes only a separa
 				})
 			).structuredContent,
 		).toMatchObject({ mode: "inspection-only", executionAvailable: true });
-		const result = await client.callTool({
-			name: "env_prepare_dependencies",
-			arguments: { app: "api", target: "mocked", requestId: "review" },
-		});
-		expect(result.isError).not.toBe(true);
-		expect(result.structuredContent).toMatchObject({
-			state: "awaiting-approval",
-			kind: "dependency-bindings",
-		});
 		expect(
 			(
 				await fetch(`${new URL(url).origin}/capabilities`, {
 					headers: { authorization: `Bearer ${"x".repeat(64)}` },
-				})
-			).status,
-		).toBe(401);
-		expect(
-			(
-				await fetch(`${access.url}/operator/operations`, {
-					headers: { authorization: `Bearer ${token}` },
 				})
 			).status,
 		).toBe(401);
@@ -192,8 +171,9 @@ test("the copied standalone CLI shares private state and publishes only a separa
 		await stderr;
 		expect(await stdout).toBe("");
 		expect(diagnostics).not.toContain(token);
-		expect(diagnostics).not.toContain(access.token);
-		expect(fs.existsSync(accessFile)).toBe(false);
+		expect(fs.existsSync(path.join(directory, "operator-access.json"))).toBe(
+			false,
+		);
 		expect(fs.existsSync(path.join(directory, "controller.lock"))).toBe(false);
 	} finally {
 		await client.close();

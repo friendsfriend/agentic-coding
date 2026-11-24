@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { EnvironmentPage } from "./EnvironmentPage.tsx";
+import { EnvironmentPage } from "./environments/EnvironmentPage.tsx";
 import type { Context, PluginDefinition, Route } from "./opencode-types.ts";
 
 const previous: { route: Route } = { route: { type: "home" } };
@@ -19,6 +19,18 @@ function close(context: Context) {
 		return;
 	}
 	context.ui.router.navigate(route);
+}
+
+/** In a session, open the environment in the host's right-hand panel. Outside
+ * a session there is no panel host, so fall back to the full-screen route. */
+function openEnvironment(context: Context) {
+	const current = context.ui.router.current();
+	if (
+		current.type === "session" &&
+		context.ui.panel.open("environment", { presentation: "panel" })
+	)
+		return;
+	open(context);
 }
 
 export const EnvironmentPlugin: PluginDefinition = {
@@ -44,11 +56,24 @@ export const EnvironmentPlugin: PluginDefinition = {
 							bind: "<leader>v",
 							slash: { name: "environment", aliases: ["env"] },
 							palette: true,
-							run: () => open(context),
+							run: () => openEnvironment(context),
 						},
 					],
 				}));
 				return null;
+			},
+		});
+		context.ui.slot({
+			append: "session.panel",
+			render: (input) => {
+				if (input.name !== "environment") return null;
+				return (
+					<EnvironmentPage
+						context={context}
+						panel={input}
+						onClose={input.close}
+					/>
+				);
 			},
 		});
 		context.ui.slot({

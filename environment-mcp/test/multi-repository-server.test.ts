@@ -51,7 +51,6 @@ test("a shared client can bind several repositories with partitioned scopes", as
 		directory: state,
 		clients,
 		port: 0,
-		operatorPort: 0,
 		idleTimeoutSec: 0,
 	});
 	const api = createHttpUiCapabilityApi({ url: server.url, token });

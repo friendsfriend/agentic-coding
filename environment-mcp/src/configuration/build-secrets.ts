@@ -3,7 +3,7 @@ import type { Executable } from "../domain/execution.ts";
 import type { SecretSource } from "./secrets.ts";
 
 /** File-based build credentials follow v1/v2: regular nonlinked file, bounded,
- * read without following symlinks, never serialized into an approval plan. */
+ * read without following symlinks, never serialized into an execution plan. */
 export function readBuildSecretFile(file: string) {
 	if (!file.startsWith("/") || /[\0\r\n]/.test(file))
 		throw new Error("build-secret-file-invalid");

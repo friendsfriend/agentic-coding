@@ -14,7 +14,6 @@ export function parseSharedServerOptions(args: string[]) {
 				"--state-dir",
 				"--clients",
 				"--port",
-				"--operator-port",
 				"--idle-timeout-sec",
 			].includes(key) ||
 			values.has(key)
@@ -33,13 +32,8 @@ export function parseSharedServerOptions(args: string[]) {
 	)
 		throw new Error("Explicit absolute paths required");
 	const port = Number(values.get("--port") ?? 0),
-		operatorPort = Number(values.get("--operator-port") ?? 0),
 		idleTimeoutSec = Number(values.get("--idle-timeout-sec") ?? 0);
-	if (
-		[port, operatorPort].some(
-			(value) => !Number.isInteger(value) || value < 0 || value > 65535,
-		)
-	)
+	if (!Number.isInteger(port) || port < 0 || port > 65535)
 		throw new Error("Invalid shared server port");
 	if (
 		!Number.isInteger(idleTimeoutSec) ||
@@ -52,7 +46,6 @@ export function parseSharedServerOptions(args: string[]) {
 		directory,
 		clients,
 		port,
-		operatorPort,
 		idleTimeoutSec,
 	};
 }

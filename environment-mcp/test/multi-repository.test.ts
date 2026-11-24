@@ -101,36 +101,11 @@ test("one client routes unambiguous apps across repository scopes and refuses am
 			},
 			async shutdown() {},
 		} as unknown as ExecutionSession;
-		const operations = {
-			async admit(_request: string, intent: { app: string }) {
-				calls.push(`${repository}:prepare:${intent.app}`);
-				return { operation: { id: `${repository}:prepare:${intent.app}` } };
-			},
-			read() {
-				return {};
-			},
-			history() {
-				return {
-					operations: [
-						{ createdAt: repository === first ? 1 : 2, id: repository },
-					],
-					total: 1,
-					nextOffset: null,
-				};
-			},
-			sharedServices: () => [],
-			sharedService: () => null,
-			issue: async () => ({}),
-			complete: async () => ({}),
-			closeScope: () => ({}),
-			owned: () => [],
-		} as unknown as RepositoryBinding["operations"];
 		return {
 			repository,
 			scopeId: scope.id,
 			scope,
 			execution,
-			operations,
 		};
 	};
 	const bindings = [

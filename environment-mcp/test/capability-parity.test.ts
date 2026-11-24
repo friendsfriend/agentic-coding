@@ -9,11 +9,6 @@ import { mcpToolSurface } from "../src/mcp/tool-surface.ts";
 import { createUiCapabilityApi } from "../src/ui/capability-api.ts";
 
 const fakeCatalog = { list: () => ({ mode: "fixture" }) } as never;
-const fakeOperations = {
-	admit: async () => ({ id: "operation" }),
-	read: async () => ({ id: "operation" }),
-	history: async () => ({ operations: [], total: 0, nextOffset: null }),
-} as never;
 const fakeExecution = {
 	admit: async () => ({ id: "operation" }),
 	execute: async () => ({ receipt: null }),
@@ -27,8 +22,25 @@ const fakeExecution = {
 function fixture(): EnvironmentCapabilities {
 	return createCapabilities({
 		catalog: fakeCatalog,
-		operations: fakeOperations,
+		repositories: ["/fixture/repo"],
 		execution: fakeExecution,
+		git: {
+			status: async () => [],
+			changes: async (repository) => ({
+				repository,
+				changes: [],
+				truncated: false,
+			}),
+			diff: async (repository, path) => ({
+				repository,
+				path,
+				diff: "",
+				binary: false,
+				truncated: false,
+				note: "no-change",
+			}),
+		},
+		refresh: () => ({ refreshed: true }),
 	});
 }
 
@@ -41,6 +53,7 @@ test("MCP and UI expose exactly the same capabilities from one registry", async 
 	expect(mcp.map((tool) => tool.name)).toEqual(names);
 	expect(actions.map((action) => action.name)).toEqual(names);
 	expect(new Set(names).size).toBe(names.length);
+	expect(names).toContain("env_refresh");
 	expect(names.some((name) => /approve|decision/.test(name))).toBe(false);
 	for (const tool of mcp) {
 		const capability = capabilities
@@ -95,4 +108,44 @@ test("entry points do not carry their own action tables", () => {
 			"utf8",
 		),
 	).toContain("capabilities.list()");
+});
+
+test("git status is limited to the authenticated repository allowlist", async () => {
+	const capabilities = fixture();
+	const signal = new AbortController().signal;
+	await expect(
+		capabilities.invoke(
+			"env_git",
+			{ repositories: ["/fixture/repo"] },
+			{ signal },
+		),
+	).resolves.toEqual({ repositories: [] });
+	await expect(
+		capabilities.invoke(
+			"env_git",
+			{ repositories: ["/fixture/other"] },
+			{ signal },
+		),
+	).rejects.toMatchObject({ code: "repository-unauthorized" });
+	await expect(
+		capabilities.invoke(
+			"env_git_changes",
+			{ repository: "/fixture/repo" },
+			{ signal },
+		),
+	).resolves.toMatchObject({ changes: [], truncated: false });
+	await expect(
+		capabilities.invoke(
+			"env_git_diff",
+			{ repository: "/fixture/repo", path: "src/a.ts" },
+			{ signal },
+		),
+	).resolves.toMatchObject({ path: "src/a.ts", diff: "" });
+	await expect(
+		capabilities.invoke(
+			"env_git_changes",
+			{ repository: "/fixture/other" },
+			{ signal },
+		),
+	).rejects.toMatchObject({ code: "repository-unauthorized" });
 });

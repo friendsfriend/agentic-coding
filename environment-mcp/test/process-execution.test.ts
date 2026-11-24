@@ -7,7 +7,7 @@ import type { ExecutionPort, ProcessHandle } from "../src/domain/execution.ts";
 import { createExecutionService } from "../src/services/execution-service.ts";
 import { openOperationJournal } from "../src/services/operation-journal.ts";
 
-test("approved shell run keeps process ownership, logs and stop in the scope", async () => {
+test("direct shell run keeps process ownership, logs and stop in the scope", async () => {
 	const root = fs.realpathSync(
 		fs.mkdtempSync(path.join(os.tmpdir(), "mcp-process-")),
 	);
@@ -108,7 +108,6 @@ test("approved shell run keeps process ownership, logs and stop in the scope", a
 		},
 	};
 	const journal = openOperationJournal(state, [repository]);
-	const operator = journal.operator();
 	const scope = journal.createScope("client", repository, "scope");
 	const service = createExecutionService(
 		manifest,
@@ -125,12 +124,6 @@ test("approved shell run keeps process ownership, logs and stop in the scope", a
 			{ app: "web", target: "dev" },
 			signal,
 		);
-		operator.decide(operation.id, {
-			requestId: "approve-process",
-			digest: operation.digest,
-			revision: operation.revision,
-			decision: "approved",
-		});
 		await agent.execute(operation.id, signal);
 		const receipt = (await agent.wait(operation.id, 5, signal)).receipt;
 		expect(receipt).toMatchObject({

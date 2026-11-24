@@ -137,6 +137,9 @@ test("copied build speaks real stdio MCP outside the checkout with no sibling pa
 		await client.connect(transport);
 		expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
 			"env_list",
+			"env_git_changes",
+			"env_git_diff",
+			"env_git",
 		]);
 		const result = await client.callTool({
 			name: "env_list",

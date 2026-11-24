@@ -5,12 +5,13 @@ Uses Bun, the official MCP SDK, Zod and the OpenTUI package. No Pi, workflow
 engine, model, UI source, native agent state or runtime source import from
 `agentic-coding/` or `agentic-coding-v2/`.
 
-**Status: catalog, exact dependency review, approved command/Compose/container/shell-process/Helm execution, Docker and Podman providers (Podman build, Compose, network and container run live-verified), multi-repository client authority, network-only Compose bridges with automatic network-only prerequisite start and `networkFrom` membership, controller-wide shared-service leases with automatic last-release cleanup, native shell, Compose collector and container-run OTLP telemetry, telemetry trace browser, endpoint/health readiness, borrowed-service safety, capability-parity agent OpenTUI, a separate operator approval OpenTUI, recovery acknowledgement, bounded operation/log history, safe scope retention, opt-in owned-app idle cleanup with clean scope closure and lazy rebinding, crash-safe process supervision, durable controller diagnostics and an OpenCode stdio bridge are implemented; saved-PID adoption is intentionally unsupported; external secret values and real-chart cluster images remain operator-supplied. Kubernetes Helm and Podman paths were exercised against disposable live environments; the real customer chart was installed/readied/uninstalled with a local substitute image and minimal CRDs, not its private application image.**
-Read-only stdio advertises `env_list`. Shared HTTP mode additionally advertises
-`env_prepare_dependencies`, `env_execute`, `env_run`, `env_operation`,
-`env_status`, `env_stop` and `env_logs`, backed by private state and a separate
-human approval interface. Execution requires exact human approval, is one-use,
-and only containers created by the issued operation enter cleanup. Borrowed
+**Status: catalog, direct command/Compose/container/shell-process/Helm execution, Docker and Podman providers (Podman build, Compose, network and container run live-verified), multi-repository client authority, network-only Compose bridges with automatic network-only prerequisite start and `networkFrom` membership, controller-wide shared-service leases with automatic last-release cleanup, native shell, Compose collector and container-run OTLP telemetry, telemetry trace browser, endpoint/health readiness, borrowed-service safety, capability-parity agent OpenTUI, bounded operation/log history, safe scope retention, opt-in owned-app idle cleanup with clean scope closure and lazy rebinding, crash-safe process supervision, durable controller diagnostics and an OpenCode stdio bridge are implemented; saved-PID adoption is intentionally unsupported; external secret values and real-chart cluster images remain externally supplied. Kubernetes Helm and Podman paths were exercised against disposable live environments; the real customer chart was installed/readied/uninstalled with a local substitute image and minimal CRDs, not its private application image.**
+Read-only stdio advertises `env_list`, `env_git`, `env_git_changes` and
+`env_git_diff`. Shared HTTP mode additionally
+advertises `env_execute`, `env_operation`, `env_status`, `env_stop`, `env_wait`, `env_refresh`,
+`env_telemetry` and `env_logs`, backed by private state. Execution is direct and
+idempotent by request id; only resources created by the issued operation enter
+cleanup. Borrowed
 PostgreSQL/Redis observations never do. Build/test command targets, Compose run targets and
 Compose collector telemetry, Kubernetes Helm release execution and network-only
 Compose bridges with `networkFrom` membership are supported. The
@@ -202,8 +203,8 @@ declared process observation, not database or application health. Only Docker
 bindings are supported in this increment; incompatible service runtimes refuse.
 
 A service binding may declare `start: {app, target}`. When the service is absent,
-the operator starts that configured infrastructure target through the normal
-`env_execute`/approval/`env_run` path. Once its container identity matches the
+start that configured infrastructure target through the normal direct
+`env_execute` path. Once its container identity matches the
 binding, the controller records a controller-wide shared service. Dependent run
 operations acquire leases at dispatch. `env_stop` on the service owner refuses
 while any lease exists; releasing the last dependent lease stops the exact started containers and
@@ -219,7 +220,7 @@ mounts, arguments and health logs. Error/invalid/oversized responses are unknown
 not absence; only a Docker 404 is absent. Shared absence returns an explicit
 start-required refusal until the mutation controller exists; external absence
 refuses. Owned dependencies cannot gain ownership through this borrowed path.
-These preparations are **not durable approvals or dispatch permits**. No container
+These preparations are **not durable execution permits**. No container
 is started, attached, stopped or adopted, and no existing service configuration
 or credentials are modified. A matching network alias is observed metadata, not
 an independently verified DNS/connectivity or SQL ownership proof.
@@ -250,7 +251,7 @@ An executable target adds a descriptor:
 BuildKit build secrets support the v2 modes directly: a template with declared
 `.env`/process references, an absolute nonlinked file of at most 64 KiB, or a
 declared environment reference. File/template contents are resolved only at
-dispatch and never enter the approval plan or receipts; they are redacted from
+dispatch and never enter the execution plan or receipts; they are redacted from
 build output. `command` runs a fixed absolute program with fixed argv (never a
 shell string), an optional declared environment-reference map and a bounded
 timeout. It covers
@@ -289,7 +290,7 @@ The v2 `endpoints`/`endpointServices` fields are read directly when present:
 Endpoints must be explicit `http`/`https` IP-loopback URLs without credentials or
 fragments; each needs one service selector naming a service in the Compose source.
 If endpoints are declared but the runtime cannot probe them, readiness is
-`unknown`, never running-only success. Compose files may live under the operator's
+`unknown`, never running-only success. Compose files may live under the user's
 private configuration root; the canonical path is frozen into the review. No shell
 string, caller command, model-authored argv or arbitrary environment is accepted.
 Missing referenced environment variables refuse before issuance; their values are
@@ -305,13 +306,13 @@ The pure lifecycle decision currently implements these rules, **not I/O**:
 
 | Lifecycle | Ready matching existing service | Absent service | Automatic app cleanup |
 | --- | --- | --- | --- |
-| shared | Reuse without taking cleanup ownership | Start requires later approval/adapter | Never stop shared service |
+| shared | Reuse without taking cleanup ownership | Start requires a configured start target/adapter | Never stop shared service |
 | external | Reuse without lifecycle mutations | Refuse | Never |
-| owned | Reuse only with current controller ownership | Start requires later approval/adapter | Only after last reference |
+| owned | Reuse only with current controller ownership | Start requires a configured start target/adapter | Only after last reference |
 
 Unready matching services wait for readiness; unknown observation, mismatched
 identity or foreign ownership of an owned service refuses. A decision is not
-proof of identity/readiness, a lease, an approval or a live cleanup capability.
+proof of identity/readiness, a lease, an execution permit or a live cleanup capability.
 
 ## Configuration doctor
 
@@ -377,8 +378,7 @@ bun dist/cli.js --ui \
 The token environment variable is the same client key configured in
 `clients.json`; only loopback HTTP URLs are accepted. Prefer a distinct client
 entry/token for the human UI so its scope and receipts do not race an agent's
-scope. The TUI can prepare and dispatch agent-capability actions; it is not the
-approval interface. The TUI lists the capabilities
+scope. The TUI executes agent-capability actions directly. It lists the capabilities
 from the server, renders the action's JSON-Schema fields, invokes the same registry
 handler MCP uses, and shows the structured result. `q` quits, `r` refreshes,
 `Esc` returns/cancels, and Enter submits on the last field. `--ui` requires
@@ -387,26 +387,31 @@ without `node_modules` still runs stdio/shared MCP but not the TUI.
 
 `src/ui/opentui.ts` exports `mountEnvironmentTui(renderer, api, {mount, onQuit})`
 for an OpenCode-hosted OpenTUI root, and `runEnvironmentTui` for the standalone
-host. `bun run build` also emits `dist/ui/index.js` and `dist/operator/index.js`, exposed
-as `environment-mcp/ui` and `environment-mcp/operator-ui`, so a plugin can import
-the controller/view without the CLI. If the plugin cannot expose a `CliRenderer`, it can use the exported
+host. `bun run build` also emits `dist/ui/index.js`, exposed as
+`environment-mcp/ui`, so a plugin can import the controller/view without the CLI. If the plugin cannot expose a `CliRenderer`, it can use the exported
 `createEnvironmentUiController` with `createHttpUiCapabilityApi` and render the
 same states with its own OpenTUI components. The renderer imports only the UI
 contract; it never imports MCP registration, listeners or service construction. `test/capability-parity.test.ts`
 checks registry/MCP/UI names and schemas; the shared-server scenario checks the
-real MCP tool list against the HTTP UI list. Operator approval is intentionally a
-separate human-only surface, not an agent action.
+real MCP tool list against the HTTP UI list. Execution is direct; there is no
+approval surface or approval capability.
 
 ### OpenCode TUI plugin
 
-`opencode-plugin/` is a local OpenCode 2.0.22 TUI plugin that renders the same
-`UiCapabilityApi` states with Solid/OpenTUI components. It registers a
-full-screen `environment` route, `/environment`/`/env`, `<leader>v`, and a
-clickable home-footer chip, with a searchable grouped capability list, schema
-forms, result scrolling, telemetry trace drill-down, a two-column `?` help
-dialog and a special-key footer. It reads
-the same authenticated loopback URL and client token file; it never constructs
-MCP registration, listeners, journals, runtime adapters or the operator surface.
+`opencode-plugin/` is a local OpenCode 2.0.22 TUI plugin that presents the
+environment inventory and execution surfaces, not the MCP tool list. It
+registers a full-screen `environment` route, `/environment`/`/env`,
+`<leader>v`, and a clickable home-footer chip. The shell has Applications,
+Libraries, Infrastructure, History and Services tabs; the inventory shows
+glyph target summaries (`⚒` build, `✓` test, `▶` run), git branch and
+modified/added/deleted counts with ahead/behind, and current run status;
+application detail with git/status, targets, owned resources and recent
+receipts; a target picker; a live operation view with build steps/logs; and
+owned logs and telemetry. An authenticated SSE invalidation stream updates
+status/history/git while the panel is open; 15s/30s reconciliation polling
+covers missed events and external changes. Build/test/run execute directly and
+stream progress before showing the settled receipt. The plugin never constructs MCP registration, listeners, journals,
+runtime adapters or an approval surface.
 
 Install locally by linking the package where OpenCode discovers local plugins:
 
@@ -421,9 +426,12 @@ Open with `/environment`, `/env`, or `<leader>v` (default `ctrl+x v`). Override
 plugin options. The plugin package has its own type-check/test dependencies;
 `bun run --cwd opencode-plugin type-check` and `bun run --cwd opencode-plugin test`
 are the focused gates, while the server package's lint/type-check/test also
-cover its sources. Forms support the flat scalar schemas the registry declares;
-nested schemas are reported unsupported. `requestId` fields are prefilled with a
-fresh UUID.
+cover its sources. The adapter generates a fresh `requestId` for each exact
+review. The current capability registry does not yet expose git
+branch/fetch/worktree operations, container stats, Kubernetes cluster
+inspection, provider change requests/issues/pipelines, or app/task CRUD; those
+screens are intentionally not claimed until the corresponding capabilities
+exist.
 
 ## Read-only v2 catalog compatibility
 
@@ -488,11 +496,10 @@ bun dist/cli.js --serve \
   --clients /absolute/clients.json [--idle-timeout-sec 1800]
 ```
 
-Optional `--port` and `--operator-port` pin listener ports; otherwise both use
-ephemeral numeric-loopback ports. Optional `--idle-timeout-sec N` stops owned
+Optional `--port` pins the listener port; otherwise an ephemeral
+numeric-loopback port is used. Optional `--idle-timeout-sec N` stops owned
 apps and closes clean scopes after N seconds without any capability use; it is
-disabled by default. A busy operation, pending approval or inspection-required
-operation keeps the scope open. Observation of a closed scope never reopens it;
+disabled by default. A busy, in-flight or inspection-required operation keeps the scope open. Observation of a closed scope never reopens it;
 the next execution action creates a fresh scope, while historical operation,
 history, log and telemetry reads remain available. Borrowed services are never
 touched. The HTTP MCP endpoint is `/mcp`. Client keys
@@ -500,13 +507,6 @@ bind to fixed principals and one or more repository scopes at startup, never to
 caller-authored owners or automatic OpenCode session IDs. This is local bearer auth,
 not OAuth or a remote deployment. Compatibility metadata input is not accepted
 as a shared-controller manifest. No application starts automatically.
-
-The separate operator capability is freshly generated into an exclusive
-mode-0600 `STATE_DIR/operator-access.json`, containing `{url, token}`. Only its
-path is printed; never share its contents with agents. Existing access files are
-refused, not overwritten. Agent keys cannot authenticate to the operator API,
-and the operator key cannot authenticate to MCP. Host/Origin checks, bounded
-requests/in-flight work and no-store headers apply to both listeners.
 
 ### Agent MCP tools in shared mode
 
@@ -523,17 +523,24 @@ requests/in-flight work and no-store headers apply to both listeners.
   this scope: state, revision, occurrence time, inspection marker and whether a
   result exists. It omits frozen plans, borrowed identities, credentials and
   resource handles. Use `env_operation` for one receipt.
-- `env_prepare_dependencies({requestId, app, target})` resolves only this scope's
-  declared dependencies and durably captures their original ready identity/
-  network bindings for human review. Reused request IDs return the same receipt;
-  changed intent under one ID refuses. No approval, issuance or runtime mutation.
-- `env_execute({requestId, app, target})` prepares an exact executable review for
-  one configured target. Admission never executes; approval alone never executes.
-- `env_run({operationId})` consumes one current approval and dispatches once.
-  Command exits are reported exactly (nonzero = failed). Compose startup claims
-  the containers it created and reports `starting` until endpoint, Docker health or
-  running readiness passes (bounded 60 s). Each receipt names `readinessSource`;
-  running-only is not claimed as application health.
+- `env_execute({requestId, app, target})` admits and dispatches one configured
+  target directly. The same request id and intent returns the same operation; it
+  never re-runs. Command exits are reported exactly (nonzero = failed). Compose
+  startup claims the containers it created and reports `starting` until endpoint,
+  Docker health or running readiness passes (bounded 60 s). Each receipt names
+  `readinessSource`; running-only is not claimed as application health.
+- `env_git({repositories?})` reads bounded branch, dirty-file, ahead/behind and
+  detached-HEAD status for the authenticated repositories. It is read-only and
+  never fetches, checks out, stages or commits.
+- `env_git_changes({repository})` lists bounded changed paths with staged/
+  worktree status, relative to the application repository; paths outside it
+  are omitted.
+- `env_git_diff({repository, path})` returns one bounded unified diff for a path
+  from the current change list. Untracked regular files are diffed against
+  `/dev/null`; binaries, directories and symlinks are refused. It is read-only
+  and does not fetch, check out, stage or commit.
+- `env_wait({operationId, waitSec?})` waits up to 120 seconds for an issued
+  operation to settle and returns its current receipt.
 - `env_status({})` reads scope state and owned container IDs. Borrowed services
   never appear and are never stoppable through this surface.
 - `env_stop({app})` removes only containers or stops only shell-process groups
@@ -544,84 +551,63 @@ requests/in-flight work and no-store headers apply to both listeners.
   bounded redacted log window in memory, so a later read returns
   `historical: true` and `retainedAt` for this controller lifetime. It is not
   durable across restart.
-- `env_operation({operationId})` reads this scope's immediate durable receipt.
-  It is not a poll loop, implicit retry or resource capability.
+- `env_operation({operationId, progressOffset?})` reads this scope's immediate
+  durable receipt, or live redacted output for an issued operation. Pass the
+  returned offset to receive only newer output; `reset` replaces the local
+  buffer. Live output is in-memory and bounded, and is not a poll loop,
+  implicit retry or resource capability.
 
-### Separate human operator OpenTUI
+### Execution and diagnostics
 
-The approval surface has its own OpenTUI and never enters the agent capability
-registry:
-
-```sh
-bun dist/cli.js --operator-ui \
-  --access-file /absolute/private-state/operator-access.json
-# or: --url http://127.0.0.1:PORT --token-env ENV_OPERATOR_KEY
-```
-
-It lists operator operations, inspects the exact frozen plan, submits an exact
-digest/revision-fenced approve/reject decision, and can acknowledge an
-inspection-required interrupted revision. The access file must be mode-0600 and
-owned by the current user. `bun run build` exposes the same client/controller/view
-as `environment-mcp/operator-ui` for embedding. It is not an MCP tool and must
-never be handed to an agent.
-
-### Separate human operator API
-
-- `GET /operator/operations?offset=0&limit=20`: bounded summaries, not frozen plans.
-- `GET /operator/operations/<id>`: inspect one exact immutable review snapshot.
-- `POST /operator/operations/<id>/decision`: JSON
-  `{requestId, digest, revision, decision: "approved" | "rejected"}`. Decisions
-  are exact digest/revision-fenced and content-bound; replay returns the original
-  decision receipt, not a new current approval. Use inspection to read current state.
-- `POST /operator/operations/<id>/acknowledge`: JSON
-  `{requestId, digest, revision}`. Clears `inspectionRequired` only for an
-  interrupted receipt at the exact reviewed revision. It is idempotent, never
-  re-arms issuance, restarts work or restores saved handles.
-- `GET /operator/diagnostics?tail=50`: bounded sanitized controller event
-  history (`startup`, `capability`, `shutdown`, `error`) from
-  `STATE_DIR/diagnostics.jsonl`. Action/error/scope fields are allowlisted; no
-  plans, arguments, credentials or free text are stored. The file is mode-0600,
-  capped at 1 MiB with one rotated segment.
-
-**These approvals cover dependency observations only**, not executable actions.
-The snapshot states that it authorizes no build/start/stop/network attachment,
-database query, reconfiguration or cleanup. There is deliberately no agent tool
-to approve or consume a permit. The internal future runtime boundary revalidates
-original bindings before durably issuing a host-local one-use permit and before
-recording completion. A changed binding refuses without issuing a replacement;
-an uncertain issued observation is inspection-required rather than automatically
-resent. No runtime compatibility is implied by an approval/fixture acknowledgement.
+Execution is direct: `env_execute` admits and dispatches the exact configured
+target in one step, and `env_wait` observes the receipt. There is no approval
+listener, access file or operator API. The private bounded diagnostics log at
+`STATE_DIR/diagnostics.jsonl` remains available for local troubleshooting; it is
+never an HTTP surface and never contains plans, arguments or credentials.
 
 ### Storage, restart and shutdown
+
+`env_refresh({})` reloads the v2 environment definitions for future executions
+without restarting the shared HTTP server or discarding receipts and retained
+logs. It is also available through the registry-derived UI capability transport.
+Stop owned apps and let active operations settle first: refresh refuses with
+`configuration-busy` if **any client** has owned resources, open/uncertain work,
+or another capability request in progress. Refresh never stops resources itself.
+
+The reload validates the complete configuration before synchronously publishing
+it. Invalid input or a changed repository allowlist returns the sanitized
+`configuration-refresh-invalid` refusal and leaves execution definitions unchanged.
+Client bindings, authorization and secret values (including `.env`) are not
+reloaded; restart for those changes. Referenced configuration sources are read
+through the normal loader; no commands or readiness probes run during refresh.
+`env_list` remains a fresh inspection of files on disk, not proof that execution
+has refreshed. After editing definitions, call `env_refresh` successfully before
+executing with a **new request ID**; existing request IDs retain their old receipt.
 
 The package owns `environment.sqlite` with its own application/schema identity;
 it never opens native v1/v2 state. `diagnostics.jsonl` is a separate bounded,
 sanitized event log for controller troubleshooting; it never contains credentials,
 plans or tool arguments. Synchronous `BEGIN IMMEDIATE` transactions and
-FULL durability fence decisions/issuance. A private directory lock permits one
-controller; no PID/age-based lock takeover. Startup interrupts prior active
-scopes, pending/approved reviews and outstanding issuances. Only previously
-issued uncertainty is marked inspection-required. A human can acknowledge that
-specific interrupted revision through the operator API; this clears the inspection
-marker but does not rearm approval/issuance or restore handles. Historical
-receipts remain readable.
+FULL durability fence operation transitions. A private directory lock permits
+one controller; no PID/age-based lock takeover. Startup interrupts prior active
+scopes and in-flight operations. Only previously issued uncertainty is marked
+inspection-required; it is never reissued automatically. Historical receipts
+remain readable.
 
-The initial journal caps retained scopes at 64, operations/decision receipts at
-128, plans at 128 KiB and result receipts at 32 KiB. At scope capacity the journal
+The initial journal caps retained scopes at 64, operations at 128, plans at 128 KiB and result receipts at 32 KiB. At scope capacity the journal
 evicts only the oldest inactive scope with no owned resources, no live review/
 issuance and no inspection-required uncertainty; active/scoped-resource history is
 never silently deleted, and capacity refuses when no safe scope exists. This is
 bounded retention, not idle expiry. Model tools cannot choose another state file
 or send executable plans.
-Normal SIGINT/SIGTERM joins listener shutdown, removes only the original unchanged
-operator access file and releases the original lock. Changed files or uncertain
+Normal SIGINT/SIGTERM joins listener shutdown and releases the original lock. Changed files or uncertain
 close retain inspection barriers. After a crash, confirm the old host is stopped
 before inspecting any stale lock/access file; do not delete the database to force
-reuse. No owned resource cleanup is claimed by this dependency-only controller.
+reuse. Owned cleanup is limited to resources recorded by issued operations.
 
 ## Live installer-space prerequisites
 
-The repository is configured for a real Mocked attempt, but three operator inputs
+The repository is configured for a real Mocked attempt, but three external inputs
 are still required and none may be guessed:
 
 1. **Build credentials.** The image does not exist locally and the v1 Dockerfile
@@ -633,17 +619,17 @@ are still required and none may be guessed:
 2. **Redis.** Only PostgreSQL is running. The Mocked app also needs Redis. A
    Compose file may start Redis as an **owned** service on the existing
    `document-service-mocked_devenv-local` network while borrowing PostgreSQL; that
-   plan must be reviewed as a whole. Existing PostgreSQL must not be recreated,
+   plan is executed as a whole. Existing PostgreSQL must not be recreated,
    reconfigured or attached.
 3. **Application secret.** The app references `ICON_APPLICATION_MASTERPASSWORD`;
    it must be supplied as a declared reference at daemon start, never written into
    the manifest or a result.
 
-Once those are provided, start the shared server with the new manifest, approve
-the exact frozen build and Mocked plans through the private operator API, run them
-via `env_run`, inspect bounded logs/status, and stop only owned containers. No
+Once those are provided, start the shared server with the new manifest, execute
+the exact build and Mocked targets through `env_execute`, inspect bounded
+logs/status, and stop only owned containers. No
 existing container or volume may be removed. This live step has **not** been run;
-the 34-test suite uses fakes and does not certify Docker/Compose/PostgreSQL parity.
+the current suite uses fakes and does not certify Docker/Compose/PostgreSQL parity.
 
 ## Capability parity with the OpenTUI
 
@@ -662,11 +648,11 @@ bun run type-check
 bun run test
 ```
 
-The complete standalone suite is currently 57 tests across 28 files. It
+The complete standalone suite is currently 58 tests across 26 files. It
 covers v1 lifecycle decisions, strict manifest validation, the copied-artifact
-stdio contract, the Unix-socket Docker observer, exact approval/issuance,
+stdio contract, the Unix-socket Docker observer, direct execution/idempotency,
 owned-only cleanup, multi-repository routing, idle scope closure/rebinding, container telemetry, trace browsing,
-the OpenCode TUI plugin catalog/keybind/error helpers,
+the environment model/keybind helpers,
 fake-runtime command/Compose execution and fake-binary network/Helm lifecycle
 behavior. The suite itself does not start a real Docker/Compose/Kubernetes/Helm runtime,
 database or engine. A separate disposable live Docker check created a temporary
@@ -690,16 +676,13 @@ replacement refusal, withheld Env/health-log values, unready/absent/unknown
 distinctions, response-size bounds and refusal to borrow as owned. It asserts
 only GET requests occur. This fixture is not a real Docker daemon or database.
 
-One combined durable journal/operator/HTTP MCP scenario verifies exact approval,
-scope isolation, one-time issuance, immutable replay, changed-binding refusal
-and conservative reopen using a fake inspection boundary. Its completion is
-explicitly a fixture acknowledgement, not runtime compatibility. One copied-
-artifact shared CLI scenario checks private operator credential publication,
-agent/human credential separation and shutdown of the original listeners/files.
-A separate fake-runtime scenario verifies exact-approved build/test/Compose
-execution, one-time dispatch, nonzero-exit failure, env-reference redaction,
-owned-container status/logs/stop and the absence of borrowed services from
-cleanup. It does not start Docker, a Compose project or a database.
+One combined durable journal/HTTP MCP scenario verifies scope isolation, direct
+execution, one-time dispatch, immutable replay and conservative reopen using a
+fake inspection boundary. One copied-artifact shared CLI scenario checks the
+single capability surface, private state and shutdown of the original listener.
+A separate fake-runtime scenario verifies direct build/test/Compose execution,
+one-time dispatch, nonzero-exit failure, env-reference redaction, owned-container
+status/logs/stop and the absence of borrowed services from cleanup. It does not start Docker, a Compose project or a database.
 
 See [PROVENANCE.md](PROVENANCE.md) for copied/adapted behavior and the active
 `mcp-v1-environment-parity` OpenSpec change for the remaining work.

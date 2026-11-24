@@ -1,6 +1,5 @@
 import type { ServerManifest } from "../configuration/server-manifest.ts";
 import { OperationRefusal, type ScopeRecord } from "../domain/operation.ts";
-import type { DependencyOperationSession } from "./dependency-operation-service.ts";
 import type { ExecutionSession } from "./execution-service.ts";
 import type { OperationJournal } from "./operation-journal.ts";
 
@@ -9,7 +8,6 @@ export type RepositoryBinding = {
 	scopeId: string;
 	scope: ScopeRecord;
 	execution: ExecutionSession;
-	operations: DependencyOperationSession;
 };
 
 export type RepositoryRuntime = {
@@ -124,7 +122,7 @@ function aggregateHistory(
 ) {
 	const collected: {
 		operation: ReturnType<
-			RepositoryBinding["operations"]["history"]
+			RepositoryBinding["execution"]["history"]
 		>["operations"][number];
 		createdAt: number;
 	}[] = [];
@@ -132,7 +130,7 @@ function aggregateHistory(
 	for (const binding of bindings) {
 		let pageOffset = 0;
 		for (;;) {
-			const page = binding.operations.history(pageOffset, 20);
+			const page = binding.execution.history(pageOffset, 20);
 			total += pageOffset === 0 ? page.total : 0;
 			for (const operation of page.operations)
 				collected.push({ operation, createdAt: operation.createdAt });
@@ -176,17 +174,21 @@ export function createMultiRepositoryExecutionSession(
 		async admit(requestId: string, rawIntent: unknown, signal: AbortSignal) {
 			const intent = rawIntent as Intent;
 			const selected = select(intent);
-			try {
-				return await selected
-					.active()
-					.execution.admit(requestId, rawIntent, signal);
-			} catch (error) {
-				console.error("DEBUG idle admit", error);
-				throw error;
-			}
+			return selected.active().execution.admit(requestId, rawIntent, signal);
 		},
-		read(id: string) {
-			return operation(id).binding.execution.read(id);
+		async executeIntent(
+			requestId: string,
+			rawIntent: unknown,
+			signal: AbortSignal,
+		) {
+			const intent = rawIntent as Intent;
+			const selected = select(intent);
+			return selected
+				.active()
+				.execution.executeIntent(requestId, rawIntent, signal);
+		},
+		read(id: string, progressOffset?: number) {
+			return operation(id).binding.execution.read(id, progressOffset);
 		},
 		history(offset = 0, limit = 20, repository?: string) {
 			return history(offset, limit, repository);
@@ -327,63 +329,4 @@ export function createMultiRepositoryExecutionSession(
 		},
 	};
 	return session as unknown as ExecutionSession;
-}
-
-export function createMultiRepositoryOperationSession(
-	manifest: ServerManifest,
-	journal: OperationJournal,
-	runtimes: readonly RepositoryRuntime[],
-) {
-	const { select, operation } = resolver(manifest, journal, runtimes);
-	const primary = () => {
-		const runtime = runtimes[0];
-		if (!runtime) throw new OperationRefusal("operation-unavailable");
-		return runtime;
-	};
-	const history = (offset: number, limit: number, repository?: string) => {
-		const selected = repository
-			? runtimes.find((runtime) => runtime.repository === repository)
-			: undefined;
-		if (repository && !selected)
-			throw new OperationRefusal("repository-unauthorized");
-		const bindings = selected
-			? selected.all()
-			: runtimes.flatMap((runtime) => runtime.all());
-		return aggregateHistory(bindings, offset, limit);
-	};
-	const session = {
-		async admit(requestId: string, rawIntent: unknown, signal: AbortSignal) {
-			const intent = rawIntent as Intent;
-			const selected = select(intent);
-			return selected.active().operations.admit(requestId, rawIntent, signal);
-		},
-		read(id: string) {
-			return operation(id).binding.operations.read(id);
-		},
-		history(offset = 0, limit = 20, repository?: string) {
-			return history(offset, limit, repository);
-		},
-		sharedServices() {
-			return primary().current.operations.sharedServices();
-		},
-		sharedService(service: string) {
-			return primary().current.operations.sharedService(service);
-		},
-		async issue(id: string, signal: AbortSignal) {
-			return operation(id).binding.operations.issue(id, signal);
-		},
-		async complete(
-			...args: Parameters<DependencyOperationSession["complete"]>
-		) {
-			const permit = args[0];
-			return operation(permit.id).binding.operations.complete(...args);
-		},
-		closeScope(revision: number) {
-			return primary().current.operations.closeScope(revision);
-		},
-		owned() {
-			return primary().current.operations.owned();
-		},
-	};
-	return session as unknown as DependencyOperationSession;
 }

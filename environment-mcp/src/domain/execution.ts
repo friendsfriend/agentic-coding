@@ -131,7 +131,7 @@ export const composeExecutableSchema = z
 				transport: z.literal("tls-host-gateway-v1"),
 			})
 			.optional(),
-		/** Join a network created by an exact approved network-only target. The
+		/** Join a network created by an exact configured network-only target. The
 		 * member never owns or removes that network. */
 		networkFrom: z
 			.strictObject({
@@ -282,7 +282,7 @@ export type ExecutionIntent = z.output<typeof executionIntentSchema>;
 export const executionDescriptorSchema = z.strictObject({
 	action,
 	executable: executableSchema,
-	/** Exact approved run prerequisites. Only network-only prerequisites are
+	/** Exact configured run prerequisites. Only network-only prerequisites are
 	 * auto-started today; other kinds remain explicit operations. */
 	prerequisites: z
 		.array(
@@ -418,6 +418,7 @@ export type ExecutionPort = {
 		cwd: string;
 		env: Record<string, string>;
 		redact: (value: string) => string;
+		onOutput?: (chunk: string) => void;
 		signal: AbortSignal;
 	}): Promise<{
 		exitCode: number | null;
@@ -430,6 +431,7 @@ export type ExecutionPort = {
 		cwd: string;
 		secrets: Record<string, string>;
 		redact: (value: string) => string;
+		onOutput?: (chunk: string) => void;
 		signal: AbortSignal;
 	}): Promise<{
 		exitCode: number | null;

@@ -12,7 +12,7 @@ import type { ExecutionPort } from "../src/domain/execution.ts";
 import { createExecutionService } from "../src/services/execution-service.ts";
 import { openOperationJournal } from "../src/services/operation-journal.ts";
 
-test("Helm execution is exact-approved, owned and cleaned up only from its install receipt", async () => {
+test("Helm execution is direct, owned and cleaned up only from its install receipt", async () => {
 	const root = fs.realpathSync(
 		fs.mkdtempSync(path.join(os.tmpdir(), "mcp-helm-service-")),
 	);
@@ -131,7 +131,6 @@ test("Helm execution is exact-approved, owned and cleaned up only from its insta
 		},
 	} as unknown as ExecutionPort;
 	const journal = openOperationJournal(state, [repository]);
-	const operator = journal.operator();
 	const scope = journal.createScope("client", repository, "scope");
 	const service = createExecutionService(
 		manifest,
@@ -149,12 +148,6 @@ test("Helm execution is exact-approved, owned and cleaned up only from its insta
 			{ app: "api", target: "helm" },
 			signal,
 		);
-		await operator.decide(operation.id, {
-			requestId: "approve-helm",
-			digest: operation.digest,
-			revision: operation.revision,
-			decision: "approved",
-		});
 		await agent.execute(operation.id, signal);
 		expect((await agent.wait(operation.id, 5, signal)).receipt).toMatchObject({
 			status: "completed",

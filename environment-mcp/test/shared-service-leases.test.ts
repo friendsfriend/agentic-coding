@@ -157,7 +157,6 @@ test("controller-wide shared service leases block cleanup until the last depende
 		},
 	};
 	const journal = openOperationJournal(state, [repository]);
-	const operator = journal.operator();
 	const infraScope = journal.createScope("infra-client", repository, "infra");
 	const apiScope = journal.createScope("api-client", repository, "api");
 	const service = createExecutionService(
@@ -170,16 +169,6 @@ test("controller-wide shared service leases block cleanup until the last depende
 	const infra = service.bind("infra-client", infraScope.id);
 	const api = service.bind("api-client", apiScope.id);
 	const signal = new AbortController().signal;
-	const approve = (
-		operation: { id: string; digest: string; revision: number },
-		requestId: string,
-	) =>
-		operator.decide(operation.id, {
-			requestId,
-			digest: operation.digest,
-			revision: operation.revision,
-			decision: "approved",
-		});
 	const run = async (
 		session: typeof infra,
 		requestId: string,
@@ -187,7 +176,6 @@ test("controller-wide shared service leases block cleanup until the last depende
 		target: string,
 	) => {
 		const operation = await session.admit(requestId, { app, target }, signal);
-		approve(operation, `approve-${requestId}`);
 		await session.execute(operation.id, signal);
 		return session.wait(operation.id, 5, signal);
 	};

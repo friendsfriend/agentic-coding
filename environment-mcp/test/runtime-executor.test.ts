@@ -625,3 +625,26 @@ printf '%064d\\n' 0 | tr '0' 'a'
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("command execution streams output before settling", async () => {
+	const executor = createRuntimeExecutor();
+	const chunks: string[] = [];
+	const result = await executor.command({
+		executable: {
+			kind: "command",
+			program: "/bin/sh",
+			args: ["-lc", "printf 'first\\nsecond\\n'"],
+			env: {},
+			envRefs: {},
+			timeoutSec: 5,
+		},
+		cwd: "/tmp",
+		env: {},
+		redact: (value) => value,
+		onOutput: (chunk) => chunks.push(chunk),
+		signal: new AbortController().signal,
+	});
+	expect(result.exitCode).toBe(0);
+	expect(chunks.join("")).toContain("first");
+	expect(chunks.join("")).toContain("second");
+});

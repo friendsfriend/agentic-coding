@@ -18,7 +18,7 @@ export const dockerServiceBindingSchema = z.strictObject({
 		),
 	network: z.strictObject({ name: resourceName, alias: resourceName }),
 	readiness: z.enum(["running", "healthy"]),
-	/** Exact approved infrastructure target that may start this absent service. */
+	/** Exact configured infrastructure target that may start this absent service. */
 	start: z.strictObject({ app: identifier, target: identifier }).optional(),
 });
 

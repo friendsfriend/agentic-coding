@@ -35,6 +35,12 @@ agentic-coding home      workflow list and observations
 agentic-coding manager   alias for home
 ```
 
+The OpenCode TUI agent/subagent definitions, adapted OpenSpec skills and the
+native worktree/session bridge live in [`opencode/`](opencode/README.md). They
+are symlinked into `~/.config/opencode`; `/openspec` or the `openspec` primary
+agent starts the workflow. `experimental.subagent_depth: 2` is required for
+nested verification.
+
 ### Workflow CLI
 
 ```text

@@ -590,7 +590,7 @@ function normalizeTarget(
 			)
 		)
 			throw new Error(
-				"Compose networkFrom must name an approved network-only target",
+				"Compose networkFrom must name a configured network-only target",
 			);
 		// All MCP-owned Compose workloads share one named group.
 		const project = "environment-mcp";

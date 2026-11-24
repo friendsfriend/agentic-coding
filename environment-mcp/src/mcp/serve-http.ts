@@ -5,8 +5,13 @@ import { OperationRefusal } from "../domain/operation.ts";
 import { createCapabilities } from "../interface/capabilities.ts";
 import { describeAction } from "../interface/descriptors.ts";
 import type { createCatalogService } from "../services/catalog-service.ts";
-import type { DependencyOperationSession } from "../services/dependency-operation-service.ts";
+import {
+	createEnvironmentEventBus,
+	type EnvironmentEventBus,
+	type EnvironmentStreamEvent,
+} from "../services/event-bus.ts";
 import type { ExecutionSession } from "../services/execution-service.ts";
+import { createGitStatusService } from "../services/git-status-service.ts";
 import { matchesBearerCredential } from "../transports/http/authentication.ts";
 import { readBoundedBody } from "../transports/http/read-body.ts";
 import { createMcpServer } from "./create-server.ts";
@@ -30,12 +35,16 @@ export function serveMcpHttp(
 	catalog: ReturnType<typeof createCatalogService>,
 	clients: readonly {
 		token: string;
-		operations: DependencyOperationSession;
+		repositories: readonly string[];
 		execution?: ExecutionSession;
 		touch?: () => void;
 		onAction?: (action: string, code?: string) => void;
 	}[],
-	options: { port?: number } = {},
+	options: {
+		port?: number;
+		events?: EnvironmentEventBus;
+		refresh?: () => Record<string, unknown>;
+	} = {},
 ) {
 	if (
 		!clients.length ||
@@ -47,15 +56,26 @@ export function serveMcpHttp(
 		(options.port ?? 0) > 65535
 	)
 		throw new Error("Invalid MCP listener configuration");
+	let activeInvocations = 0;
 	const entries = clients.map(
-		({ token, operations, execution, touch, onAction }) => {
+		({ token, repositories, execution, touch, onAction }) => {
 			const base = createCapabilities({
 				catalog,
-				operations,
+				repositories,
 				execution,
+				...(options.refresh
+					? {
+							refresh: () => {
+								if (activeInvocations > 1)
+									throw new OperationRefusal("configuration-busy");
+								return options.refresh?.() ?? {};
+							},
+						}
+					: {}),
+				git: createGitStatusService(),
 			});
 			const capabilities =
-				touch || onAction
+				touch || onAction || options.refresh
 					? {
 							list: () => base.list(),
 							async invoke(
@@ -64,6 +84,7 @@ export function serveMcpHttp(
 								context: { signal: AbortSignal },
 							) {
 								touch?.();
+								activeInvocations++;
 								try {
 									const result = await base.invoke(name, input, context);
 									onAction?.(name);
@@ -78,12 +99,15 @@ export function serveMcpHttp(
 											: "error";
 									onAction?.(name, code);
 									throw error;
+								} finally {
+									activeInvocations--;
 								}
 							},
 						}
 					: base;
 			return {
 				token,
+				repositories,
 				capabilities,
 				handler: createMcpHandler(() => createMcpServer(capabilities), {
 					maxRequestBodySize: 65536,
@@ -92,6 +116,7 @@ export function serveMcpHttp(
 			};
 		},
 	);
+	const events = options.events ?? createEnvironmentEventBus();
 	const pending = new Set<Promise<Response>>();
 	let closing = false,
 		stopping: Promise<void> | undefined;
@@ -115,6 +140,90 @@ export function serveMcpHttp(
 		);
 		if (!client)
 			return errorResponse("Environment authentication required", 401);
+		if (url.pathname === "/events") {
+			if (request.method !== "GET")
+				return errorResponse("Event method not allowed", 405);
+			if (url.searchParams.size)
+				return errorResponse("Unexpected event query", 400);
+			if (
+				!request.headers
+					.get("accept")
+					?.split(",")
+					.some((value) => value.trim() === "text/event-stream")
+			)
+				return errorResponse("Event stream required", 406);
+			const lastId = Number.parseInt(
+				request.headers.get("last-event-id") ?? "",
+				10,
+			);
+			const encoder = new TextEncoder();
+			let closed = false;
+			let unsubscribe: (() => void) | undefined;
+			let heartbeat: ReturnType<typeof setInterval> | undefined;
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					const close = () => {
+						if (closed) return;
+						closed = true;
+						if (heartbeat) clearInterval(heartbeat);
+						unsubscribe?.();
+						try {
+							controller.close();
+						} catch {
+							// The stream was already closed by the client.
+						}
+					};
+					const send = (event: EnvironmentStreamEvent) => {
+						if (closed) return;
+						try {
+							controller.enqueue(
+								encoder.encode(
+									`id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+								),
+							);
+						} catch {
+							close();
+						}
+					};
+					unsubscribe = events.subscribe(client.repositories, send);
+					if (!unsubscribe) {
+						send({
+							type: "snapshot",
+							seq: events.currentSeq(),
+							at: Date.now(),
+						});
+						close();
+						return;
+					}
+					if (Number.isFinite(lastId) && lastId > 0)
+						for (const event of events.replayAfter(lastId, client.repositories))
+							send(event);
+					send({
+						type: "snapshot",
+						seq: events.currentSeq(),
+						at: Date.now(),
+					});
+					heartbeat = setInterval(() => {
+						if (closed) return;
+						try {
+							controller.enqueue(encoder.encode(": keepalive\n\n"));
+						} catch {
+							close();
+						}
+					}, 15_000);
+					request.signal.addEventListener("abort", close, { once: true });
+				},
+			});
+			return new Response(stream, {
+				headers: {
+					...securityHeaders,
+					"Content-Type": "text/event-stream",
+					"Cache-Control": "no-cache",
+					Connection: "keep-alive",
+					"X-Accel-Buffering": "no",
+				},
+			});
+		}
 		if (url.pathname === "/capabilities") {
 			if (request.method !== "GET")
 				return errorResponse("Capability method not allowed", 405);

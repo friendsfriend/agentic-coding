@@ -100,7 +100,7 @@ const traceId = (value: unknown) =>
 const spanId = (value: unknown) =>
 	typeof value === "string" && /^[a-f0-9]{16}$/.test(value) ? value : undefined;
 
-/** Bounded OTLP/HTTP JSON receiver for one approved run. Shell processes use a
+/** Bounded OTLP/HTTP JSON receiver for one owned run. Shell processes use a
  * loopback listener. Compose telemetry uses a fresh TLS host-gateway listener;
  * the collector receives a CA mount and the receiver never writes received
  * telemetry or the bearer token to disk. */

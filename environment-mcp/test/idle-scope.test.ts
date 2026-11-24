@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { serverManifestSchema } from "../src/configuration/server-manifest.ts";
 import type { ExecutionPort } from "../src/domain/execution.ts";
-import { createDependencyOperationService } from "../src/services/dependency-operation-service.ts";
 import { createExecutionService } from "../src/services/execution-service.ts";
 import {
 	closeIdleRepository,
@@ -54,9 +53,6 @@ test("an idle repository scope closes and reopens while retaining historical sco
 		{} as ExecutionPort,
 		{ get: () => undefined },
 	);
-	const operations = createDependencyOperationService(manifest, journal, {
-		inspect: async () => ({ status: "absent" as const }),
-	});
 	const runtime = createRepositoryRuntime({
 		repository,
 		create: () => {
@@ -66,7 +62,6 @@ test("an idle repository scope closes and reopens while retaining historical sco
 				scopeId: scope.id,
 				scope,
 				execution: execution.bind("client", scope.id),
-				operations: operations.bind("client", scope.id),
 			};
 		},
 	});

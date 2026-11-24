@@ -17,7 +17,7 @@ export type PreparedDependencyBindings = Readonly<{
 }>;
 
 /** Bound by a trusted server scope. This is read-only preparation, not an
- * approval journal or issuance permit; no method can start or stop a resource. */
+ * issuance permit or resource authority; no method can start or stop a resource. */
 export function createDependencyBindingService(
 	configuration: ServerManifest,
 	repository: string,

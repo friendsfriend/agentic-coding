@@ -1,8 +1,8 @@
 import * as z from "zod/v4";
 import { executionIntentSchema } from "../domain/execution.ts";
-import { operationIntentSchema } from "../domain/operation.ts";
+import type { GitStatusPort } from "../domain/git-status.ts";
+import { OperationRefusal } from "../domain/operation.ts";
 import type { createCatalogService } from "../services/catalog-service.ts";
-import type { DependencyOperationSession } from "../services/dependency-operation-service.ts";
 import type { ExecutionSession } from "../services/execution-service.ts";
 
 export type CapabilityAnnotations = {
@@ -69,8 +69,10 @@ function capability<I extends z.ZodType>(
  * this list; neither owns a separate action table or implementation. */
 export function createCapabilities(deps: {
 	catalog: ReturnType<typeof createCatalogService>;
-	operations?: DependencyOperationSession;
+	repositories: readonly string[];
+	git: GitStatusPort;
 	execution?: ExecutionSession;
+	refresh?: () => Record<string, unknown>;
 }): EnvironmentCapabilities {
 	const capabilities: Capability[] = [
 		capability(
@@ -88,8 +90,76 @@ export function createCapabilities(deps: {
 				executionAvailable: Boolean(deps.execution),
 			}),
 		),
+		capability(
+			"env_git_changes",
+			"List repository changes",
+			"List bounded changed paths and their staged/worktree status for one authorized repository. Read-only: no diff contents, fetch, checkout, stage or commit.",
+			z.strictObject({
+				repository: z.string().min(1).max(4096),
+			}),
+			{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+			async ({ repository }, { signal }) => {
+				if (!deps.repositories.includes(repository))
+					throw new OperationRefusal("repository-unauthorized");
+				return deps.git.changes(repository, signal);
+			},
+		),
+		capability(
+			"env_git_diff",
+			"Read repository diff",
+			"Read one bounded unified diff for a path reported by env_git_changes. Untracked regular files are diffed against /dev/null; binaries and symlinks are refused. Read-only: no fetch, checkout, stage or commit.",
+			z.strictObject({
+				repository: z.string().min(1).max(4096),
+				path: z.string().min(1).max(4096),
+			}),
+			{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+			async ({ repository, path }, { signal }) => {
+				if (!deps.repositories.includes(repository))
+					throw new OperationRefusal("repository-unauthorized");
+				return deps.git.diff(repository, path, signal);
+			},
+		),
+		capability(
+			"env_git",
+			"Read repository git status",
+			"Read bounded branch, dirty-file, ahead/behind and detached-HEAD status for authorized repositories. Read-only: no fetch, checkout, stage or commit.",
+			z.strictObject({
+				repositories: z
+					.array(z.string().min(1).max(4096))
+					.min(1)
+					.max(64)
+					.optional(),
+			}),
+			{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+			async ({ repositories }, { signal }) => {
+				const requested = repositories
+					? [...new Set(repositories)]
+					: [...deps.repositories];
+				if (
+					requested.some(
+						(repository) => !deps.repositories.includes(repository),
+					)
+				)
+					throw new OperationRefusal("repository-unauthorized");
+				return {
+					repositories: await deps.git.status(requested, signal),
+				};
+			},
+		),
 	];
-	const history = deps.operations?.history ?? deps.execution?.history;
+	const refresh = deps.refresh;
+	if (refresh)
+		capabilities.push(
+			capability(
+				"env_refresh",
+				"Refresh configuration",
+				"Reload validated environment definitions for future execution without restarting the server. Refuses while any client has active work or owned resources. Repository authorization, client credentials and secret values are not reloaded; changing them requires a restart. Invalid configuration leaves execution unchanged.",
+				z.strictObject({}),
+				{ readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+				async () => refresh(),
+			),
+		);
+	const history = deps.execution?.history;
 	if (history) {
 		capabilities.push(
 			capability(
@@ -107,7 +177,7 @@ export function createCapabilities(deps: {
 			),
 		);
 	}
-	const sharedSession = deps.execution ?? deps.operations;
+	const sharedSession = deps.execution;
 	if (sharedSession) {
 		capabilities.push(
 			capability(
@@ -128,42 +198,25 @@ export function createCapabilities(deps: {
 			),
 		);
 	}
-	if (deps.operations) {
-		const operations = deps.operations;
-		capabilities.push(
-			capability(
-				"env_prepare_dependencies",
-				"Prepare dependency review",
-				"Prepare exact human review of this scope's configured dependency observations. Does not approve or issue anything and does not build, start, stop, attach or query services. Borrowed dependencies grant no cleanup ownership.",
-				operationIntentSchema.extend({
-					requestId: z.string().trim().min(1).max(256),
-				}),
-				{
-					readOnlyHint: false,
-					destructiveHint: false,
-					idempotentHint: true,
-					openWorldHint: false,
-				},
-				async ({ requestId, ...intent }, { signal }) =>
-					operations.admit(requestId, intent, signal),
-			),
-			capability(
-				"env_operation",
-				"Read operation receipt",
-				"Read one durable receipt owned by this fixed scope. Immediate observation only; historical approvals/receipts grant no runtime execution or restored resource authority.",
-				z.strictObject({ operationId: z.uuid() }),
-				{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-				async ({ operationId }) => operations.read(operationId),
-			),
-		);
-	}
 	if (deps.execution) {
 		const execution = deps.execution;
 		capabilities.push(
 			capability(
+				"env_operation",
+				"Read operation receipt",
+				"Read one durable receipt owned by this fixed scope, or the live output of an issued operation. Pass progressOffset to receive only output written after that offset; a reset result replaces the buffered output. Immediate observation only; live or historical output grants no runtime execution or restored resource authority.",
+				z.strictObject({
+					operationId: z.uuid(),
+					progressOffset: z.number().int().min(0).max(2147483647).optional(),
+				}),
+				{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+				async ({ operationId, progressOffset }) =>
+					execution.read(operationId, progressOffset),
+			),
+			capability(
 				"env_execute",
-				"Prepare execution",
-				"Request exact human approval for one configured build, test or run target. Admission and approval never execute. Missing declared secret references refuse admission before review. Nonzero exits are failures. Borrowed dependencies are revalidated before issuance and never enter cleanup.",
+				"Execute target",
+				"Execute one configured build, test or run target. Admission and dispatch are one step; missing declared secret references refuse before dispatch. Nonzero exits are failures. Borrowed dependencies are revalidated before dispatch and never enter cleanup. Use env_wait for a bounded observation of the settled receipt.",
 				executionIntentSchema.extend({
 					requestId: z.string().trim().min(1).max(256),
 				}),
@@ -174,21 +227,7 @@ export function createCapabilities(deps: {
 					openWorldHint: true,
 				},
 				async ({ requestId, ...intent }, { signal }) =>
-					execution.admit(requestId, intent, signal),
-			),
-			capability(
-				"env_run",
-				"Run approved operation",
-				"Dispatch one exact-approved executable operation once and return after durable issuance. Use env_wait for a bounded observation of the settled receipt. Issued uncertainty is never automatically resent.",
-				z.strictObject({ operationId: z.uuid() }),
-				{
-					readOnlyHint: false,
-					destructiveHint: true,
-					idempotentHint: true,
-					openWorldHint: true,
-				},
-				async ({ operationId }, { signal }) =>
-					execution.execute(operationId, signal),
+					execution.executeIntent(requestId, intent, signal),
 			),
 			capability(
 				"env_wait",

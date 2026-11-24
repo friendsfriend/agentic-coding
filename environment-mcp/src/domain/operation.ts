@@ -6,17 +6,6 @@ export const operationIntentSchema = z.strictObject({
 	target: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
 	repository: z.string().min(1).max(4096).optional(),
 });
-export const operatorDecisionSchema = z.strictObject({
-	requestId: boundedIdentity,
-	digest: z.string().regex(/^[a-f0-9]{64}$/),
-	revision: z.number().int().min(1),
-	decision: z.enum(["approved", "rejected"]),
-});
-export const operatorAcknowledgementSchema = z.strictObject({
-	requestId: boundedIdentity,
-	digest: z.string().regex(/^[a-f0-9]{64}$/),
-	revision: z.number().int().min(1),
-});
 const workspaceSchema = z.strictObject({
 	directory: z.string(),
 	device: z.string(),
@@ -38,6 +27,9 @@ export const operationRecordSchema = z.strictObject({
 	identity: z.string(),
 	plan: z.string(),
 	digest: z.string().regex(/^[a-f0-9]{64}$/),
+	/** `awaiting-approval` and `rejected` remain readable for journals written
+	 * before direct execution; new operations start approved and are issued
+	 * immediately. */
 	state: z.enum([
 		"awaiting-approval",
 		"approved",
@@ -52,10 +44,6 @@ export const operationRecordSchema = z.strictObject({
 	result: z.string().optional(),
 });
 export type OperationIntent = z.output<typeof operationIntentSchema>;
-export type OperatorDecision = z.output<typeof operatorDecisionSchema>;
-export type OperatorAcknowledgement = z.output<
-	typeof operatorAcknowledgementSchema
->;
 export type ScopeRecord = z.output<typeof scopeRecordSchema>;
 export type OperationRecord = z.output<typeof operationRecordSchema>;
 
@@ -66,9 +54,10 @@ export class OperationRefusal extends Error {
 			| "scope-unavailable"
 			| "operation-unavailable"
 			| "request-conflict"
-			| "decision-conflict"
 			| "journal-capacity"
 			| "cleanup-unavailable"
+			| "configuration-busy"
+			| "configuration-refresh-invalid"
 			| "repository-ambiguous"
 			| "repository-unauthorized"
 			| "network-prerequisite-unavailable"
@@ -78,7 +67,62 @@ export class OperationRefusal extends Error {
 	}
 }
 
+export type OperationSubject = {
+	app: string;
+	target: string;
+	action?: string;
+	repository?: string;
+};
+
+/** Safe UI attribution from the frozen plan. The plan itself never leaves the
+ * private execution plan; the UI only receives the exact app/target/action
+ * and repository directory. */
+export function operationSubject(
+	record: OperationRecord,
+): OperationSubject | undefined {
+	try {
+		const plan = JSON.parse(record.plan) as unknown;
+		if (!plan || typeof plan !== "object") return undefined;
+		const value = plan as Record<string, unknown>;
+		const intent =
+			value.intent && typeof value.intent === "object"
+				? (value.intent as Record<string, unknown>)
+				: undefined;
+		const descriptor =
+			value.descriptor && typeof value.descriptor === "object"
+				? (value.descriptor as Record<string, unknown>)
+				: undefined;
+		const workspace =
+			value.workspace && typeof value.workspace === "object"
+				? (value.workspace as Record<string, unknown>)
+				: undefined;
+		const app = typeof intent?.app === "string" ? intent.app : undefined;
+		const target =
+			typeof intent?.target === "string" ? intent.target : undefined;
+		if (!app || !target) return undefined;
+		const action =
+			typeof descriptor?.action === "string" ? descriptor.action : undefined;
+		const repository =
+			typeof workspace?.directory === "string"
+				? workspace.directory
+				: undefined;
+		return {
+			app,
+			target,
+			...(action ? { action } : {}),
+			...(repository ? { repository } : {}),
+		};
+	} catch {
+		return undefined;
+	}
+}
+
 export function operationView(record: OperationRecord, currentHost: string) {
 	const { plan: _plan, identity: _identity, host, ...view } = record;
-	return { ...view, historical: host !== currentHost };
+	const subject = operationSubject(record);
+	return {
+		...view,
+		...(subject ? { subject } : {}),
+		historical: host !== currentHost,
+	};
 }

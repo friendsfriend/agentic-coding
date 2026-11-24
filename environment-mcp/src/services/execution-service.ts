@@ -27,6 +27,7 @@ import type { OwnedResource } from "../domain/owned-resource.ts";
 import type { SharedService } from "../domain/shared-service.ts";
 import { createTelemetryReceiver } from "../telemetry/receiver.ts";
 import { createDependencyBindingService } from "./dependency-binding-service.ts";
+import type { EnvironmentEventInput } from "./event-bus.ts";
 import type { OperationJournal } from "./operation-journal.ts";
 
 const receiptOutputLimit = 24 * 1024;
@@ -103,8 +104,13 @@ export function createExecutionService(
 	containers: ContainerInspectionPort,
 	executor: ExecutionPort,
 	secrets: SecretSource,
-	options: { telemetryDirectory?: string; configDir?: string } = {},
+	options: {
+		telemetryDirectory?: string;
+		configDir?: string;
+		onEvent?: (event: EnvironmentEventInput) => void;
+	} = {},
 ) {
+	let configurationRevision = 0;
 	const ensureSecrets = (executable: Executable) => {
 		const refs: string[] = [];
 		const add = (values: Record<string, string>) => {
@@ -144,13 +150,26 @@ export function createExecutionService(
 			journal.confirmSharedRelease(service.service, confirmed);
 	};
 	return {
+		/** Called only by the controller's synchronous idle-only refresh. Keep the
+		 * manifest identity stable for repository resolvers and bound sessions. */
+		refresh(next: ServerManifest) {
+			Object.assign(manifest, next);
+			configurationRevision++;
+		},
 		bind(principal: string, scopeId: string) {
 			const session = journal.bind(principal, scopeId);
 			const requireRepository = (repository?: string) => {
 				if (repository && repository !== session.scope().workspace.directory)
 					throw new OperationRefusal("repository-unauthorized");
 			};
+			let redactionCache: string[] | undefined;
+			let redactionRevision = configurationRevision;
 			const redactionValues = () => {
+				if (redactionRevision !== configurationRevision) {
+					redactionCache = undefined;
+					redactionRevision = configurationRevision;
+				}
+				if (redactionCache) return redactionCache;
 				const values: string[] = [];
 				for (const app of manifest.apps)
 					for (const target of app.targets) {
@@ -172,6 +191,7 @@ export function createExecutionService(
 							if (value) values.push(value);
 						}
 					}
+				redactionCache = values;
 				return values;
 			};
 			const redact = (text: string) =>
@@ -186,6 +206,39 @@ export function createExecutionService(
 				string,
 				{ controller: AbortController; promise: Promise<void> }
 			>();
+			const liveOutputLimit = 4 * 1024 * 1024;
+			const liveOutput = new Map<
+				string,
+				{ text: string; total: number; carry: string }
+			>();
+			const redactionCarryLength = Math.min(
+				65536,
+				Math.max(128, ...redactionValues().map((value) => value.length)),
+			);
+			const appendLiveOutput = (id: string, chunk: string) => {
+				if (!chunk) return;
+				const current = liveOutput.get(id) ?? {
+					text: "",
+					total: 0,
+					carry: "",
+				};
+				const combined = current.carry + chunk;
+				const redacted = redact(combined);
+				const redactedCarry = current.carry ? redact(current.carry) : "";
+				const addition =
+					redactedCarry && redacted.startsWith(redactedCarry)
+						? redacted.slice(redactedCarry.length)
+						: redacted;
+				const next = current.text + addition;
+				liveOutput.set(id, {
+					text:
+						next.length > liveOutputLimit
+							? next.slice(next.length - liveOutputLimit)
+							: next,
+					total: current.total + addition.length,
+					carry: combined.slice(-redactionCarryLength),
+				});
+			};
 			const filterLogs = (text: string, grep: string | undefined) =>
 				grep
 					? text
@@ -343,6 +396,7 @@ export function createExecutionService(
 							cwd,
 							env,
 							redact,
+							onOutput: (chunk) => appendLiveOutput(permit.id, chunk),
 							signal,
 						});
 						receipt = {
@@ -363,6 +417,7 @@ export function createExecutionService(
 							cwd,
 							secrets: secretValues,
 							redact,
+							onOutput: (chunk) => appendLiveOutput(permit.id, chunk),
 							signal,
 						});
 						receipt = {
@@ -1022,7 +1077,7 @@ export function createExecutionService(
 					) {
 						// Trusted configuration may place a compose file outside the
 						// repository (v1 keeps them under its config root). Freeze the
-						// canonical path so a symlink swap cannot redirect approval.
+						// canonical path so a symlink swap cannot redirect dispatch.
 						const file = fs.realpathSync(descriptor.executable.file);
 						if (!fs.lstatSync(file).isFile())
 							throw new OperationRefusal("operation-unavailable");
@@ -1041,7 +1096,7 @@ export function createExecutionService(
 						descriptor.executable.networkFrom
 					) {
 						const networkFrom = descriptor.executable.networkFrom;
-						const approvedPrerequisite = descriptor.prerequisites.some(
+						const configuredPrerequisite = descriptor.prerequisites.some(
 							(prerequisite) =>
 								prerequisite.app === networkFrom.app &&
 								prerequisite.target === networkFrom.target &&
@@ -1071,7 +1126,7 @@ export function createExecutionService(
 								network.labels["environment-mcp-target"] !== networkFrom.target)
 						)
 							throw new OperationRefusal("network-prerequisite-unavailable");
-						if (!network && !approvedPrerequisite)
+						if (!network && !configuredPrerequisite)
 							throw new OperationRefusal("network-prerequisite-unavailable");
 					}
 					const head = await gitHead(scope.workspace.directory);
@@ -1098,7 +1153,7 @@ export function createExecutionService(
 						dependencies,
 						repositoryHead: head,
 						authority:
-							"Execute exactly this configured command or Compose project after separate human approval. Only resources created by this issuance may enter cleanup; borrowed dependencies and volumes grant no cleanup authority. Nonzero exits are failures, not successful verification. Cancellation is not rollback of server-side effects.",
+							"Execute exactly this configured command or Compose project. Only resources created by this issuance may enter cleanup; borrowed dependencies and volumes grant no cleanup authority. Nonzero exits are failures, not successful verification. Cancellation is not rollback of server-side effects.",
 					});
 					const operation = session.admit(
 						requestId,
@@ -1108,8 +1163,54 @@ export function createExecutionService(
 					);
 					return operationView(operation, journal.host);
 				},
-				read(id: string) {
-					return operationView(session.read(id), journal.host);
+				async executeIntent(
+					requestId: string,
+					rawIntent: unknown,
+					signal: AbortSignal,
+				) {
+					const admitted = await this.admit(requestId, rawIntent, signal);
+					if (admitted.state === "approved")
+						return this.execute(admitted.id, signal);
+					const operation = session.read(admitted.id);
+					const receipt = operation.result
+						? (JSON.parse(operation.result) as ExecutionReceipt)
+						: null;
+					return {
+						operation: operationView(operation, journal.host),
+						receipt,
+					};
+				},
+				read(
+					id: string,
+					progressOffset = 0,
+				): ReturnType<typeof operationView> & {
+					progress?: { offset: number; text: string; reset?: boolean };
+				} {
+					const view = operationView(session.read(id), journal.host);
+					const current = liveOutput.get(id);
+					if (!current || current.total === 0) return view;
+					const chunkLimit = 64 * 1024;
+					const requested =
+						Number.isFinite(progressOffset) && progressOffset > 0
+							? Math.floor(progressOffset)
+							: 0;
+					const base = current.total - current.text.length;
+					if (requested < base)
+						return {
+							...view,
+							progress: {
+								offset: current.total,
+								text: current.text.slice(-chunkLimit),
+								reset: true,
+							},
+						};
+					const offset = Math.min(requested, current.total);
+					const start = offset - base;
+					const text = current.text.slice(start, start + chunkLimit);
+					return {
+						...view,
+						progress: { offset: offset + text.length, text },
+					};
 				},
 				history(offset = 0, limit = 20, repository?: string) {
 					requireRepository(repository);
@@ -1195,13 +1296,29 @@ export function createExecutionService(
 					const permit = issued.permit;
 					if (!permit) throw new OperationRefusal("operation-unavailable");
 					const controller = new AbortController();
+					const repository = scope.workspace.directory;
+					options.onEvent?.({
+						type: "operation",
+						repository,
+						operationId: id,
+					});
+					options.onEvent?.({ type: "status", repository });
 					const promise = dispatch(
 						permit,
 						frozen,
-						scope.workspace.directory,
+						repository,
 						controller.signal,
 					).finally(() => {
 						if (runs.get(id)?.controller === controller) runs.delete(id);
+						liveOutput.delete(id);
+						options.onEvent?.({
+							type: "operation",
+							repository,
+							operationId: id,
+						});
+						options.onEvent?.({ type: "status", repository });
+						options.onEvent?.({ type: "git", repository });
+						options.onEvent?.({ type: "services", repository });
 					});
 					runs.set(id, { controller, promise });
 					return {
@@ -1430,6 +1547,9 @@ export function createExecutionService(
 						retainedLogs.set(app, { output, retainedAt: Date.now() });
 					}
 					telemetryByApp.get(app)?.close();
+					const repositoryPath = session.scope().workspace.directory;
+					options.onEvent?.({ type: "status", repository: repositoryPath });
+					options.onEvent?.({ type: "services", repository: repositoryPath });
 					return {
 						stopped,
 						remaining: remaining.filter((item) => item.app === app).length,
@@ -1569,10 +1689,16 @@ export function createExecutionService(
 				},
 				closeScope(revision: number) {
 					for (const { controller } of runs.values()) controller.abort();
-					return session.beginClose(revision);
+					const repository = session.scope().workspace.directory;
+					const closed = session.beginClose(revision);
+					options.onEvent?.({ type: "status", repository });
+					return closed;
 				},
 				finishClose(revision: number, cleaned: boolean) {
-					return session.finishClose(revision, cleaned);
+					const repository = session.scope().workspace.directory;
+					const closed = session.finishClose(revision, cleaned);
+					options.onEvent?.({ type: "status", repository });
+					return closed;
 				},
 			};
 		},

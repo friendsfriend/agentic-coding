@@ -10,6 +10,8 @@ import {
 import { ownedResourceSchema } from "../domain/owned-resource.ts";
 import { sharedServiceSchema } from "../domain/shared-service.ts";
 
+// `decisions` and `acknowledgements` remain readable legacy fields; direct
+// execution never writes them.
 const documentSchema = z.strictObject({
 	scopes: z.record(z.string(), scopeRecordSchema),
 	operations: z.record(z.string(), operationRecordSchema),

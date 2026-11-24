@@ -11,16 +11,15 @@ import { loadSecretSource } from "../configuration/secrets.ts";
 import { identifier } from "../configuration/server-manifest.ts";
 import { readV2Configuration } from "../configuration/v2-configuration.ts";
 import { serveMcpHttp } from "../mcp/serve-http.ts";
-import { serveOperatorApi } from "../operator/serve-operator-api.ts";
 import { openDiagnosticsLog } from "../persistence/diagnostics-log.ts";
 import { createCatalogService } from "./catalog-service.ts";
-import { createDependencyOperationService } from "./dependency-operation-service.ts";
+import { createConfigurationRefresh } from "./configuration-refresh.ts";
+import { createEnvironmentEventBus } from "./event-bus.ts";
 import { createExecutionService } from "./execution-service.ts";
 import { createIdleReaper } from "./idle-reaper.ts";
 import {
 	closeIdleRepository,
 	createMultiRepositoryExecutionSession,
-	createMultiRepositoryOperationSession,
 	createRepositoryRuntime,
 } from "./multi-repository-session.ts";
 import { openOperationJournal } from "./operation-journal.ts";
@@ -60,7 +59,7 @@ const clientsSchema = z.strictObject({
 		.max(32),
 });
 
-/** One environment authority, with separate agent and human listeners. */
+/** One environment authority and one authenticated MCP listener. */
 export async function startSharedServer(
 	options: ReturnType<typeof parseSharedServerOptions>,
 ) {
@@ -103,20 +102,14 @@ export async function startSharedServer(
 		options.directory,
 		manifest.repositories,
 	);
-	let operator: ReturnType<typeof serveOperatorApi> | undefined;
 	let mcp: ReturnType<typeof serveMcpHttp> | undefined;
-	let releaseAccess: (() => void) | undefined;
 	let stopSessions: (() => Promise<void>) | undefined;
 	let diagnostics: ReturnType<typeof openDiagnosticsLog> | undefined;
 	const idleAbort = new AbortController();
 	let idleTimer: ReturnType<typeof setInterval> | undefined;
 	try {
 		diagnostics = openDiagnosticsLog(options.directory);
-		const operations = createDependencyOperationService(
-			manifest,
-			journal,
-			createDockerInspectionAdapter(),
-		);
+		const events = createEnvironmentEventBus();
 		const execution = createExecutionService(
 			manifest,
 			journal,
@@ -126,6 +119,7 @@ export async function startSharedServer(
 			{
 				telemetryDirectory: options.directory,
 				configDir: options.configDir,
+				onEvent: (event) => events.publish(event),
 			},
 		);
 		const bindings = authenticatedClients.map((client) => {
@@ -143,7 +137,6 @@ export async function startSharedServer(
 							scopeId: scope.id,
 							scope,
 							execution: execution.bind(client.id, scope.id),
-							operations: operations.bind(client.id, scope.id),
 						};
 					},
 				}),
@@ -155,15 +148,21 @@ export async function startSharedServer(
 				journal,
 				runtimes,
 			);
-			const boundOperations = createMultiRepositoryOperationSession(
-				manifest,
-				journal,
-				runtimes,
-			);
 			const activity = { at: Date.now() };
 			return {
+				isRefreshIdle: () =>
+					runtimes.every((runtime) =>
+						runtime
+							.all()
+							.every(
+								(binding) =>
+									!journal.scopeHasOpenWork(binding.scopeId) &&
+									!binding.execution.isBusy() &&
+									binding.execution.status().owned.length === 0,
+							),
+					),
 				token: client.token,
-				operations: boundOperations,
+				repositories: client.repositories,
 				execution: boundExecution,
 				activity,
 				touch: () => {
@@ -227,10 +226,6 @@ export async function startSharedServer(
 			);
 			idleTimer.unref?.();
 		}
-		operator = serveOperatorApi(journal.operator(), {
-			port: options.operatorPort,
-			diagnostics,
-		});
 		mcp = serveMcpHttp(
 			createCatalogService({
 				file: path.join(options.configDir, "environments.json"),
@@ -238,56 +233,30 @@ export async function startSharedServer(
 				repositories: [],
 			}),
 			bindings,
-			{ port: options.port },
+			{
+				port: options.port,
+				events,
+				refresh: createConfigurationRefresh({
+					configDir: options.configDir,
+					repositories: [...manifest.repositories],
+					isIdle: () => bindings.every((binding) => binding.isRefreshIdle()),
+					apply: (next) => execution.refresh(next),
+				}),
+			},
 		);
 		diagnostics.append({ event: "startup", count: bindings.length });
-		const access = path.join(options.directory, "operator-access.json");
-		const content = JSON.stringify({
-			url: operator.url,
-			token: operator.token,
-		});
-		const fd = fs.openSync(access, "wx", 0o600);
-		let identity: fs.Stats;
-		try {
-			fs.writeFileSync(fd, content);
-			fs.fsyncSync(fd);
-			identity = fs.fstatSync(fd);
-		} finally {
-			fs.closeSync(fd);
-		}
-		releaseAccess = () => {
-			const current = fs.lstatSync(access);
-			if (
-				!current.isFile() ||
-				current.dev !== identity.dev ||
-				current.ino !== identity.ino ||
-				fs.readFileSync(access, "utf8") !== content
-			)
-				throw new Error(
-					"Operator access file changed; retained for inspection",
-				);
-			fs.unlinkSync(access);
-		};
 		let stopping: Promise<void> | undefined;
 		return {
 			url: mcp.url,
-			accessFile: access,
 			stop() {
 				stopping ??= (async () => {
 					if (idleTimer) clearInterval(idleTimer);
 					idleAbort.abort();
 					await stopSessions?.();
 					diagnostics?.append({ event: "shutdown" });
-					const listeners = await Promise.allSettled([
-						mcp?.stop(),
-						operator?.stop(),
-					]);
-					try {
-						releaseAccess?.();
-					} finally {
-						diagnostics?.close();
-						journal.close();
-					}
+					const listeners = await Promise.allSettled([mcp?.stop()]);
+					diagnostics?.close();
+					journal.close();
 					if (listeners.some((result) => result.status === "rejected"))
 						throw new Error("Listener shutdown failed");
 				})();
@@ -299,13 +268,9 @@ export async function startSharedServer(
 		idleAbort.abort();
 		await stopSessions?.();
 		diagnostics?.append({ event: "error", code: "startup-failed" });
-		await Promise.allSettled([mcp?.stop(), operator?.stop()]);
-		try {
-			releaseAccess?.();
-		} finally {
-			diagnostics?.close();
-			journal.close();
-		}
+		await Promise.allSettled([mcp?.stop()]);
+		diagnostics?.close();
+		journal.close();
 		throw error;
 	}
 }

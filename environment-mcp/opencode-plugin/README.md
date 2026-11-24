@@ -1,9 +1,12 @@
 # OpenCode TUI plugin
 
-The OpenCode 2.0.22 TUI surface for `environment-mcp`. It renders the same
-capability registry the agent uses, over the authenticated loopback HTTP API.
-It does not construct an MCP server, listener, journal, runtime adapter or
-approval authority.
+The app-centric OpenCode 2.0.22 TUI for `environment-mcp`. It presents the
+configured environments — applications, libraries, infrastructure, services,
+receipts, logs and telemetry — rather than the agent's MCP tool list.
+
+It uses the same authenticated loopback capability API as the standalone UI. It
+does not construct an MCP server, listener, journal, runtime adapter or approval
+gate, and it has no plugin-local action table.
 
 ## Install
 
@@ -15,8 +18,8 @@ ln -sfn "$PWD/opencode-plugin" ~/.config/opencode/plugins/environment-mcp
 opencode plugin list
 ```
 
-OpenCode discovers `<config>/plugins/<directory>` automatically. The plugin
-hot-reloads from source; there is no build step for local use.
+OpenCode discovers `<config>/plugins/<directory>` automatically and hot-reloads
+the source; there is no build step for local use.
 
 Open it with any of:
 
@@ -25,19 +28,58 @@ Open it with any of:
 - `<leader>v` (the default leader is `ctrl+x`, so `ctrl+x v`)
 - the command palette (`ctrl+p`) entry **Environment**
 
-## What it shows
+## Screens
 
-- A searchable capability list grouped **Inspect**, **Operate**, **Observe**.
-- The action's JSON-Schema inputs, required markers, defaults and allowed values.
-- A running state with cancellation, a scrollable structured result, and a
-  telemetry trace list with parent/child drill-down.
-- A two-column `?` help dialog and a footer that advertises only special keys.
-- Theme colors, keybind dispatch and dialogs from the host OpenCode TUI.
+- **Applications / Libraries / Infrastructure** — the configured environment
+  inventory, glyph target summaries (`⚒` build, `✓` test, `▶` run), git branch
+  and modified/added/deleted counts with ahead/behind, and current run status
+  with owned-resource count. An authenticated SSE stream invalidates
+  status/history/git while the panel is open; 15s/30s reconciliation polling is
+  the fallback.
+- **Application detail** — kind, repository, git state, current status, defaults,
+  targets, owned resources, recent receipts, and the action keys. `c` opens the
+  changed-files list.
+- **Changes / Diff** — bounded changed paths with status glyphs, stage/worktree
+  flags and rename origins; `Enter` opens a bounded unified diff. Binary,
+  symlink, directory and invalid paths are refused with a clear note.
+- **Target picker** — the exact configured target/profile for build, test or run.
+- **Operation** — the running or settled execution receipt, subject,
+  digest/revision, live build steps and per-step logs.
+- **History** — operation receipts with safe app/target/action attribution.
+- **Services** — configured service bindings and controller-wide shared state.
+- **Logs / Telemetry** — owned logs and captured OTLP logs/traces for the
+  selected application.
 
-The UI consumes `UiCapabilityApi` through the same
-`createEnvironmentUiController` as the standalone OpenTUI. Capability names,
-labels and input schemas therefore remain registry-derived; there is no
-plugin-local action table. Approval remains a separate operator surface.
+## Actions
+
+| Key | Action |
+| --- | --- |
+| `b` | Prepare a build review |
+| `s` | Prepare a start/run review |
+| `t` | Prepare a test review |
+| `S` | Stop owned resources for the selected app |
+| `l` | Read owned logs |
+| `L` | Open operation history |
+| `e` | Read telemetry |
+| `r` | Refresh the current surface |
+| `Esc` | Back / close |
+| `?` | Full keybind help |
+
+Build, test and run execute directly:
+
+1. The plugin calls `env_execute` with the exact app/target and a fresh request id.
+2. The operation is admitted and dispatched in one step.
+3. `env_wait` observes the settled receipt; `r` refreshes if it is still running.
+
+Stop is owned-only and does not touch borrowed/shared services. There is no
+approval surface.
+
+## Filtering
+
+While the application filter is focused, `↑/↓` moves the filtered result
+selection. `Enter` returns focus to the list without opening anything; the
+normal arrows/`j/k` then navigate and `Enter` opens the selected application.
+`Esc` clears the filter.
 
 ## Configuration
 
@@ -48,44 +90,20 @@ Defaults:
 | URL | `http://127.0.0.1:38471` |
 | Token file | `~/.config/environment-mcp/client-token` |
 
-Override with environment variables:
+Override with `ENVIRONMENT_MCP_URL` / `ENVIRONMENT_MCP_TOKEN_FILE`, or pass
+`url` / `tokenFile` plugin options through an explicit `cli.json` entry.
 
-```sh
-ENVIRONMENT_MCP_URL=http://127.0.0.1:38471
-ENVIRONMENT_MCP_TOKEN_FILE=/absolute/path/client-token
-```
+## Current backend limits
 
-If installed through an explicit `cli.json` plugin entry, options are also
-accepted:
+The environment-mcp capability registry currently exposes the execution
+inventory, direct execution/wait, owned stop, logs, telemetry, services and
+receipts. It does not yet expose git branch/fetch/worktree operations,
+container stats, Kubernetes cluster inspection, provider change requests /
+issues / pipelines, or app/task CRUD. Those screens are not claimed here; they
+require new capabilities before they can be added to this UI.
 
-```json
-{
-  "plugins": [
-    {
-      "package": "/absolute/path/to/environment-mcp/opencode-plugin",
-      "options": {
-        "url": "http://127.0.0.1:38471",
-        "tokenFile": "/absolute/path/client-token"
-      }
-    }
-  ]
-}
-```
-
-The token is read from the file and never displayed. A missing or invalid token
-shows the same setup error as an unreachable service; `r` retries.
-
-## Limits
-
-- Forms support the flat scalar object schemas the capability registry currently
-  declares. A nested schema is reported as unsupported rather than guessed.
-- The plugin can prepare and dispatch agent capabilities, including destructive
-  ones, after the server's own admission rules. It is not the approval surface.
-- `requestId` fields are prefilled with a fresh UUID so exact-review actions are
-  usable without hand-typing an idempotency key.
-- The local package is not published. OpenCode aliases the TUI runtime imports
-  (`@opentui/solid`, `solid-js`); the package's own `node_modules` is only for
-  type-checking and tests.
+The table and detail only read metadata. `env_list` still carries executable
+descriptors for the agent; this UI never renders them.
 
 ## Checks
 

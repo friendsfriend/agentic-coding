@@ -4,8 +4,6 @@ import {
 	type OperationRecord,
 	OperationRefusal,
 	operationView,
-	operatorAcknowledgementSchema,
-	operatorDecisionSchema,
 	type ScopeRecord,
 } from "../domain/operation.ts";
 import type { SharedService } from "../domain/shared-service.ts";
@@ -337,7 +335,7 @@ export function openOperationJournal(
 							identity,
 							plan,
 							digest: digest(plan),
-							state: "awaiting-approval",
+							state: "approved",
 							revision: 1,
 							createdAt: Date.now(),
 							inspectionRequired: false,
@@ -652,123 +650,6 @@ export function openOperationJournal(
 						scope.state = cleaned ? "closed" : "interrupted";
 						scope.revision++;
 						return scope;
-					});
-				},
-			};
-		},
-		operator() {
-			return {
-				list(offset = 0, limit = 20) {
-					if (
-						!Number.isSafeInteger(offset) ||
-						offset < 0 ||
-						!Number.isSafeInteger(limit) ||
-						limit < 1 ||
-						limit > 20
-					)
-						throw new OperationRefusal("operation-unavailable");
-					const operations = Object.values(store.read().operations).sort(
-						(a, b) => b.createdAt - a.createdAt,
-					);
-					return {
-						operations: operations
-							.slice(offset, offset + limit)
-							.map(
-								({
-									id,
-									scope,
-									state,
-									revision,
-									digest,
-									inspectionRequired,
-									createdAt,
-								}) => ({
-									id,
-									scope,
-									state,
-									revision,
-									digest,
-									inspectionRequired,
-									createdAt,
-								}),
-							),
-						total: operations.length,
-						nextOffset:
-							offset + limit < operations.length ? offset + limit : null,
-					};
-				},
-				inspect(id: string) {
-					const document = store.read();
-					const operation = document.operations[id];
-					if (!operation || digest(operation.plan) !== operation.digest)
-						throw new OperationRefusal("operation-unavailable");
-					return operation;
-				},
-				decide(id: string, raw: unknown) {
-					const decision = operatorDecisionSchema.parse(raw);
-					const request = key([id, decision.requestId]),
-						identity = JSON.stringify(decision);
-					return store.transaction((document) => {
-						const previous = document.decisions[request];
-						if (previous) {
-							if (previous.identity !== identity)
-								throw new OperationRefusal("decision-conflict");
-							return previous.operation;
-						}
-						const operation = document.operations[id];
-						if (!operation) throw new OperationRefusal("operation-unavailable");
-						const scope = document.scopes[operation.scope];
-						if (!scope) throw new OperationRefusal("scope-unavailable");
-						readScope(document, scope.id, scope.principal, true);
-						if (
-							operation.host !== host ||
-							operation.state !== "awaiting-approval" ||
-							operation.digest !== decision.digest ||
-							digest(operation.plan) !== decision.digest ||
-							operation.revision !== decision.revision
-						)
-							throw new OperationRefusal("operation-unavailable");
-						if (Object.keys(document.decisions).length >= 128)
-							throw new OperationRefusal("journal-capacity");
-						operation.state = decision.decision;
-						operation.revision++;
-						document.decisions[request] = {
-							identity,
-							operation: structuredClone(operation),
-						};
-						return operation;
-					});
-				},
-				acknowledge(id: string, raw: unknown) {
-					const acknowledgement = operatorAcknowledgementSchema.parse(raw);
-					const request = key([id, acknowledgement.requestId]),
-						identity = JSON.stringify(acknowledgement);
-					return store.transaction((document) => {
-						const previous = document.acknowledgements[request];
-						if (previous) {
-							if (previous.identity !== identity)
-								throw new OperationRefusal("decision-conflict");
-							return previous.operation;
-						}
-						const operation = document.operations[id];
-						if (
-							!operation ||
-							operation.digest !== acknowledgement.digest ||
-							digest(operation.plan) !== acknowledgement.digest ||
-							operation.revision !== acknowledgement.revision ||
-							operation.state !== "interrupted" ||
-							!operation.inspectionRequired
-						)
-							throw new OperationRefusal("operation-unavailable");
-						if (Object.keys(document.acknowledgements).length >= 128)
-							throw new OperationRefusal("journal-capacity");
-						operation.inspectionRequired = false;
-						operation.revision++;
-						document.acknowledgements[request] = {
-							identity,
-							operation: structuredClone(operation),
-						};
-						return operation;
 					});
 				},
 			};

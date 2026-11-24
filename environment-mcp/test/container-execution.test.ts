@@ -7,7 +7,7 @@ import type { ExecutionPort } from "../src/domain/execution.ts";
 import { createExecutionService } from "../src/services/execution-service.ts";
 import { openOperationJournal } from "../src/services/operation-journal.ts";
 
-test("approved container run records identity, readiness, logs and owned stop", async () => {
+test("direct container run records identity, readiness, logs and owned stop", async () => {
 	const root = fs.realpathSync(
 		fs.mkdtempSync(path.join(os.tmpdir(), "mcp-container-exec-")),
 	);
@@ -108,7 +108,6 @@ test("approved container run records identity, readiness, logs and owned stop", 
 		},
 	};
 	const journal = openOperationJournal(state, [repository]);
-	const operator = journal.operator();
 	const scope = journal.createScope("client", repository, "scope");
 	const service = createExecutionService(
 		manifest,
@@ -125,12 +124,6 @@ test("approved container run records identity, readiness, logs and owned stop", 
 			{ app: "web", target: "container" },
 			signal,
 		);
-		operator.decide(operation.id, {
-			requestId: "approve-container",
-			digest: operation.digest,
-			revision: operation.revision,
-			decision: "approved",
-		});
 		await agent.execute(operation.id, signal);
 		const receipt = (await agent.wait(operation.id, 5, signal)).receipt;
 		expect(receipt).toMatchObject({

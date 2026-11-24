@@ -967,3 +967,370 @@ engine, cluster or container was started.
 The controller now prefills `requestId` form fields with a UUID; a focused UI
 test covers it. Standalone suite: **57 pass, 0 fail** (479 assertions, 28 files,
 8.44s). `bun run lint` and `bun run type-check` are clean.
+
+## App-centric OpenCode environment UI (task 3.41)
+
+Replaced the capability browser with an app-centric OpenCode TUI surface. The
+new shell has Applications, Libraries, Infrastructure, History and Services
+tabs; an application table with target summaries, repository and owned count; an
+application detail with defaults, targets, owned resources and recent receipts;
+a target picker; an exact-review operation view; owned logs; and telemetry
+trace drill-down. The old schema-form/capability-list plugin files were removed.
+
+Operation views now include a safe `subject` projection `{app, target, action?,
+repository?}` parsed from the frozen plan. The plan and identity remain
+operator-only; a direct projection test asserts both are absent. This makes
+history and operation detail attributable without exposing execution commands,
+secrets or the review body.
+
+Live verification used a disposable OpenCode 2.0.22 TUI against the restarted
+shared environment-mcp service:
+
+- The table showed 41 apps with tabs **Applications (25)**, **Libraries (9)**,
+  **Infrastructure (7)**, **History**, **Services** and `35/35 scopes active`.
+- Opening `customer-external-mw` showed six targets, defaults, scope and zero
+  owned resources.
+- `b` opened the build target picker; Enter prepared an exact review and showed
+  **awaiting-approval** with app/target/action/repository and receipt fields.
+- `d` while awaiting approval refused with “Approve the exact review in the
+  operator surface first”; `Esc` returned to the application detail.
+- History showed the new operation with subject attribution from the backend
+  projection; Services reported no configured bindings.
+- `S` stopped zero owned resources and reported zero remaining.
+- `l`/`e` on an app without owned output reported “No owned logs or retained
+  output” / “No telemetry captured” instead of a raw refusal.
+- `?` opened the new two-column help; `Esc` returned through detail to the table.
+- The global plugin symlink hot-reloaded in the running TUI (13 plugins, no
+  plugin error).
+
+The environment-mcp service was rebuilt and restarted; the OpenCode MCP bridge
+reconnected and the doctor reported **117 executable / 0 unavailable** with the
+same three external-secret gaps.
+
+Standalone suite: **60 pass, 0 fail** (478 assertions, 28 files, 7.78s).
+Plugin focused suite: **7 pass** (25 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+Not yet ported because the capability registry has no backend for them: git
+branch/fetch/worktrees, container stats, Kubernetes cluster inspection,
+provider change requests/issues/pipelines, and app/task CRUD. The UI does not
+claim those screens.
+
+> The approval workflow described in the preceding section was removed by
+> task 3.42; execution is now direct.
+
+## Direct execution and operator removal (task 3.42)
+
+Removed the separate human operator approval surface. `env_execute` now admits
+and dispatches one exact configured target in a single step; `env_wait` observes
+the settled receipt. The same request id and intent returns the existing operation
+and never re-runs it. The `env_run` and `env_prepare_dependencies` capabilities
+were removed, leaving 10 direct capabilities.
+
+Removed:
+
+- `src/operator/` client/controller/OpenTUI/HTTP API;
+- `--operator-ui`, `--operator-port` and the operator access file;
+- the second operator listener and its launchd argument;
+- operator/approval tests and the dependency-review service;
+- decision/acknowledgement writes for new operations.
+
+The launchd plist was backed up as
+`dev.environment-mcp.plist.bak-20261124-direct-execution`, the
+`--operator-port 38472` arguments were removed, and the service was reloaded.
+Only `127.0.0.1:38471` is listening; `operator-access.json` was removed; the
+OpenCode MCP bridge reconnected; the doctor reports **117 executable / 0
+unavailable** with the same three external-secret gaps.
+
+Live direct execution used the owned network-only infrastructure target
+`host-infra-network` / `run-compose-default`:
+
+- `env_execute` returned an issued operation with safe subject attribution;
+- `env_wait` returned a completed network receipt;
+- `env_stop` removed the exact network and reported `remaining: 0`;
+- no test network remained.
+
+The disposable OpenCode TUI then executed the same target from the Infrastructure
+tab: the operation view settled to completed with the network receipt, and `S`
+stopped the owned network (`Stopped 1 resource; 0 remaining`). No approval step
+was presented.
+
+Legacy `awaiting-approval`/`rejected` journal records remain readable but are
+never created by new operations; startup interrupts prior ready/issued work and
+never reissues it automatically.
+
+Standalone suite: **58 pass, 0 fail** (411 assertions, 26 files, 9.85s).
+Plugin focused suite: **8 pass** (26 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+
+## Filter focus and navigation (task 3.43)
+
+Fixed the application filter interaction:
+
+- While the filter input is focused, `↑/↓` moves the filtered result selection
+  without stealing `j/k` from the text field.
+- `Enter` now blurs the filter and returns focus to the list; it no longer opens
+  the selected application.
+- After blurring, the normal list keymap is active again: arrows/`j/k` navigate,
+  `Enter` opens the selected application, `/` re-focuses the filter, and `Esc`
+  closes.
+- `Esc` while filtering clears the query and restores the full list.
+- The footer changes from `Enter list · Esc clear` while filtering to the normal
+  list keys after focus returns.
+
+Live-tested in a disposable OpenCode TUI: filter `customer`, move with `↓`/`↑`
+while the input stayed focused, press `Enter` to blur, navigate to `customer-fe`
+with `↓`, then `Enter` to open its detail. The filter remained applied.
+
+Standalone suite: **58 pass, 0 fail** (411 assertions, 26 files, 9.85s).
+Plugin focused suite: **8 pass** (26 assertions). Lint/type-check clean.
+
+## Split panel and fullscreen (task 3.44)
+
+The environment dashboard opens inside an OpenCode session through
+`ui.panel.open("environment", { presentation: "panel" })`; the full-screen
+route remains the fallback when no session panel is available. The panel
+auto-focuses on open and its keymaps are gated on `panel.focused`, so the
+session keeps its own keys while the panel is unfocused. `f` toggles fullscreen
+and windowed mode, and widths below 96 columns use compact header/tabs and
+application rows.
+
+Live-tested in a disposable OpenCode TUI: the split opened beside the session,
+`f` toggled fullscreen both ways, filtering and `Enter`/arrow navigation worked,
+and `Esc` closed the panel and returned to the unchanged session. A full-width
+blank line now separates the content from the footer; the footer background
+starts at the status message, not at the gap.
+
+## Build steps and logs (task 3.45)
+
+`OperationView` now has Info/Steps/Logs tabs. Docker-build receipts are parsed
+into ordered BuildKit steps by `opencode-plugin/src/environments/build.ts`;
+each step keeps its title, status (running/done/cached/error/canceled), duration
+and own log lines. Unrecognized lines and global build output remain in the
+Logs tab, and no line is reordered or invented. The Steps tab is selected
+automatically for a build receipt, the first failing step is selected, and
+`Tab`/`Shift+Tab`/`1–3` switch tabs while `↑/↓`/`j/k` move the step. The step
+list scrolls the selection into view.
+
+Parser tests cover the success/cached shape and a failing BuildKit block with
+its `ERROR`/`------` payload. Live verification in the disposable OpenCode TUI:
+
+- `customer-fe/build-docker-default` executed through the direct capability
+  (no approval) and completed in 9 ordered steps with durations and per-step
+  logs (the base-image step retained 114 log lines, the `npm install` step 29);
+  the Steps tab opened first and the selected step log updated as `j` moved the
+  selection.
+- The earlier `installer-space-mw` failed receipt rendered its failing step as
+  an error with the `ERROR` block and build log lines. That receipt was
+  truncated at the journal output cap, so the truncated header fell back to
+  `Step 10` instead of a title.
+- `Tab`/`1`/`2` switched between Logs, Info and Steps; `Esc` returned to the
+  operation history; the footer showed `Tab tabs · r refresh · Esc back ·
+  ? help · f fullscreen`.
+
+Environment-mcp suite: **60 pass, 0 fail** (420 assertions, 27 files, 9.03s).
+Plugin focused suite: **10 pass, 0 fail** (35 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Live build progress (task 3.46)
+
+`env_operation` now also serves in-flight output. `env_execute` starts the
+direct dispatch; `env_operation` returns `progress: { offset, text, reset? }`
+for an issued operation, capped at 64 KiB per response, while the controller
+keeps a redacted 4 MiB rolling buffer. Output is redacted before buffering,
+including secrets split across chunks, and the buffer is released when the
+operation settles.
+
+The panel polls `env_operation` every second while the operation is issued,
+accumulates deltas up to 8 MiB, and feeds them through the BuildKit parser.
+Steps and their logs therefore appear while the build runs: the running step is
+selected automatically, its log tails the newest lines, and the view settles
+without pressing `r`. A settled receipt is merged back by step id so the
+authoritative final status and duration win even though the journal receipt is
+tail-truncated. The "Dispatched — press r to refresh" hint was removed; the
+footer already lists `r refresh`.
+
+Live-tested with `installer-space-mw/build-docker-default` in the disposable
+OpenCode TUI:
+
+- while the operation was `issued`, Steps showed all nine steps, including
+  cached (`↻`) and the running (`◌`) `build 2/2` step;
+- the running step's log followed the newest output (line 922) instead of the
+  first line;
+- the view changed to the settled state on its own when the build finished; the
+  receipt reported the maven failure (HTTP 403 resolving a site descriptor);
+- after a plugin reload only the tail-truncated receipt remained, so verbose
+  historical builds can still show only the final steps. Live output is
+  in-memory and does not survive a service restart.
+
+Standalone suite: **64 pass, 0 fail** (436 assertions, 28 files, 8.50s).
+Plugin focused suite: **12 pass, 0 fail** (39 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Application status and git state (task 3.47)
+
+The Applications/Libraries/Infrastructure inventory now derives each row's
+current run status from owned resources and issued operations: `running` with an
+owned count, `building`/`testing`/`starting` while an operation is in flight, or
+`stopped`. The repository column and the separate owned column were replaced by
+`Git` and `Status`; the full repository path remains in the application detail.
+Compact rows show the app and status on the first line, then targets, branch and
+working-tree state.
+
+A new read-only `env_git` capability reads `git status --porcelain=v2 --branch`
+for the authenticated repositories with an 8-way concurrency limit, a 3-second
+per-repository timeout and a 256 KiB output bound. It reports branch, short head,
+detached HEAD, modified/added/deleted file counts and ahead/behind; it never
+fetches, checks out, stages or commits. Requests outside the client's repository allowlist are
+rejected with `repository-unauthorized` (409).
+
+Live verification:
+
+- the controller returned 35 authorized repositories; `customer-fe` reported
+  `qa` with 1 added file, `devenv` reported `main` with 1 modified and 2 added,
+  and clean repositories reported their current branches;
+- the panel rendered `Git` and `Status` columns with a one-column gap. The Git
+  cell shows a yellow `~modified`, green `+added`, red `-deleted` and
+  ahead/behind above a truncated branch; application names are bold and use the
+  base text color. `devenv` rendered `~1 +2`, and `document-service` rendered
+  `+2 ↑1` over a truncated `feature/DAC…` branch;
+- after running `host-infra-network/run-compose-default`, its row showed
+  `running` and `1 owned`; `env_stop` removed the network with `remaining: 0`,
+  and the row returned to `stopped`;
+- an unauthorized repository request returned HTTP 409.
+
+Environment-mcp suite: **67 pass, 0 fail** (450 assertions, 29 files, 10.11s).
+Plugin focused suite: **12 pass, 0 fail** (39 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Target glyphs (task 3.48)
+
+The inventory target summary, the application-detail target rows and defaults,
+and the target-picker heading now use compact glyphs instead of the words
+`build`, `test` and `run`:
+
+- `⚒` build
+- `✓` test
+- `▶` run
+- `•` fallback for an unknown action
+
+Counts append directly to the glyph (`⚒2`, `▶3`) and summaries are joined by
+spaces. The inventory rendered `⚒2 ✓ ▶3` for `customer-external-mw`, its detail
+rows showed the glyph in a two-column action slot, and pressing `b` opened the
+picker with the heading `⚒ customer-external-mw`.
+
+The model test now asserts `⚒ ✓ ▶2` for the fixture. Suite: **67 pass, 0 fail**
+(450 assertions, 29 files, 10.11s). `bun run lint` and `bun run type-check` are
+clean.
+
+## Live status and git refresh (task 3.49)
+
+This was the polling baseline: while the panel was open on an inventory tab or
+the application detail, the store polled `env_status` and `env_history` every 5
+seconds and `env_git` every 10 seconds. Task 3.50 replaces the primary path with
+SSE invalidation and keeps a 15s/30s reconciliation poll as fallback.
+
+The application detail Overview now shows `Git` (branch, modified/added/deleted
+counts and ahead/behind) and `Status` (running, building/testing/starting or
+stopped), using the same status rule as the inventory row.
+
+Live verification:
+
+- starting `host-infra-network` externally changed its inventory row from
+  `stopped` to `running` / `1 owned` within 7 seconds without pressing `r`; the
+  detail showed the same status;
+- stopping it externally returned the detail to `stopped` / `0 owned` within
+  7 seconds;
+- creating a disposable untracked file in the infrastructure repository changed
+  the detail line to `main · ~13 +1 -1 ↑3` within 11 seconds; removing the file
+  restored `main · ~13 -1 ↑3`.
+
+Environment-mcp suite: **67 pass, 0 fail** (450 assertions, 29 files, 7.74s).
+`bun run lint` and `bun run type-check` are clean.
+
+## Event invalidation (task 3.50)
+
+The capability listener now serves an authenticated `/events` SSE stream in
+addition to request/response capabilities. Events are invalidation hints, not
+state payloads:
+
+- `status`, `git`, `operation` and `services` events carry only the repository
+  and optional operation id; the plugin re-reads the existing capabilities.
+- Events are filtered to the authenticated client's repository allowlist.
+- The bus keeps a bounded 256-event ring. Reconnects send `Last-Event-ID` and
+  receive missed events followed by a snapshot marker; heartbeats run every
+  15 seconds. The stream is capped at 64 subscribers.
+- The execution service emits `operation`/`status` when an operation is issued,
+  `operation`/`status`/`git`/`services` when it settles, and
+  `status`/`services` when an operation stops or a scope closes.
+- The plugin reconnects with backoff and `Last-Event-ID`, refreshes status/history
+  on status/operation events, refreshes only the affected repository on git
+  events, and uses a latest-request-wins rule so a stale response cannot
+  overwrite a newer observation. A 15s status/history and 30s git reconciliation
+  poll remains for missed events and external changes (Docker stops, file edits).
+
+Live verification:
+
+- a raw SSE connection received `snapshot`, then issue/settle
+  `operation`/`status`/`git`/`services` frames for a real network run, and
+  `status`/`services` frames on stop;
+- in the TUI, starting `host-infra-network` changed the row to
+  `running` / `1 owned` and stopping it returned to `stopped` within a few
+  seconds without pressing `r`; the backend reported owned 1 then 0;
+- the Git column and detail remained populated, and `r` still performs an
+  explicit full refresh.
+
+Tests add the event-bus filtering/replay unit and an authenticated SSE snapshot
+test.
+
+### Heartbeat parser regression (task 3.51)
+
+The first SSE client parser used a `continue` for frames without `data` before
+advancing to the next frame boundary. The first 15-second heartbeat therefore
+left the loop on the stale boundary and spun forever, freezing the TUI at 100%
+CPU. The parser now consumes every complete frame before continuing, ignoring
+comment-only heartbeats. `drainSseFrames` is a pure function covered by tests
+for heartbeat-then-data, multiple frames and partial remainders.
+
+Isolated CPU check in a disposable TUI: with events and live refresh enabled,
+CPU stayed at 0.1–1.2% through 60 seconds (past two heartbeats); disabling only
+SSE left the baseline similarly low, confirming the heartbeat loop was the
+cause.
+
+Environment-mcp suite: **71 pass, 0 fail** (463 assertions, 32 files, 11.77s).
+Plugin focused suite: **14 pass, 0 fail** (43 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Read-only git changes and diff (task 3.52)
+
+Added `env_git_changes` and `env_git_diff`, both restricted to the authenticated
+repository allowlist:
+
+- `env_git_changes` parses NUL-delimited porcelain v2, reports modified, added,
+  deleted, renamed, copied, conflicted and untracked paths with staged/worktree
+  presence, and caps the list at 500 entries. Paths are made relative to the
+  application repository even when it is a subdirectory of a larger worktree;
+  paths outside the app repository are omitted.
+- `env_git_diff` validates the requested path against the current change list,
+  refuses absolute paths and `..` segments, and returns at most 48 KiB of unified
+  diff. Untracked regular files are diffed against `/dev/null`; binaries,
+  directories and symlinks return a note instead of content. No fetch, checkout,
+  stage or commit is performed.
+- The application detail exposes `c` → Changes (`↑/↓`/`j/k`, `Enter`, `r`,
+  `Esc`) and the diff view (`r`, `Esc`, scrollable body). The footer/help
+  catalogs include both surfaces.
+
+Live verification:
+
+- `env_git_changes` returned 31 app-relative paths for the `devenv-config/devenv`
+  worktree and 3 for `development/devenv`; the deleted
+  `.pi/extensions/tools-jira.ts` diff returned 16,649 characters;
+- the Changes view rendered `M`/`A` glyphs, paths and `worktree` flags; `Enter`
+  opened the diff, including a `truncated` badge for the 48 KiB `tui/bun.lock`
+  diff; `Esc` returned Changes → detail;
+- a `../etc/passwd` path was refused as `invalid-path` in the adapter test.
+
+Environment-mcp suite: **74 pass, 0 fail** (500 assertions, 33 files, 8.35s).
+Plugin focused suite: **15 pass, 0 fail** (47 assertions). `bun run lint` and
+`bun run type-check` are clean.

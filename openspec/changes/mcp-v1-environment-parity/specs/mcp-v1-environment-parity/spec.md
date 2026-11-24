@@ -10,7 +10,7 @@ checkout. Compatibility readers SHALL be distinct from execution authorization;
 unimplemented mutation tools MUST NOT be advertised.
 
 #### Scenario: Run the standalone artifact
-- **WHEN** an operator builds the package and copies only its output outside the checkout
+- **WHEN** a user builds the package and copies only its output outside the checkout
 - **THEN** a standard MCP client can inspect a configured fixture without v1/v2 source, an agent host or their state stores
 
 #### Scenario: Preserve the old installation during construction
@@ -55,7 +55,7 @@ Stopping, cancelling or expiring an app scope SHALL release its references but M
 
 ### Requirement: Portable authority and replay fences
 
-MCP SHALL use one authenticated environment authority with fixed principal/workspace bindings. Dependency reuse MUST NOT expose operator credentials to agents or restore previous-host mutation/cleanup permits. Changed dependency identity or connectivity SHALL require a new frozen plan and decision rather than modifying an approved record.
+MCP SHALL use one authenticated environment authority with fixed principal/workspace bindings. Dependency reuse MUST NOT expose human credentials to agents or restore previous-host mutation/cleanup permits. Changed dependency identity or connectivity SHALL require a new frozen plan rather than modifying an issued record.
 
 #### Scenario: Replaced dependency
 - **WHEN** a reviewed shared dependency is replaced before startup
@@ -76,8 +76,8 @@ capability registry with its input schema, annotations, UI label and handler. MC
 tools and the OpenTUI action surface SHALL derive from that registry; neither
 entry point may carry an independent action table or handler. The UI layer SHALL
 NOT import MCP registration, listeners, journals or runtime/service construction.
-Operator approval SHALL remain a separate human-only capability and MUST NOT be
-added to the agent registry.
+Execution SHALL be direct and idempotent. There SHALL be no approval, decision
+or acknowledgement capability in the agent registry or UI.
 
 #### Scenario: Add an agent action
 - **WHEN** a capability is added to the registry
@@ -94,7 +94,7 @@ endpoint, Docker health, or only Docker running state. Running-only readiness
 MUST NOT be described as application health. Declared endpoints SHALL be explicit
 loopback HTTP(S) URLs with matching Compose service selectors; an unavailable
 probe SHALL be unknown, not a successful readiness claim. BuildKit secret values
-SHALL remain out of review plans and receipts and SHALL be redacted from output.
+SHALL remain out of execution plans and receipts and SHALL be redacted from output.
 
 #### Scenario: Application endpoint
 - **WHEN** a Compose target declares a loopback endpoint and it returns HTTP 2xx/3xx
@@ -104,22 +104,22 @@ SHALL remain out of review plans and receipts and SHALL be redacted from output.
 - **WHEN** a Compose target has no endpoint or healthcheck
 - **THEN** the receipt reports `docker-running` and does not claim application health
 
-### Requirement: Separate operator approval surface
+### Requirement: Direct execution and receipts
 
-Exact human approval, rejection and recovery acknowledgement SHALL be available
-through a human-only operator interface and MUST NOT be registered as agent MCP
-or UI capabilities. The operator UI SHALL consume the authenticated operator API
-without constructing the server, journal or runtime adapters. Decisions and
-acknowledgements SHALL be fenced by the reviewed digest and revision; replay may
-return the original receipt but MUST NOT re-arm issuance or restore handles.
+`env_execute` SHALL admit and dispatch one exact configured target in a single
+step. Replaying the same request id and intent SHALL return the same operation
+and MUST NOT re-run it. `env_wait` SHALL observe the settled receipt. There SHALL
+be no approval, decision, acknowledgement, operator listener or operator access
+file. Issued uncertainty SHALL remain inspection-required and MUST NOT be
+reissued automatically.
 
-#### Scenario: Approve from the operator UI
-- **WHEN** a human inspects an awaiting-approval operation and confirms approval
-- **THEN** the exact digest/revision is submitted through the operator API and the agent capability list remains unchanged
+#### Scenario: Execute directly
+- **WHEN** an authorized client invokes `env_execute` for a configured app/target
+- **THEN** the operation is admitted and dispatched without a separate approval step, and its receipt names the exact readiness source
 
-#### Scenario: Acknowledge an interruption
-- **WHEN** an interrupted operation is marked inspection-required
-- **THEN** a human can clear only that exact revision's inspection marker; the operation remains interrupted and cannot be re-issued
+#### Scenario: Replay is not a rerun
+- **WHEN** the same request id and intent is invoked again
+- **THEN** the original operation is returned and no second dispatch occurs
 
 ### Requirement: Local stdio bridge preserves authority
 
@@ -164,7 +164,7 @@ uncertain work, and MUST refuse scope creation when no safe scope exists.
 
 ### Requirement: Idle owned-resource cleanup
 
-When an operator configures an idle timeout, the controller SHALL stop only owned
+When a user configures an idle timeout, the controller SHALL stop only owned
 apps after that much capability inactivity. A client with an active operation
 MUST be exempt. Borrowed/shared/external resources MUST NOT be stopped, and a
 failed cleanup MUST retain its owned record for a later retry. Idle cleanup MUST
@@ -203,12 +203,12 @@ authority.
 ### Requirement: Durable controller diagnostics
 
 The controller SHALL maintain a private, bounded, sanitized diagnostics event
-log and expose only a bounded tail through the authenticated operator interface.
-It MUST NOT store credentials, plans, tool arguments or free text, and diagnostics
+log for local troubleshooting. It MUST NOT expose an HTTP diagnostics or operator
+surface, store credentials, plans, tool arguments or free text, and diagnostics
 failures MUST NOT fail a capability request.
 
 #### Scenario: Diagnose capability activity
-- **WHEN** an operator reads the diagnostics tail after a capability call
+- **WHEN** the local diagnostics log is read after a capability call
 - **THEN** it includes allowlisted event/action/scope fields and no bearer token, plan or argument
 
 #### Scenario: Log rotation
@@ -217,13 +217,13 @@ failures MUST NOT fail a capability request.
 
 ### Requirement: Read-only configuration doctor
 
-The package SHALL provide a read-only configuration report for operators. It MUST
+The package SHALL provide a read-only configuration report for users. It MUST
 not create state or listeners, and MUST not print commands, plans, credentials or
 repository paths. It SHALL report executable/unavailable counts and sanitized
 migration hints.
 
 #### Scenario: Unsupported Compose target
-- **WHEN** an operator runs the doctor against a configuration with a non-prefixed Compose container name
+- **WHEN** a user runs the doctor against a configuration with a non-prefixed Compose container name
 - **THEN** the report counts it as unavailable and includes the sanitized prefix-migration hint
 
 ### Requirement: Provider-aware container execution
@@ -401,11 +401,11 @@ NOT restore ownership after restart.
 ### Requirement: Network prerequisite admission
 
 A member with an explicit `networkFrom` prerequisite SHALL be refused before
-approval when the exact labelled bridge is absent and no matching approved
+dispatch when the exact labelled bridge is absent and no matching configured
 network-only prerequisite exists, or when an existing bridge does not match the
 declared app/target. Admission MUST NOT create the bridge. The declared target
-`prerequisites` SHALL remain visible in catalog metadata. Dispatch MAY create an
-approved network-only prerequisite bridge when absent; it MUST then own only
+`prerequisites` SHALL remain visible in catalog metadata. Dispatch MAY create a
+configured network-only prerequisite bridge when absent; it MUST then own only
 that original bridge and remove it only after all attached containers settle.
 
 #### Scenario: Missing bridge with approved prerequisite

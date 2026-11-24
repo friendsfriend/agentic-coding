@@ -8,7 +8,7 @@
 	},
 	"scripts": {
 		"start": "bun src/cli.ts",
-		"build": "bun build src/cli.ts --target=bun --outdir=dist --external @opentui/core && bun build src/ui/index.ts --target=bun --outdir=dist/ui --external @opentui/core && bun build src/operator/index.ts --target=bun --outdir=dist/operator --external @opentui/core",
+		"build": "bun build src/cli.ts --target=bun --outdir=dist --external @opentui/core && bun build src/ui/index.ts --target=bun --outdir=dist/ui --external @opentui/core",
 		"test": "bun run build && bun test",
 		"lint": "biome check .",
 		"format": "biome check --write .",
@@ -29,10 +29,6 @@
 		"./ui": {
 			"types": "./src/ui/index.ts",
 			"import": "./dist/ui/index.js"
-		},
-		"./operator-ui": {
-			"types": "./src/operator/index.ts",
-			"import": "./dist/operator/index.js"
 		}
 	}
 }

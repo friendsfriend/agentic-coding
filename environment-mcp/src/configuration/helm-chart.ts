@@ -183,5 +183,5 @@ export function verifyHelmChart(chart: string, expected: string) {
 	if (!fs.lstatSync(root).isDirectory())
 		throw new Error("Helm chart is unavailable");
 	if (identity(walk(root)).digest !== expected)
-		throw new Error("Helm chart changed after approval");
+		throw new Error("Helm chart changed after admission");
 }

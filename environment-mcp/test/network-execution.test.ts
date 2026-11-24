@@ -152,7 +152,6 @@ test("a network-only target creates the exact bridge and members join without ow
 		},
 	} as unknown as ExecutionPort;
 	const journal = openOperationJournal(state, [repository]);
-	const operator = journal.operator();
 	const scope = journal.createScope("client", repository, "scope");
 	const service = createExecutionService(
 		manifest,
@@ -163,24 +162,12 @@ test("a network-only target creates the exact bridge and members join without ow
 	);
 	const agent = service.bind("client", scope.id);
 	const signal = new AbortController().signal;
-	const approve = async (operation: {
-		id: string;
-		digest: string;
-		revision: number;
-	}) =>
-		operator.decide(operation.id, {
-			requestId: `approve-${operation.id}`,
-			digest: operation.digest,
-			revision: operation.revision,
-			decision: "approved",
-		});
 	try {
 		const member = await agent.admit(
 			"member",
 			{ app: "api", target: "run" },
 			signal,
 		);
-		await approve(member);
 		await agent.execute(member.id, signal);
 		expect((await agent.wait(member.id, 5, signal)).receipt).toMatchObject({
 			status: "completed",
@@ -206,7 +193,6 @@ test("a network-only target creates the exact bridge and members join without ow
 			{ app: "infra", target: "net" },
 			signal,
 		);
-		await approve(networkRun);
 		await agent.execute(networkRun.id, signal);
 		expect((await agent.wait(networkRun.id, 5, signal)).receipt).toMatchObject({
 			status: "completed",

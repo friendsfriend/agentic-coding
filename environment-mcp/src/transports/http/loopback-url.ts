@@ -1,5 +1,5 @@
 /** The environment listeners bind numeric loopback only. Sharing this check keeps
- * the UI and operator clients aligned with the server host fence. */
+ * the UI clients aligned with the server host fence. */
 export function loopbackBaseUrl(raw: string) {
 	const url = new URL(raw);
 	if (

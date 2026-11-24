@@ -74,7 +74,6 @@ test("the live idle reaper closes a clean scope and the next execution reopens i
 		directory: state,
 		clients,
 		port: 0,
-		operatorPort: 0,
 		idleTimeoutSec: 1,
 	});
 	const api = createHttpUiCapabilityApi({ url: server.url, token });
@@ -88,12 +87,27 @@ test("the live idle reaper closes a clean scope and the next execution reopens i
 		expect((await api.invoke("env_status", {})).scope).toMatchObject({
 			state: "closed",
 		});
-		const operation = await api.invoke("env_execute", {
+		const execution = await api.invoke("env_execute", {
 			app: "api",
 			target: "run",
 			requestId: "idle-reopen",
 		});
-		expect(operation).toMatchObject({ state: "awaiting-approval" });
+		const operation = execution.operation as { id: string; state: string };
+		expect(operation.state).toBe("issued");
+		expect(
+			await api.invoke("env_wait", {
+				operationId: operation.id,
+				waitSec: 5,
+			}),
+		).toMatchObject({
+			operation: { state: "completed" },
+			receipt: {
+				status: "completed",
+				kind: "process",
+				readiness: "ready",
+				readinessSource: "process",
+			},
+		});
 		expect((await api.invoke("env_status", {})).scope).toMatchObject({
 			state: "active",
 		});
