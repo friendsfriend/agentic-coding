@@ -107,3 +107,4 @@
 - [x] 3.85 Add bounded namespace events, single-resource describe and pod tail logs with panel views and keys, using only fixed read-only kubectl commands.
 - [x] 3.86 Add tag and stash listing, annotated tag creation, tag deletion, and stash pop/apply/drop through preview-confirm writes.
 - [x] 3.87 Add path staging and unstage-all/stage-all actions, and split commit into staged-only `commit` plus `commit-all`, with panel staging keys.
+- [x] 3.88 Add force-with-lease push and rebase abort to guarded Git writes, with upstream/lease validation and panel keys.

@@ -175,6 +175,8 @@ const GIT: readonly Keybind[] = [
 	{ key: "f", action: "fetch", short: "fetch" },
 	{ key: "p", action: "pull fast-forward", short: "pull" },
 	{ key: "P", action: "push branch", short: "push" },
+	{ key: "F", action: "force push with lease", short: "force push" },
+	{ key: "X", action: "abort rebase", short: "abort rebase" },
 	{ key: "t", action: "create tag", short: "tag" },
 	{ key: "T", action: "list tags", short: "tags" },
 	{ key: "R", action: "rename branch", short: "rename" },

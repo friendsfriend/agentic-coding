@@ -681,10 +681,11 @@ as a shared-controller manifest. No application starts automatically.
   can therefore target any local git repository through this flag; only the git
   surface is exposed, never environment execution.
 - `env_git_write({repository, session?, action, ..., requestId, confirm?})`
-  previews and confirms higher-risk git writes: `push` (never force), lightweight
-  or annotated `tag`, `tag-delete`, `branch-rename`, `remote-set-url`, staged
+  previews and confirms higher-risk git writes: `push`, `push-force` with an
+  exact `--force-with-lease` from the local remote-tracking ref, lightweight or
+  annotated `tag`, `tag-delete`, `branch-rename`, `remote-set-url`, staged
   `commit`, `commit-all`, `stash`, `stash-pop`/`stash-apply`/`stash-drop`,
-  `merge` and `rebase`. The first call returns the exact intent digest without
+  `merge`, `rebase` and `rebase-abort`. The first call returns the exact intent digest without
   running git; repeating with that digest executes it. Merge/rebase require a
   clean worktree and refuse the current branch. `commit` keeps the current
   index; `commit-all` stages every change first. Replay protection is

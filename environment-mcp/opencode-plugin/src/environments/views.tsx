@@ -4893,6 +4893,7 @@ export function TagAddView(props: {
 
 function gitWriteLabel(action: GitWriteRequest["action"] | undefined) {
 	if (action === "push") return "Push branch";
+	if (action === "push-force") return "Force push with lease";
 	if (action === "tag") return "Create tag";
 	if (action === "tag-delete") return "Delete tag";
 	if (action === "stash-pop") return "Pop stash";
@@ -4905,6 +4906,7 @@ function gitWriteLabel(action: GitWriteRequest["action"] | undefined) {
 	if (action === "stash") return "Stash changes";
 	if (action === "merge") return "Merge branch";
 	if (action === "rebase") return "Rebase branch";
+	if (action === "rebase-abort") return "Abort rebase";
 	return "Git write";
 }
 
@@ -4928,6 +4930,8 @@ function gitWriteHint(action: GitWriteRequest["action"] | undefined) {
 		return "All changes are staged and committed. Enter previews the exact intent digest.";
 	if (action === "push")
 		return "No force push is used. Enter previews the exact intent digest.";
+	if (action === "push-force")
+		return "Uses the local remote-tracking ref as an exact lease. Fetch before forcing. Enter previews the exact intent digest.";
 	if (action === "merge" || action === "rebase")
 		return "The worktree must be clean. Enter previews the exact intent digest.";
 	if (action === "stash")

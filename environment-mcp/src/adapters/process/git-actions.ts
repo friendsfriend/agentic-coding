@@ -457,10 +457,14 @@ function writeReason(action: GitWriteRequest["action"], output: string) {
 	)
 		return "remote-unavailable";
 	if (
-		action === "push" &&
+		(action === "push" || action === "push-force") &&
 		/rejected|non-fast-forward|failed to push/i.test(output)
 	)
 		return "push-rejected";
+	if (action === "push-force" && /stale info|force-with-lease/i.test(output))
+		return "force-lease-stale";
+	if (action === "rebase-abort" && /no rebase in progress/i.test(output))
+		return "no-rebase";
 	if (action === "commit" && /nothing to commit|no changes added/i.test(output))
 		return "nothing-to-commit";
 	if (
@@ -487,7 +491,10 @@ function writeReason(action: GitWriteRequest["action"], output: string) {
 	return undefined;
 }
 
-function writeArgs(request: GitWriteRequest): {
+function writeArgs(
+	request: GitWriteRequest,
+	lease?: string,
+): {
 	args: string[];
 	timeoutMs: number;
 } {
@@ -497,6 +504,16 @@ function writeArgs(request: GitWriteRequest): {
 				args: [
 					"push",
 					...(request.setUpstream ? ["-u"] : []),
+					request.remote,
+					request.branch,
+				],
+				timeoutMs: 120_000,
+			};
+		case "push-force":
+			return {
+				args: [
+					"push",
+					`--force-with-lease=${request.branch}:${lease ?? ""}`,
 					request.remote,
 					request.branch,
 				],
@@ -555,6 +572,8 @@ function writeArgs(request: GitWriteRequest): {
 			};
 		case "rebase":
 			return { args: ["rebase", request.branch], timeoutMs: 60_000 };
+		case "rebase-abort":
+			return { args: ["rebase", "--abort"], timeoutMs: 60_000 };
 	}
 }
 
@@ -578,7 +597,31 @@ export async function runGitWrite(
 				};
 			}
 		}
-		const { args, timeoutMs } = writeArgs(request);
+		let lease: string | undefined;
+		if (request.action === "push-force") {
+			const resolved = await capture(
+				repository,
+				[
+					"rev-parse",
+					"--verify",
+					`refs/remotes/${request.remote}/${request.branch}`,
+				],
+				signal,
+				3000,
+			);
+			if (resolved.code !== 0 || !resolved.stdout.trim()) {
+				return {
+					repository,
+					action: request.action,
+					status: "failed",
+					output: "",
+					truncated: false,
+					reason: "force-lease-missing",
+				};
+			}
+			lease = resolved.stdout.trim();
+		}
+		const { args, timeoutMs } = writeArgs(request, lease);
 		const result = await capture(repository, args, signal, timeoutMs);
 		const output = redactRemoteCredentials(
 			[result.stdout, result.stderr]

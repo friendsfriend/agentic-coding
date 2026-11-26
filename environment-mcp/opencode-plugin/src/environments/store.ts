@@ -836,6 +836,10 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 			"merge-conflict": "Merge stopped on conflicts",
 			"rebase-conflict": "Rebase stopped on conflicts",
 			"push-rejected": "Push was rejected; fetch and reconcile first",
+			"force-lease-missing":
+				"Force push requires an upstream and a fetched remote-tracking ref",
+			"force-lease-stale": "The remote moved since the last fetch; fetch first",
+			"no-rebase": "No rebase is in progress",
 			"authentication-required": "The remote requires credentials",
 			"remote-unavailable": "The remote is unavailable",
 			"identity-missing": "Configure git user.name and user.email first",
@@ -1287,7 +1291,7 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 			beginTagAdd(origin);
 			return;
 		}
-		if (action === "push") {
+		if (action === "push" || action === "push-force") {
 			if (!branch) return;
 			const upstreamRemote = branch.upstream?.split("/")[0];
 			const remote = [upstreamRemote, "origin", remoteList[0]?.name].find(
@@ -1298,12 +1302,23 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 				setError("No git remote is configured.");
 				return;
 			}
-			request = {
-				action,
-				branch: branch.name,
-				remote,
-				setUpstream: !branch.upstream,
-			};
+			if (action === "push-force") {
+				if (!branch.upstream) {
+					setMessage("Force push requires an upstream branch.");
+					setError("Force push requires an upstream branch.");
+					return;
+				}
+				request = { action, branch: branch.name, remote };
+			} else {
+				request = {
+					action,
+					branch: branch.name,
+					remote,
+					setUpstream: !branch.upstream,
+				};
+			}
+		} else if (action === "rebase-abort") {
+			request = { action };
 		} else if (action === "tag-delete") {
 			const tag = selectedTag();
 			if (!tag) return;

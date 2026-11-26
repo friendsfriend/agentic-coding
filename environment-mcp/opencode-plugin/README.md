@@ -61,13 +61,15 @@ Open it with any of:
 - **Git** — `g` opens a raised header matching the environment shell, with the
   current branch, branch/worktree counts and the `/` branch filter in the
   header. `Enter` switches branch, `f` fetches, `p` pulls fast-forward-only,
-  `P` pushes, `t` creates a tag (message optional for an annotated tag), `T`
+  `P` pushes, `F` force-pushes with an exact lease, `X` aborts an in-progress
+  rebase, `t` creates a tag (message optional for an annotated tag), `T`
   lists tags, `R` renames the selected branch, `C` commits staged changes, `A`
   commits all changes, `s` stashes, `S` lists stashes, `M` merges the selected
   branch into the current branch, `B` rebases the current branch onto the
   selected one, `d` safely deletes the selected branch, `m` opens remotes, and
   `c` opens changes. Writes show an exact target and digest, then require `y`;
-  push never forces and merge/rebase require a clean worktree. `<leader>G` opens the same view
+  ordinary push never forces, force push requires an upstream and local
+  remote-tracking ref, and merge/rebase require a clean worktree. `<leader>G` opens the same view
   directly for the agent cwd, hiding the environment tabs; `Esc` closes it.
   The cwd is `process.cwd()` unless the plugin receives a `directory` or `cwd`
   option.

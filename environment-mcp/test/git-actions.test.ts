@@ -609,3 +609,111 @@ test("tags, stashes and staging writes", async () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("force-with-lease push and rebase abort are guarded", async () => {
+	const root = fs.realpathSync(
+		fs.mkdtempSync(path.join(os.tmpdir(), "mcp-git-force-")),
+	);
+	const remote = path.join(root, "remote.git");
+	const repository = path.join(root, "repo");
+	const git = (cwd: string, ...args: string[]) => {
+		const child = Bun.spawnSync(["git", "-C", cwd, ...args], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		if (child.exitCode !== 0)
+			throw new Error(`git ${args.join(" ")} failed: ${child.stderr}`);
+		return child.stdout.toString().trim();
+	};
+	const signal = new AbortController().signal;
+	const service = createGitActionService();
+	const write = async (
+		request: Parameters<typeof service.write>[1],
+		requestId: string,
+	) => {
+		const preview = await service.write(
+			repository,
+			request,
+			requestId,
+			undefined,
+			signal,
+		);
+		if (preview.status !== "confirmation-required")
+			throw new Error("no confirmation digest");
+		return await service.write(
+			repository,
+			request,
+			requestId,
+			preview.digest,
+			signal,
+		);
+	};
+	try {
+		fs.mkdirSync(remote);
+		git(remote, "init", "--bare", "--initial-branch=main");
+		git(root, "init", "--initial-branch=main", repository);
+		git(repository, "config", "user.name", "Fixture");
+		git(repository, "config", "user.email", "fixture@example.invalid");
+		fs.writeFileSync(path.join(repository, "file.txt"), "one\n");
+		git(repository, "add", "file.txt");
+		git(repository, "commit", "--quiet", "-m", "one");
+		git(repository, "remote", "add", "origin", remote);
+		git(repository, "push", "--quiet", "-u", "origin", "main");
+		fs.writeFileSync(path.join(repository, "file.txt"), "two\n");
+		git(repository, "commit", "--quiet", "-am", "two");
+		git(repository, "push", "--quiet");
+		git(repository, "reset", "--hard", "--quiet", "HEAD~1");
+		expect(
+			await write(
+				{ action: "push-force", branch: "main", remote: "origin" },
+				"force-push-1",
+			),
+		).toMatchObject({
+			status: "completed",
+			outcome: { status: "completed", action: "push-force" },
+		});
+		expect(git(remote, "rev-parse", "main")).toBe(
+			git(repository, "rev-parse", "main"),
+		);
+
+		git(repository, "branch", "no-upstream");
+		const refused = await write(
+			{ action: "push-force", branch: "no-upstream", remote: "origin" },
+			"force-push-2",
+		);
+		expect(refused).toMatchObject({
+			status: "completed",
+			outcome: { status: "refused", reason: "force-lease-missing" },
+		});
+
+		git(repository, "checkout", "--quiet", "-b", "topic");
+		fs.writeFileSync(path.join(repository, "conflict.txt"), "topic\n");
+		git(repository, "add", "conflict.txt");
+		git(repository, "commit", "--quiet", "-m", "topic");
+		git(repository, "checkout", "--quiet", "main");
+		fs.writeFileSync(path.join(repository, "conflict.txt"), "main\n");
+		git(repository, "add", "conflict.txt");
+		git(repository, "commit", "--quiet", "-m", "main");
+		git(repository, "checkout", "--quiet", "topic");
+		const rebase = Bun.spawnSync(["git", "-C", repository, "rebase", "main"], {
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(rebase.exitCode).not.toBe(0);
+		expect(
+			await write({ action: "rebase-abort" }, "rebase-abort-1"),
+		).toMatchObject({
+			status: "completed",
+			outcome: { status: "completed", action: "rebase-abort" },
+		});
+		expect(git(repository, "status", "--porcelain")).toBe("");
+		expect(git(repository, "branch", "--show-current")).toBe("topic");
+		const noRebase = await write({ action: "rebase-abort" }, "rebase-abort-2");
+		expect(noRebase).toMatchObject({
+			status: "completed",
+			outcome: { status: "refused", reason: "no-rebase" },
+		});
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

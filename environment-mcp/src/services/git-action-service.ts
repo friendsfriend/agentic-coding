@@ -104,6 +104,26 @@ function validRefName(
 	return check.exitCode === 0;
 }
 
+function rebaseInProgress(repository: string) {
+	const resolved = Bun.spawnSync(
+		["git", "-C", repository, "rev-parse", "--git-path", "rebase-merge"],
+		{ stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+	);
+	const apply = Bun.spawnSync(
+		["git", "-C", repository, "rev-parse", "--git-path", "rebase-apply"],
+		{ stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+	);
+	return [resolved, apply].some((entry) => {
+		if (entry.exitCode !== 0) return false;
+		const value = entry.stdout.toString().trim();
+		if (!value) return false;
+		const target = path.isAbsolute(value)
+			? value
+			: path.join(repository, value);
+		return fs.existsSync(target);
+	});
+}
+
 function refExists(repository: string, ref: string) {
 	const check = Bun.spawnSync(
 		["git", "-C", repository, "rev-parse", "--verify", "--quiet", ref],
@@ -121,6 +141,8 @@ function writeDigest(repository: string, request: GitWriteRequest) {
 function writeTarget(request: GitWriteRequest) {
 	if (request.action === "push")
 		return `${request.branch} → ${request.remote}${request.setUpstream ? " (set upstream)" : ""}`;
+	if (request.action === "push-force")
+		return `${request.branch} → ${request.remote} (force-with-lease)`;
 	if (request.action === "tag") return request.name;
 	if (request.action === "tag-delete") return request.name;
 	if (
@@ -135,6 +157,7 @@ function writeTarget(request: GitWriteRequest) {
 	if (request.action === "commit") return "staged changes";
 	if (request.action === "commit-all") return "all changes";
 	if (request.action === "stash") return "working tree";
+	if (request.action === "rebase-abort") return "current rebase";
 	return request.branch;
 }
 
@@ -395,7 +418,7 @@ async function validateWrite(
 ): Promise<string | undefined> {
 	const branches = await readGitBranches(repository, signal);
 	if (branches.note) return "unavailable";
-	if (request.action === "push") {
+	if (request.action === "push" || request.action === "push-force") {
 		const branch = branches.branches.find(
 			(entry) => entry.name === request.branch,
 		);
@@ -405,6 +428,17 @@ async function validateWrite(
 		if (remotes.note) return "unavailable";
 		if (!remotes.remotes.some((remote) => remote.name === request.remote))
 			return "remote-not-found";
+		if (request.action === "push-force") {
+			if (branch.upstream !== `${request.remote}/${request.branch}`)
+				return "force-lease-missing";
+			if (
+				!refExists(
+					repository,
+					`refs/remotes/${request.remote}/${request.branch}`,
+				)
+			)
+				return "force-lease-missing";
+		}
 		return undefined;
 	}
 	if (request.action === "tag") {
@@ -471,6 +505,10 @@ async function validateWrite(
 				? "nothing-to-commit"
 				: "nothing-to-stash";
 		return undefined;
+	}
+	if (request.action === "rebase-abort") {
+		if (rebaseInProgress(repository)) return undefined;
+		return "no-rebase";
 	}
 	if (!branches.current) return "detached-head";
 	const branch = branches.branches.find(

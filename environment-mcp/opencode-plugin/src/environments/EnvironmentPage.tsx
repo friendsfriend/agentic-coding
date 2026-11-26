@@ -1590,6 +1590,18 @@ export function EnvironmentPage(props: {
 				run: () => void store.beginGitWrite("push", "git"),
 			},
 			{
+				bind: "shift+f",
+				title: "Force push with lease",
+				group: "Environments",
+				run: () => void store.beginGitWrite("push-force", "git"),
+			},
+			{
+				bind: "shift+x",
+				title: "Abort rebase",
+				group: "Environments",
+				run: () => void store.beginGitWrite("rebase-abort", "git"),
+			},
+			{
 				bind: "t",
 				title: "Create tag",
 				group: "Environments",

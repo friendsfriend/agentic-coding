@@ -143,6 +143,11 @@ export type GitWriteRequest =
 			remote: string;
 			setUpstream: boolean;
 	  }
+	| {
+			action: "push-force";
+			branch: string;
+			remote: string;
+	  }
 	| { action: "tag"; name: string; message?: string }
 	| { action: "tag-delete"; name: string }
 	| { action: "stash-pop"; index: number }
@@ -154,7 +159,8 @@ export type GitWriteRequest =
 	| { action: "commit-all"; message: string }
 	| { action: "stash"; message?: string }
 	| { action: "merge"; branch: string }
-	| { action: "rebase"; branch: string };
+	| { action: "rebase"; branch: string }
+	| { action: "rebase-abort" };
 
 export type GitWriteOutcome =
 	| {

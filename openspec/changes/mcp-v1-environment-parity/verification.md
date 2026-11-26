@@ -2104,3 +2104,23 @@ Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
 Environment-mcp suite: **109 pass, 0 fail** (1020 assertions, 40 files, 12.82s).
 Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
 `bun run type-check` are clean.
+
+## Force-with-lease push and rebase abort (task 3.88)
+
+- `push-force` refuses unless the selected branch tracks the requested remote
+  and a local remote-tracking ref exists. The adapter resolves that ref and
+  passes it as the exact `--force-with-lease=<branch>:<sha>` value, so a moved
+  remote is rejected rather than overwritten.
+- `rebase-abort` refuses when no rebase is in progress and otherwise runs
+  `git rebase --abort`.
+- Panel: Git `F` force push with lease, `X` abort rebase. Both show the exact
+  target and digest before running.
+- Backend test covers a successful force push after local history rewrite,
+  refusal without an upstream, a real rebase conflict followed by abort, and
+  refusal when no rebase is active.
+- PTY verification completed force-with-lease push against a disposable bare
+  remote and rebase abort after a real conflict.
+
+Environment-mcp suite: **110 pass, 0 fail** (1028 assertions, 40 files, 14.32s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.

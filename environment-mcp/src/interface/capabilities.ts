@@ -1564,7 +1564,7 @@ export function createCapabilities(deps: {
 			capability(
 				"env_git_write",
 				"Run guarded git write",
-				"Preview and confirm one Git write for an authorized repository: push a branch (never force), create a lightweight or annotated tag, delete a tag, rename a branch, update a remote URL, commit staged changes or all changes, stash, pop/apply/drop a stash, merge, or rebase. The first call returns the exact intent digest without running git; repeat with that digest to execute. Merge/rebase require a clean worktree. Replayed confirmations are cached per process. Direct execution after confirmation.",
+				"Preview and confirm one Git write for an authorized repository: push a branch, force-push with an exact lease, create a lightweight or annotated tag, delete a tag, rename a branch, update a remote URL, commit staged changes or all changes, stash, pop/apply/drop a stash, merge, rebase, or abort a rebase. The first call returns the exact intent digest without running git; repeat with that digest to execute. Force push requires an existing upstream and local remote-tracking ref. Merge/rebase require a clean worktree. Replayed confirmations are cached per process. Direct execution after confirmation.",
 				z.discriminatedUnion("action", [
 					z.strictObject({
 						repository: z.string().min(1).max(4096),
@@ -1578,6 +1578,18 @@ export function createCapabilities(deps: {
 						branch: z.string().min(1).max(255),
 						remote: z.string().min(1).max(255),
 						setUpstream: z.boolean().default(false),
+					}),
+					z.strictObject({
+						repository: z.string().min(1).max(4096),
+						session: z.boolean().default(false),
+						requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+						confirm: z
+							.string()
+							.regex(/^[a-f0-9]{64}$/)
+							.optional(),
+						action: z.literal("push-force"),
+						branch: z.string().min(1).max(255),
+						remote: z.string().min(1).max(255),
 					}),
 					z.strictObject({
 						repository: z.string().min(1).max(4096),
@@ -1713,6 +1725,16 @@ export function createCapabilities(deps: {
 							.optional(),
 						action: z.literal("rebase"),
 						branch: z.string().min(1).max(255),
+					}),
+					z.strictObject({
+						repository: z.string().min(1).max(4096),
+						session: z.boolean().default(false),
+						requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+						confirm: z
+							.string()
+							.regex(/^[a-f0-9]{64}$/)
+							.optional(),
+						action: z.literal("rebase-abort"),
 					}),
 				]),
 				{
