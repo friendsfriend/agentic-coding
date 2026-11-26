@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveBuildSecrets } from "../src/configuration/build-secrets.ts";
 import {
+	loadSecretFile,
 	loadSecretSource,
 	renderTemplate,
 } from "../src/configuration/secrets.ts";
@@ -337,6 +338,22 @@ test("the standalone server reads the v2 environments.json structure directly", 
 		JSON.stringify({ repositories: [path.join(root, "other")] }),
 	);
 	expect(() => catalog.list({ offset: 0, limit: 10 })).toThrow();
+});
+
+test("explicit provider secret files may be symlinks but must resolve private", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-secret-file-"));
+	const target = path.join(root, "environment.env");
+	const link = path.join(root, "provider.env");
+	try {
+		fs.writeFileSync(target, "GITLAB_TOKEN=fixture-token\n", { mode: 0o600 });
+		fs.symlinkSync(target, link);
+		const secrets = loadSecretFile(link);
+		expect(secrets.get("GITLAB_TOKEN")).toBe("fixture-token");
+		fs.chmodSync(target, 0o644);
+		expect(() => loadSecretFile(link)).toThrow("Invalid secret file");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("configuration secrets use the v2 config-root .env with process fallback and strict templates", () => {

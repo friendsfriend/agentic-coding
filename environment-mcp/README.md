@@ -6,10 +6,29 @@ engine, model, UI source, native agent state or runtime source import from
 `agentic-coding/` or `agentic-coding-v2/`.
 
 **Status: catalog, direct command/Compose/container/shell-process/Helm execution, Docker and Podman providers (Podman build, Compose, network and container run live-verified), multi-repository client authority, network-only Compose bridges with automatic network-only prerequisite start and `networkFrom` membership, controller-wide shared-service leases with automatic last-release cleanup, native shell, Compose collector and container-run OTLP telemetry, telemetry trace browser, endpoint/health readiness, borrowed-service safety, capability-parity agent OpenTUI, bounded operation/log history, safe scope retention, opt-in owned-app idle cleanup with clean scope closure and lazy rebinding, crash-safe process supervision, durable controller diagnostics and an OpenCode stdio bridge are implemented; saved-PID adoption is intentionally unsupported; external secret values and real-chart cluster images remain externally supplied. Kubernetes Helm and Podman paths were exercised against disposable live environments; the real customer chart was installed/readied/uninstalled with a local substitute image and minimal CRDs, not its private application image.**
-Read-only stdio advertises `env_list`, `env_git`, `env_git_changes` and
-`env_git_diff`. Shared HTTP mode additionally
-advertises `env_execute`, `env_operation`, `env_status`, `env_stop`, `env_wait`, `env_refresh`,
-`env_telemetry` and `env_logs`, backed by private state. Execution is direct and
+Read-only stdio advertises `env_list`, `env_git`, `env_git_changes`,
+`env_git_diff`, `env_git_branches`, `env_git_worktrees`, `env_git_remotes`,
+`env_git_tags` and `env_git_stashes`. Shared HTTP mode additionally advertises `env_git_action`,
+`env_git_write`, `env_execute`, `env_operation`, `env_status`, `env_stop`, `env_wait`,
+`env_refresh`, `env_telemetry`, `env_logs`, `env_container_stats`, `env_clusters`,
+`env_cluster_resources`, `env_cluster_events`, `env_cluster_describe` and
+`env_pod_logs`, backed by private state, plus the read-only
+provider surface: `env_providers`, `env_provider_repos`,
+`env_provider_changes`, `env_provider_change`, `env_provider_change_files`,
+`env_provider_change_versions`, `env_provider_issues`, `env_provider_issue`,
+`env_provider_issue_comments`, `env_provider_discussions`, `env_provider_pipelines`, `env_provider_jobs`,
+`env_provider_job_logs`, `env_provider_repository`, `env_provider_comment_change`,
+`env_provider_comment_issue`, `env_provider_approve_change`,
+`env_provider_merge_change`, `env_provider_set_issue_state`,
+`env_provider_rebase_change`, `env_provider_unapprove_change`,
+`env_provider_reply_discussion`, `env_provider_set_discussion_resolved`,
+`env_provider_add_labels`, `env_provider_set_assignees`,
+`env_provider_retry_pipeline`, `env_provider_retry_job`,
+`env_provider_cancel_pipeline`, `env_provider_writes`, `env_config_revision`, `env_app_create`,
+`env_app_update`, `env_app_delete`, `env_target_create`, `env_target_update`
+and `env_target_delete`. Provider tokens stay as environment references resolved
+from the process environment or the configuration root's private `.env`; values
+are never returned. Execution is direct and
 idempotent by request id; only resources created by the issued operation enter
 cleanup. Borrowed
 PostgreSQL/Redis observations never do. Build/test command targets, Compose run targets and
@@ -327,7 +346,11 @@ unavailable targets, sanitized migration hints and `secretGaps` naming declared
 references absent from the config `.env`/process fallback without printing
 values. `env_execute` also refuses admission for a target with missing declared
 references. It does not print commands, plans, credentials or repository
-paths. The real v2 configuration currently
+paths. `env_execute` accepts an optional `worktree` for a linked worktree of the
+app repository: shell/process commands and Docker builds run there, with
+repository-local program/argument and Dockerfile paths rewritten to the
+worktree. Compose, container and Helm targets refuse because their resource
+names are repository-scoped. The real v2 configuration currently
 reports **117 executable targets and no unavailable targets**; the Compose
 container-name migration, collector-telemetry normalization, Helm targets and
 network-only bridge topology are complete. `secretGaps` now lists three remaining targets: Eon installer's EIV Jasypt
@@ -335,6 +358,106 @@ password and the hwportal/EFIX external credential sets (plus the frontend AEM
 endpoint). Local Redis/Postgres/portal, Eon MySQL/datasource and grid mock values
 were added from known local configuration. The three still refuse admission
 until their external values are supplied.
+
+## Application and target CRUD
+
+Configuration writes operate on the v2 `environments.json` through the shared
+HTTP capability registry. A preview returns the current digest, next digest, a
+bounded summary and an exact confirmation digest; no file is touched until the
+same intent is repeated with that digest. A stale current digest refuses with
+`config-stale`.
+
+Writes are serialized, validated against the full v2 configuration loader, and
+committed with a private timestamped backup plus an atomic temp-file/rename.
+The execution catalog is refreshed immediately; a refresh failure restores the
+previous file. Backups use `environments.json.mcp-bak-*` and are capped at ten;
+user-created backups are never pruned.
+
+- Applications: create, update kind/repository/defaults, delete with explicit
+  target cascade. Repository changes refuse while targets exist.
+- Targets: duplicate an existing target (the profile-variant path), create a
+  shell build/test/run target, update profile/action/shell command/timeout/
+  dependencies/prerequisites/endpoints, or delete one. Defaults and external
+  prerequisite references guard deletion.
+- `profile` remains a free-form target label. There is no profile entity or
+  profile CRUD; creating a profile means assigning its label to a target.
+- Runtime-specific executable descriptors beyond the supported forms remain
+  file/skill edits.
+
+## Container stats and Kubernetes inspection
+
+`env_container_stats` reads CPU, memory, network and PID values only for
+containers owned by the current scopes or registered shared services. It never
+enumerates other host containers. Each container is sampled over the configured
+Docker/Podman socket; engine failures are counted as unavailable rather than
+returned as host details.
+
+`env_clusters` lists Kubernetes clusters explicitly authorized for the client's
+repositories. `env_cluster_resources({cluster, namespace})` runs one fixed
+read-only `kubectl get deployments,statefulsets,pods,services --output json` in a
+non-system namespace, returns at most 200 structured resources plus a bounded
+table, and never exposes raw objects. `env_cluster_events` returns at most 100
+namespace events. `env_cluster_describe` reads one named resource from a fixed
+kind set. `env_pod_logs` reads at most 1000 tail lines for one pod and optional
+container. All output is bounded at 128 KiB. Kubeconfig paths and cluster
+environment values are never returned. No apply, edit, delete, exec, attach or
+arbitrary kubectl arguments are exposed.
+
+## Provider read-only surface
+
+The shared HTTP server reads providers from the v2 `config.json` and resolves
+each `tokenRef` from the process environment or the configuration root's
+private `.env` at call time. `--provider-env-file /absolute/.env` adds an
+explicit private fallback file for provider tokens only; its canonical target
+must be a private regular file, so the operator-owned environment `.env`
+symlink can be used without copying secrets. The installed launchd job uses
+`/Users/fabiankellner/.config/agentic-coding/.env` and exports
+`SSL_CERT_FILE=/usr/local/share/ca-certificates/cacert.pem` so GitHub TLS uses
+the enterprise root chain. It exposes six bounded, read-only capabilities:
+
+- `env_providers` lists the configured GitHub/GitLab providers with type, base
+  URL, username and whether the token reference resolves. No token value,
+  reference or secret-bearing header is returned.
+- `env_provider_repository({repository})` resolves an authorized local
+  repository's git remotes to configured provider repository references without
+  a network call, so an application can open its provider change/issue list
+  directly.
+- `env_provider_repos({provider, query})` searches at most 20 repositories.
+- `env_provider_changes({provider, repository, state})` lists at most 50 pull
+  requests or merge requests; `state` is `open`, `closed` or `all`.
+- `env_provider_issues(...)` lists at most 50 issues and excludes GitHub
+  pull-request entries.
+- `env_provider_pipelines({provider, repository})` lists at most 30 recent
+  workflow runs or pipelines.
+- `env_provider_jobs({provider, repository, pipeline})` lists at most 30 jobs.
+- `env_provider_change({provider, repository, number})` returns one change with
+  body, counts and timestamps; `change_files` returns at most 100 changed files
+  with at most 48 KiB of aggregate patch text; `change_versions` returns at
+  most 100 commits/versions.
+- `env_provider_issue(...)` returns one issue with body and timestamps;
+  `env_provider_issue_comments(...)` returns at most 50 issue comments/notes;
+  `env_provider_discussions(...)` returns at most 50 review comments or
+  discussion notes.
+- `env_provider_job_logs(...)` returns at most 64 KiB of redacted job log text.
+
+Outbound calls require HTTPS except loopback HTTP, refuse redirects (GitHub job
+logs follow only a signed redirect target without credentials), time out after
+12s, cap JSON responses at 1 MiB, and map upstream 401/403/404/429/5xx to
+bounded refusals. Tokens are redacted from parsed responses.
+
+Provider writes are preview-confirmed. The first call omits `confirm` and
+returns the exact intent digest without an outbound write; repeating with that
+digest performs the action. `requestId` is durable: the same ID and digest
+replays the recorded receipt, a different digest is a conflict, and interrupted
+attempts fail closed rather than resending. Receipts live in the private state
+directory (bounded to 512, 50 returned) and are readable through
+`env_provider_writes`. The write surface covers change/issue comments,
+exact-head approval and unapproval, merge, issue open/close, GitLab rebase,
+discussion replies, GitLab discussion resolution, labels, assignees, pipeline
+retry/cancel and individual job retry. GitHub discussion resolution is not
+offered because its REST API has no thread-resolution endpoint and this
+implementation does not use GraphQL. GitHub unapproval dismisses the configured
+account's latest approval after re-reading the head.
 
 ## OpenCode cutover via the stdio bridge
 
@@ -400,8 +523,8 @@ approval surface or approval capability.
 
 `opencode-plugin/` is a local OpenCode 2.0.22 TUI plugin that presents the
 environment inventory and execution surfaces, not the MCP tool list. It
-registers a full-screen `environment` route, `/environment`/`/env`,
-`<leader>v`, and a clickable home-footer chip. The shell has Applications,
+registers a full-screen `environment` route, `/environment`, `<leader>v`,
+`/git`, `/issues`, `/changes`, and a clickable home-footer chip. The shell has Applications,
 Libraries, Infrastructure, History and Services tabs; the inventory shows
 glyph target summaries (`⚒` build, `✓` test, `▶` run), git branch and
 modified/added/deleted counts with ahead/behind, and current run status;
@@ -421,17 +544,17 @@ ln -sfn "$PWD/opencode-plugin" ~/.config/opencode/plugins/environment-mcp
 opencode plugin list
 ```
 
-Open with `/environment`, `/env`, or `<leader>v` (default `ctrl+x v`). Override
+Open with `/environment` or `<leader>v` (default `ctrl+x v`). Override
 `ENVIRONMENT_MCP_URL`/`ENVIRONMENT_MCP_TOKEN_FILE` or pass `url`/`tokenFile`
 plugin options. The plugin package has its own type-check/test dependencies;
 `bun run --cwd opencode-plugin type-check` and `bun run --cwd opencode-plugin test`
 are the focused gates, while the server package's lint/type-check/test also
 cover its sources. The adapter generates a fresh `requestId` for each exact
-review. The current capability registry does not yet expose git
-branch/fetch/worktree operations, container stats, Kubernetes cluster
-inspection, provider change requests/issues/pipelines, or app/task CRUD; those
-screens are intentionally not claimed until the corresponding capabilities
-exist.
+review. The current capability registry exposes git read/actions, linked
+worktree execution, provider reads and guarded writes, app/target configuration
+writes, scoped container stats and read-only Kubernetes inspection including
+namespace events, bounded describe and pod logs. It does not yet expose pod
+attach or exec; those screens are intentionally not claimed.
 
 ## Read-only v2 catalog compatibility
 
@@ -532,13 +655,40 @@ as a shared-controller manifest. No application starts automatically.
 - `env_git({repositories?})` reads bounded branch, dirty-file, ahead/behind and
   detached-HEAD status for the authenticated repositories. It is read-only and
   never fetches, checks out, stages or commits.
-- `env_git_changes({repository})` lists bounded changed paths with staged/
-  worktree status, relative to the application repository; paths outside it
-  are omitted.
-- `env_git_diff({repository, path})` returns one bounded unified diff for a path
-  from the current change list. Untracked regular files are diffed against
-  `/dev/null`; binaries, directories and symlinks are refused. It is read-only
-  and does not fetch, check out, stage or commit.
+- `env_git_changes({repository, session?})` lists bounded changed paths with
+  staged/worktree status, relative to the application repository; paths outside
+  it are omitted. `session: true` uses the supplied working-directory
+  repository.
+- `env_git_diff({repository, path, side?, session?})` returns one bounded unified
+  diff for a path from the current change list. `side` selects `all` (HEAD vs
+  working tree), `staged` (HEAD vs index) or `worktree` (index vs working tree).
+  Untracked regular files are diffed against `/dev/null`; binaries, directories
+  and symlinks are refused. It is read-only and does not fetch, check out, stage
+  or commit.
+- `env_git_branches({repository, session?})`, `env_git_worktrees(...)` and
+  `env_git_remotes(...)` list local branches, linked worktrees and remotes with
+  current/upstream/ahead/behind, locked/prunable state and sanitized URLs.
+  `session: true` resolves the supplied working directory as a git repository
+  and bypasses the configured allowlist; this is the any-cwd surface.
+- `env_git_action({repository, session?, action, ...})` runs one direct guarded
+  git action: `fetch`, fast-forward-only `pull`, `checkout`, safe
+  `branch-delete`, `worktree-add`/`worktree-remove`,
+  `remote-add`/`remote-remove`, or `stage`/`unstage`/`stage-all`/`unstage-all`.
+  Mutations refuse a dirty worktree, the current worktree, branches in use,
+  existing paths, paths inside the repository and active operations. Available only with the execution surface (shared HTTP mode).
+  `session: true` allows the agent's working-directory repository, including
+  repositories outside the configured allowlist. Authenticated local clients
+  can therefore target any local git repository through this flag; only the git
+  surface is exposed, never environment execution.
+- `env_git_write({repository, session?, action, ..., requestId, confirm?})`
+  previews and confirms higher-risk git writes: `push` (never force), lightweight
+  or annotated `tag`, `tag-delete`, `branch-rename`, `remote-set-url`, staged
+  `commit`, `commit-all`, `stash`, `stash-pop`/`stash-apply`/`stash-drop`,
+  `merge` and `rebase`. The first call returns the exact intent digest without
+  running git; repeating with that digest executes it. Merge/rebase require a
+  clean worktree and refuse the current branch. `commit` keeps the current
+  index; `commit-all` stages every change first. Replay protection is
+  process-local; git itself is the durable record of the result.
 - `env_wait({operationId, waitSec?})` waits up to 120 seconds for an issued
   operation to settle and returns its current receipt.
 - `env_status({})` reads scope state and owned container IDs. Borrowed services

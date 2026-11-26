@@ -23,6 +23,7 @@ export type KubernetesCluster = {
 	context: string;
 	kubeconfig?: string;
 	environment: Record<string, string>;
+	repositories: readonly string[];
 	digest: string;
 };
 
@@ -131,6 +132,7 @@ export function loadKubernetesClusters(
 				context,
 				kubeconfig: selected.path,
 				environment,
+				repositories: declared.map((repository) => fs.realpathSync(repository)),
 				digest: digest(
 					JSON.stringify({
 						id,
@@ -148,6 +150,7 @@ export function loadKubernetesClusters(
 			id: "devenv",
 			context: "kind-devenv",
 			environment,
+			repositories,
 			digest: digest(JSON.stringify({ id: "devenv", context: "kind-devenv" })),
 		});
 	}

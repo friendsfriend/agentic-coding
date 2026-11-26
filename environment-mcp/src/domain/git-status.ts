@@ -38,9 +38,12 @@ export type GitChanges = {
 	note?: "unavailable";
 };
 
+export type GitDiffSide = "all" | "staged" | "worktree";
+
 export type GitDiff = {
 	repository: string;
 	path: string;
+	side: GitDiffSide;
 	diff: string;
 	binary: boolean;
 	truncated: boolean;
@@ -53,7 +56,12 @@ export interface GitStatusPort {
 		signal: AbortSignal,
 	): Promise<readonly GitRepositoryStatus[]>;
 	changes(repository: string, signal: AbortSignal): Promise<GitChanges>;
-	diff(repository: string, path: string, signal: AbortSignal): Promise<GitDiff>;
+	diff(
+		repository: string,
+		path: string,
+		signal: AbortSignal,
+		side?: GitDiffSide,
+	): Promise<GitDiff>;
 }
 
 export function unknownGitStatus(

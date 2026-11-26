@@ -2,10 +2,52 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readContainerStats } from "../src/adapters/docker/container-stats.ts";
 import { serverManifestSchema } from "../src/configuration/server-manifest.ts";
 import type { ExecutionPort } from "../src/domain/execution.ts";
 import { createExecutionService } from "../src/services/execution-service.ts";
 import { openOperationJournal } from "../src/services/operation-journal.ts";
+
+test("container stats derive bounded CPU, memory, network and PID values", () => {
+	const stats = readContainerStats({
+		read: "2026-01-01T00:00:00Z",
+		cpu_stats: {
+			cpu_usage: { total_usage: 300 },
+			system_cpu_usage: 1300,
+			online_cpus: 2,
+		},
+		precpu_stats: {
+			cpu_usage: { total_usage: 100 },
+			system_cpu_usage: 1000,
+		},
+		memory_stats: {
+			usage: 4096,
+			limit: 8192,
+			stats: { cache: 1024 },
+		},
+		networks: {
+			eth0: { rx_bytes: 10, tx_bytes: 20 },
+			eth1: { rx_bytes: 5, tx_bytes: 7 },
+		},
+		pids_stats: { current: 3 },
+	});
+	expect(stats).toEqual({
+		cpuPercent: 133.33,
+		memoryUsageBytes: 3072,
+		memoryLimitBytes: 8192,
+		memoryPercent: 37.5,
+		networkRxBytes: 15,
+		networkTxBytes: 27,
+		pids: 3,
+		readAt: "2026-01-01T00:00:00Z",
+	});
+	expect(
+		readContainerStats({
+			cpu_stats: { cpu_usage: { total_usage: 1 }, system_cpu_usage: 1 },
+			precpu_stats: { cpu_usage: { total_usage: 1 }, system_cpu_usage: 1 },
+		}),
+	).toEqual({});
+});
 
 test("direct container run records identity, readiness, logs and owned stop", async () => {
 	const root = fs.realpathSync(
@@ -67,6 +109,7 @@ test("direct container run records identity, readiness, logs and owned stop", as
 	});
 	const containerId = "d".repeat(64);
 	const calls: string[] = [];
+	const statsCalls: string[] = [];
 	let telemetryEnv: Record<string, string> | undefined;
 	let telemetryMount: { certificate: string } | undefined;
 	const executor: ExecutionPort = {
@@ -115,6 +158,22 @@ test("direct container run records identity, readiness, logs and owned stop", as
 		{ inspect: async () => ({ status: "absent" as const }) },
 		executor,
 		{ get: () => undefined },
+		{
+			containerStats: {
+				async stats(_provider, _socket, container) {
+					statsCalls.push(container);
+					return {
+						cpuPercent: 2.5,
+						memoryUsageBytes: 1024,
+						memoryLimitBytes: 4096,
+						memoryPercent: 25,
+						networkRxBytes: 10,
+						networkTxBytes: 20,
+						pids: 3,
+					};
+				},
+			},
+		},
 	);
 	const agent = service.bind("client", scope.id);
 	const signal = new AbortController().signal;
@@ -136,6 +195,20 @@ test("direct container run records identity, readiness, logs and owned stop", as
 		expect(agent.status().owned).toMatchObject([
 			{ app: "web", kind: "container", runtimeId: containerId },
 		]);
+		expect(await agent.containerStats(signal)).toMatchObject({
+			containers: [
+				{
+					container: containerId,
+					app: "web",
+					provider: "docker",
+					cpuPercent: 2.5,
+					memoryUsageBytes: 1024,
+					pids: 3,
+				},
+			],
+			unavailable: 0,
+		});
+		expect(statsCalls).toEqual([containerId]);
 		expect(telemetryEnv).toMatchObject({
 			OTEL_EXPORTER_OTLP_CERTIFICATE: "/environment-mcp-otel-ca.pem",
 			OTEL_TRACES_EXPORTER: "otlp",
@@ -156,6 +229,10 @@ test("direct container run records identity, readiness, logs and owned stop", as
 		});
 		expect(calls).toEqual(["run", "stop"]);
 		expect(agent.status().owned).toEqual([]);
+		expect(await agent.containerStats(signal)).toMatchObject({
+			containers: [],
+			unavailable: 0,
+		});
 	} finally {
 		journal.close();
 		fs.rmSync(root, { recursive: true, force: true });

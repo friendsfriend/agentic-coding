@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import {
 	buildSecretRedactionValues,
 	resolveBuildSecrets,
@@ -10,6 +11,7 @@ import {
 	type SecretSource,
 } from "../configuration/secrets.ts";
 import type { ServerManifest } from "../configuration/server-manifest.ts";
+import type { ContainerStatsPort } from "../domain/container-stats.ts";
 import {
 	type ContainerInspectionPort,
 	matchBorrowedContainer,
@@ -60,6 +62,82 @@ async function gitHead(directory: string) {
 	return output.trim();
 }
 
+function gitOutput(directory: string, args: readonly string[]) {
+	const child = Bun.spawnSync(["git", "-C", directory, ...args], {
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "ignore",
+	});
+	if (child.exitCode !== 0) return undefined;
+	return child.stdout.toString().trim();
+}
+
+/** A linked worktree is valid only when it shares the configured repository's
+ * git common directory. The app may be a subdirectory of the worktree root. */
+export function resolveWorktreeContext(repository: string, worktree: string) {
+	if (!path.isAbsolute(worktree))
+		throw new OperationRefusal("worktree-unsupported");
+	let root: string;
+	try {
+		root = fs.realpathSync(worktree);
+		if (!fs.lstatSync(root).isDirectory())
+			throw new OperationRefusal("worktree-unsupported");
+	} catch {
+		throw new OperationRefusal("worktree-unsupported");
+	}
+	const top = gitOutput(root, ["rev-parse", "--show-toplevel"]);
+	if (!top || fs.realpathSync(top) !== root)
+		throw new OperationRefusal("worktree-unsupported");
+	const common = (directory: string) => {
+		const value = gitOutput(directory, ["rev-parse", "--git-common-dir"]);
+		if (!value) return undefined;
+		try {
+			return fs.realpathSync(path.resolve(directory, value));
+		} catch {
+			return undefined;
+		}
+	};
+	const configuredCommon = common(repository);
+	const worktreeCommon = common(root);
+	if (!configuredCommon || configuredCommon !== worktreeCommon)
+		throw new OperationRefusal("worktree-unsupported");
+	const prefix = (
+		gitOutput(repository, ["rev-parse", "--show-prefix"]) ?? ""
+	).replace(/\/+$/, "");
+	const directory = path.resolve(root, prefix);
+	try {
+		if (!fs.lstatSync(directory).isDirectory())
+			throw new OperationRefusal("worktree-unsupported");
+	} catch {
+		throw new OperationRefusal("worktree-unsupported");
+	}
+	const relative = path.relative(root, directory);
+	if (relative.startsWith("..") || path.isAbsolute(relative))
+		throw new OperationRefusal("worktree-unsupported");
+	return { root, directory };
+}
+
+export function rewriteWorktreeExecutable(
+	executable: Executable,
+	repository: string,
+	worktreeDirectory: string,
+) {
+	const map = (value: string) => {
+		if (value === repository) return worktreeDirectory;
+		if (value.startsWith(`${repository}/`))
+			return `${worktreeDirectory}${value.slice(repository.length)}`;
+		return value;
+	};
+	if (executable.kind === "command" || executable.kind === "process") {
+		executable.program = map(executable.program);
+		executable.args = executable.args.map(map);
+	} else if (executable.kind === "docker-build") {
+		executable.context = map(executable.context);
+		if (executable.dockerfile)
+			executable.dockerfile = map(executable.dockerfile);
+	}
+}
+
 /** Re-observe exactly the reviewed dependency identity; never replace the frozen
  * review with a newer generation. */
 async function revalidateFrozen(
@@ -107,6 +185,7 @@ export function createExecutionService(
 	options: {
 		telemetryDirectory?: string;
 		configDir?: string;
+		containerStats?: ContainerStatsPort;
 		onEvent?: (event: EnvironmentEventInput) => void;
 	} = {},
 ) {
@@ -1071,6 +1150,22 @@ export function createExecutionService(
 						endpoints: target.endpoints,
 						endpointServices: target.endpointServices,
 					});
+					const worktree = intent.worktree
+						? resolveWorktreeContext(app.repository, intent.worktree)
+						: undefined;
+					if (worktree) {
+						if (
+							descriptor.executable.kind !== "command" &&
+							descriptor.executable.kind !== "process" &&
+							descriptor.executable.kind !== "docker-build"
+						)
+							throw new OperationRefusal("worktree-unsupported");
+						rewriteWorktreeExecutable(
+							descriptor.executable,
+							app.repository,
+							worktree.directory,
+						);
+					}
 					if (
 						descriptor.executable.kind === "compose" &&
 						descriptor.executable.file
@@ -1129,7 +1224,9 @@ export function createExecutionService(
 						if (!network && !configuredPrerequisite)
 							throw new OperationRefusal("network-prerequisite-unavailable");
 					}
-					const head = await gitHead(scope.workspace.directory);
+					const head = await gitHead(
+						worktree?.directory ?? scope.workspace.directory,
+					);
 					signal.throwIfAborted();
 					let dependencies: unknown = null;
 					if (target.dependsOn.length) {
@@ -1148,6 +1245,7 @@ export function createExecutionService(
 						scope: scope.id,
 						principal,
 						workspace: scope.workspace,
+						...(worktree ? { executionWorkspace: worktree.directory } : {}),
 						intent,
 						descriptor,
 						dependencies,
@@ -1259,7 +1357,8 @@ export function createExecutionService(
 							receipt: null,
 						};
 					const stored = JSON.parse(operation.plan) as {
-						intent: { app: string; target: string };
+						intent: { app: string; target: string; worktree?: string };
+						executionWorkspace?: string;
 						descriptor: {
 							action: "build" | "test" | "run";
 							executable: Executable;
@@ -1306,7 +1405,7 @@ export function createExecutionService(
 					const promise = dispatch(
 						permit,
 						frozen,
-						repository,
+						stored.executionWorkspace ?? repository,
 						controller.signal,
 					).finally(() => {
 						if (runs.get(id)?.controller === controller) runs.delete(id);
@@ -1356,6 +1455,86 @@ export function createExecutionService(
 						? (JSON.parse(operation.result) as ExecutionReceipt)
 						: null;
 					return { operation: operationView(operation, journal.host), receipt };
+				},
+				async containerStats(signal: AbortSignal) {
+					const targets = new Map<
+						string,
+						{
+							container: string;
+							provider: "docker" | "podman";
+							socket: string;
+							app?: string;
+							service?: string;
+						}
+					>();
+					for (const owned of session.owned()) {
+						if (owned.kind !== "container") continue;
+						try {
+							targets.set(owned.runtimeId, {
+								container: owned.runtimeId,
+								provider: providerOf(owned),
+								socket: socketOf(owned),
+								app: owned.app,
+							});
+						} catch {
+							/* An unreadable descriptor remains unobservable. */
+						}
+					}
+					for (const service of session.sharedServices()) {
+						if (!service.containers.length || service.state === "released")
+							continue;
+						for (const container of service.containers)
+							targets.set(container, {
+								container,
+								provider: service.provider,
+								socket: service.socket,
+								service: service.service,
+							});
+					}
+					const containers: {
+						container: string;
+						provider: "docker" | "podman";
+						app?: string;
+						service?: string;
+						cpuPercent?: number;
+						memoryUsageBytes?: number;
+						memoryLimitBytes?: number;
+						memoryPercent?: number;
+						networkRxBytes?: number;
+						networkTxBytes?: number;
+						pids?: number;
+						readAt?: string;
+					}[] = [];
+					let unavailable = 0;
+					for (const target of [...targets.values()].slice(0, 64)) {
+						signal.throwIfAborted();
+						if (!options.containerStats) {
+							unavailable++;
+							continue;
+						}
+						try {
+							const stats = await options.containerStats.stats(
+								target.provider,
+								target.socket,
+								target.container,
+								signal,
+							);
+							containers.push({
+								container: target.container,
+								provider: target.provider,
+								...(target.app ? { app: target.app } : {}),
+								...(target.service ? { service: target.service } : {}),
+								...stats,
+							});
+						} catch {
+							unavailable++;
+						}
+					}
+					return {
+						containers,
+						unavailable,
+						note: "Only containers owned by this scope or registered shared services are observed.",
+					};
 				},
 				async stop(app: string, signal: AbortSignal, repository?: string) {
 					requireRepository(repository);

@@ -24,9 +24,17 @@ the source; there is no build step for local use.
 Open it with any of:
 
 - the clickable **Environment** chip in the home footer
-- `/environment` or `/env`
+- `/environment`
 - `<leader>v` (the default leader is `ctrl+x`, so `ctrl+x v`)
-- the command palette (`ctrl+p`) entry **Environment**
+- `<leader>G` (leader then Shift+G; bind string `<leader>shift+g`) opens **Git
+  for the agent's current working directory**, including repositories outside
+  the environment allowlist
+- `/git` opens the same Git view
+- `/issues` and `/changes` open the current directory's provider issues or
+  change requests
+- the command palette (`ctrl+p`) entries **Environment**, **Git actions for
+  current directory**, **Issues for current directory** and **Changes for
+  current directory**
 
 ## Screens
 
@@ -38,10 +46,81 @@ Open it with any of:
   the fallback.
 - **Application detail** — kind, repository, git state, current status, defaults,
   targets, owned resources, recent receipts, and the action keys. `c` opens the
-  changed-files list.
+  changed-files list; `E` edits the application and `X` deletes it.
+- **App/target CRUD** — `n` on the applications table opens the new-application
+  form. In the target picker, `n` creates a shell target, `d` duplicates the
+  selected target, `e` edits profile/action/shell settings, and `x` deletes it.
+  Forms preview the exact intent digest; `y` confirms, `Tab` moves fields, and
+  `Esc` cancels. Profiles are optional target labels, not separate records.
 - **Changes / Diff** — bounded changed paths with status glyphs, stage/worktree
-  flags and rename origins; `Enter` opens a bounded unified diff. Binary,
-  symlink, directory and invalid paths are refused with a clear note.
+  flags, rename origins and a staged count; `s` toggles staging for the selected
+  path, `a` stages all, `u` unstages all, and `Enter` opens a bounded unified
+  diff. In the diff, `s` cycles all/staged/worktree sides. Binary, symlink,
+  directory and invalid paths are refused with a clear note. Session Git opens
+  the same changes/diff views.
+- **Git** — `g` opens a raised header matching the environment shell, with the
+  current branch, branch/worktree counts and the `/` branch filter in the
+  header. `Enter` switches branch, `f` fetches, `p` pulls fast-forward-only,
+  `P` pushes, `t` creates a tag (message optional for an annotated tag), `T`
+  lists tags, `R` renames the selected branch, `C` commits staged changes, `A`
+  commits all changes, `s` stashes, `S` lists stashes, `M` merges the selected
+  branch into the current branch, `B` rebases the current branch onto the
+  selected one, `d` safely deletes the selected branch, `m` opens remotes, and
+  `c` opens changes. Writes show an exact target and digest, then require `y`;
+  push never forces and merge/rebase require a clean worktree. `<leader>G` opens the same view
+  directly for the agent cwd, hiding the environment tabs; `Esc` closes it.
+  The cwd is `process.cwd()` unless the plugin receives a `directory` or `cwd`
+  option.
+- **Providers** — provider descriptions, timeline notes and commit messages
+  normalize GitLab/GitHub HTML fragments to Markdown before rendering. Change
+  and issue lists use two-line rows (title/state plus
+  branches/author or author/labels), and every scrollable list shows a vertical
+  scrollbar on the right when its content overflows. `c` and `i` on the applications table resolve the selected
+  app's git remote to its configured provider and open change requests or issues
+  directly; `Esc` returns to the application list. `p` opens the configured
+  GitHub/GitLab providers with token availability, `/` filtering and `Enter`
+  to search repositories. Open a repository to browse changes, issues and
+  pipelines (`c`, `i`, `l`), cycle change/issue state with `s`, and open
+  pipeline jobs with `Enter`. Change and issue `Enter` opens detail with the
+  body rendered as Markdown; change detail `d` opens bounded changed files,
+  file `Enter` opens the native OpenTUI diff viewer with line numbers and
+  add/remove styling, `h` opens a discussion timeline with a continuous rail,
+  typed event glyphs and Markdown note bodies, and `v` opens version history
+  with commit glyphs and the same rail. Issue detail `h` opens its comment
+  timeline; job `Enter` opens a bounded redacted log. Provider writes are
+  preview-confirmed: change/issue `c` comments, change `a` approves the exact
+  displayed head, `u` withdraws approval, `M` merges it, `B` requests a GitLab
+  rebase, `l` adds labels, `A` sets assignees, issue `o` toggles open/closed,
+  discussion `c` replies and `x` resolves/unresolves (GitLab), pipeline `t`/`x`
+  retries or cancels, job `t` retries it, `y` confirms the exact digest, and `w`
+  lists durable write receipts. `/issues` and `/changes` open the current
+  directory's provider lists directly. All read views support `/`
+  filtering where applicable and use the same raised environment-style header.
+  Tokens are never shown.
+- **Tags** — `T` lists lightweight and annotated tags with subject/date; `t`
+  creates a tag (message optional), `d` deletes the selected tag, and both use
+  the preview-confirm flow.
+- **Stashes** — `S` lists stashes with index, branch, message and date; `p`
+  pops, `a` applies, and `d` drops the selected stash with confirmation.
+- **Remotes** — sanitized fetch/push URLs; `a` adds a remote (credential-bearing
+  HTTP URLs are refused), `e` updates the selected remote URL through the
+  preview-confirm flow, `x` removes the selected remote.
+- **Worktrees** — current/locked/prunable linked worktrees; `a` opens the
+  worktree form with editable path and branch fields (`Tab` switches), an
+  existing/new branch badge, and creates a new branch when the name is not
+  local. `u` runs supported targets from the selected worktree (shell/process
+  and Docker builds; Compose, container and Helm targets refuse); `x` removes
+  the selected clean non-current worktree. The active worktree carries an
+  `execution` badge and detail/history show its path.
+- **Container stats** — `m` from application detail reads CPU, memory, network
+  and PID stats for containers owned by the scope or registered shared services.
+  Other host containers are never listed.
+- **Kubernetes** — `K` from the applications table lists authorized clusters;
+  `Enter` opens a namespace prompt and returns deployments, statefulsets, pods
+  and services as selectable two-line resources. `Enter` describes the selected
+  resource, `e` opens namespace events, and `l` reads tail logs for the selected
+  pod using its first container. System namespaces are refused; no exec or
+  attach is exposed.
 - **Target picker** — the exact configured target/profile for build, test or run.
 - **Operation** — the running or settled execution receipt, subject,
   digest/revision, live build steps and per-step logs.
@@ -95,12 +174,11 @@ Override with `ENVIRONMENT_MCP_URL` / `ENVIRONMENT_MCP_TOKEN_FILE`, or pass
 
 ## Current backend limits
 
-The environment-mcp capability registry currently exposes the execution
-inventory, direct execution/wait, owned stop, logs, telemetry, services and
-receipts. It does not yet expose git branch/fetch/worktree operations,
-container stats, Kubernetes cluster inspection, provider change requests /
-issues / pipelines, or app/task CRUD. Those screens are not claimed here; they
-require new capabilities before they can be added to this UI.
+The environment-mcp capability registry exposes the execution inventory, direct
+execution/wait, owned stop, logs, telemetry, services, scoped container stats,
+git reads and guarded git writes, provider reads and guarded writes, app/target
+configuration writes, and read-only Kubernetes inspection including events,
+describe and pod logs. It does not yet expose pod attach or exec.
 
 The table and detail only read metadata. `env_list` still carries executable
 descriptors for the agent; this UI never renders them.

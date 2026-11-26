@@ -14,7 +14,7 @@ const unavailable = () =>
 
 // Bun on macOS cannot realpath a socket itself. Resolve directory identities
 // and explicit symlink hops without opening the socket as a regular file.
-function resolveSocketPath(file: string) {
+export function resolveSocketPath(file: string) {
 	let current = file;
 	for (let hop = 0; hop < 16; hop++) {
 		const resolved = path.join(

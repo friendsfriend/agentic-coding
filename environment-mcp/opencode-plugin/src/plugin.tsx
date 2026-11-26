@@ -1,5 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { EnvironmentPage } from "./environments/EnvironmentPage.tsx";
+import {
+	requestSessionGit,
+	requestSessionProvider,
+} from "./environments/session.ts";
 import type { Context, PluginDefinition, Route } from "./opencode-types.ts";
 
 const previous: { route: Route } = { route: { type: "home" } };
@@ -33,6 +37,23 @@ function openEnvironment(context: Context) {
 	open(context);
 }
 
+function sessionDirectory(context: Context) {
+	const configured = context.options.directory ?? context.options.cwd;
+	if (typeof configured === "string" && configured.trim())
+		return configured.trim();
+	return process.cwd();
+}
+
+function openSessionGit(context: Context) {
+	requestSessionGit(sessionDirectory(context));
+	openEnvironment(context);
+}
+
+function openSessionProvider(context: Context, kind: "issues" | "changes") {
+	requestSessionProvider(sessionDirectory(context), kind);
+	openEnvironment(context);
+}
+
 export const EnvironmentPlugin: PluginDefinition = {
 	id: "environment-mcp",
 	setup(context) {
@@ -54,9 +75,40 @@ export const EnvironmentPlugin: PluginDefinition = {
 							description: "Browse and run environment-mcp capabilities",
 							group: "Environment",
 							bind: "<leader>v",
-							slash: { name: "environment", aliases: ["env"] },
+							slash: { name: "environment" },
 							palette: true,
 							run: () => openEnvironment(context),
+						},
+						{
+							id: "environment.gitSession",
+							title: "Git actions for current directory",
+							description:
+								"Open git branches and actions for the agent working directory",
+							group: "Environment",
+							bind: "<leader>shift+g",
+							slash: { name: "git" },
+							palette: true,
+							run: () => openSessionGit(context),
+						},
+						{
+							id: "environment.issuesSession",
+							title: "Issues for current directory",
+							description:
+								"Open configured provider issues for the current repository",
+							group: "Environment",
+							slash: { name: "issues" },
+							palette: true,
+							run: () => openSessionProvider(context, "issues"),
+						},
+						{
+							id: "environment.changesSession",
+							title: "Changes for current directory",
+							description:
+								"Open configured provider change requests for the current repository",
+							group: "Environment",
+							slash: { name: "changes" },
+							palette: true,
+							run: () => openSessionProvider(context, "changes"),
 						},
 					],
 				}));

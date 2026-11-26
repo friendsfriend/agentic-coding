@@ -11,6 +11,7 @@ import { readV2Configuration } from "./configuration/v2-configuration.ts";
 import { createCapabilities } from "./interface/capabilities.ts";
 import { createMcpServer } from "./mcp/create-server.ts";
 import { createCatalogService } from "./services/catalog-service.ts";
+import { createGitActionService } from "./services/git-action-service.ts";
 import { createGitStatusService } from "./services/git-status-service.ts";
 import { startSharedServer } from "./services/shared-server.ts";
 
@@ -98,6 +99,7 @@ if (process.argv.slice(2).length === 1 && process.argv[2] === "--help") {
 				catalog,
 				repositories: catalog.list({ offset: 0, limit: 1 }).repositories,
 				git: createGitStatusService(),
+				gitActions: createGitActionService(),
 			}),
 		);
 		process.once("SIGINT", () => {

@@ -37,6 +37,22 @@ test("direct command/compose execution is one-use, fails closed and stops only o
 		});
 		if (child.exitCode !== 0) throw new Error("Fixture Git failed");
 	}
+	const linked = path.join(root, "linked");
+	const worktree = Bun.spawnSync(
+		[
+			"git",
+			"-C",
+			repository,
+			"worktree",
+			"add",
+			"--quiet",
+			"-b",
+			"linked",
+			linked,
+		],
+		{ stdout: "ignore", stderr: "ignore" },
+	);
+	if (worktree.exitCode !== 0) throw new Error("Fixture worktree failed");
 	const secret = "execution-credential-value";
 	process.env.MCP_TEST_EXEC_SECRET = secret;
 	const binding = {
@@ -225,6 +241,13 @@ test("direct command/compose execution is one-use, fails closed and stops only o
 				signal,
 			),
 		).rejects.toMatchObject({ code: "secret-reference-unavailable" });
+		await expect(
+			agent.admit(
+				"worktree-compose",
+				{ app: "api", target: "mocked", worktree: linked },
+				signal,
+			),
+		).rejects.toMatchObject({ code: "worktree-unsupported" });
 		const build = await agent.admit(
 			"build",
 			{ app: "api", target: "build" },

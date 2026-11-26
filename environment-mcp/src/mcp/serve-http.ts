@@ -1,16 +1,20 @@
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { DependencyBindingRefusal } from "../domain/dependency-binding.ts";
+import type { KubernetesPort } from "../domain/kubernetes.ts";
 import { OperationRefusal } from "../domain/operation.ts";
+import type { ProviderPort } from "../domain/provider.ts";
 import { createCapabilities } from "../interface/capabilities.ts";
 import { describeAction } from "../interface/descriptors.ts";
 import type { createCatalogService } from "../services/catalog-service.ts";
+import type { ConfigurationWriteService } from "../services/configuration-write-service.ts";
 import {
 	createEnvironmentEventBus,
 	type EnvironmentEventBus,
 	type EnvironmentStreamEvent,
 } from "../services/event-bus.ts";
 import type { ExecutionSession } from "../services/execution-service.ts";
+import { createGitActionService } from "../services/git-action-service.ts";
 import { createGitStatusService } from "../services/git-status-service.ts";
 import { matchesBearerCredential } from "../transports/http/authentication.ts";
 import { readBoundedBody } from "../transports/http/read-body.ts";
@@ -43,6 +47,9 @@ export function serveMcpHttp(
 	options: {
 		port?: number;
 		events?: EnvironmentEventBus;
+		providers?: ProviderPort;
+		kubernetes?: KubernetesPort;
+		config?: ConfigurationWriteService;
 		refresh?: () => Record<string, unknown>;
 	} = {},
 ) {
@@ -63,6 +70,9 @@ export function serveMcpHttp(
 				catalog,
 				repositories,
 				execution,
+				...(options.providers ? { providers: options.providers } : {}),
+				...(options.kubernetes ? { kubernetes: options.kubernetes } : {}),
+				...(options.config ? { config: options.config } : {}),
 				...(options.refresh
 					? {
 							refresh: () => {
@@ -73,6 +83,7 @@ export function serveMcpHttp(
 						}
 					: {}),
 				git: createGitStatusService(),
+				gitActions: createGitActionService(),
 			});
 			const capabilities =
 				touch || onAction || options.refresh

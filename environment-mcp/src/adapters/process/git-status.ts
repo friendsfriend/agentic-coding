@@ -4,6 +4,7 @@ import {
 	type GitChange,
 	type GitChanges,
 	type GitDiff,
+	type GitDiffSide,
 	type GitRepositoryStatus,
 	parseGitChangesOutput,
 	parseGitStatusOutput,
@@ -14,7 +15,7 @@ const statusLimit = 256 * 1024;
 const changesLimit = 512 * 1024;
 const diffLimit = 48 * 1024;
 
-function pathContext(repository: string) {
+export function gitPathContext(repository: string) {
 	const root = Bun.spawnSync(
 		["git", "-C", repository, "rev-parse", "--show-toplevel"],
 		{ stdin: "ignore", stdout: "pipe", stderr: "ignore" },
@@ -131,7 +132,7 @@ export async function readGitChanges(
 				note: "unavailable",
 			};
 		const parsed = parseGitChangesOutput(repository, result.text);
-		const { prefix } = pathContext(repository);
+		const { prefix } = gitPathContext(repository);
 		const changes = prefix
 			? parsed.changes.flatMap((change) => {
 					const relative = stripPrefix(change.path, prefix);
@@ -178,18 +179,20 @@ export async function readGitDiff(
 	repository: string,
 	change: GitChange,
 	signal: AbortSignal,
+	side: GitDiffSide = "all",
 ): Promise<GitDiff> {
 	const relative = safeRelativePath(change.path);
 	const unavailable = (note: GitDiff["note"]): GitDiff => ({
 		repository,
 		path: change.path,
+		side,
 		diff: "",
 		binary: false,
 		truncated: false,
 		...(note ? { note } : {}),
 	});
 	if (!relative) return unavailable("invalid-path");
-	const context = pathContext(repository);
+	const context = gitPathContext(repository);
 	const rootRelative = context.prefix
 		? `${context.prefix}${relative}`
 		: relative;
@@ -215,20 +218,28 @@ export async function readGitDiff(
 			absolute,
 		];
 	} else {
-		const head = Bun.spawnSync(
-			["git", "-C", repository, "rev-parse", "--verify", "HEAD"],
-			{
-				stdin: "ignore",
-				stdout: "ignore",
-				stderr: "ignore",
-			},
-		);
+		const revision =
+			side === "staged"
+				? ["--cached"]
+				: side === "worktree"
+					? []
+					: (() => {
+							const head = Bun.spawnSync(
+								["git", "-C", repository, "rev-parse", "--verify", "HEAD"],
+								{
+									stdin: "ignore",
+									stdout: "ignore",
+									stderr: "ignore",
+								},
+							);
+							return head.exitCode === 0 ? ["HEAD"] : ["--cached"];
+						})();
 		args = [
 			"diff",
 			"--no-ext-diff",
 			"--no-textconv",
 			"--unified=3",
-			...(head.exitCode === 0 ? ["HEAD"] : ["--cached"]),
+			...revision,
 			"--",
 			rootRelative,
 		];
@@ -244,6 +255,7 @@ export async function readGitDiff(
 		return {
 			repository,
 			path: change.path,
+			side,
 			diff: result.text,
 			binary,
 			truncated: result.truncated,

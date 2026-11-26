@@ -13,6 +13,7 @@ export function parseSharedServerOptions(args: string[]) {
 				"--config-dir",
 				"--state-dir",
 				"--clients",
+				"--provider-env-file",
 				"--port",
 				"--idle-timeout-sec",
 			].includes(key) ||
@@ -23,12 +24,14 @@ export function parseSharedServerOptions(args: string[]) {
 	}
 	const configDir = values.get("--config-dir"),
 		directory = values.get("--state-dir"),
-		clients = values.get("--clients");
+		clients = values.get("--clients"),
+		providerEnvFile = values.get("--provider-env-file");
 	if (
 		!configDir ||
 		!directory ||
 		!clients ||
-		![configDir, directory, clients].every(path.isAbsolute)
+		![configDir, directory, clients].every(path.isAbsolute) ||
+		(providerEnvFile !== undefined && !path.isAbsolute(providerEnvFile))
 	)
 		throw new Error("Explicit absolute paths required");
 	const port = Number(values.get("--port") ?? 0),
@@ -45,6 +48,7 @@ export function parseSharedServerOptions(args: string[]) {
 		configDir,
 		directory,
 		clients,
+		...(providerEnvFile ? { providerEnvFile } : {}),
 		port,
 		idleTimeoutSec,
 	};

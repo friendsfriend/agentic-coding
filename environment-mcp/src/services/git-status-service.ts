@@ -3,7 +3,7 @@ import {
 	readGitDiff,
 	readGitStatus,
 } from "../adapters/process/git-status.ts";
-import type { GitStatusPort } from "../domain/git-status.ts";
+import type { GitDiffSide, GitStatusPort } from "../domain/git-status.ts";
 
 const concurrency = 8;
 
@@ -12,19 +12,20 @@ export function createGitStatusService(): GitStatusPort {
 		changes(repository, signal) {
 			return readGitChanges(repository, signal);
 		},
-		async diff(repository, path, signal) {
+		async diff(repository, path, signal, side: GitDiffSide = "all") {
 			const changes = await readGitChanges(repository, signal);
 			const change = changes.changes.find((entry) => entry.path === path);
 			if (!change)
 				return {
 					repository,
 					path,
+					side,
 					diff: "",
 					binary: false,
 					truncated: false,
 					note: changes.note ?? "no-change",
 				};
-			return readGitDiff(repository, change, signal);
+			return readGitDiff(repository, change, signal, side);
 		},
 		async status(repositories, signal) {
 			const results: Awaited<ReturnType<GitStatusPort["status"]>>[number][] =

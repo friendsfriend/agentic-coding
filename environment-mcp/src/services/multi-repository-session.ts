@@ -237,6 +237,27 @@ export function createMultiRepositoryExecutionSession(
 		async wait(id: string, waitSec: number, signal: AbortSignal) {
 			return operation(id).binding.execution.wait(id, waitSec, signal);
 		},
+		async containerStats(signal: AbortSignal) {
+			const containers: Awaited<
+				ReturnType<ExecutionSession["containerStats"]>
+			>["containers"] = [];
+			let unavailable = 0;
+			for (const runtime of runtimes) {
+				const result = await runtime.current.execution.containerStats(signal);
+				unavailable += result.unavailable;
+				containers.push(
+					...result.containers.map((entry) => ({
+						...entry,
+						repository: runtime.repository,
+					})),
+				);
+			}
+			return {
+				containers,
+				unavailable,
+				note: "Only containers owned by these scopes or registered shared services are observed.",
+			};
+		},
 		async stop(app: string, signal: AbortSignal, repository?: string) {
 			if (repository) {
 				const runtime = runtimes.find((item) => item.repository === repository);

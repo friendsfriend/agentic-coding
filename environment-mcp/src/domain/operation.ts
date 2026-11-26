@@ -53,6 +53,7 @@ export class OperationRefusal extends Error {
 			| "journal-unavailable"
 			| "scope-unavailable"
 			| "operation-unavailable"
+			| "operation-in-progress"
 			| "request-conflict"
 			| "journal-capacity"
 			| "cleanup-unavailable"
@@ -61,7 +62,32 @@ export class OperationRefusal extends Error {
 			| "repository-ambiguous"
 			| "repository-unauthorized"
 			| "network-prerequisite-unavailable"
-			| "secret-reference-unavailable",
+			| "secret-reference-unavailable"
+			| "worktree-unsupported"
+			| "provider-not-configured"
+			| "provider-token-unavailable"
+			| "provider-unauthorized"
+			| "provider-forbidden"
+			| "provider-not-found"
+			| "provider-rate-limited"
+			| "provider-unavailable"
+			| "provider-invalid"
+			| "provider-response-too-large"
+			| "kubernetes-cluster-unavailable"
+			| "provider-write-unavailable"
+			| "provider-write-in-progress"
+			| "git-write-in-progress"
+			| "provider-head-changed"
+			| "config-stale"
+			| "config-invalid"
+			| "config-write-unavailable"
+			| "app-not-found"
+			| "app-exists"
+			| "app-has-targets"
+			| "target-not-found"
+			| "target-exists"
+			| "target-referenced"
+			| "target-is-default",
 	) {
 		super(code);
 	}
@@ -72,6 +98,7 @@ export type OperationSubject = {
 	target: string;
 	action?: string;
 	repository?: string;
+	worktree?: string;
 };
 
 /** Safe UI attribution from the frozen plan. The plan itself never leaves the
@@ -106,11 +133,18 @@ export function operationSubject(
 			typeof workspace?.directory === "string"
 				? workspace.directory
 				: undefined;
+		const executionWorkspace =
+			typeof value.executionWorkspace === "string"
+				? value.executionWorkspace
+				: undefined;
 		return {
 			app,
 			target,
 			...(action ? { action } : {}),
 			...(repository ? { repository } : {}),
+			...(executionWorkspace && executionWorkspace !== repository
+				? { worktree: executionWorkspace }
+				: {}),
 		};
 	} catch {
 		return undefined;

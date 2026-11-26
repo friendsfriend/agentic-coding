@@ -130,3 +130,40 @@ test("reads a real repository without mutating it", async () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("reads staged, worktree and combined diffs", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-git-sides-"));
+	const signal = new AbortController().signal;
+	const git = (...args: string[]) => {
+		const child = Bun.spawnSync(["git", "-C", root, ...args], {
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		if (child.exitCode !== 0) throw new Error("Fixture Git failed");
+	};
+	try {
+		git("init", "--quiet", "-b", "main");
+		git("config", "user.name", "Fixture");
+		git("config", "user.email", "fixture@example.invalid");
+		fs.writeFileSync(path.join(root, "tracked.txt"), "one\n");
+		git("add", "tracked.txt");
+		git("commit", "--quiet", "-m", "initial");
+		fs.writeFileSync(path.join(root, "tracked.txt"), "index\n");
+		git("add", "tracked.txt");
+		fs.writeFileSync(path.join(root, "tracked.txt"), "worktree\n");
+		const change = (await readGitChanges(root, signal)).changes.find(
+			(entry) => entry.path === "tracked.txt",
+		);
+		if (!change) throw new Error("expected tracked change");
+		const staged = await readGitDiff(root, change, signal, "staged");
+		expect(staged.side).toBe("staged");
+		expect(staged.diff).toContain("+index");
+		expect(staged.diff).not.toContain("+worktree");
+		const worktree = await readGitDiff(root, change, signal, "worktree");
+		expect(worktree.diff).toContain("+worktree");
+		const all = await readGitDiff(root, change, signal, "all");
+		expect(all.diff).toContain("+worktree");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

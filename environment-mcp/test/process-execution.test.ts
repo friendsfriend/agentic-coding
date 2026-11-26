@@ -15,8 +15,11 @@ test("direct shell run keeps process ownership, logs and stop in the scope", asy
 		state = path.join(root, "state");
 	fs.mkdirSync(repository);
 	fs.mkdirSync(state, { mode: 0o700 });
+	const script = path.join(repository, "run.sh");
+	fs.writeFileSync(script, "#!/bin/sh\nsleep 30\n", { mode: 0o755 });
 	for (const args of [
 		["init", "--quiet"],
+		["add", "run.sh"],
 		[
 			"-c",
 			"user.name=Fixture",
@@ -49,8 +52,8 @@ test("direct shell run keeps process ownership, logs and stop in the scope", asy
 						runtime: "shell",
 						executable: {
 							kind: "process",
-							program: "/bin/sh",
-							args: ["-lc", "sleep 30"],
+							program: script,
+							args: [],
 							readyText: "ready",
 							telemetry: "otlp-http-json",
 							timeoutSec: 5,
@@ -60,8 +63,26 @@ test("direct shell run keeps process ownership, logs and stop in the scope", asy
 			},
 		],
 	});
+	const linked = path.join(root, "linked");
+	const worktree = Bun.spawnSync(
+		[
+			"git",
+			"-C",
+			repository,
+			"worktree",
+			"add",
+			"--quiet",
+			"-b",
+			"linked",
+			linked,
+		],
+		{ stdout: "ignore", stderr: "ignore" },
+	);
+	if (worktree.exitCode !== 0) throw new Error("Fixture worktree failed");
 	let stopped = 0;
 	let exited = false;
+	let startedCwd: string | undefined;
+	let startedProgram: string | undefined;
 	let telemetryEnvironment: Record<string, string> | undefined;
 	const handle: ProcessHandle = {
 		pid: 4242,
@@ -78,7 +99,9 @@ test("direct shell run keeps process ownership, logs and stop in the scope", asy
 		},
 	};
 	const executor: ExecutionPort = {
-		async processStart({ env }) {
+		async processStart({ executable, cwd, env }) {
+			startedCwd = cwd;
+			startedProgram = executable.program;
 			telemetryEnvironment = env;
 			return handle;
 		},
@@ -119,9 +142,16 @@ test("direct shell run keeps process ownership, logs and stop in the scope", asy
 	const agent = service.bind("client", scope.id);
 	const signal = new AbortController().signal;
 	try {
+		await expect(
+			agent.admit(
+				"unrelated-worktree",
+				{ app: "web", target: "dev", worktree: root },
+				signal,
+			),
+		).rejects.toMatchObject({ code: "worktree-unsupported" });
 		const operation = await agent.admit(
 			"process",
-			{ app: "web", target: "dev" },
+			{ app: "web", target: "dev", worktree: linked },
 			signal,
 		);
 		await agent.execute(operation.id, signal);
@@ -133,6 +163,8 @@ test("direct shell run keeps process ownership, logs and stop in the scope", asy
 			readiness: "ready",
 			readinessSource: "text",
 		});
+		expect(startedCwd).toBe(linked);
+		expect(startedProgram).toBe(path.join(linked, "run.sh"));
 		expect(agent.status().owned).toMatchObject([
 			{ app: "web", kind: "process", runtimeId: "pid:4242" },
 		]);

@@ -3,17 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import * as z from "zod/v4";
 import { createDockerInspectionAdapter } from "../adapters/docker/container-inspection.ts";
+import { createDockerStatsAdapter } from "../adapters/docker/container-stats.ts";
+import { createProviderApi } from "../adapters/http/provider-api.ts";
+import { createKubernetesAdapter } from "../adapters/process/kubernetes.ts";
 import { createRuntimeExecutor } from "../adapters/process/runtime-executor.ts";
 import type { parseSharedServerOptions } from "../cli/shared-options.ts";
 import { readPrivateTokenFile } from "../configuration/private-token.ts";
+import { readProviderConfigs } from "../configuration/providers.ts";
 import { readConfigurationJson } from "../configuration/read-json.ts";
-import { loadSecretSource } from "../configuration/secrets.ts";
+import { loadSecretFile, loadSecretSource } from "../configuration/secrets.ts";
 import { identifier } from "../configuration/server-manifest.ts";
 import { readV2Configuration } from "../configuration/v2-configuration.ts";
 import { serveMcpHttp } from "../mcp/serve-http.ts";
 import { openDiagnosticsLog } from "../persistence/diagnostics-log.ts";
 import { createCatalogService } from "./catalog-service.ts";
 import { createConfigurationRefresh } from "./configuration-refresh.ts";
+import { createConfigurationWriteService } from "./configuration-write-service.ts";
 import { createEnvironmentEventBus } from "./event-bus.ts";
 import { createExecutionService } from "./execution-service.ts";
 import { createIdleReaper } from "./idle-reaper.ts";
@@ -110,18 +115,49 @@ export async function startSharedServer(
 	try {
 		diagnostics = openDiagnosticsLog(options.directory);
 		const events = createEnvironmentEventBus();
+		const secrets = loadSecretSource(options.configDir);
+		const fallbackSecrets = options.providerEnvFile
+			? loadSecretFile(options.providerEnvFile)
+			: undefined;
+		const providerSecrets = {
+			get(reference: string) {
+				return secrets.get(reference) ?? fallbackSecrets?.get(reference);
+			},
+		};
+		const providers = createProviderApi(
+			readProviderConfigs(options.configDir),
+			providerSecrets,
+			fetch,
+			{ stateDir: options.directory },
+		);
+		const kubernetes = createKubernetesAdapter(
+			options.configDir,
+			manifest.repositories,
+		);
 		const execution = createExecutionService(
 			manifest,
 			journal,
 			createDockerInspectionAdapter(),
 			createRuntimeExecutor(),
-			loadSecretSource(options.configDir),
+			secrets,
 			{
 				telemetryDirectory: options.directory,
 				configDir: options.configDir,
+				containerStats: createDockerStatsAdapter(),
 				onEvent: (event) => events.publish(event),
 			},
 		);
+		const refreshConfiguration = createConfigurationRefresh({
+			configDir: options.configDir,
+			repositories: [...manifest.repositories],
+			isIdle: () => bindings.every((binding) => binding.isRefreshIdle()),
+			apply: (next) => execution.refresh(next),
+		});
+		const configuration = createConfigurationWriteService({
+			configDir: options.configDir,
+			repositories: manifest.repositories,
+			refresh: refreshConfiguration,
+		});
 		const bindings = authenticatedClients.map((client) => {
 			const runtimes = client.repositories.map((repository) =>
 				createRepositoryRuntime({
@@ -236,12 +272,10 @@ export async function startSharedServer(
 			{
 				port: options.port,
 				events,
-				refresh: createConfigurationRefresh({
-					configDir: options.configDir,
-					repositories: [...manifest.repositories],
-					isIdle: () => bindings.every((binding) => binding.isRefreshIdle()),
-					apply: (next) => execution.refresh(next),
-				}),
+				providers,
+				kubernetes,
+				config: configuration,
+				refresh: refreshConfiguration,
 			},
 		);
 		diagnostics.append({ event: "startup", count: bindings.length });

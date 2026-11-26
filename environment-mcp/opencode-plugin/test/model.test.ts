@@ -4,10 +4,32 @@ import {
 	defaultTarget,
 	filterApps,
 	parseApp,
+	parseConfigurationMutation,
+	parseConfigurationRevision,
+	parseContainerStats,
 	parseGitChanges,
 	parseGitDiff,
+	parseGitRemotes,
 	parseHistory,
+	parseKubernetesClusters,
+	parseKubernetesResources,
 	parseOperationDetail,
+	parseProviderChangeDetail,
+	parseProviderChanges,
+	parseProviderDiscussions,
+	parseProviderFiles,
+	parseProviderIssueComments,
+	parseProviderIssueDetail,
+	parseProviderIssues,
+	parseProviderJobLogs,
+	parseProviderJobs,
+	parseProviderPipelines,
+	parseProviderRepositories,
+	parseProviderRepositoryMatches,
+	parseProviders,
+	parseProviderVersions,
+	parseProviderWriteOutcome,
+	parseProviderWrites,
 	parseStatus,
 	parseTelemetry,
 	targetSummary,
@@ -34,6 +56,189 @@ const app = parseApp({
 if (!app) throw new Error("expected app");
 
 describe("environment model", () => {
+	test("parses configuration revisions and preview/apply outcomes", () => {
+		expect(
+			parseConfigurationRevision({
+				digest: "a".repeat(64),
+				apps: 3,
+				targets: 7,
+				repositories: ["/repo"],
+			}),
+		).toEqual({
+			digest: "a".repeat(64),
+			apps: 3,
+			targets: 7,
+			repositories: ["/repo"],
+		});
+		expect(
+			parseConfigurationMutation({
+				status: "confirmation-required",
+				expectedDigest: "a".repeat(64),
+				nextDigest: "b".repeat(64),
+				confirm: "c".repeat(64),
+				summary: "create app",
+			}),
+		).toMatchObject({ status: "confirmation-required", summary: "create app" });
+		expect(
+			parseConfigurationMutation({
+				status: "completed",
+				digest: "b".repeat(64),
+				summary: "created",
+			}),
+		).toEqual({
+			status: "completed",
+			digest: "b".repeat(64),
+			summary: "created",
+		});
+	});
+
+	test("parses local provider repository matches", () => {
+		expect(
+			parseProviderRepositoryMatches({
+				matches: [
+					{
+						provider: "github-fixture",
+						type: "github",
+						reference: "org/repo",
+						host: "github.com",
+						url: "https://github.com/org/repo",
+					},
+				],
+			}),
+		).toEqual([
+			{
+				provider: "github-fixture",
+				type: "github",
+				reference: "org/repo",
+				host: "github.com",
+				url: "https://github.com/org/repo",
+			},
+		]);
+	});
+
+	test("parses provider write previews, receipts and replayed outcomes", () => {
+		const preview = parseProviderWriteOutcome({
+			status: "confirmation-required",
+			digest: "a".repeat(64),
+			intent: {
+				provider: "github-fixture",
+				action: "comment-change",
+				target: "org/repo:1",
+			},
+		});
+		expect(preview).toMatchObject({
+			status: "confirmation-required",
+			intent: { target: "org/repo:1" },
+		});
+		const writes = parseProviderWrites({
+			writes: [
+				{
+					requestId: "comment-1",
+					provider: "github-fixture",
+					action: "comment-change",
+					target: "org/repo:1",
+					digest: "a".repeat(64),
+					state: "completed",
+					createdAt: 1,
+					updatedAt: 2,
+					result: { id: 10 },
+				},
+			],
+		});
+		expect(writes[0]).toMatchObject({
+			state: "completed",
+			result: { id: 10 },
+		});
+		expect(
+			parseProviderWriteOutcome({
+				status: "replayed",
+				digest: "a".repeat(64),
+				receipt: writes[0],
+			}),
+		).toMatchObject({ status: "replayed" });
+	});
+
+	test("parses authorized clusters and bounded resource output", () => {
+		expect(
+			parseKubernetesClusters({
+				clusters: [
+					{
+						id: "devenv",
+						context: "kind-devenv",
+						repositories: ["/repo"],
+					},
+				],
+			}),
+		).toEqual([
+			{ id: "devenv", context: "kind-devenv", repositories: ["/repo"] },
+		]);
+		expect(
+			parseKubernetesResources({
+				cluster: "devenv",
+				namespace: "default",
+				output: "NAME READY",
+				truncated: true,
+				items: [
+					{
+						kind: "Pod",
+						name: "pod-a",
+						status: "Running",
+						ready: "1/1",
+						restarts: 2,
+						age: "3m",
+					},
+				],
+			}),
+		).toEqual({
+			cluster: "devenv",
+			namespace: "default",
+			output: "NAME READY",
+			truncated: true,
+			items: [
+				{
+					kind: "Pod",
+					name: "pod-a",
+					status: "Running",
+					ready: "1/1",
+					restarts: 2,
+					age: "3m",
+				},
+			],
+		});
+	});
+
+	test("parses container stats entries and unavailable counts", () => {
+		expect(
+			parseContainerStats({
+				containers: [
+					{
+						container: "a".repeat(64),
+						app: "web",
+						provider: "docker",
+						cpuPercent: 1.5,
+						memoryUsageBytes: 1024,
+						memoryLimitBytes: 4096,
+						pids: 2,
+					},
+				],
+				unavailable: 1,
+				note: "owned only",
+			}),
+		).toMatchObject({
+			containers: [
+				{
+					container: "a".repeat(64),
+					app: "web",
+					cpuPercent: 1.5,
+					memoryUsageBytes: 1024,
+					pids: 2,
+				},
+			],
+			unavailable: 1,
+			note: "owned only",
+		});
+	});
+
 	test("parses git changes and diff envelopes", () => {
 		const changes = parseGitChanges({
 			repository: "/repo",
@@ -69,6 +274,22 @@ describe("environment model", () => {
 			truncated: true,
 		});
 		expect(diff.diff).toContain("+added");
+	});
+
+	test("parses remotes with sanitized fetch and push URLs", () => {
+		const remotes = parseGitRemotes({
+			repository: "/repo",
+			remotes: [
+				{ name: "origin", fetchUrl: "git@github.com:org/repo.git" },
+				{
+					name: "mirror",
+					fetchUrl: "https://mirror.example/repo.git",
+					pushUrl: "ssh://mirror/repo.git",
+				},
+			],
+		});
+		expect(remotes.remotes).toHaveLength(2);
+		expect(remotes.remotes[1]?.pushUrl).toBe("ssh://mirror/repo.git");
 	});
 
 	test("parses live operation progress", () => {
@@ -152,11 +373,186 @@ describe("environment model", () => {
 						app: "customer-external-mw",
 						target: "run-mocked",
 						action: "run",
+						worktree: "/worktrees/feature",
 					},
 				},
 			],
 		});
 		expect(history.operations[0]?.subject?.target).toBe("run-mocked");
+		expect(history.operations[0]?.subject?.worktree).toBe("/worktrees/feature");
+	});
+
+	test("parses provider summaries and list envelopes", () => {
+		expect(
+			parseProviders({
+				providers: [
+					{
+						name: "github-fixture",
+						type: "github",
+						baseUrl: "https://api.github.example",
+						username: "fixture",
+						hasToken: true,
+					},
+				],
+			}),
+		).toEqual([
+			{
+				name: "github-fixture",
+				type: "github",
+				baseUrl: "https://api.github.example",
+				username: "fixture",
+				hasToken: true,
+			},
+		]);
+		expect(
+			parseProviderRepositories({
+				repositories: [
+					{
+						reference: "org/repo",
+						name: "repo",
+						description: "fixture",
+						url: "https://example/repo",
+						defaultBranch: "main",
+					},
+				],
+			})[0]?.reference,
+		).toBe("org/repo");
+		expect(
+			parseProviderChanges({
+				changes: [
+					{
+						id: "github-change-1",
+						number: 1,
+						title: "change",
+						state: "open",
+						sourceBranch: "feature",
+						targetBranch: "main",
+						author: "author",
+						url: "https://example/1",
+					},
+				],
+			})[0]?.sourceBranch,
+		).toBe("feature");
+		expect(
+			parseProviderIssues({
+				issues: [
+					{
+						id: "github-issue-2",
+						number: 2,
+						title: "issue",
+						state: "open",
+						author: "author",
+						labels: ["bug"],
+						url: "https://example/2",
+					},
+				],
+			})[0]?.labels,
+		).toEqual(["bug"]);
+		expect(
+			parseProviderPipelines({
+				pipelines: [
+					{
+						id: 3,
+						name: "CI",
+						status: "completed",
+						conclusion: "success",
+						url: "https://example/3",
+					},
+				],
+			})[0]?.conclusion,
+		).toBe("success");
+		expect(
+			parseProviderJobs({
+				jobs: [
+					{
+						id: 4,
+						name: "test",
+						status: "completed",
+						stage: "test",
+						url: "https://example/4",
+					},
+				],
+			})[0]?.stage,
+		).toBe("test");
+		expect(
+			parseProviderChangeDetail({
+				change: {
+					id: "github-change-1",
+					number: 1,
+					title: "change",
+					state: "open",
+					sourceBranch: "feature",
+					targetBranch: "main",
+					author: "author",
+					url: "https://example/1",
+					body: "body",
+					changedFiles: 2,
+				},
+			}),
+		).toMatchObject({ body: "body", changedFiles: 2 });
+		expect(
+			parseProviderFiles({
+				files: [
+					{
+						path: "src/a.ts",
+						status: "modified",
+						patch: "@@",
+					},
+				],
+				truncated: true,
+			}),
+		).toMatchObject({
+			truncated: true,
+			files: [{ path: "src/a.ts", patch: "@@" }],
+		});
+		expect(
+			parseProviderVersions({
+				versions: [{ sha: "a".repeat(40), message: "commit" }],
+			})[0]?.sha,
+		).toBe("a".repeat(40));
+		expect(
+			parseProviderIssueDetail({
+				issue: {
+					id: "github-issue-2",
+					number: 2,
+					title: "issue",
+					state: "open",
+					author: "author",
+					labels: ["bug"],
+					url: "https://example/2",
+					body: "body",
+				},
+			}),
+		).toMatchObject({ body: "body" });
+		expect(
+			parseProviderIssueComments({
+				comments: [
+					{
+						id: "61",
+						author: "reviewer",
+						body: "issue note",
+					},
+				],
+			})[0]?.body,
+		).toBe("issue note");
+		expect(
+			parseProviderDiscussions({
+				discussions: [
+					{
+						id: "1",
+						author: "reviewer",
+						body: "note",
+						resolved: true,
+					},
+				],
+			})[0]?.resolved,
+		).toBe(true);
+		expect(
+			parseProviderJobLogs({
+				output: "line",
+				truncated: true,
+			}),
+		).toEqual({ output: "line", truncated: true });
 	});
 
 	test("parses bounded telemetry summaries", () => {

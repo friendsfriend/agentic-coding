@@ -276,6 +276,9 @@ export const executionIntentSchema = z.strictObject({
 	/** Canonical repository path when the same client is authorized for more
 	 * than one repository. Omit only when the app identity is unambiguous. */
 	repository: z.string().min(1).max(4096).optional(),
+	/** Optional linked-worktree root. Supported for shell/process commands and
+	 * Docker builds; Compose/container/Helm are refused to avoid name collisions. */
+	worktree: z.string().min(1).max(4096).optional(),
 });
 export type ExecutionIntent = z.output<typeof executionIntentSchema>;
 

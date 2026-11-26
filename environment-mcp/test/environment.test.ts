@@ -140,6 +140,11 @@ test("copied build speaks real stdio MCP outside the checkout with no sibling pa
 			"env_git_changes",
 			"env_git_diff",
 			"env_git",
+			"env_git_branches",
+			"env_git_worktrees",
+			"env_git_remotes",
+			"env_git_tags",
+			"env_git_stashes",
 		]);
 		const result = await client.callTool({
 			name: "env_list",

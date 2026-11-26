@@ -1334,3 +1334,773 @@ Live verification:
 Environment-mcp suite: **74 pass, 0 fail** (500 assertions, 33 files, 8.35s).
 Plugin focused suite: **15 pass, 0 fail** (47 assertions). `bun run lint` and
 `bun run type-check` are clean.
+
+## Guarded git actions (task 3.53)
+
+Added read-only `env_git_branches` and `env_git_worktrees`, plus
+`env_git_action` in shared execution mode. The action capability is not exposed
+by read-only stdio mode.
+
+- `fetch` and fast-forward-only `pull` are bounded and non-interactive
+  (`GIT_TERMINAL_PROMPT=0`).
+- `checkout` requires an existing local branch; switching to the current branch
+  is a no-op and is allowed on a dirty tree. Switching elsewhere refuses a dirty
+  worktree.
+- `worktree-add` requires an absolute path outside the repository whose parent
+  exists and whose target does not. It accepts an existing branch or creates a
+  new one when `create: true`; branch names are checked with
+  `git check-ref-format`.
+- `worktree-remove` refuses the current worktree and a target worktree with
+  uncommitted changes.
+- Actions are serialized per repository; non-fetch actions refuse while an
+  environment operation is in progress. Outcomes include bounded output and a
+  reason code.
+
+UI:
+
+- detail `g` opens the Git view (`Enter` switch, `f` fetch, `p` pull,
+  `w` worktrees, `r` refresh, `Esc` back);
+- Worktrees (`a` add, `x` remove) and the new-worktree path form (prefilled
+  outside the repository, `Esc` cancel);
+- the Git view displays the last action outcome and reason.
+
+Live verification:
+
+- the Git view showed `customer-fe` on `qa` with `origin/qa` and the expected
+  footer; the Worktrees view showed the repository as current; the add form
+  prefilled a sibling path outside the repository;
+- checking out the current branch completed even with a dirty tree; adding a
+  worktree for the current branch was refused as `branch-in-use` and created
+  nothing;
+- the backend scenario covered local-remote fetch, fast-forward pull, branch
+  checkout, dirty-tree refusal, worktree add/remove, current/dirty removal
+  refusals and creating a new branch in a worktree;
+- panel CPU stayed at 0.3–1.4% across the new views.
+
+Limitation: the UI worktree form uses the branch selected in the Git view;
+backend-only `create: true` support is not exposed there yet. UI fetch/pull was
+not run against a real remote; the local-remote scenario covers the command
+path.
+
+Environment-mcp suite: **75 pass, 0 fail** (530 assertions, 34 files, 9.13s).
+Plugin focused suite: **15 pass, 0 fail** (47 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Git for the agent cwd (task 3.54)
+
+`env_git_branches`, `env_git_worktrees` and `env_git_action` accept
+`session: true` for a supplied working directory. This bypasses the configured
+repository allowlist for the git surface only; `env_git_action` remains gated on
+shared execution mode, so read-only stdio exposes only read-only branch/worktree
+listing. Authenticated local clients can therefore target any local git
+repository through the session flag, but never environment execution.
+
+The plugin adds `<leader>shift+g` (leader then Shift+G; displayed as `<leader>G`;
+command palette title "Git actions for current directory") and the
+`/git-actions` slash command with alias `/git-cwd`. The plain `/git` slash name
+is already the existing Git usage command, so the plugin command does not
+override it.
+
+- resolves `process.cwd()`, or a plugin `directory`/`cwd` option when present;
+- sets a one-shot session request consumed by the environment page;
+- opens the panel/full-screen environment and shows the Git view for that
+  repository, hiding the environment tab header;
+- `Esc` closes the session Git view/panel; `<leader>v` still opens the normal
+  environment.
+
+Live verification:
+
+- the agent cwd `/Users/fabiankellner/agentic-coding` returned HTTP 409 through
+  the normal allowlisted path and listed its branches through `session: true`
+  (current `feat/agentic-coding-v2`);
+- `ctrl+x Shift+G` and `/git-actions` opened the Git view with the
+  agentic-coding branch list and no environment tabs; CPU stayed at 0.5%; `Esc`
+  returned to the session and `ctrl+x v` opened the normal Applications table;
+- `ctrl+x g` remained the timeline search and did not open the environment;
+- checkout of the already-current branch through the session action completed.
+
+Limitation: `process.cwd()` is process-wide in the plugin runtime; distinct
+OpenCode sessions sharing one process may not have distinct cwds. Set the
+plugin `directory`/`cwd` option if needed.
+
+Environment-mcp suite: **75 pass, 0 fail** (530 assertions, 34 files, 11.87s).
+Plugin focused suite: **15 pass, 0 fail** (47 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Git branch filter (task 3.55)
+
+The Git view now mirrors the applications filter:
+
+- `/` focuses the branch input; typed text filters by branch name or upstream;
+- `Enter` returns focus to the filtered list, `↑/↓` move through the filtered
+  branches without stealing `j/k` from the input, and `Esc` clears/blurs;
+- while filtering, global environment keys (`r`, tabs, fullscreen, help) and
+  Git actions are gated off so letters reach the input;
+- the filter row shows `visible of total`; the footer switches to
+  `Enter list · Esc clear`, and the `?` help lists the Git filter/action keys.
+
+Live verification: `/feature` on the agentic-coding Git view reduced 196
+branches to 193; `Enter` returned to the list and `↓` moved the selection; the
+panel stayed responsive.
+
+Environment-mcp suite: **75 pass, 0 fail** (530 assertions, 34 files, 11.69s).
+Plugin focused suite: **15 pass, 0 fail** (47 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Git view header (task 3.56)
+
+The Git view now uses a header outside the padded content box, styled like the
+environment shell:
+
+- raised background, two-column (one in compact) horizontal padding and the same
+  vertical spacing as the environments header;
+- bold lowercase `git` title, green current-branch dot and branch name, muted
+  app id, right-aligned `N branches · M worktrees` (hidden in compact mode);
+- the `/` filter input and `visible of total` count live in the header’s second
+  row, matching the shell’s title-plus-tabs structure.
+
+The Git branch list, outcome line and actions remain in the content area.
+Live verification: the session Git header showed
+`git ● feat/agentic-coding-v2 agentic-coding … 196 branches · 10 worktrees`,
+with the filter row showing `196 of 196`; typing reduced it to `193 of 196`.
+CPU stayed at 0.4%.
+
+Environment-mcp suite: **75 pass, 0 fail** (530 assertions, 34 files, 10.75s).
+Plugin focused suite: **15 pass, 0 fail** (47 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Git polish (task 3.57)
+
+- **Worktree form** — path and branch are both editable inputs; `Tab` switches
+  the focused field and the header shows `existing branch` or `new branch`.
+  The action infers `create: true` when the typed branch is not local, and the
+  suggested path follows the branch until the path is edited manually.
+- **Session changes/diff** — `c` from the session Git view opens the same
+  Changes/Diff surfaces using the session repository. `env_git_changes` and
+  `env_git_diff` accept `session: true`.
+- **Per-side diff** — `env_git_diff` accepts `side: all|staged|worktree`;
+  the diff header shows the current side and `s` cycles and reloads it.
+
+Live verification:
+
+- the session Git view for `/Users/fabiankellner/agentic-coding` showed 27
+  changes on `c`; the selected deleted file opened with side `all`, `s` switched
+  to `staged` and correctly reported no staged diff;
+- the worktree form showed editable Path/Branch fields, `Tab field`, an
+  `existing branch` badge, and switched to `new branch` when the branch name was
+  edited; nothing was created during the test;
+- adapter tests assert staged (`+index`, no `+worktree`) versus worktree
+  (`+worktree`) versus all (`+worktree`) diffs.
+
+Environment-mcp suite: **76 pass, 0 fail** (537 assertions, 34 files, 10.40s).
+Plugin focused suite: **15 pass, 0 fail** (47 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Branch deletion and remotes (task 3.58)
+
+- `env_git_action` adds safe `branch-delete` (`git branch -d`), `remote-add` and
+  `remote-remove`. Deletion refuses the current branch; Git refuses unmerged or
+  worktree-checked-out branches with reason mapping.
+- `env_git_remotes` returns remotes with sanitized URLs: HTTP(S) userinfo is
+  stripped and credential-bearing HTTP URLs are refused for add.
+- The Git view adds `d` delete and `m` remotes; the Remotes view lists
+  name/fetch URL/split-push marker, `a` opens a two-field add form (`Tab`
+  switches), and `x` removes the selected remote.
+- All actions keep the per-repository lock, active-operation refusal and session
+  mode.
+
+Live verification:
+
+- the session Git header counted 1 remote; the Remotes view showed
+  `origin git@github.com:friendsfriend/agentic-coding.git`;
+- deleting the current branch (`feat/agentic-coding-v2`) was refused as
+  `current-branch`;
+- the remote add form rendered Name/URL fields and the credential guidance;
+- backend tests covered deleting a merged branch, current-branch refusal,
+  adding/removing a remote, credential-URL refusal, and remote listing.
+
+Limitations: running environment targets from a linked worktree and validating
+fetch/pull against real credentialed remotes are not implemented; the local
+remote scenario covers the command path.
+
+Environment-mcp suite: **77 pass, 0 fail** (554 assertions, 34 files, 10.92s).
+Plugin focused suite: **15 pass, 0 fail** (47 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Linked-worktree execution (task 3.59)
+
+- `env_execute` accepts an optional `worktree`. Admission resolves the real path,
+  requires the configured repository and worktree to share a git common
+  directory, requires the worktree path to be its git top-level, and derives the
+  app-relative working directory from the configured repository prefix.
+- Repository-local command programs/arguments and Docker build context/dockerfile
+  paths are rewritten to the linked worktree, so the checked-out branch is what
+  runs. Process cwd and command cwd use the worktree directory.
+- Compose, container-run and Helm targets refuse with `worktree-unsupported`;
+  their resource names and service bindings are repository-scoped.
+- The operation plan records the execution worktree, the operation subject
+  exposes it, and the UI shows an `execution` badge in Worktrees plus a
+  Worktree row in detail/history. `u` in Worktrees selects or clears it.
+- Removing the active worktree clears the worktree execution selection.
+
+Live verification:
+
+- a non-worktree path to `env_execute` was refused with `worktree-unsupported`;
+- the plugin Worktrees footer showed `a add  u use  x remove  r refresh`, and
+  `u` on Session Git reported `Session Git has no environment targets.`;
+- backend tests covered accepted linked-worktree cwd/program rewriting and
+  Compose refusal.
+
+Limitations: fetch/pull against real credentialed remotes still requires
+authorized credentials and network access; the local-remote scenario covers the
+command path.
+
+## Read-only provider surface (task 3.60)
+
+- The shared HTTP server reads the v2 `config.json` provider registry and
+  resolves `tokenRef` from the process environment or configuration `.env` at
+  call time. Only provider name/type/base URL/username and `hasToken` are
+  projected; token references and values are never returned.
+- `env_provider_repos`, `env_provider_changes`, `env_provider_issues`,
+  `env_provider_pipelines` and `env_provider_jobs` are bounded read-only
+  capabilities (20/50/50/30/30) with `open`/`closed`/`all` state where relevant.
+- GitLab calls use the `/api/v4` prefix and encode project paths for nested namespaces; GitHub issue lists
+  exclude pull requests. GitHub merged changes report `merged`; GitLab
+  `opened` maps to `open`.
+- Requests are HTTPS-only except loopback HTTP, refuse redirects, time out at
+  12s, cap response bytes at 256 KiB, and map 401/403/404/429/400/422/5xx to
+  bounded refusals. Tokens are redacted from parsed responses.
+- The plugin adds `p` from the applications table, a Providers list, repository
+  search, and Changes/Issues/Pipelines/Jobs views with `/` filtering, headers,
+  `c`/`i`/`l` switches, `s` state cycling and `Enter` job navigation.
+
+Live verification:
+
+- `env_providers` returned `github-friendsfriend` and `gitlab-iconnect` with
+  their types, base URLs, usernames and `hasToken: false`; neither `tokenRef`
+  nor secret material appeared in the response.
+- The plugin showed the two providers, `/` filtering to `gitlab-iconnect`,
+  repository search entry/blur/back navigation, and the read-only footer.
+- No provider network request was made: both configured token references are
+  absent from the v2 configuration `.env` and the service process environment,
+  so live repository/change/issue/pipeline reads remain credential-blocked.
+  Adapter behavior is covered with fake-fetch tests only.
+
+Environment-mcp suite: **83 pass, 0 fail** (622 assertions, 35 files, 9.32s).
+Plugin focused suite: **18 pass, 0 fail** (60 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider detail, files, discussions and job logs (task 3.61)
+
+- `env_provider_change`, `env_provider_change_files`,
+  `env_provider_change_versions`, `env_provider_issue`,
+  `env_provider_discussions` and `env_provider_job_logs` extend the read-only
+  surface. Change files cap at 100 paths and 48 KiB aggregate patch text;
+  versions at 100; discussions at 50 flattened notes; job logs at 64 KiB.
+- GitHub change detail maps additions/deletions/changed files; GitHub issue
+  detail refuses pull-request numbers. GitLab detail maps description,
+  `changes_count`, `diff` patches and flattened discussion notes with resolved
+  state.
+- GitHub job logs fetch the signed redirect target without credentials; GitLab
+  traces use the project job trace endpoint. Both redact the provider token and
+  mark truncation.
+- Plugin drill-down: change/issue `Enter` opens detail; change `d` opens files,
+  `h` opens discussion history; file `Enter` opens the patch; job `Enter` opens
+  logs; `Esc` returns through the provider view stack.
+- Adapter tests cover GitHub and GitLab detail mapping, patch and log caps, and
+  token redaction.
+- A disposable loopback GitHub fixture (temporary config, client token, state
+  and fake provider server) served every new capability successfully. The
+  plugin browsed provider → repository search → changes → change detail →
+  files → patch → discussions, issues → issue detail, and pipelines → jobs →
+  job log. No external network or real credential was used.
+- The real configured provider token references still do not resolve, so live
+  GitHub/GitLab reads remain blocked; GitLab detail mapping is unit-tested only.
+
+Environment-mcp suite: **83 pass, 0 fail** (674 assertions, 35 files, 9.94s).
+Plugin focused suite: **18 pass, 0 fail** (69 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Container stats and Kubernetes inspection (tasks 3.62-3.63)
+
+- `env_container_stats` aggregates only containers owned by the bound scopes or
+  registered shared services across the client's repositories. The Docker/Podman
+  Engine adapter uses the configured socket, verifies socket identity before and
+  after, caps stats JSON at 256 KiB, and projects CPU, memory, network and PID
+  values. Engine failures count as `unavailable`; other host containers are never
+  enumerated.
+- `env_clusters` lists clusters whose configured repository scope intersects the
+  client's repositories. `env_cluster_resources` validates a non-system namespace
+  and runs one fixed read-only `kubectl get
+  deployments,statefulsets,pods,services --output wide` with the explicit
+  context/kubeconfig, a 10s request timeout, 15s process timeout and 128 KiB
+  output cap. No arbitrary kubectl arguments are exposed.
+- The plugin adds `m` container stats from application detail and `K` cluster
+  inspection from the applications table, with a namespace prompt and bounded
+  resource view.
+
+Live verification:
+
+- `env_container_stats` returned an empty owned/shared set (no running owned
+  containers) with `unavailable: 0`.
+- `env_clusters` returned the implicit `devenv`/`kind-devenv` cluster scoped to
+  the 35 configured repositories.
+- The plugin showed the cluster list, namespace prompt, back navigation and the
+  empty container-stats view.
+- Kubernetes resource execution was not run against a live cluster; the fixed
+  command, namespace refusal, authorization scope and missing-kubectl behavior
+  are covered by a disposable fake-kubectl test.
+
+Environment-mcp suite: **89 pass, 0 fail** (714 assertions, 36 files, 10.52s).
+Plugin focused suite: **22 pass, 0 fail** (77 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider writes (task 3.64)
+
+- Writes use a two-step preview-confirm contract. The first call returns a
+  SHA-256 digest of the exact provider/action/target/body/head intent and sends
+  no outbound request; the same call with that `confirm` digest performs the
+  action. A mismatched digest remains a preview.
+- `requestId` is persisted in a private `provider-writes.json` journal. Same ID
+  and digest replays the receipt without a second call; different digest is
+  `request-conflict`; an in-progress ID is `provider-write-in-progress`.
+  Attempts left `attempting` by a restart are marked
+  `provider-write-interrupted` and are never resent.
+- Receipts are bounded to 512 on disk and 50 returned, with an atomic
+  `0600` temp-file/rename write. `env_provider_writes` exposes only
+  request/provider/action/target/digest/state/timestamps, bounded result or
+  error code, and never token material.
+- Actions: change/issue comments (16 KiB max), GitHub/GitLab exact-head approval
+  with a re-read head check, and pipeline retry/cancel. No merge, close, rebase,
+  unapprove or discussion resolution.
+- The plugin adds `c`/`a` on changes, `c` on issues, `t`/`x` on pipelines, `y`
+  confirmation, and `w` durable receipt listing.
+
+Live verification against a disposable loopback GitHub fixture:
+
+- preview returned a digest without a write;
+- confirm completed and replay returned the same receipt without a second call;
+- a different body under the same request ID was refused as `request-conflict`;
+- exact-head approval completed; pipeline retry/cancel completed;
+- the provider write list showed all receipts and no token material;
+- the plugin completed comment, approval, retry and cancel flows through the
+  preview-confirm UI and listed seven receipts.
+- The real provider preview returned a digest without an outbound call because
+  its token reference is unavailable; no real provider write was made.
+
+Environment-mcp suite: **94 pass, 0 fail** (768 assertions, 37 files, 10.16s).
+Plugin focused suite: **23 pass, 0 fail** (83 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Direct application provider navigation (task 3.65)
+
+- `env_provider_repository({repository})` reads the authorized repository's
+  fetch remotes and matches their host/path to configured provider base URLs.
+  It handles SCP-like and URL remotes, GitHub `api.` hosts, nested GitLab
+  namespaces, `.git` suffixes, and rejects traversal-like or malformed paths.
+  No network call or token is used.
+- The applications table now maps `c` to change requests and `i` to issues for
+  the selected app. The plugin resolves the provider repository, selects the
+  provider, and opens the list directly; `Esc` returns to the applications
+  table rather than the longer provider stack.
+- The provider path (`p` → repository → changes/issues) remains available.
+
+Live verification:
+
+- the disposable app fixture resolved `git@127.0.0.1:org/repo.git` to
+  `fixture-github`/`org/repo`; table `i` opened the fixture issue list and `Esc`
+  returned to the table; table `c` opened the fixture change list;
+- the real service resolved `customer-fe` to
+  `gitlab-iconnect`/`funke-iconnect/icon-customer-v2` and `customer-mw` to
+  `funke-iconnect/icon-customer-services` without a network call.
+- Provider reads still require the configured provider token references.
+
+Environment-mcp suite: **96 pass, 0 fail** (785 assertions, 38 files, 10.24s).
+Plugin focused suite: **24 pass, 0 fail** (86 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider token fallback and TLS (task 3.66)
+
+- `--provider-env-file /absolute/.env` adds a provider-only fallback secret
+  source. The path may be the operator-owned environment `.env` symlink; its
+  canonical target must be a private regular file. Config-root `.env` and
+  process values still take precedence.
+- The launchd job now passes
+  `--provider-env-file /Users/fabiankellner/.config/agentic-coding/.env` and
+  sets `SSL_CERT_FILE=/usr/local/share/ca-certificates/cacert.pem`; without that
+  CA bundle, launchd rejected the GitHub API certificate chain.
+- GitHub repository paths now use literal `/` between owner and repository;
+  GitLab keeps encoded project paths for nested namespaces.
+
+Live verification:
+
+- `env_providers` reports `hasToken: true` for both `github-friendsfriend` and
+  `gitlab-iconnect`;
+- GitHub open issues/changes for `friendsfriend/agentic-coding` return
+  successfully (0 open items);
+- GitLab open issues for `funke-iconnect/icon-customer-v2` return successfully
+  (0 items), and application-table `c` shows 10 open changes;
+- table `i` opens the GitLab issue list with the correct `gitlab-iconnect`
+  provider label.
+
+Environment-mcp suite: **97 pass, 0 fail** (788 assertions, 38 files, 11.46s).
+Plugin focused suite: **24 pass, 0 fail** (86 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider detail selection fix (task 3.67)
+
+- `openProviderIssue` and `openProviderChange` previously defaulted to the
+  already-loaded detail before the selected list row, so opening a second item
+  reused the first detail. They now default to the selected row; refresh passes
+  the current detail explicitly.
+- A disposable fixture with three issues verified: issue #1 opened, `Esc`
+  returned to the list, `Down` + `Enter` opened issue #2, then issue #3, each
+  with its own title and body. The same fix applies to change detail.
+- The store also clears stale change/issue detail when loading a list or moving
+  the selection, and the keymap passes the selected row explicitly.
+- Running OpenCode processes were started before this source change and keep
+  the previously loaded plugin modules; a full OpenCode restart is required to
+  load the fix. No user process was terminated.
+
+## Application-table provider action selection (task 3.68)
+
+- Table `i`/`c` previously called `selectedApp()`, which preferred the last
+  opened `selectedAppId`. After opening one application, moving the table
+  selection and pressing `i` still resolved the old application's provider
+  repository.
+- The table view now forces `selectedApp()` to the highlighted row, and
+  `openAppProvider` explicitly uses `filteredApps()[selectedIndex()]`.
+- A two-app disposable fixture verified: move from `app-a` to `app-b`, press
+  `i`, see `org/repo-b` / `Issue B`, not app-a's issues.
+
+## Provider diff/discussion keys (task 3.69)
+
+- `f` is reserved for panel fullscreen. Provider change detail now uses `d`
+  for changed files/diffs and `h` for discussion history; `c` and `a` remain
+  comment and exact-head approval.
+- Clearing list filters no longer resets the selected provider index. Opening
+  files, discussions, jobs or switching change/issue state keeps the provider
+  header and follow-up reads on the same provider.
+- Live verification on `customer-fe` change #1881: change detail showed
+  `gitlab-iconnect`, `d` opened its three changed files, and `h` opened its
+  discussion history (`y5114 approved this merge request`) with the same
+  provider.
+
+Environment-mcp suite: **97 pass, 0 fail** (789 assertions, 38 files, 10.68s).
+Plugin focused suite: **24 pass, 0 fail** (87 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider detail UI (task 3.70)
+
+- Change and issue descriptions now render through OpenTUI `MarkdownRenderable`
+  with a renderer-owned syntax style cached by renderer/theme. Headings, bold,
+  inline code, lists and links render as Markdown instead of raw markers.
+- The provider file view uses the built-in OpenTUI `DiffRenderable` with line
+  numbers, add/remove signs and colors, word wrapping and a scrolling parent.
+  No patch text is synthesized; non-textual diffs show a clear fallback.
+- Discussion history is a timeline: system events get approval/merge/close
+  glyphs, author/timestamp/resolved badges form the header, and each note body
+  renders as Markdown under the timeline rail.
+- Syntax styles are created with the active renderer owner and cached per
+  renderer/theme. Creation is wrapped: if the host rejects the owner, Markdown
+  falls back to streamed host rendering and the panel stays alive instead of
+  crashing `session.panel`. Diff keeps the renderable's own context-owned
+  fallback. Markdown bodies also use streaming so text appears before the
+  syntax pass.
+
+Live verification:
+
+- disposable Markdown fixture: `# Summary`, bold, inline code, a two-item list
+  and a link rendered without markers; the diff showed numbered context/add/
+  remove lines; the timeline showed an approval event with `✓` and a Markdown
+  comment with bold, inline code and a list.
+- real `customer-fe` change: the provider diff rendered the actual source patch
+  with line numbers and removed lines under the correct `gitlab-iconnect`
+  provider.
+
+Environment-mcp suite: **97 pass, 0 fail** (789 assertions, 38 files, 10.79s).
+Plugin focused suite: **24 pass, 0 fail** (87 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## OpenTUI ResourceContext crash fix (task 3.71)
+
+- The initial explicit style path could raise
+  `SyntaxStyle requires an explicit resource owner` in a panel slot. The style
+  path now catches that mismatch and falls back to the host renderable's own
+  handling; markdown renders with `streaming` so text is visible without a
+  successful syntax pass.
+- Re-tested provider change Markdown, native diff and the discussion timeline in
+  a disposable panel after the fix; no slot crash and all three views rendered.
+
+Environment-mcp suite: **97 pass, 0 fail** (789 assertions, 38 files, 12.88s).
+Plugin focused suite: **24 pass, 0 fail** (87 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## List readability and scrollbars (task 3.72)
+
+- Provider change rows are two lines: number/title/state, then source → target
+  and author. Issue rows are two lines: number/title/state, then author and
+  labels (or `no labels`).
+- All scrollboxes previously forced `verticalScrollbarOptions.visible = false`;
+  that override was removed, so OpenTUI's native vertical scrollbar appears on
+  the right only when the content overflows. Horizontal scrollbars remain
+  hidden.
+- Live verification: the 41-application table showed a right-edge scrollbar;
+  `customer-fe` changes showed two readable lines per row with branch and author
+  while keeping the correct `gitlab-iconnect` provider.
+
+Environment-mcp suite: **97 pass, 0 fail** (789 assertions, 38 files, 13.46s).
+Plugin focused suite: **24 pass, 0 fail** (87 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Application and target CRUD (task 3.73)
+
+- Added `env_config_revision` and preview-confirm `env_app_create`,
+  `env_app_update`, `env_app_delete`, `env_target_create`,
+  `env_target_update` and `env_target_delete`.
+- Writes require the exact current digest and confirmation digest, serialize,
+  validate the whole v2 configuration, create a private
+  `environments.json.mcp-bak-*` backup, atomically replace the file and refresh
+  the execution catalog. A refresh failure restores the prior bytes.
+- App deletion refuses targets unless explicit cascade is confirmed and always
+  refuses external prerequisite references. Target deletion refuses defaults and
+  references. Repository changes refuse while targets exist.
+- `profile` is only a target label; no profile entity or MCP profile action was
+  added.
+- UI: `n` new app, `E`/`X` edit/delete app, target picker `n`/`d`/`e`/`x`,
+  digest preview and `y` confirmation.
+
+Live verification:
+
+- a disposable service created `app-b`, observed the new revision and a backup,
+  then completed a second write against the refreshed configuration;
+- the panel created `app-c` through the preview-confirm form and refreshed the
+  applications table;
+- target picker navigation showed the new `n`/`d`/`e`/`x` actions; target
+  mutations were exercised through the disposable service tests, not applied to
+  the real configuration.
+- The real configuration was previewed only; no real configuration write was
+  made.
+
+Environment-mcp suite: **101 pass, 0 fail** (856 assertions, 39 files, 10.02s).
+Plugin focused suite: **26 pass, 0 fail** (93 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider issue comments and version history (task 3.74)
+
+- `env_provider_issue_comments` reads at most 50 GitHub issue comments or
+  GitLab issue notes. Issue detail `h` renders them through the same Markdown
+  timeline as change discussions.
+- Change detail `v` opens the existing `env_provider_change_versions` history
+  as a two-line version list with SHA, message/date and author when supplied.
+- Provider JSON response limit increased from 256 KiB to 1 MiB after a large
+  public GitHub issue page exceeded the old bound; the consumer mapping remains
+  capped at 50 items and the capability result stays under 128 KiB.
+
+Live verification:
+
+- GitHub `anomalyco/opencode` issue #66549 opened its comment timeline with the
+  Markdown comment body under `github-friendsfriend`;
+- `customer-fe` change #1882 showed one version (`1bbffb60`) under
+  `gitlab-iconnect`.
+
+Environment-mcp suite: **101 pass, 0 fail** (863 assertions, 39 files, 10.65s).
+Plugin focused suite: **26 pass, 0 fail** (94 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Timeline connectors and event glyphs (task 3.75)
+
+- Discussion and issue-comment timelines render a dedicated rail column: the
+  event glyph sits directly on the rail and the connector continues beneath it
+  through the Markdown body and into the next entry.
+- Event glyphs distinguish resolved/approved (`✓`), unapproved/removed (`✗`),
+  merged (`◆`), closed (`✕`), reopened (`○`), assigned (`→`),
+  unassigned (`←`), labels (`▣`), commits/added (`↑`), review (`?`) and ordinary
+  comments (`●`).
+- Change version history uses a commit glyph (`◆`) and connector between
+  versions.
+- Verified with a fixture containing approval, close, reopen and comment events:
+  all four glyphs and the connector rail rendered correctly; live GitHub issue
+  comments and GitLab version history also rendered.
+
+Environment-mcp suite: **101 pass, 0 fail** (863 assertions, 39 files, 10.74s).
+Plugin focused suite: **26 pass, 0 fail** (94 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+Environment-mcp suite: **101 pass, 0 fail** (863 assertions, 39 files, 11.27s).
+Plugin focused suite: **26 pass, 0 fail** (94 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+Environment-mcp suite: **101 pass, 0 fail** (863 assertions, 39 files, 10.96s).
+Plugin focused suite: **26 pass, 0 fail** (94 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider HTML normalization (task 3.76)
+
+- Provider bodies are passed through a bounded HTML-to-Markdown normalizer before
+  Markdown rendering. It handles paragraphs, headings, bold/italic/deleted,
+  inline code, fenced code blocks, lists, blockquotes, details/summary, links,
+  images, line breaks, horizontal rules, entities and relative GitLab links.
+- Change/issue descriptions, timeline notes and version messages all use the
+  same normalizer. Ordinary Markdown is left intact apart from entity decoding.
+- Converter tests cover GitLab system-note lists/links/code, details and code
+  blocks, entities, relative links and plain Markdown passthrough.
+
+Environment-mcp suite: **104 pass, 0 fail** (874 assertions, 40 files, 10.59s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider merge/issue-state/rebase and cwd slash commands (tasks 3.77-3.78)
+
+- `env_provider_merge_change` re-reads the head SHA before GitHub/GitLab merge,
+  supports GitHub merge/squash/rebase methods, and stores a normal durable
+  receipt. `env_provider_set_issue_state` opens/closes issues.
+  `env_provider_rebase_change` is GitLab-only and refuses other providers.
+- UI: change detail `M` merge, `B` rebase; issue detail `o` toggle state. All use
+  the existing preview-confirm receipt flow.
+- `env_provider_repository` accepts `session: true` for the current cwd outside
+  the configured allowlist. `/issues` and `/changes` request that resolution and
+  open the matching provider list in the panel.
+- Live: session resolution of `/Users/fabiankellner/agentic-coding` returned
+  `github-friendsfriend/friendsfriend/agentic-coding`; merge preview returned a
+  confirmation digest without a write. Real merge/close/rebase writes were not
+  performed.
+- Merge/state/rebase command paths are covered by fake GitHub/GitLab writes.
+
+Environment-mcp suite: **105 pass, 0 fail** (894 assertions, 40 files, 10.88s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Plugin launch aliases (task 3.79)
+
+- Slash commands are now exactly `/environment`, `/git`, `/issues` and
+  `/changes`; the `/env`, `/git-actions`, `/git-cwd`, `/provider-issues` and
+  `/provider-changes` aliases were removed. Keyboard binds remain
+  `<leader>v` and `<leader>G`, and the home footer chip remains.
+- Live OpenCode test: `/git` listed and opened the Git view; `/issues` opened
+  `friendsfriend/agentic-coding` issues for the cwd outside the configured
+  allowlist.
+
+Environment-mcp suite: **105 pass, 0 fail** (894 assertions, 40 files, 11.35s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider unapprove, discussions, labels/assignees and job retry (tasks 3.80-3.81)
+
+- New capabilities: `env_provider_unapprove_change`,
+  `env_provider_reply_discussion`, `env_provider_set_discussion_resolved`,
+  `env_provider_add_labels`, `env_provider_set_assignees` and
+  `env_provider_retry_job`. All use the existing exact intent digest,
+  request-id replay/conflict handling and durable receipts.
+- GitHub unapproval re-reads the exact head, resolves the configured account,
+  finds its latest APPROVED review and dismisses that review. GitLab unapproval
+  sends the exact head SHA to the unapprove endpoint.
+- Discussion replies support change review threads and issue threads. GitLab
+  discussion resolution toggles the whole discussion; GitHub resolution refuses
+  because the REST API exposes no thread-resolution endpoint and this
+  implementation does not use GraphQL. GitLab note ids now retain their parent
+  discussion id for replies.
+- Labels are appended to changes or issues. Assignees replace the current set;
+  GitLab usernames are resolved to user ids before the update.
+- Individual job retry posts to GitHub workflow-job rerun or GitLab job retry.
+- Panel keys: change `u` withdraw, `l` labels, `A` assignees; issue `l`/`A`;
+  discussion `c` reply and GitLab `x` resolve/unresolve; jobs `t` retry. The
+  reply/label/assignee forms use the same preview/edit/confirm flow.
+- The write editor now binds Enter to preview explicitly. Without this the
+  OpenTUI input did not advance the stage in the PTY.
+- Discussion replies previously lost the selected thread after the view
+  switched to `provider-write`; selection now follows the recorded write origin.
+- PTY verification with a disposable fake GitHub provider completed:
+  reply (`POST /issues/1/comments`), labels (`POST /issues/1/labels`),
+  assignees (`PATCH /issues/1`), job retry (`POST /actions/jobs/12/rerun`) and
+  unapprove (`GET /user`, `GET` reviews, `PUT` dismissal). Direct capability
+  checks completed the GitLab resolve, reply, labels, assignees, job retry and
+  unapprove paths. No real provider writes were performed.
+
+Environment-mcp suite: **107 pass, 0 fail** (936 assertions, 40 files, 11.99s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Guarded Git writes (tasks 3.82-3.83)
+
+- New capability `env_git_write` previews and confirms eight writes: `push`,
+  lightweight `tag`, `branch-rename`, `remote-set-url`, stage-all `commit`,
+  `stash`, `merge` and `rebase`. The first call returns a SHA-256 digest of the
+  exact repository and request without running git; the same request with that
+  digest executes it.
+- Push never uses force and refuses unknown branches or remotes. Tags and
+  renamed branches are validated with `git check-ref-format` and checked for
+  collisions. Remote URLs reject credential-bearing HTTP forms. Commit and
+  stash refuse an empty change set. Merge and rebase refuse the current branch
+  and a dirty worktree.
+- Confirmation replay is cached per service process; git itself remains the
+  durable record. Unlike provider writes, Git writes do not use a durable
+  receipt journal.
+- Panel: `P` push, `t` tag, `R` rename, `C` commit all, `s` stash, `M` merge,
+  `B` rebase, and remotes `e` edit URL. The confirmation screen shows the exact
+  target (for example `main → origin`) and digest; `y` executes. The result view
+  shows status, reason, branch/head and bounded output with remote credentials
+  redacted.
+- Backend test covers all eight actions against local repositories and a local
+  bare remote, plus digest replay, request conflict, dirty-worktree refusal and
+  stash/commit/merge/rebase outcomes.
+- PTY verification against a disposable repository completed commit, tag,
+  merge, push, stash, branch rename and remote URL update, including target
+  display and result output. Rebase is covered by the backend test.
+- Existing Git reads and direct fetch/pull/checkout/worktree/remote actions are
+  unchanged.
+
+Environment-mcp suite: **108 pass, 0 fail** (961 assertions, 40 files, 11.52s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Kubernetes inspection depth (tasks 3.84-3.85)
+
+- `env_cluster_resources` now runs the same fixed `kubectl get
+  deployments,statefulsets,pods,services` with JSON output and returns up to 200
+  structured items (kind, name, status, readiness, restarts, containers, age)
+  plus a bounded table fallback. Raw objects are not returned.
+- New read-only capabilities: `env_cluster_events` (up to 100 namespace events),
+  `env_cluster_describe` (one resource from a fixed kind set) and `env_pod_logs`
+  (up to 1000 tail lines, optional container). All keep cluster authorization,
+  non-system namespace checks, fixed kubectl arguments, 128 KiB output bounds and
+  the existing kubeconfig/environment non-disclosure.
+- Panel: resources are selectable two-line rows; `Enter` describes, `e` opens
+  namespace events, `l` reads pod logs using the pod's first container, `r`
+  refreshes and `Esc` returns to resources.
+- Unit test covers structured resources, events, describe, pod logs, fixed argv,
+  invalid resource names/kinds/tails, namespace and authorization refusals.
+- PTY verification against a fake kubectl fixture completed resources →
+  describe → pod logs → events. No live cluster was available; live-cluster
+  behavior remains manually unverified.
+
+Environment-mcp suite: **108 pass, 0 fail** (985 assertions, 40 files, 10.57s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Tags, stashes and staging (tasks 3.86-3.87)
+
+- New read capabilities `env_git_tags` (up to 200 tags with annotated state,
+  subject and date) and `env_git_stashes` (up to 100 stashes with index, branch,
+  message and date).
+- Git writes now include annotated `tag` (optional message), `tag-delete`,
+  `stash-pop`, `stash-apply` and `stash-drop`. `commit` keeps the existing index
+  and refuses when nothing is staged; new `commit-all` stages every change
+  first.
+- New direct, reversible git actions `stage`, `unstage`, `stage-all` and
+  `unstage-all`. Paths must match a reported change and may not escape the
+  repository.
+- Panel: `T` tags, `t` create tag (name + optional message), `d` delete tag;
+  `S` stashes, `p` pop, `a` apply, `d` drop; `C` commit staged, `A` commit all;
+  Changes `s` toggle stage, `a` stage all, `u` unstage all.
+- The changes header shows the staged count. Tag/stash data refreshes without
+  replacing the completed-write result screen.
+- Backend tests cover annotated tags, tag delete, stash list/pop/apply/drop,
+  stage/unstage/all, staged versus all commits, path validation and refusal
+  reasons.
+- PTY verification completed staged commit and commit-all, annotated tag
+  creation, tag deletion, and stash pop/drop through the panel.
+
+Environment-mcp suite: **109 pass, 0 fail** (1020 assertions, 40 files, 12.82s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
