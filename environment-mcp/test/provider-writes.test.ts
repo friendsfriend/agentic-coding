@@ -936,3 +936,110 @@ test("GitLab unapprove, discussion resolution, labels, assignees and job writes"
 		fs.rmSync(stateDir, { recursive: true, force: true });
 	}
 });
+
+test("GitHub review-thread resolution uses GraphQL", async () => {
+	const stateDir = stateDirectory();
+	let resolved = false;
+	const calls: string[] = [];
+	const fetchImpl = (async (
+		input: string | URL | Request,
+		init?: RequestInit,
+	) => {
+		const url = String(input);
+		const method = init?.method ?? "GET";
+		if (url.endsWith("/api/graphql") && method === "POST") {
+			const body = JSON.parse(String(init?.body ?? "{}")) as {
+				query?: string;
+				variables?: Record<string, unknown>;
+			};
+			const query = body.query ?? "";
+			if (query.includes("reviewThreads")) {
+				calls.push("threads");
+				return response({
+					data: {
+						repository: {
+							pullRequest: {
+								reviewThreads: {
+									nodes: [
+										{
+											id: "THREAD1",
+											isResolved: resolved,
+											comments: { nodes: [{ databaseId: 77 }] },
+										},
+									],
+								},
+							},
+						},
+					},
+				});
+			}
+			if (query.includes("unresolveReviewThread")) {
+				calls.push(`unresolve:${String(body.variables?.threadId)}`);
+				resolved = false;
+				return response({
+					data: {
+						unresolveReviewThread: {
+							thread: { id: "THREAD1", isResolved: false },
+						},
+					},
+				});
+			}
+			if (query.includes("resolveReviewThread")) {
+				calls.push(`resolve:${String(body.variables?.threadId)}`);
+				resolved = true;
+				return response({
+					data: {
+						resolveReviewThread: {
+							thread: { id: "THREAD1", isResolved: true },
+						},
+					},
+				});
+			}
+		}
+		return response({ message: "not found" }, 404);
+	}) as unknown as typeof fetch;
+	try {
+		const api = createProviderApi([github], tokens, fetchImpl, { stateDir });
+		const signal = new AbortController().signal;
+		expect(
+			await confirmed(
+				api,
+				{
+					action: "set-discussion-resolved",
+					provider: "github-fixture",
+					repository: "org/repo",
+					number: 7,
+					discussionId: "77",
+					resolved: true,
+					requestId: "resolve-gh-1",
+				},
+				signal,
+			),
+		).toMatchObject({
+			status: "completed",
+			receipt: { result: { id: "THREAD1", isResolved: true } },
+		});
+		expect(calls).toContain("resolve:THREAD1");
+		expect(
+			await confirmed(
+				api,
+				{
+					action: "set-discussion-resolved",
+					provider: "github-fixture",
+					repository: "org/repo",
+					number: 7,
+					discussionId: "77",
+					resolved: false,
+					requestId: "resolve-gh-2",
+				},
+				signal,
+			),
+		).toMatchObject({
+			status: "completed",
+			receipt: { result: { id: "THREAD1", isResolved: false } },
+		});
+		expect(calls).toContain("unresolve:THREAD1");
+	} finally {
+		fs.rmSync(stateDir, { recursive: true, force: true });
+	}
+});

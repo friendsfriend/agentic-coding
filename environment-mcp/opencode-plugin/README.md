@@ -21,6 +21,13 @@ opencode plugin list
 OpenCode discovers `<config>/plugins/<directory>` automatically and hot-reloads
 the source; there is no build step for local use.
 
+The optional configuration-editing skill can be linked into the same config:
+
+```sh
+ln -sfn "$PWD/opencode-plugin/skills/environment-config-editing" \
+  ~/.config/opencode/skills/environment-config-editing
+```
+
 Open it with any of:
 
 - the clickable **Environment** chip in the home footer
@@ -36,9 +43,14 @@ Open it with any of:
   current directory**, **Issues for current directory** and **Changes for
   current directory**
 
+Full runtime descriptors, profiles and bulk configuration edits are covered by
+the optional `environment-config-editing` skill.
+
 ## Screens
 
-- **Applications / Libraries / Infrastructure** — the configured environment
+- **Applications / Libraries / Infrastructure** — create apps with build/test/run
+  defaults; edit targets with command, timeout, environment, secret references,
+  ready text, endpoints and prerequisites; the configured environment
   inventory, glyph target summaries (`⚒` build, `✓` test, `▶` run), git branch
   and modified/added/deleted counts with ahead/behind, and current run status
   with owned-resource count. An authenticated SSE stream invalidates
@@ -62,14 +74,16 @@ Open it with any of:
   current branch, branch/worktree counts and the `/` branch filter in the
   header. `Enter` switches branch, `f` fetches, `p` pulls fast-forward-only,
   `P` pushes, `F` force-pushes with an exact lease, `X` aborts an in-progress
-  rebase, `t` creates a tag (message optional for an annotated tag), `T`
+  rebase, `L` opens commit history, `t` creates a tag (message optional for an
+  annotated tag), `T`
   lists tags, `R` renames the selected branch, `C` commits staged changes, `A`
   commits all changes, `s` stashes, `S` lists stashes, `M` merges the selected
   branch into the current branch, `B` rebases the current branch onto the
   selected one, `d` safely deletes the selected branch, `m` opens remotes, and
   `c` opens changes. Writes show an exact target and digest, then require `y`;
   ordinary push never forces, force push requires an upstream and local
-  remote-tracking ref, and merge/rebase require a clean worktree. `<leader>G` opens the same view
+  remote-tracking ref and binds that SHA into the confirmation digest, and
+  merge/rebase require a clean worktree. `<leader>G` opens the same view
   directly for the agent cwd, hiding the environment tabs; `Esc` closes it.
   The cwd is `process.cwd()` unless the plugin receives a `directory` or `cwd`
   option.
@@ -91,14 +105,19 @@ Open it with any of:
   with commit glyphs and the same rail. Issue detail `h` opens its comment
   timeline; job `Enter` opens a bounded redacted log. Provider writes are
   preview-confirmed: change/issue `c` comments, change `a` approves the exact
-  displayed head, `u` withdraws approval, `M` merges it, `B` requests a GitLab
-  rebase, `l` adds labels, `A` sets assignees, issue `o` toggles open/closed,
-  discussion `c` replies and `x` resolves/unresolves (GitLab), pipeline `t`/`x`
+  displayed head, `u` withdraws approval, `M` opens the GitHub merge-method
+  picker (merge/squash/rebase) or merges directly on GitLab, `B` requests a
+  GitLab rebase, `l` adds labels, `A` sets assignees, issue `o` toggles open/closed,
+  discussion `c` replies and `x` resolves/unresolves (GitLab discussions or
+  GitHub review threads through GraphQL), pipeline `t`/`x`
   retries or cancels, job `t` retries it, `y` confirms the exact digest, and `w`
   lists durable write receipts. `/issues` and `/changes` open the current
   directory's provider lists directly. All read views support `/`
   filtering where applicable and use the same raised environment-style header.
   Tokens are never shown.
+- **Commit history** — `L` lists the current branch's last 50 commits with
+  short SHA, subject, author, date and ref badges. `Enter` opens the commit's
+  full message, parents, file stats and a per-file native diff.
 - **Tags** — `T` lists lightweight and annotated tags with subject/date; `t`
   creates a tag (message optional), `d` deletes the selected tag, and both use
   the preview-confirm flow.
@@ -110,19 +129,26 @@ Open it with any of:
 - **Worktrees** — current/locked/prunable linked worktrees; `a` opens the
   worktree form with editable path and branch fields (`Tab` switches), an
   existing/new branch badge, and creates a new branch when the name is not
-  local. `u` runs supported targets from the selected worktree (shell/process
-  and Docker builds; Compose, container and Helm targets refuse); `x` removes
-  the selected clean non-current worktree. The active worktree carries an
+  local. `u` runs targets from the selected worktree (shell/process, Docker
+  builds, Compose, container-run and Helm). Compose projects, container names
+  and Helm releases get a per-worktree suffix, as do Docker-build tags and
+  container-run images that reference a build target. Compose files and Helm
+  charts must be repository-local. Network-only targets refuse. `x` removes the
+  selected clean non-current worktree. The active worktree carries an
   `execution` badge and detail/history show its path.
 - **Container stats** — `m` from application detail reads CPU, memory, network
   and PID stats for containers owned by the scope or registered shared services.
+  While the view is open it samples every two seconds, keeps a bounded 60-sample
+  history and shows CPU/memory sparklines plus CPU, memory and network deltas.
   Other host containers are never listed.
 - **Kubernetes** — `K` from the applications table lists authorized clusters;
-  `Enter` opens a namespace prompt and returns deployments, statefulsets, pods
-  and services as selectable two-line resources. `Enter` describes the selected
-  resource, `e` opens namespace events, and `l` reads tail logs for the selected
-  pod using its first container. System namespaces are refused; no exec or
-  attach is exposed.
+  `Enter` opens a selectable namespace list (default selected) with `/` for a
+  custom namespace, then returns deployments, statefulsets, pods and services as
+  selectable two-line resources. `Enter` describes the selected
+  resource, `e` opens namespace events with `/` filtering, and `l` reads tail
+  logs for the selected pod. Multi-container pods open a container picker
+  first; pod logs `p` switches to the previous container instance. System
+  namespaces are refused; no exec or attach is exposed.
 - **Target picker** — the exact configured target/profile for build, test or run.
 - **Operation** — the running or settled execution receipt, subject,
   digest/revision, live build steps and per-step logs.

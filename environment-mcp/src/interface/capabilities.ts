@@ -669,7 +669,7 @@ export function createCapabilities(deps: {
 				capability(
 					"env_provider_set_discussion_resolved",
 					"Resolve provider discussion",
-					"Preview or resolve/unresolve one GitLab merge-request discussion. GitHub discussions refuse because its REST API has no thread-resolution endpoint. Omit or mismatch confirm to receive the intent digest without a write. Same requestId and digest replay the durable receipt. External side effect.",
+					"Preview or resolve/unresolve one discussion. GitLab toggles the merge-request discussion; GitHub finds the review thread containing the selected comment through GraphQL and resolves or unresolves it. Omit or mismatch confirm to receive the intent digest without a write. Same requestId and digest replay the durable receipt. External side effect.",
 					z.strictObject({
 						provider: providerName,
 						repository: providerRepository,
@@ -956,6 +956,22 @@ export function createCapabilities(deps: {
 					}),
 				),
 				capability(
+					"env_cluster_namespaces",
+					"List Kubernetes namespaces",
+					"List at most 200 non-system namespace names in an authorized cluster. Read-only; no apply, edit, delete, exec or arbitrary kubectl arguments.",
+					z.strictObject({
+						cluster: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+					}),
+					{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+					async ({ cluster }, { signal }) => ({
+						...(await kubernetes.namespaces(
+							deps.repositories,
+							cluster,
+							signal,
+						)),
+					}),
+				),
+				capability(
 					"env_cluster_events",
 					"List Kubernetes namespace events",
 					"Read at most 100 recent events in one explicit non-system namespace of an authorized cluster, sorted by last timestamp. Read-only; no apply, edit, delete, exec, logs or arbitrary kubectl arguments.",
@@ -1016,7 +1032,7 @@ export function createCapabilities(deps: {
 				capability(
 					"env_pod_logs",
 					"Read Kubernetes pod logs",
-					"Read bounded tail logs for one pod in an explicit non-system namespace of an authorized cluster. Optional container selects one container. Read-only; no exec, attach, apply, edit or delete.",
+					"Read bounded tail logs for one pod in an explicit non-system namespace of an authorized cluster. Optional container selects one container; previous reads the prior container instance. Read-only; no exec, attach, apply, edit or delete.",
 					z.strictObject({
 						cluster: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
 						namespace: z
@@ -1033,9 +1049,13 @@ export function createCapabilities(deps: {
 							.max(63)
 							.optional(),
 						tail: z.number().int().min(1).max(1000).default(200),
+						previous: z.boolean().default(false),
 					}),
 					{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-					async ({ cluster, namespace, pod, container, tail }, { signal }) => ({
+					async (
+						{ cluster, namespace, pod, container, tail, previous },
+						{ signal },
+					) => ({
 						...(await kubernetes.podLogs(
 							deps.repositories,
 							cluster,
@@ -1043,6 +1063,7 @@ export function createCapabilities(deps: {
 							pod,
 							container,
 							tail,
+							previous,
 							signal,
 						)),
 					}),
@@ -1241,7 +1262,7 @@ export function createCapabilities(deps: {
 				capability(
 					"env_target_update",
 					"Update target",
-					"Preview or update target metadata: profile, action, shell command, timeout, ready text, dependencies, prerequisites, endpoints and endpoint services. Unsupported runtime-specific descriptor changes are left to file/skill edits. Omit or mismatch confirm to receive the intent digest without a write.",
+					"Preview or update target metadata: profile, action, shell command, timeout, shell environment and secret references, ready text, dependencies, prerequisites, endpoints and endpoint services. Unsupported runtime-specific descriptor changes are left to file/skill edits. Omit or mismatch confirm to receive the intent digest without a write.",
 					z.strictObject({
 						app: identifier,
 						id: identifier,
@@ -1249,6 +1270,8 @@ export function createCapabilities(deps: {
 						action: z.enum(["build", "test", "run"]).optional(),
 						command: configText.optional(),
 						timeoutSec: z.number().int().min(1).max(7200).optional(),
+						environment: configStrings.optional(),
+						secretRefs: configStrings.optional(),
 						readyText: z.string().min(1).max(4096).nullable().optional(),
 						dependsOn: z
 							.array(z.record(z.string(), z.unknown()))
@@ -1427,6 +1450,37 @@ export function createCapabilities(deps: {
 				if (!session && !deps.repositories.includes(repository))
 					throw new OperationRefusal("repository-unauthorized");
 				return deps.gitActions.remotes(repository, signal);
+			},
+		),
+		capability(
+			"env_git_log",
+			"List repository commits",
+			"List at most 50 commits from the current HEAD history with full/short SHA, subject, author, date and ref names for one authorized repository. Read-only. Pass session: true for the current working-directory repository.",
+			z.strictObject({
+				repository: z.string().min(1).max(4096),
+				session: z.boolean().default(false),
+			}),
+			{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+			async ({ repository, session }, { signal }) => {
+				if (!session && !deps.repositories.includes(repository))
+					throw new OperationRefusal("repository-unauthorized");
+				return deps.gitActions.log(repository, signal);
+			},
+		),
+		capability(
+			"env_git_commit",
+			"Read repository commit",
+			"Read one commit by full SHA with author, email, date, parents, full message, up to 200 changed-file stats and a bounded 48 KiB unified diff for one authorized repository. Read-only. Pass session: true for the current working-directory repository.",
+			z.strictObject({
+				repository: z.string().min(1).max(4096),
+				session: z.boolean().default(false),
+				sha: z.string().regex(/^[a-f0-9]{40,64}$/),
+			}),
+			{ readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+			async ({ repository, session, sha }, { signal }) => {
+				if (!session && !deps.repositories.includes(repository))
+					throw new OperationRefusal("repository-unauthorized");
+				return deps.gitActions.commit(repository, sha, signal);
 			},
 		),
 		capability(
@@ -1834,7 +1888,7 @@ export function createCapabilities(deps: {
 			capability(
 				"env_execute",
 				"Execute target",
-				"Execute one configured build, test or run target. Admission and dispatch are one step; missing declared secret references refuse before dispatch. Nonzero exits are failures. Borrowed dependencies are revalidated before dispatch and never enter cleanup. Pass worktree to run shell/process commands or Docker builds from a linked worktree of the app repository; Compose, container and Helm targets refuse. Use env_wait for a bounded observation of the settled receipt.",
+				"Execute one configured build, test or run target. Admission and dispatch are one step; missing declared secret references refuse before dispatch. Nonzero exits are failures. Borrowed dependencies are revalidated before dispatch and never enter cleanup. Pass worktree to run shell/process commands, Docker builds, Compose, container-run or Helm targets from a linked worktree; Compose files and Helm charts must be repository-local, and network-only targets refuse. Use env_wait for a bounded observation of the settled receipt.",
 				executionIntentSchema.extend({
 					requestId: z.string().trim().min(1).max(256),
 				}),

@@ -44,6 +44,35 @@ test("provider reads are bounded, mapped and never expose tokens", async () => {
 	) => {
 		const url = String(input);
 		calls.push({ url, init });
+		if (url.endsWith("/api/graphql") && init?.method === "POST") {
+			return response({
+				data: {
+					repository: {
+						pullRequest: {
+							reviewThreads: {
+								nodes: [
+									{
+										id: "THREAD1",
+										isResolved: true,
+										comments: {
+											nodes: [
+												{
+													databaseId: 31,
+													body: "note gh-secret-value",
+													author: { login: "reviewer" },
+													url: "https://github.com/org/repo/pull/7#note",
+													createdAt: "2026-01-01T00:00:00Z",
+												},
+											],
+										},
+									},
+								],
+							},
+						},
+					},
+				},
+			});
+		}
 		if (url.includes("/search/repositories")) {
 			return response({
 				items: [
@@ -319,8 +348,10 @@ test("provider reads are bounded, mapped and never expose tokens", async () => {
 	);
 	expect(discussions[0]).toMatchObject({
 		id: "31",
+		threadId: "THREAD1",
 		author: "reviewer",
 		body: "note [REDACTED]",
+		resolved: true,
 	});
 	const logs = await api.jobLogs("github-fixture", "org/repo", 12, signal);
 	expect(logs).toMatchObject({

@@ -24,7 +24,9 @@ import {
 	parseGitAction,
 	parseGitBranches,
 	parseGitChanges,
+	parseGitCommitDetail,
 	parseGitDiff,
+	parseGitLog,
 	parseGitRemotes,
 	parseGitStashes,
 	parseGitStatuses,
@@ -35,6 +37,7 @@ import {
 	parseKubernetesClusters,
 	parseKubernetesDescribe,
 	parseKubernetesEvents,
+	parseKubernetesNamespaces,
 	parseKubernetesPodLogs,
 	parseKubernetesResources,
 	parseList,
@@ -192,6 +195,7 @@ export class EnvironmentMcpClient {
 			id: string;
 			kind: "app" | "library" | "infrastructure";
 			repository: string;
+			defaults?: { build?: string; test?: string; run?: string };
 		},
 		expectedDigest?: string,
 		confirm?: string,
@@ -208,6 +212,7 @@ export class EnvironmentMcpClient {
 			id: string;
 			kind?: "app" | "library" | "infrastructure";
 			repository?: string;
+			defaults?: { build?: string; test?: string; run?: string };
 		},
 		expectedDigest?: string,
 		confirm?: string,
@@ -258,6 +263,9 @@ export class EnvironmentMcpClient {
 			profile?: string;
 			command: string;
 			timeoutSec?: number;
+			environment?: Record<string, string>;
+			secretRefs?: Record<string, string>;
+			readyText?: string;
 		},
 		expectedDigest?: string,
 		confirm?: string,
@@ -278,6 +286,12 @@ export class EnvironmentMcpClient {
 			action?: "build" | "test" | "run";
 			command?: string;
 			timeoutSec?: number;
+			environment?: Record<string, string>;
+			secretRefs?: Record<string, string>;
+			readyText?: string | null;
+			prerequisites?: readonly { app: string; target: string }[];
+			endpoints?: Record<string, string>;
+			endpointServices?: Record<string, string>;
 		},
 		expectedDigest?: string,
 		confirm?: string,
@@ -311,6 +325,12 @@ export class EnvironmentMcpClient {
 		);
 	}
 
+	async clusterNamespaces(cluster: string) {
+		return parseKubernetesNamespaces(
+			await this.invoke("env_cluster_namespaces", { cluster }),
+		);
+	}
+
 	async clusterEvents(cluster: string, namespace: string) {
 		return parseKubernetesEvents(
 			await this.invoke("env_cluster_events", { cluster, namespace }),
@@ -339,6 +359,7 @@ export class EnvironmentMcpClient {
 		pod: string,
 		container?: string,
 		tail = 200,
+		previous = false,
 	) {
 		return parseKubernetesPodLogs(
 			await this.invoke("env_pod_logs", {
@@ -347,6 +368,7 @@ export class EnvironmentMcpClient {
 				pod,
 				...(container ? { container } : {}),
 				tail,
+				...(previous ? { previous: true } : {}),
 			}),
 		);
 	}
@@ -827,6 +849,25 @@ export class EnvironmentMcpClient {
 				repository,
 				...(session ? { session: true } : {}),
 				...request,
+			}),
+		);
+	}
+
+	async gitLog(repository: string, session = false) {
+		return parseGitLog(
+			await this.invoke("env_git_log", {
+				repository,
+				...(session ? { session: true } : {}),
+			}),
+		);
+	}
+
+	async gitCommit(repository: string, sha: string, session = false) {
+		return parseGitCommitDetail(
+			await this.invoke("env_git_commit", {
+				repository,
+				sha,
+				...(session ? { session: true } : {}),
 			}),
 		);
 	}

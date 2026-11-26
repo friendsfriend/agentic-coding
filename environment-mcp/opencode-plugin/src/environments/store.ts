@@ -21,8 +21,10 @@ import {
 	type GitActionRequest,
 	type GitBranches,
 	type GitChanges,
+	type GitCommitDetail,
 	type GitDiff,
 	type GitDiffSide,
+	type GitLog,
 	type GitRemotes,
 	type GitStashes,
 	type GitStatus,
@@ -33,7 +35,9 @@ import {
 	type KubernetesClusterInfo,
 	type KubernetesDescribe,
 	type KubernetesEvents,
+	type KubernetesNamespaces,
 	type KubernetesPodLogs,
+	type KubernetesResource,
 	type KubernetesResources,
 	type LogsSnapshot,
 	type OperationDetail,
@@ -65,6 +69,11 @@ import {
 	tabCounts,
 	targetsFor,
 } from "./model.ts";
+import {
+	appendContainerSample,
+	type ContainerSample,
+	sampleContainer,
+} from "./stats.ts";
 
 export function createEnvironmentStore(client: EnvironmentMcpClient) {
 	const [apps, setApps] = createSignal<readonly EnvironmentApp[]>([]);
@@ -100,6 +109,9 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 	const [gitWriteOutcome, setGitWriteOutcome] = createSignal<GitWriteOutcome>();
 	const [gitWriteOrigin, setGitWriteOrigin] =
 		createSignal<EnvironmentView>("git");
+	const [gitLog, setGitLog] = createSignal<GitLog>();
+	const [gitCommitDetail, setGitCommitDetail] = createSignal<GitCommitDetail>();
+	const [gitLogIndex, setGitLogIndex] = createSignal(0);
 	const [tags, setTags] = createSignal<GitTags>();
 	const [tagIndex, setTagIndex] = createSignal(0);
 	const [stashes, setStashes] = createSignal<GitStashes>();
@@ -110,6 +122,9 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 	const [tagOrigin, setTagOrigin] = createSignal<EnvironmentView>("git");
 	const [containerStats, setContainerStats] =
 		createSignal<ContainerStatsResult>();
+	const [containerHistory, setContainerHistory] = createSignal<
+		ReadonlyMap<string, readonly ContainerSample[]>
+	>(new Map());
 	const [clusters, setClusters] = createSignal<
 		readonly KubernetesClusterInfo[]
 	>([]);
@@ -120,10 +135,21 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 	const [clusterResources, setClusterResources] =
 		createSignal<KubernetesResources>();
 	const [clusterResourceIndex, setClusterResourceIndex] = createSignal(0);
+	const [clusterNamespaces, setClusterNamespaces] =
+		createSignal<KubernetesNamespaces>();
+	const [clusterNamespaceIndex, setClusterNamespaceIndex] = createSignal(0);
 	const [clusterEvents, setClusterEvents] = createSignal<KubernetesEvents>();
 	const [clusterDescribe, setClusterDescribe] =
 		createSignal<KubernetesDescribe>();
 	const [clusterPodLogs, setClusterPodLogs] = createSignal<KubernetesPodLogs>();
+	const [clusterContainerIndex, setClusterContainerIndex] = createSignal(0);
+	const [podLogPrevious, setPodLogPrevious] = createSignal(false);
+	const [clusterLogOrigin, setClusterLogOrigin] = createSignal<
+		"resources" | "containers"
+	>("resources");
+	const [clusterEventQuery, setClusterEventQueryValue] = createSignal("");
+	const [clusterEventFilterFocused, setClusterEventFilterFocused] =
+		createSignal(false);
 	const [configAction, setConfigAction] = createSignal<
 		| "app-create"
 		| "app-edit"
@@ -146,6 +172,19 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 	const [configTargetAction, setConfigTargetAction] = createSignal("build");
 	const [configCommand, setConfigCommand] = createSignal("");
 	const [configTimeout, setConfigTimeout] = createSignal("");
+	const [configDefaultsBuild, setConfigDefaultsBuild] = createSignal("");
+	const [configDefaultsTest, setConfigDefaultsTest] = createSignal("");
+	const [configDefaultsRun, setConfigDefaultsRun] = createSignal("");
+	const [configEnvironment, setConfigEnvironment] = createSignal("");
+	const [configSecretRefs, setConfigSecretRefs] = createSignal("");
+	const [configReadyText, setConfigReadyText] = createSignal("");
+	const [configEndpoints, setConfigEndpoints] = createSignal("");
+	const [configEndpointServices, setConfigEndpointServices] = createSignal("");
+	const [configPrerequisites, setConfigPrerequisites] = createSignal("");
+	const [configEndpointsExposed, setConfigEndpointsExposed] =
+		createSignal(false);
+	const [configEndpointServicesExposed, setConfigEndpointServicesExposed] =
+		createSignal(false);
 	const [configDeleteTargets, setConfigDeleteTargets] = createSignal(false);
 	const [configSource, setConfigSource] = createSignal<{
 		app: string;
@@ -213,6 +252,11 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 	const [providerWriteBody, setProviderWriteBody] = createSignal("");
 	const [providerWriteRequestId, setProviderWriteRequestId] = createSignal("");
 	const [providerWriteDigest, setProviderWriteDigest] = createSignal<string>();
+	const [providerWriteTarget, setProviderWriteTarget] = createSignal<string>();
+	const [providerMergeMethod, setProviderMergeMethod] = createSignal<
+		"merge" | "squash" | "rebase"
+	>("merge");
+	const [providerMergeIndex, setProviderMergeIndex] = createSignal(0);
 	const [providerWriteStage, setProviderWriteStage] = createSignal<
 		"edit" | "confirm" | "completed"
 	>("edit");
@@ -284,7 +328,7 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		const raw = errorMessage(reason);
 		const text =
 			raw === "worktree-unsupported"
-				? "Only shell/process and Docker build targets can run from a worktree."
+				? "This target cannot run from a worktree; Compose files and Helm charts must be repository-local and network-only targets refuse."
 				: (providerErrors[raw] ?? raw);
 		setError(text);
 		setMessage(text);
@@ -440,6 +484,23 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 	const selectedStash = createMemo(
 		() => stashes()?.stashes[stashIndex()] ?? stashes()?.stashes[0],
 	);
+	const selectedPodContainer = createMemo(() => {
+		const containers = selectedClusterResource()?.containers ?? [];
+		return containers[clusterContainerIndex()] ?? containers[0];
+	});
+	const visibleClusterEvents = createMemo(() =>
+		(clusterEvents()?.events ?? []).filter((event) =>
+			matches(clusterEventQuery(), [
+				event.type,
+				event.reason,
+				event.object,
+				event.message,
+			]),
+		),
+	);
+	const setClusterEventQuery = (value: string) => {
+		setClusterEventQueryValue(value);
+	};
 	const selectedProviderDiscussion = createMemo(() => {
 		const issueComments =
 			view() === "provider-issue-comments" ||
@@ -1130,6 +1191,46 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 			Math.min(current, Math.max(0, next.stashes.length - 1)),
 		);
 	};
+	const loadGitLog = async () => {
+		const app = selectedApp();
+		if (!app) return;
+		setBusy(true);
+		setError(undefined);
+		try {
+			setGitLog(await client.gitLog(app.repository, sessionMode()));
+			setGitLogIndex(0);
+			setView("git-log");
+		} catch (reason) {
+			fail(reason);
+		} finally {
+			setBusy(false);
+		}
+	};
+	const openGitCommit = async (
+		commit = gitLog()?.commits[gitLogIndex()] ?? gitLog()?.commits[0],
+	) => {
+		const app = selectedApp();
+		if (!app || !commit) return;
+		setBusy(true);
+		setError(undefined);
+		try {
+			setGitCommitDetail(
+				await client.gitCommit(app.repository, commit.sha, sessionMode()),
+			);
+			setView("git-commit");
+		} catch (reason) {
+			fail(reason);
+		} finally {
+			setBusy(false);
+		}
+	};
+	const moveGitLog = (delta: number) => {
+		const count = gitLog()?.commits.length ?? 0;
+		if (!count) return;
+		setGitLogIndex((current) =>
+			Math.min(count - 1, Math.max(0, current + delta)),
+		);
+	};
 	const loadTags = async () => {
 		const app = selectedApp();
 		if (!app) return;
@@ -1390,7 +1491,7 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		setError(undefined);
 		try {
 			const outcome = await gitWriteCall();
-			if (!outcome || outcome.status !== "confirmation-required")
+			if (outcome?.status !== "confirmation-required")
 				throw new Error("invalid-response");
 			clearMessage();
 			setGitWriteDigest(outcome.digest);
@@ -1410,8 +1511,14 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		setError(undefined);
 		try {
 			const outcome = await gitWriteCall(digest);
-			if (!outcome || outcome.status === "confirmation-required")
-				throw new Error("invalid-response");
+			if (!outcome) throw new Error("invalid-response");
+			if (outcome.status === "confirmation-required") {
+				setGitWriteDigest(outcome.digest);
+				setGitWriteTarget(outcome.intent.target);
+				setGitWriteStage("confirm");
+				setMessage("The remote-tracking ref moved; review the new lease.");
+				return;
+			}
 			setGitWriteOutcome(outcome);
 			setGitWriteStage("completed");
 			if (outcome.outcome.status === "completed") {
@@ -1692,11 +1799,38 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 	const setClusterNamespace = (value: string) => {
 		setClusterNamespaceValue(value);
 	};
-	const beginClusterNamespace = () => {
-		if (!selectedCluster()) return;
-		if (!clusterNamespace().trim()) setClusterNamespaceValue("default");
-		setClusterNamespaceFocused(true);
+	const loadClusterNamespaces = async () => {
+		const cluster = selectedCluster();
+		if (!cluster) return;
+		setClusterNamespaces(undefined);
+		setClusterNamespaceIndex(0);
+		setClusterNamespaceFocused(false);
 		setView("cluster-namespace");
+		try {
+			const next = await client.clusterNamespaces(cluster.id);
+			setClusterNamespaces(next);
+			const index = next.namespaces.indexOf("default");
+			const selected = Math.max(index, 0);
+			setClusterNamespaceIndex(selected);
+			if (next.namespaces[selected])
+				setClusterNamespaceValue(next.namespaces[selected]);
+		} catch (reason) {
+			fail(reason);
+		}
+	};
+	const beginClusterNamespace = () => {
+		void loadClusterNamespaces();
+	};
+	const selectClusterNamespace = (index: number) => {
+		const namespaces = clusterNamespaces()?.namespaces ?? [];
+		if (!namespaces.length) return;
+		const next = Math.min(namespaces.length - 1, Math.max(0, index));
+		setClusterNamespaceIndex(next);
+		const namespace = namespaces[next];
+		if (namespace) setClusterNamespaceValue(namespace);
+	};
+	const moveClusterNamespace = (delta: number) => {
+		selectClusterNamespace(clusterNamespaceIndex() + delta);
 	};
 	const loadClusterResources = async (
 		cluster = selectedCluster()?.id,
@@ -1761,14 +1895,14 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 			setBusy(false);
 		}
 	};
-	const openClusterPodLogs = async (resource = selectedClusterResource()) => {
+	const fetchPodLogs = async (
+		resource: KubernetesResource,
+		container: string | undefined,
+		previous: boolean,
+		origin: "resources" | "containers",
+	) => {
 		const current = clusterResources();
-		if (!current || !resource) return;
-		if (resource.kind !== "Pod") {
-			setMessage("Pod logs are only available for pods.");
-			setError("Pod logs are only available for pods.");
-			return;
-		}
+		if (!current) return;
 		setBusy(true);
 		setError(undefined);
 		try {
@@ -1777,9 +1911,13 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 					current.cluster,
 					current.namespace,
 					resource.name,
-					resource.containers?.[0],
+					container,
+					200,
+					previous,
 				),
 			);
+			setPodLogPrevious(previous);
+			setClusterLogOrigin(origin);
 			setView("cluster-pod-logs");
 		} catch (reason) {
 			fail(reason);
@@ -1787,17 +1925,97 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 			setBusy(false);
 		}
 	};
+	const openClusterPodLogs = async (resource = selectedClusterResource()) => {
+		if (!resource) return;
+		if (resource.kind !== "Pod") {
+			setMessage("Pod logs are only available for pods.");
+			setError("Pod logs are only available for pods.");
+			return;
+		}
+		const containers = resource.containers ?? [];
+		if (containers.length > 1) {
+			setClusterContainerIndex(0);
+			setView("cluster-pod-containers");
+			return;
+		}
+		await fetchPodLogs(resource, containers[0], false, "resources");
+	};
+	const moveClusterContainer = (delta: number) => {
+		const count = selectedClusterResource()?.containers?.length ?? 0;
+		if (!count) return;
+		setClusterContainerIndex((current) =>
+			Math.min(count - 1, Math.max(0, current + delta)),
+		);
+	};
+	const openSelectedPodContainerLogs = async () => {
+		const resource = selectedClusterResource();
+		const container = selectedPodContainer();
+		if (!resource || !container) return;
+		await fetchPodLogs(resource, container, false, "containers");
+	};
+	const togglePodLogPrevious = async () => {
+		const current = clusterPodLogs();
+		if (!current) return;
+		setBusy(true);
+		setError(undefined);
+		try {
+			const next = !current.previous;
+			setClusterPodLogs(
+				await client.podLogs(
+					current.cluster,
+					current.namespace,
+					current.pod,
+					current.container,
+					200,
+					next,
+				),
+			);
+			setPodLogPrevious(next);
+		} catch (reason) {
+			fail(reason);
+		} finally {
+			setBusy(false);
+		}
+	};
 
+	const recordContainerStats = (result: ContainerStatsResult) => {
+		const at = Date.now();
+		const next = new Map<string, readonly ContainerSample[]>();
+		for (const entry of result.containers) {
+			const previous = containerHistory().get(entry.container) ?? [];
+			next.set(
+				entry.container,
+				appendContainerSample(previous, sampleContainer(entry, at)),
+			);
+		}
+		setContainerHistory(next);
+	};
 	const loadContainerStats = async () => {
 		setBusy(true);
 		setError(undefined);
 		try {
-			setContainerStats(await client.containerStats());
+			const result = await client.containerStats();
+			setContainerStats(result);
+			recordContainerStats(result);
 			setView("container-stats");
 		} catch (reason) {
 			fail(reason);
 		} finally {
 			setBusy(false);
+		}
+	};
+	let statsSampleInFlight = false;
+	const refreshContainerStats = async () => {
+		if (statsSampleInFlight) return;
+		statsSampleInFlight = true;
+		try {
+			const result = await client.containerStats();
+			setContainerStats(result);
+			recordContainerStats(result);
+		} catch {
+			/* The next poll or manual refresh retries without disturbing the view. */
+		} finally {
+			statsSampleInFlight = false;
 		}
 	};
 	const loadProviders = async () => {
@@ -2392,7 +2610,7 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 						repository.reference,
 						change.number,
 						change.headSha,
-						"merge",
+						providerMergeMethod(),
 						requestId,
 						confirm,
 					);
@@ -2438,6 +2656,32 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 					confirm,
 				);
 	};
+	const mergeMethods = ["merge", "squash", "rebase"] as const;
+	const beginProviderMerge = () => {
+		const provider = selectedProvider();
+		if (!provider) return;
+		if (provider.type !== "github") {
+			setProviderMergeMethod("merge");
+			void beginProviderWrite("merge-change", "provider-change");
+			return;
+		}
+		setProviderMergeIndex(0);
+		setView("provider-merge");
+	};
+	const selectProviderMerge = (index: number) => {
+		setProviderMergeIndex(
+			Math.min(mergeMethods.length - 1, Math.max(0, index)),
+		);
+	};
+	const moveProviderMerge = (delta: number) => {
+		selectProviderMerge(providerMergeIndex() + delta);
+	};
+	const chooseProviderMerge = async () => {
+		const method = mergeMethods[providerMergeIndex()] ?? "merge";
+		setProviderMergeMethod(method);
+		await beginProviderWrite("merge-change", "provider-change");
+	};
+
 	const beginProviderWrite = async (
 		action: ProviderWriteAction,
 		origin: EnvironmentView,
@@ -2449,6 +2693,7 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		setProviderWriteBody("");
 		setProviderWriteRequestId(crypto.randomUUID());
 		setProviderWriteDigest(undefined);
+		setProviderWriteTarget(undefined);
 		setProviderWriteReceipt(undefined);
 		const needsBody =
 			action === "comment-change" ||
@@ -2500,6 +2745,7 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 				throw new Error("provider-invalid");
 			clearMessage();
 			setProviderWriteDigest(outcome.digest);
+			setProviderWriteTarget(outcome.intent.target);
 			setProviderWriteStage("confirm");
 		} catch (reason) {
 			fail(reason);
@@ -2518,6 +2764,17 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 				throw new Error("provider-write-unavailable");
 			setProviderWriteReceipt(outcome.receipt);
 			setProviderWriteStage("completed");
+			if (outcome.receipt.action === "set-discussion-resolved") {
+				const discussion = selectedProviderDiscussion();
+				if (discussion) {
+					const resolved = !discussion.resolved;
+					setProviderDiscussions(
+						providerDiscussions().map((entry) =>
+							entry.id === discussion.id ? { ...entry, resolved } : entry,
+						),
+					);
+				}
+			}
 			setMessage(`${outcome.receipt.action} ${outcome.receipt.state}`);
 		} catch (reason) {
 			fail(reason);
@@ -2542,17 +2799,43 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		else void openProviderRepo();
 	};
 
+	const configRecord = (value: string) => {
+		if (!value.trim()) return {};
+		const result: Record<string, string> = {};
+		for (const entry of value.split(",")) {
+			const item = entry.trim();
+			if (!item) continue;
+			const index = item.indexOf("=");
+			if (index <= 0) return undefined;
+			const key = item.slice(0, index).trim();
+			if (!key) return undefined;
+			result[key] = item.slice(index + 1).trim();
+		}
+		return result;
+	};
+	const configPrerequisiteList = (value: string) => {
+		if (!value.trim()) return [];
+		const result: { app: string; target: string }[] = [];
+		for (const entry of value.split(",")) {
+			const item = entry.trim();
+			if (!item) continue;
+			const [app = "", target = "", extra] = item.split("/");
+			if (!app || !target || extra !== undefined) return undefined;
+			result.push({ app: app.trim(), target: target.trim() });
+		}
+		return result;
+	};
 	const configFieldCount = () => {
 		const action = configAction();
-		if (action === "app-create") return 3;
-		if (action === "app-edit") return 2;
+		if (action === "app-create") return 6;
+		if (action === "app-edit") return 5;
 		if (action === "target-duplicate") return 2;
-		if (action === "target-shell") return 5;
+		if (action === "target-shell") return 8;
 		if (action === "target-edit")
 			return configSource()?.runtime === "shell" ||
 				configSource()?.runtime === "systemshell"
-				? 4
-				: 2;
+				? 10
+				: 6;
 		return 0;
 	};
 	const cycleConfigField = () => {
@@ -2567,6 +2850,11 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		setConfigId("");
 		setConfigKind("app");
 		setConfigRepository(repositories()[0] ?? selectedApp()?.repository ?? "");
+		setConfigDefaultsBuild("");
+		setConfigDefaultsTest("");
+		setConfigDefaultsRun("");
+		setConfigEndpointsExposed(false);
+		setConfigEndpointServicesExposed(false);
 		setConfigPreview(undefined);
 		setConfigResult(undefined);
 		setView("config-write");
@@ -2585,6 +2873,9 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 				: "app",
 		);
 		setConfigRepository(app.repository);
+		setConfigDefaultsBuild(app.defaults.build ?? "");
+		setConfigDefaultsTest(app.defaults.test ?? "");
+		setConfigDefaultsRun(app.defaults.run ?? "");
 		setConfigPreview(undefined);
 		setConfigResult(undefined);
 		setView("config-write");
@@ -2634,6 +2925,11 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		setConfigTargetAction("build");
 		setConfigCommand("");
 		setConfigTimeout("");
+		setConfigEnvironment("");
+		setConfigSecretRefs("");
+		setConfigReadyText("");
+		setConfigEndpointsExposed(false);
+		setConfigEndpointServicesExposed(false);
 		setConfigPreview(undefined);
 		setConfigResult(undefined);
 		setView("config-write");
@@ -2651,6 +2947,28 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		setConfigTargetAction(target.action);
 		setConfigCommand("");
 		setConfigTimeout("");
+		setConfigEnvironment("");
+		setConfigSecretRefs("");
+		setConfigReadyText("");
+		setConfigEndpoints(
+			Object.entries(target.endpoints)
+				.map(([key, value]) => `${key}=${value}`)
+				.join(", "),
+		);
+		setConfigEndpointsExposed(Object.keys(target.endpoints).length > 0);
+		setConfigEndpointServices(
+			Object.entries(target.endpointServices)
+				.map(([key, value]) => `${key}=${value}`)
+				.join(", "),
+		);
+		setConfigEndpointServicesExposed(
+			Object.keys(target.endpointServices).length > 0,
+		);
+		setConfigPrerequisites(
+			target.prerequisites
+				.map((entry) => `${entry.app}/${entry.target}`)
+				.join(", "),
+		);
 		setConfigSource({
 			app: app.id,
 			target: target.id,
@@ -2696,15 +3014,31 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 				? Math.floor(timeout)
 				: undefined;
 		const source = configSource();
+		const defaults = {
+			...(configDefaultsBuild().trim()
+				? { build: configDefaultsBuild().trim() }
+				: {}),
+			...(configDefaultsTest().trim()
+				? { test: configDefaultsTest().trim() }
+				: {}),
+			...(configDefaultsRun().trim()
+				? { run: configDefaultsRun().trim() }
+				: {}),
+		};
 		if (action === "app-create")
 			return await client.appCreate(
-				{ id, kind, repository },
+				{
+					id,
+					kind,
+					repository,
+					...(Object.keys(defaults).length ? { defaults } : {}),
+				},
 				expectedDigest,
 				confirm,
 			);
 		if (action === "app-edit")
 			return await client.appUpdate(
-				{ id, kind, repository },
+				{ id, kind, repository, defaults },
 				expectedDigest,
 				confirm,
 			);
@@ -2728,6 +3062,9 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 				confirm,
 			);
 		}
+		const environment = configRecord(configEnvironment());
+		const secretRefs = configRecord(configSecretRefs());
+		if (environment === undefined || secretRefs === undefined) return undefined;
 		if (action === "target-shell") {
 			const app = selectedApp();
 			if (!app) return undefined;
@@ -2739,6 +3076,11 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 					command,
 					...(profile ? { profile } : {}),
 					...(timeoutSec ? { timeoutSec } : {}),
+					...(Object.keys(environment).length ? { environment } : {}),
+					...(Object.keys(secretRefs).length ? { secretRefs } : {}),
+					...(configReadyText().trim()
+						? { readyText: configReadyText().trim() }
+						: {}),
 				},
 				expectedDigest,
 				confirm,
@@ -2746,6 +3088,17 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		}
 		if (!source) return undefined;
 		if (action === "target-edit") {
+			const endpoints = configRecord(configEndpoints());
+			const endpointServices = configRecord(configEndpointServices());
+			const prerequisites = configPrerequisiteList(configPrerequisites());
+			if (
+				endpoints === undefined ||
+				endpointServices === undefined ||
+				prerequisites === undefined
+			)
+				return undefined;
+			const shell =
+				source.runtime === "shell" || source.runtime === "systemshell";
 			return await client.targetUpdate(
 				{
 					app: source.app,
@@ -2754,6 +3107,20 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 					action: targetAction,
 					...(command.trim() ? { command } : {}),
 					...(timeoutSec ? { timeoutSec } : {}),
+					...(shell && Object.keys(environment).length ? { environment } : {}),
+					...(shell && Object.keys(secretRefs).length ? { secretRefs } : {}),
+					...(targetAction === "run" && configReadyText().trim()
+						? { readyText: configReadyText().trim() }
+						: targetAction !== "run"
+							? { readyText: null }
+							: {}),
+					...(configEndpoints().trim() || configEndpointsExposed()
+						? { endpoints }
+						: {}),
+					...(configEndpointServices().trim() || configEndpointServicesExposed()
+						? { endpointServices }
+						: {}),
+					prerequisites,
 				},
 				expectedDigest,
 				confirm,
@@ -2865,7 +3232,11 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 			setView(tagOrigin());
 			return true;
 		}
-		if (view() === "tags" || view() === "stashes") {
+		if (view() === "git-commit") {
+			setView("git-log");
+			return true;
+		}
+		if (view() === "git-log" || view() === "tags" || view() === "stashes") {
 			setView("git");
 			return true;
 		}
@@ -2906,11 +3277,19 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 			setView("clusters");
 			return true;
 		}
-		if (
-			view() === "cluster-events" ||
-			view() === "cluster-describe" ||
-			view() === "cluster-pod-logs"
-		) {
+		if (view() === "cluster-pod-containers") {
+			setView("cluster-resources");
+			return true;
+		}
+		if (view() === "cluster-pod-logs") {
+			setView(
+				clusterLogOrigin() === "containers"
+					? "cluster-pod-containers"
+					: "cluster-resources",
+			);
+			return true;
+		}
+		if (view() === "cluster-events" || view() === "cluster-describe") {
 			setView("cluster-resources");
 			return true;
 		}
@@ -2964,6 +3343,10 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		}
 		if (view() === "provider-job-logs") {
 			setView("provider-jobs");
+			return true;
+		}
+		if (view() === "provider-merge") {
+			setView("provider-change");
 			return true;
 		}
 		if (view() === "provider-write") {
@@ -3025,6 +3408,8 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 							current.namespace,
 							current.pod,
 							current.container,
+							200,
+							current.previous,
 						),
 					);
 				} catch (reason) {
@@ -3033,6 +3418,14 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 					setBusy(false);
 				}
 			}
+			return;
+		}
+		if (view() === "git-log") {
+			await loadGitLog();
+			return;
+		}
+		if (view() === "git-commit") {
+			await openGitCommit();
 			return;
 		}
 		if (view() === "tags") {
@@ -3160,6 +3553,8 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		apps,
 		services,
 		containerStats,
+		containerHistory,
+		refreshContainerStats,
 		clusters,
 		clusterIndex,
 		configAction,
@@ -3172,6 +3567,17 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		configTargetAction,
 		configCommand,
 		configTimeout,
+		configDefaultsBuild,
+		configDefaultsTest,
+		configDefaultsRun,
+		configEnvironment,
+		configSecretRefs,
+		configReadyText,
+		configEndpoints,
+		configEndpointServices,
+		configPrerequisites,
+		configEndpointsExposed,
+		configEndpointServicesExposed,
 		configDeleteTargets,
 		configSource,
 		configPreview,
@@ -3194,10 +3600,24 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		setConfigTargetAction,
 		setConfigCommand,
 		setConfigTimeout,
+		setConfigDefaultsBuild,
+		setConfigDefaultsTest,
+		setConfigDefaultsRun,
+		setConfigEnvironment,
+		setConfigSecretRefs,
+		setConfigReadyText,
+		setConfigEndpoints,
+		setConfigEndpointServices,
+		setConfigPrerequisites,
 		setConfigField,
 		setConfigStage,
 		clusterNamespace,
 		clusterNamespaceFocused,
+		clusterNamespaces,
+		clusterNamespaceIndex,
+		moveClusterNamespace,
+		selectClusterNamespace,
+		loadClusterNamespaces,
 		clusterResources,
 		clusterResourceIndex,
 		setClusterResourceIndex,
@@ -3205,6 +3625,15 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		clusterEvents,
 		clusterDescribe,
 		clusterPodLogs,
+		clusterContainerIndex,
+		setClusterContainerIndex,
+		selectedPodContainer,
+		podLogPrevious,
+		clusterEventQuery,
+		setClusterEventQuery,
+		clusterEventFilterFocused,
+		setClusterEventFilterFocused,
+		visibleClusterEvents,
 		selectedCluster,
 		repositories,
 		status,
@@ -3238,6 +3667,9 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		gitWriteDigest,
 		gitWriteTarget,
 		gitWriteOutcome,
+		gitLog,
+		gitLogIndex,
+		gitCommitDetail,
 		tags,
 		tagIndex,
 		setTagIndex,
@@ -3259,6 +3691,9 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		submitTagAdd,
 		deleteSelectedTag,
 		beginStashWrite,
+		loadGitLog,
+		moveGitLog,
+		openGitCommit,
 		loadTags,
 		loadStashes,
 		moveTag,
@@ -3313,6 +3748,9 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		providerWriteBody,
 		providerWriteRequestId,
 		providerWriteDigest,
+		providerWriteTarget,
+		providerMergeMethod,
+		providerMergeIndex,
 		providerWriteStage,
 		providerWriteReceipt,
 		providerWriteOrigin,
@@ -3365,6 +3803,9 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		openClusterEvents,
 		openClusterDescribe,
 		openClusterPodLogs,
+		moveClusterContainer,
+		openSelectedPodContainerLogs,
+		togglePodLogPrevious,
 		setClusterNamespace,
 		setClusterNamespaceFocused,
 		setClusterIndex,
@@ -3392,6 +3833,10 @@ export function createEnvironmentStore(client: EnvironmentMcpClient) {
 		openProviderFile,
 		openProviderJobLogs,
 		beginProviderWrite,
+		beginProviderMerge,
+		moveProviderMerge,
+		selectProviderMerge,
+		chooseProviderMerge,
 		previewProviderWrite,
 		confirmProviderWrite,
 		loadProviderWrites,

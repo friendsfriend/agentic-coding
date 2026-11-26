@@ -43,6 +43,22 @@ function fixture(): EnvironmentCapabilities {
 				repository,
 				remotes: [],
 			}),
+			log: async (repository) => ({
+				repository,
+				commits: [],
+			}),
+			commit: async (repository, sha) => ({
+				repository,
+				sha,
+				shortSha: sha.slice(0, 8),
+				subject: "",
+				author: "",
+				parents: [],
+				body: "",
+				files: [],
+				diff: "",
+				truncated: false,
+			}),
 			tags: async (repository) => ({
 				repository,
 				tags: [],
@@ -132,6 +148,10 @@ function fixture(): EnvironmentCapabilities {
 				output: "",
 				truncated: false,
 				items: [],
+			}),
+			namespaces: async (_repositories, cluster) => ({
+				cluster,
+				namespaces: [],
 			}),
 			events: async (_repositories, cluster, namespace) => ({
 				cluster,
@@ -248,6 +268,7 @@ test("MCP and UI expose exactly the same capabilities from one registry", async 
 	expect(names).toContain("env_target_update");
 	expect(names).toContain("env_clusters");
 	expect(names).toContain("env_cluster_resources");
+	expect(names).toContain("env_cluster_namespaces");
 	expect(names).toContain("env_cluster_events");
 	expect(names).toContain("env_cluster_describe");
 	expect(names).toContain("env_pod_logs");

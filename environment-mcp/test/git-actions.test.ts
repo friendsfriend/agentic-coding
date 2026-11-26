@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import {
 	readGitBranches,
+	readGitCommit,
+	readGitLog,
 	readGitRemotes,
 	readGitWorktrees,
 } from "../src/adapters/process/git-actions.ts";
@@ -663,10 +665,25 @@ test("force-with-lease push and rebase abort are guarded", async () => {
 		git(repository, "commit", "--quiet", "-am", "two");
 		git(repository, "push", "--quiet");
 		git(repository, "reset", "--hard", "--quiet", "HEAD~1");
+		const forcePreview = await service.write(
+			repository,
+			{ action: "push-force", branch: "main", remote: "origin" },
+			"force-push-1",
+			undefined,
+			signal,
+		);
+		if (forcePreview.status !== "confirmation-required")
+			throw new Error("no confirmation digest");
+		expect(forcePreview.intent.target).toMatch(
+			/^main → origin \(force-with-lease @[a-f0-9]{8}\)$/,
+		);
 		expect(
-			await write(
+			await service.write(
+				repository,
 				{ action: "push-force", branch: "main", remote: "origin" },
 				"force-push-1",
+				forcePreview.digest,
+				signal,
 			),
 		).toMatchObject({
 			status: "completed",
@@ -676,15 +693,41 @@ test("force-with-lease push and rebase abort are guarded", async () => {
 			git(repository, "rev-parse", "main"),
 		);
 
-		git(repository, "branch", "no-upstream");
-		const refused = await write(
-			{ action: "push-force", branch: "no-upstream", remote: "origin" },
-			"force-push-2",
+		fs.writeFileSync(path.join(repository, "file.txt"), "three\n");
+		git(repository, "commit", "--quiet", "-am", "three");
+		const three = git(repository, "rev-parse", "HEAD");
+		const one = git(repository, "rev-parse", "HEAD~1");
+		git(repository, "update-ref", "refs/remotes/origin/main", three);
+		const moving = await service.write(
+			repository,
+			{ action: "push-force", branch: "main", remote: "origin" },
+			"force-push-3",
+			undefined,
+			signal,
 		);
-		expect(refused).toMatchObject({
-			status: "completed",
-			outcome: { status: "refused", reason: "force-lease-missing" },
+		if (moving.status !== "confirmation-required")
+			throw new Error("no confirmation digest");
+		git(repository, "update-ref", "refs/remotes/origin/main", one);
+		expect(
+			await service.write(
+				repository,
+				{ action: "push-force", branch: "main", remote: "origin" },
+				"force-push-3",
+				moving.digest,
+				signal,
+			),
+		).toMatchObject({
+			status: "confirmation-required",
+			intent: { target: expect.stringContaining(one.slice(0, 8)) },
 		});
+
+		git(repository, "branch", "no-upstream");
+		await expect(
+			write(
+				{ action: "push-force", branch: "no-upstream", remote: "origin" },
+				"force-push-2",
+			),
+		).rejects.toMatchObject({ code: "force-lease-missing" });
 
 		git(repository, "checkout", "--quiet", "-b", "topic");
 		fs.writeFileSync(path.join(repository, "conflict.txt"), "topic\n");
@@ -713,6 +756,65 @@ test("force-with-lease push and rebase abort are guarded", async () => {
 			status: "completed",
 			outcome: { status: "refused", reason: "no-rebase" },
 		});
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("reads current-branch commit history with refs", async () => {
+	const root = fs.realpathSync(
+		fs.mkdtempSync(path.join(os.tmpdir(), "mcp-git-log-")),
+	);
+	const repository = path.join(root, "repo");
+	const git = (cwd: string, ...args: string[]) => {
+		const child = Bun.spawnSync(["git", "-C", cwd, ...args], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		if (child.exitCode !== 0)
+			throw new Error(`git ${args.join(" ")} failed: ${child.stderr}`);
+		return child.stdout.toString().trim();
+	};
+	const signal = new AbortController().signal;
+	try {
+		git(root, "init", "--initial-branch=main", repository);
+		git(repository, "config", "user.name", "Fixture");
+		git(repository, "config", "user.email", "fixture@example.invalid");
+		fs.writeFileSync(path.join(repository, "file.txt"), "one\n");
+		git(repository, "add", "file.txt");
+		git(repository, "commit", "--quiet", "-m", "one");
+		fs.writeFileSync(path.join(repository, "file.txt"), "two\n");
+		git(repository, "commit", "--quiet", "-am", "two", "-m", "body line");
+		git(repository, "tag", "v1");
+		const log = await readGitLog(repository, signal);
+		expect(log.commits).toHaveLength(2);
+		expect(log.commits[0]).toMatchObject({
+			subject: "two",
+			author: "Fixture",
+		});
+		expect(log.commits[0]?.sha).toHaveLength(40);
+		expect(log.commits[0]?.shortSha).toBe(log.commits[0]?.sha.slice(0, 7));
+		expect(log.commits[0]?.refs?.join(" ")).toContain("tag: v1");
+		expect(log.commits[1]?.subject).toBe("one");
+		const detail = await readGitCommit(
+			repository,
+			log.commits[0]?.sha ?? "",
+			signal,
+		);
+		expect(detail).toMatchObject({
+			shortSha: log.commits[0]?.shortSha,
+			subject: "two",
+			author: "Fixture",
+			email: "fixture@example.invalid",
+		});
+		expect(detail.body).toContain("body line");
+		expect(detail.parents).toHaveLength(1);
+		expect(detail.files).toEqual([
+			{ path: "file.txt", additions: 1, deletions: 1 },
+		]);
+		expect(detail.diff).toContain("-one");
+		expect(detail.diff).toContain("+two");
+		expect(detail.truncated).toBe(false);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

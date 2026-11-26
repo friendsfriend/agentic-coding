@@ -41,7 +41,9 @@ import {
 	type GitBranch,
 	type GitChange,
 	type GitChanges,
+	type GitCommitDetail,
 	type GitDiff,
+	type GitLog,
 	type GitRemotes,
 	type GitStashes,
 	type GitStatus,
@@ -54,6 +56,7 @@ import {
 	type KubernetesEvent,
 	type KubernetesEvents,
 	type KubernetesPodLogs,
+	type KubernetesResource,
 	type KubernetesResources,
 	type LogsSnapshot,
 	type OperationDetail,
@@ -85,6 +88,7 @@ import {
 	targetLabel,
 	targetSummary,
 } from "./model.ts";
+import { type ContainerSample, containerTrend } from "./stats.ts";
 import { filetypeFor, useSyntaxStyle } from "./syntax.ts";
 
 function toneColor(
@@ -4073,7 +4077,15 @@ function containerLabel(entry: ContainerStatsEntry) {
 export function ContainerStatsView(props: {
 	theme: Theme;
 	stats: ContainerStatsResult;
+	history: ReadonlyMap<string, readonly ContainerSample[]>;
 }) {
+	const signed = (
+		value: number | undefined,
+		format: (input: number) => string,
+	) => {
+		if (value === undefined) return "—";
+		return `${value >= 0 ? "+" : "-"}${format(Math.abs(value))}`;
+	};
 	return (
 		<box flexDirection="column" flexGrow={1} minHeight={0} gap={1}>
 			<ProviderHeader
@@ -4102,70 +4114,122 @@ export function ContainerStatsView(props: {
 					horizontalScrollbarOptions={{ visible: false }}
 				>
 					<For each={props.stats.containers}>
-						{(entry, index) => (
-							<box
-								id={`container-stats-${index()}`}
-								flexDirection="row"
-								gap={1}
-								height={1}
-								paddingLeft={1}
-								paddingRight={1}
-							>
-								<text
-									fg={props.theme.text.feedback.info.base}
-									wrapMode="none"
-									flexShrink={0}
-									maxWidth={28}
-									truncate
+						{(entry, index) => {
+							const samples = () => props.history.get(entry.container) ?? [];
+							const trend = () => containerTrend(samples());
+							return (
+								<box
+									id={`container-stats-${index()}`}
+									flexDirection="column"
+									height={2}
+									paddingLeft={1}
+									paddingRight={1}
 								>
-									{containerLabel(entry)}
-								</text>
-								<text
-									fg={props.theme.text.muted}
-									wrapMode="none"
-									flexShrink={0}
-								>
-									{entry.provider} {entry.container.slice(0, 12)}
-								</text>
-								<text
-									fg={props.theme.text.base}
-									wrapMode="none"
-									flexShrink={0}
-									minWidth={12}
-								>
-									CPU {entry.cpuPercent?.toFixed(1) ?? "—"}%
-								</text>
-								<text
-									fg={props.theme.text.base}
-									wrapMode="none"
-									flexShrink={0}
-									minWidth={30}
-								>
-									MEM {formatBytes(entry.memoryUsageBytes)} /{" "}
-									{formatBytes(entry.memoryLimitBytes)}
-									{entry.memoryPercent !== undefined
-										? ` (${entry.memoryPercent.toFixed(0)}%)`
-										: ""}
-								</text>
-								<text
-									fg={props.theme.text.muted}
-									wrapMode="none"
-									flexShrink={0}
-								>
-									NET ↓{formatBytes(entry.networkRxBytes)} ↑
-									{formatBytes(entry.networkTxBytes)}
-								</text>
-								<Show when={entry.pids !== undefined}>
-									<text
-										fg={props.theme.text.muted}
-										wrapMode="none"
-										flexShrink={0}
+									<box flexDirection="row" gap={1} height={1}>
+										<text
+											fg={props.theme.text.feedback.info.base}
+											wrapMode="none"
+											flexShrink={0}
+											maxWidth={28}
+											truncate
+										>
+											{containerLabel(entry)}
+										</text>
+										<text
+											fg={props.theme.text.muted}
+											wrapMode="none"
+											flexShrink={0}
+										>
+											{entry.provider} {entry.container.slice(0, 12)}
+										</text>
+										<text
+											fg={props.theme.text.base}
+											wrapMode="none"
+											flexShrink={0}
+											minWidth={12}
+										>
+											CPU {entry.cpuPercent?.toFixed(1) ?? "—"}%
+										</text>
+										<text
+											fg={props.theme.text.base}
+											wrapMode="none"
+											flexShrink={0}
+											minWidth={30}
+										>
+											MEM {formatBytes(entry.memoryUsageBytes)} /{" "}
+											{formatBytes(entry.memoryLimitBytes)}
+											{entry.memoryPercent !== undefined
+												? ` (${entry.memoryPercent.toFixed(0)}%)`
+												: ""}
+										</text>
+										<text
+											fg={props.theme.text.muted}
+											wrapMode="none"
+											flexShrink={0}
+										>
+											NET ↓{formatBytes(entry.networkRxBytes)} ↑
+											{formatBytes(entry.networkTxBytes)}
+										</text>
+										<Show when={entry.pids !== undefined}>
+											<text
+												fg={props.theme.text.muted}
+												wrapMode="none"
+												flexShrink={0}
+											>
+												{entry.pids} pids
+											</text>
+										</Show>
+									</box>
+									<box
+										flexDirection="row"
+										gap={2}
+										height={1}
+										paddingLeft={1}
+										minWidth={0}
 									>
-										{entry.pids} pids
-									</text>
-								</Show>
-							</box>
-						)}
+										<text
+											fg={props.theme.text.feedback.info.base}
+											wrapMode="none"
+											flexShrink={0}
+										>
+											CPU {trend().cpuSpark || "…"} Δ
+											{signed(
+												trend().cpuDelta,
+												(value) => `${value.toFixed(1)}%`,
+											)}
+										</text>
+										<text
+											fg={props.theme.text.feedback.info.base}
+											wrapMode="none"
+											flexShrink={0}
+										>
+											MEM {trend().memorySpark || "…"} Δ
+											{signed(trend().memoryDelta, formatBytes)}
+										</text>
+										<text
+											fg={props.theme.text.muted}
+											wrapMode="none"
+											flexShrink={0}
+										>
+											NET Δ↓{signed(trend().networkRxDelta, formatBytes)} Δ↑
+											{signed(trend().networkTxDelta, formatBytes)}
+										</text>
+										<text
+											fg={props.theme.text.muted}
+											wrapMode="none"
+											flexShrink={0}
+										>
+											{trend().count} samples
+										</text>
+										<Show when={trend().count < 2}>
+											<text fg={props.theme.text.muted} wrapMode="none">
+												collecting…
+											</text>
+										</Show>
+									</box>
+								</box>
+							);
+						}}
 					</For>
 				</scrollbox>
 			</Show>
@@ -4181,10 +4245,8 @@ export function ClustersView(props: {
 	onOpen(): void;
 }) {
 	let scroll: ScrollBoxRenderable | undefined;
-	const selectedCluster = () =>
-		props.clusters[props.selected] ?? props.clusters[0];
 	createEffect(() => {
-		const cluster = selectedCluster();
+		const cluster = props.clusters[props.selected] ?? props.clusters[0];
 		if (!scroll || !cluster) return;
 		queueMicrotask(() =>
 			scroll?.scrollChildIntoView(`cluster-${props.selected}`),
@@ -4202,7 +4264,7 @@ export function ClustersView(props: {
 				when={props.clusters.length > 0}
 				fallback={
 					<text fg={props.theme.text.muted}>
-						No Kubernetes clusters are authorized for these repositories.
+						No Kubernetes clusters are authorized.
 					</text>
 				}
 			>
@@ -4244,14 +4306,18 @@ export function ClustersView(props: {
 										{selected() ? "›" : " "}
 									</text>
 									<text
-										fg={props.theme.text.feedback.info.base}
+										fg={
+											selected()
+												? props.theme.text.base
+												: props.theme.text.muted
+										}
 										wrapMode="none"
 										flexShrink={0}
 									>
 										{cluster.id}
 									</text>
 									<text
-										fg={props.theme.text.base}
+										fg={props.theme.text.muted}
 										wrapMode="none"
 										truncate
 										flexGrow={1}
@@ -4259,7 +4325,11 @@ export function ClustersView(props: {
 									>
 										{cluster.context}
 									</text>
-									<text fg={props.theme.text.muted} wrapMode="none">
+									<text
+										fg={props.theme.text.muted}
+										wrapMode="none"
+										flexShrink={0}
+									>
 										{cluster.repositories.length} repos
 									</text>
 								</box>
@@ -4276,12 +4346,17 @@ export function ClusterNamespaceView(props: {
 	theme: Theme;
 	cluster: KubernetesClusterInfo;
 	namespace: string;
+	namespaces: readonly string[];
+	selected: number;
+	focused: boolean;
 	onNamespace(value: string): void;
+	onSelect(index: number): void;
 	onSubmit(): void;
 }) {
 	let input: InputRenderable | undefined;
 	createEffect(() => {
-		queueMicrotask(() => input?.focus());
+		if (props.focused) queueMicrotask(() => input?.focus());
+		else input?.blur();
 	});
 	return (
 		<box flexDirection="column" flexGrow={1} minHeight={0} gap={1}>
@@ -4289,11 +4364,11 @@ export function ClusterNamespaceView(props: {
 				theme={props.theme}
 				title="Inspect namespace"
 				context={`${props.cluster.id} · ${props.cluster.context}`}
-				count={0}
+				count={props.namespaces.length}
 			/>
 			<text fg={props.theme.text.muted} wrapMode="word">
 				Read deployments, statefulsets, pods and services. System namespaces are
-				refused.
+				refused. Use ↑/↓ or / to type a namespace.
 			</text>
 			<box flexDirection="row" gap={1} height={1}>
 				<text fg={props.theme.text.muted} width={9} flexShrink={0}>
@@ -4305,7 +4380,7 @@ export function ClusterNamespaceView(props: {
 					}}
 					value={props.namespace}
 					placeholder="default"
-					focused
+					focused={props.focused}
 					backgroundColor={props.theme.background.base}
 					focusedBackgroundColor={props.theme.background.raised.base}
 					textColor={props.theme.text.base}
@@ -4317,6 +4392,68 @@ export function ClusterNamespaceView(props: {
 					flexGrow={1}
 				/>
 			</box>
+			<Show
+				when={props.namespaces.length > 0}
+				fallback={
+					<text fg={props.theme.text.muted}>
+						No namespaces listed. Press / to type one.
+					</text>
+				}
+			>
+				<scrollbox
+					flexGrow={1}
+					minHeight={0}
+					horizontalScrollbarOptions={{ visible: false }}
+				>
+					<For each={props.namespaces}>
+						{(namespace, index) => {
+							const selected = () => index() === props.selected;
+							return (
+								<box
+									flexDirection="row"
+									gap={1}
+									height={1}
+									paddingLeft={1}
+									paddingRight={1}
+									backgroundColor={
+										selected() && !props.focused
+											? props.theme.background.raised.high
+											: undefined
+									}
+									onMouseUp={() => {
+										props.onSelect(index());
+										props.onNamespace(namespace);
+									}}
+								>
+									<text
+										fg={
+											selected() && !props.focused
+												? props.theme.text.action.primary.base
+												: props.theme.text.muted
+										}
+										flexShrink={0}
+									>
+										{selected() && !props.focused ? "›" : " "}
+									</text>
+									<text
+										fg={
+											selected() && !props.focused
+												? props.theme.text.base
+												: props.theme.text.muted
+										}
+										wrapMode="none"
+									>
+										{namespace}
+									</text>
+								</box>
+							);
+						}}
+					</For>
+				</scrollbox>
+				<text fg={props.theme.text.muted} wrapMode="none">
+					↑/↓ choose · Enter inspect · / type · Esc back
+				</text>
+			</Show>
 		</box>
 	);
 }
@@ -4457,6 +4594,12 @@ export function ClusterResourcesView(props: {
 export function ClusterEventsView(props: {
 	theme: Theme;
 	events: KubernetesEvents;
+	visible: readonly KubernetesEvent[];
+	query: string;
+	focused: boolean;
+	onQuery(value: string): void;
+	onRef(input: InputRenderable | undefined): void;
+	onSubmit(): void;
 }) {
 	return (
 		<box flexDirection="column" flexGrow={1} minHeight={0} gap={1}>
@@ -4466,21 +4609,47 @@ export function ClusterEventsView(props: {
 				context={`${props.events.cluster} · ${props.events.namespace}`}
 				count={props.events.events.length}
 			/>
+			<box flexDirection="row" gap={1} height={1}>
+				<text fg={props.theme.text.muted} flexShrink={0}>
+					/
+				</text>
+				<input
+					ref={props.onRef}
+					value={props.query}
+					placeholder="filter events"
+					focused={props.focused}
+					backgroundColor={props.theme.background.base}
+					focusedBackgroundColor={props.theme.background.raised.base}
+					textColor={props.theme.text.base}
+					focusedTextColor={props.theme.text.base}
+					placeholderColor={props.theme.text.muted}
+					cursorColor={props.theme.text.base}
+					onInput={props.onQuery}
+					onSubmit={props.onSubmit}
+					flexGrow={1}
+				/>
+			</box>
 			<Show when={props.events.truncated}>
 				<text fg={props.theme.text.feedback.warning.base} wrapMode="none">
 					Output truncated.
 				</text>
 			</Show>
 			<Show
-				when={props.events.events.length > 0}
-				fallback={<text fg={props.theme.text.muted}>No events.</text>}
+				when={props.visible.length > 0}
+				fallback={
+					<text fg={props.theme.text.muted}>
+						{props.query.trim()
+							? `No events match “${props.query.trim()}”.`
+							: "No events."}
+					</text>
+				}
 			>
 				<scrollbox
 					flexGrow={1}
 					minHeight={0}
 					horizontalScrollbarOptions={{ visible: false }}
 				>
-					<For each={props.events.events}>
+					<For each={props.visible}>
 						{(event: KubernetesEvent) => (
 							<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 								<box flexDirection="row" gap={1} height={1}>
@@ -4565,6 +4734,68 @@ export function ClusterDescribeView(props: {
 	);
 }
 
+export function ClusterPodContainersView(props: {
+	theme: Theme;
+	resource: KubernetesResource;
+	containers: readonly string[];
+	selected: number;
+	onSelect(index: number): void;
+}) {
+	return (
+		<box flexDirection="column" flexGrow={1} minHeight={0} gap={1}>
+			<ProviderHeader
+				theme={props.theme}
+				title={`Containers ${props.resource.name}`}
+				context="choose a container for logs"
+				count={props.containers.length}
+			/>
+			<scrollbox
+				flexGrow={1}
+				minHeight={0}
+				horizontalScrollbarOptions={{ visible: false }}
+			>
+				<For each={props.containers}>
+					{(container, index) => {
+						const selected = () => index() === props.selected;
+						return (
+							<box
+								flexDirection="row"
+								gap={1}
+								height={1}
+								paddingLeft={1}
+								paddingRight={1}
+								backgroundColor={
+									selected() ? props.theme.background.raised.high : undefined
+								}
+								onMouseUp={() => props.onSelect(index())}
+							>
+								<text
+									fg={
+										selected()
+											? props.theme.text.action.primary.base
+											: props.theme.text.muted
+									}
+									flexShrink={0}
+								>
+									{selected() ? "›" : " "}
+								</text>
+								<text
+									fg={
+										selected() ? props.theme.text.base : props.theme.text.muted
+									}
+									wrapMode="none"
+								>
+									{container}
+								</text>
+							</box>
+						);
+					}}
+				</For>
+			</scrollbox>
+		</box>
+	);
+}
+
 export function ClusterPodLogsView(props: {
 	theme: Theme;
 	logs: KubernetesPodLogs;
@@ -4577,6 +4808,9 @@ export function ClusterPodLogsView(props: {
 				context={`${props.logs.cluster} · ${props.logs.namespace}${props.logs.container ? ` · ${props.logs.container}` : ""}`}
 				count={0}
 			/>
+			<Show when={props.logs.previous}>
+				<Badge theme={props.theme} label="previous container" tone="warning" />
+			</Show>
 			<Show when={props.logs.truncated}>
 				<text fg={props.theme.text.feedback.warning.base} wrapMode="none">
 					Output truncated at 128 KiB.
@@ -4591,6 +4825,273 @@ export function ClusterPodLogsView(props: {
 					{props.logs.output || "No log output."}
 				</text>
 			</scrollbox>
+			<text fg={props.theme.text.muted} wrapMode="none">
+				p {props.logs.previous ? "current" : "previous"} · r reload · Esc back
+			</text>
+		</box>
+	);
+}
+
+function commitDiffChunks(diff: string) {
+	return diff
+		.split(/^diff --git /m)
+		.filter((chunk) => chunk.trim())
+		.slice(0, 50)
+		.map((chunk) => {
+			const full = `diff --git ${chunk}`;
+			const match = /^diff --git a\/(.+?) b\/(.+)$/m.exec(full);
+			return { path: match?.[2] ?? "file", diff: full };
+		});
+}
+
+export function GitCommitView(props: {
+	theme: Theme;
+	detail: GitCommitDetail;
+}) {
+	const syntax = useSyntaxStyle(props.theme);
+	const additions = () =>
+		props.detail.files.reduce(
+			(total, file) => total + (file.additions ?? 0),
+			0,
+		);
+	const deletions = () =>
+		props.detail.files.reduce(
+			(total, file) => total + (file.deletions ?? 0),
+			0,
+		);
+	const bodyLines = () => props.detail.body.split("\n");
+	const chunks = () => commitDiffChunks(props.detail.diff);
+	const fileFor = (path: string) =>
+		props.detail.files.find(
+			(file) => file.path === path || path.endsWith(`/${file.path}`),
+		);
+	return (
+		<box flexDirection="column" flexGrow={1} minHeight={0} gap={1}>
+			<ProviderHeader
+				theme={props.theme}
+				title={`Commit ${props.detail.shortSha}`}
+				context={`${props.detail.author || "unknown author"}${props.detail.email ? ` · ${props.detail.email}` : ""}`}
+				count={props.detail.files.length}
+			/>
+			<Show when={props.detail.note === "unavailable"}>
+				<text fg={props.theme.text.feedback.warning.base} wrapMode="none">
+					Commit details unavailable.
+				</text>
+			</Show>
+			<box flexDirection="row" gap={2} height={1}>
+				<Show when={props.detail.date}>
+					<text fg={props.theme.text.muted} wrapMode="none">
+						{formatTimestamp(Date.parse(props.detail.date ?? ""))}
+					</text>
+				</Show>
+				<Show when={props.detail.parents.length > 0}>
+					<text fg={props.theme.text.muted} wrapMode="none">
+						parents{" "}
+						{props.detail.parents.map((parent) => parent.slice(0, 8)).join(" ")}
+					</text>
+				</Show>
+				<text fg={props.theme.text.muted} wrapMode="none">
+					{props.detail.files.length} files
+				</text>
+				<text fg={props.theme.text.feedback.success.base} wrapMode="none">
+					+{additions()}
+				</text>
+				<text fg={props.theme.text.feedback.error.base} wrapMode="none">
+					-{deletions()}
+				</text>
+				<Show when={props.detail.truncated}>
+					<Badge theme={props.theme} label="truncated" tone="warning" />
+				</Show>
+			</box>
+			<scrollbox
+				flexGrow={1}
+				minHeight={0}
+				horizontalScrollbarOptions={{ visible: false }}
+			>
+				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<For each={bodyLines()}>
+						{(line) => (
+							<text fg={props.theme.text.base} wrapMode="word" selectable>
+								{line || " "}
+							</text>
+						)}
+					</For>
+				</box>
+				<Show
+					when={chunks().length > 0}
+					fallback={
+						<text fg={props.theme.text.muted} paddingLeft={1}>
+							No textual diff.
+						</text>
+					}
+				>
+					<For each={chunks()}>
+						{(chunk) => {
+							const file = () => fileFor(chunk.path);
+							return (
+								<box flexDirection="column" gap={1} marginTop={1}>
+									<box flexDirection="row" gap={1} paddingLeft={1}>
+										<text
+											fg={props.theme.text.feedback.info.base}
+											wrapMode="none"
+										>
+											{chunk.path}
+										</text>
+										<Show when={file()?.binary}>
+											<Badge
+												theme={props.theme}
+												label="binary"
+												tone="warning"
+											/>
+										</Show>
+										<Show when={file()?.additions !== undefined}>
+											<text fg={props.theme.text.feedback.success.base}>
+												+{file()?.additions ?? 0}
+											</text>
+										</Show>
+										<Show when={file()?.deletions !== undefined}>
+											<text fg={props.theme.text.feedback.error.base}>
+												-{file()?.deletions ?? 0}
+											</text>
+										</Show>
+									</box>
+									<diff
+										diff={chunk.diff}
+										view="unified"
+										showLineNumbers
+										filetype={filetypeFor(chunk.path)}
+										syntaxStyle={syntax}
+										wrapMode="word"
+										fg={props.theme.text.base}
+										contextBg={props.theme.background.base}
+										addedSignColor={props.theme.text.feedback.success.base}
+										removedSignColor={props.theme.text.feedback.error.base}
+										lineNumberFg={props.theme.text.muted}
+										lineNumberBg={props.theme.background.base}
+									/>
+								</box>
+							);
+						}}
+					</For>
+				</Show>
+			</scrollbox>
+		</box>
+	);
+}
+
+export function GitLogView(props: {
+	theme: Theme;
+	log: GitLog;
+	selected: number;
+	onSelect(index: number): void;
+}) {
+	let scroll: ScrollBoxRenderable | undefined;
+	createEffect(() => {
+		const commit = props.log.commits[props.selected] ?? props.log.commits[0];
+		if (!scroll || !commit) return;
+		queueMicrotask(() =>
+			scroll?.scrollChildIntoView(`commit-${props.selected}`),
+		);
+	});
+	return (
+		<box flexDirection="column" flexGrow={1} minHeight={0} gap={1}>
+			<ProviderHeader
+				theme={props.theme}
+				title="Commit history"
+				context={props.log.repository}
+				count={props.log.commits.length}
+			/>
+			<Show
+				when={props.log.commits.length > 0}
+				fallback={
+					<text fg={props.theme.text.muted}>
+						{props.log.note === "unavailable"
+							? "Commit history unavailable."
+							: "No commits."}
+					</text>
+				}
+			>
+				<scrollbox
+					ref={(value: ScrollBoxRenderable) => {
+						scroll = value;
+					}}
+					flexGrow={1}
+					minHeight={0}
+					horizontalScrollbarOptions={{ visible: false }}
+				>
+					<For each={props.log.commits}>
+						{(commit, index) => {
+							const selected = () => index() === props.selected;
+							return (
+								<box
+									id={`commit-${index()}`}
+									flexDirection="column"
+									height={2}
+									paddingLeft={1}
+									paddingRight={1}
+									backgroundColor={
+										selected() ? props.theme.background.raised.high : undefined
+									}
+									onMouseUp={() => props.onSelect(index())}
+								>
+									<box flexDirection="row" gap={1} height={1}>
+										<text
+											fg={
+												selected()
+													? props.theme.text.action.primary.base
+													: props.theme.text.muted
+											}
+											flexShrink={0}
+										>
+											{selected() ? "›" : " "}
+										</text>
+										<text
+											fg={props.theme.text.feedback.info.base}
+											flexShrink={0}
+										>
+											{commit.shortSha}
+										</text>
+										<text
+											fg={props.theme.text.base}
+											wrapMode="none"
+											truncate
+											flexGrow={1}
+											minWidth={0}
+										>
+											{commit.subject || "(no subject)"}
+										</text>
+										<For each={commit.refs ?? []}>
+											{(ref) => (
+												<Badge
+													theme={props.theme}
+													label={ref}
+													tone={
+														ref.startsWith("HEAD")
+															? "success"
+															: ref.startsWith("tag:")
+																? "warning"
+																: "info"
+													}
+												/>
+											)}
+										</For>
+									</box>
+									<box flexDirection="row" gap={2} height={1} paddingLeft={2}>
+										<text fg={props.theme.text.muted} wrapMode="none">
+											{commit.author || "unknown author"}
+										</text>
+										<Show when={commit.date}>
+											<text fg={props.theme.text.muted} wrapMode="none">
+												{formatTimestamp(Date.parse(commit.date ?? ""))}
+											</text>
+										</Show>
+									</box>
+								</box>
+							);
+						}}
+					</For>
+				</scrollbox>
+			</Show>
 		</box>
 	);
 }
@@ -5164,6 +5665,15 @@ export function ConfigWriteView(props: {
 	targetAction: string;
 	command: string;
 	timeout: string;
+	defaultsBuild: string;
+	defaultsTest: string;
+	defaultsRun: string;
+	environment: string;
+	secretRefs: string;
+	readyText: string;
+	endpoints: string;
+	endpointServices: string;
+	prerequisites: string;
 	deleteTargets: boolean;
 	source?: { app: string; target: string; runtime: string };
 	preview?: ConfigurationPreview;
@@ -5175,6 +5685,15 @@ export function ConfigWriteView(props: {
 	onTargetAction(value: string): void;
 	onCommand(value: string): void;
 	onTimeout(value: string): void;
+	onDefaultsBuild(value: string): void;
+	onDefaultsTest(value: string): void;
+	onDefaultsRun(value: string): void;
+	onEnvironment(value: string): void;
+	onSecretRefs(value: string): void;
+	onReadyText(value: string): void;
+	onEndpoints(value: string): void;
+	onEndpointServices(value: string): void;
+	onPrerequisites(value: string): void;
 	onPreview(): void;
 }) {
 	const inputs: (InputRenderable | undefined)[] = [];
@@ -5244,6 +5763,30 @@ export function ConfigWriteView(props: {
 						{...input(2)}
 						onInput={props.onRepository}
 					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Build target"
+						value={props.defaultsBuild}
+						placeholder="optional target id"
+						{...input(3)}
+						onInput={props.onDefaultsBuild}
+					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Test target"
+						value={props.defaultsTest}
+						placeholder="optional target id"
+						{...input(4)}
+						onInput={props.onDefaultsTest}
+					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Run target"
+						value={props.defaultsRun}
+						placeholder="optional target id"
+						{...input(5)}
+						onInput={props.onDefaultsRun}
+					/>
 				</Show>
 				<Show when={props.action === "app-edit"}>
 					<text fg={props.theme.text.muted}>Application {props.id}</text>
@@ -5262,6 +5805,30 @@ export function ConfigWriteView(props: {
 						placeholder="/absolute/repository"
 						{...input(1)}
 						onInput={props.onRepository}
+					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Build target"
+						value={props.defaultsBuild}
+						placeholder="optional target id"
+						{...input(2)}
+						onInput={props.onDefaultsBuild}
+					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Test target"
+						value={props.defaultsTest}
+						placeholder="optional target id"
+						{...input(3)}
+						onInput={props.onDefaultsTest}
+					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Run target"
+						value={props.defaultsRun}
+						placeholder="optional target id"
+						{...input(4)}
+						onInput={props.onDefaultsRun}
 					/>
 				</Show>
 				<Show when={props.action === "app-delete"}>
@@ -5339,6 +5906,30 @@ export function ConfigWriteView(props: {
 						{...input(4)}
 						onInput={props.onTimeout}
 					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Environment"
+						value={props.environment}
+						placeholder="KEY=value, KEY2=value2"
+						{...input(5)}
+						onInput={props.onEnvironment}
+					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Secret refs"
+						value={props.secretRefs}
+						placeholder="KEY=ENV_NAME"
+						{...input(6)}
+						onInput={props.onSecretRefs}
+					/>
+					<ConfigInput
+						theme={props.theme}
+						label="Ready text"
+						value={props.readyText}
+						placeholder="run targets only"
+						{...input(7)}
+						onInput={props.onReadyText}
+					/>
 				</Show>
 				<Show when={props.action === "target-edit"}>
 					<text fg={props.theme.text.muted}>
@@ -5383,6 +5974,93 @@ export function ConfigWriteView(props: {
 							{...input(3)}
 							onInput={props.onTimeout}
 						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Environment"
+							value={props.environment}
+							placeholder="KEY=value, KEY2=value2"
+							{...input(4)}
+							onInput={props.onEnvironment}
+						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Secret refs"
+							value={props.secretRefs}
+							placeholder="KEY=ENV_NAME"
+							{...input(5)}
+							onInput={props.onSecretRefs}
+						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Ready text"
+							value={props.readyText}
+							placeholder="run targets only"
+							{...input(6)}
+							onInput={props.onReadyText}
+						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Endpoints"
+							value={props.endpoints}
+							placeholder="name=http://host:port"
+							{...input(7)}
+							onInput={props.onEndpoints}
+						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Endpoint svc"
+							value={props.endpointServices}
+							placeholder="name=service-id"
+							{...input(8)}
+							onInput={props.onEndpointServices}
+						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Prereqs"
+							value={props.prerequisites}
+							placeholder="app/target, app/target"
+							{...input(9)}
+							onInput={props.onPrerequisites}
+						/>
+					</Show>
+					<Show
+						when={
+							props.source?.runtime !== "shell" &&
+							props.source?.runtime !== "systemshell"
+						}
+					>
+						<ConfigInput
+							theme={props.theme}
+							label="Ready text"
+							value={props.readyText}
+							placeholder="run targets only"
+							{...input(2)}
+							onInput={props.onReadyText}
+						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Endpoints"
+							value={props.endpoints}
+							placeholder="name=http://host:port"
+							{...input(3)}
+							onInput={props.onEndpoints}
+						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Endpoint svc"
+							value={props.endpointServices}
+							placeholder="name=service-id"
+							{...input(4)}
+							onInput={props.onEndpointServices}
+						/>
+						<ConfigInput
+							theme={props.theme}
+							label="Prereqs"
+							value={props.prerequisites}
+							placeholder="app/target, app/target"
+							{...input(5)}
+							onInput={props.onPrerequisites}
+						/>
 					</Show>
 				</Show>
 				<Show when={props.action === "target-delete"}>
@@ -5419,12 +6097,120 @@ export function ConfigWriteView(props: {
 	);
 }
 
+export function ProviderMergeView(props: {
+	theme: Theme;
+	provider: string;
+	repository: string;
+	number: number;
+	selected: number;
+	onSelect(index: number): void;
+}) {
+	const methods = [
+		{
+			id: "merge",
+			label: "Merge commit",
+			description: "Preserve commits and create a merge commit.",
+		},
+		{
+			id: "squash",
+			label: "Squash and merge",
+			description: "Combine commits into one commit on the target branch.",
+		},
+		{
+			id: "rebase",
+			label: "Rebase and merge",
+			description:
+				"Replay commits onto the target branch without a merge commit.",
+		},
+	];
+	let scroll: ScrollBoxRenderable | undefined;
+	createEffect(() => {
+		if (!scroll) return;
+		queueMicrotask(() =>
+			scroll?.scrollChildIntoView(`provider-merge-${props.selected}`),
+		);
+	});
+	return (
+		<box flexDirection="column" flexGrow={1} minHeight={0} gap={1}>
+			<ProviderHeader
+				theme={props.theme}
+				title={`Merge #${props.number}`}
+				context={`${props.repository} · ${props.provider}`}
+				count={methods.length}
+			/>
+			<text fg={props.theme.text.muted} wrapMode="word">
+				Choose the GitHub merge method. The exact head and method are bound into
+				the next confirmation digest.
+			</text>
+			<scrollbox
+				ref={(value: ScrollBoxRenderable) => {
+					scroll = value;
+				}}
+				flexGrow={1}
+				minHeight={0}
+				horizontalScrollbarOptions={{ visible: false }}
+			>
+				<For each={methods}>
+					{(method, index) => {
+						const selected = () => index() === props.selected;
+						return (
+							<box
+								id={`provider-merge-${index()}`}
+								flexDirection="column"
+								height={2}
+								paddingLeft={1}
+								paddingRight={1}
+								backgroundColor={
+									selected() ? props.theme.background.raised.high : undefined
+								}
+								onMouseUp={() => props.onSelect(index())}
+							>
+								<box flexDirection="row" gap={1} height={1}>
+									<text
+										fg={
+											selected()
+												? props.theme.text.action.primary.base
+												: props.theme.text.muted
+										}
+										flexShrink={0}
+									>
+										{selected() ? "›" : " "}
+									</text>
+									<text
+										fg={
+											selected()
+												? props.theme.text.base
+												: props.theme.text.muted
+										}
+										flexShrink={0}
+									>
+										{method.label}
+									</text>
+								</box>
+								<box paddingLeft={3}>
+									<text fg={props.theme.text.muted} wrapMode="word">
+										{method.description}
+									</text>
+								</box>
+							</box>
+						);
+					}}
+				</For>
+			</scrollbox>
+			<text fg={props.theme.text.muted} wrapMode="none">
+				↑/↓ choose · Enter continue · Esc back
+			</text>
+		</box>
+	);
+}
+
 export function ProviderWriteView(props: {
 	theme: Theme;
 	action?: ProviderWriteAction;
 	stage: "edit" | "confirm" | "completed";
 	body: string;
 	digest?: string;
+	target?: string;
 	receipt?: ProviderWriteReceipt;
 	onBody(value: string): void;
 	onPreview(): void;
@@ -5482,6 +6268,11 @@ export function ProviderWriteView(props: {
 					No write has been sent. Confirm the digest below to perform the
 					external action.
 				</text>
+				<Show when={props.target}>
+					<text fg={props.theme.text.base} wrapMode="none">
+						{props.target}
+					</text>
+				</Show>
 				<text fg={props.theme.text.feedback.info.base} wrapMode="none">
 					{props.digest}
 				</text>

@@ -31,6 +31,38 @@ export type GitWorktrees = {
 	note?: "unavailable";
 };
 
+export type GitCommit = {
+	sha: string;
+	shortSha: string;
+	subject: string;
+	author: string;
+	date?: string;
+	refs?: readonly string[];
+};
+
+export type GitCommitFile = {
+	path: string;
+	additions?: number;
+	deletions?: number;
+	binary?: boolean;
+};
+
+export type GitCommitDetail = GitCommit & {
+	email?: string;
+	parents: readonly string[];
+	body: string;
+	files: readonly GitCommitFile[];
+	diff: string;
+	truncated: boolean;
+	note?: "unavailable";
+};
+
+export type GitLog = {
+	repository: string;
+	commits: readonly GitCommit[];
+	note?: "unavailable";
+};
+
 export type GitRemote = {
 	name: string;
 	fetchUrl: string;
@@ -101,6 +133,8 @@ export type GitWriteRequest =
 			action: "push-force";
 			branch: string;
 			remote: string;
+			/** Resolved from the local remote-tracking ref; never client-supplied. */
+			lease?: string;
 	  }
 	| { action: "tag"; name: string; message?: string }
 	| { action: "tag-delete"; name: string }
@@ -148,6 +182,12 @@ export interface GitActionPort {
 	branches(repository: string, signal: AbortSignal): Promise<GitBranches>;
 	worktrees(repository: string, signal: AbortSignal): Promise<GitWorktrees>;
 	remotes(repository: string, signal: AbortSignal): Promise<GitRemotes>;
+	log(repository: string, signal: AbortSignal): Promise<GitLog>;
+	commit(
+		repository: string,
+		sha: string,
+		signal: AbortSignal,
+	): Promise<GitCommitDetail>;
 	tags(repository: string, signal: AbortSignal): Promise<GitTags>;
 	stashes(repository: string, signal: AbortSignal): Promise<GitStashes>;
 	run(

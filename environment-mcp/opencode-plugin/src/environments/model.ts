@@ -112,6 +112,38 @@ export type GitActionRequest =
 	  }
 	| { action: "worktree-remove"; path: string };
 
+export type GitCommit = {
+	sha: string;
+	shortSha: string;
+	subject: string;
+	author: string;
+	date?: string;
+	refs?: readonly string[];
+};
+
+export type GitCommitFile = {
+	path: string;
+	additions?: number;
+	deletions?: number;
+	binary?: boolean;
+};
+
+export type GitCommitDetail = GitCommit & {
+	email?: string;
+	parents: readonly string[];
+	body: string;
+	files: readonly GitCommitFile[];
+	diff: string;
+	truncated: boolean;
+	note?: string;
+};
+
+export type GitLog = {
+	repository: string;
+	commits: readonly GitCommit[];
+	note?: string;
+};
+
 export type GitTags = {
 	repository: string;
 	tags: readonly {
@@ -454,6 +486,11 @@ export type KubernetesEvent = {
 	lastTimestamp?: string;
 };
 
+export type KubernetesNamespaces = {
+	cluster: string;
+	namespaces: readonly string[];
+};
+
 export type KubernetesEvents = {
 	cluster: string;
 	namespace: string;
@@ -476,6 +513,7 @@ export type KubernetesPodLogs = {
 	namespace: string;
 	pod: string;
 	container?: string;
+	previous?: boolean;
 	output: string;
 	truncated: boolean;
 };
@@ -670,9 +708,13 @@ export type EnvironmentView =
 	| "cluster-events"
 	| "cluster-describe"
 	| "cluster-pod-logs"
+	| "cluster-pod-containers"
+	| "provider-merge"
 	| "provider-write"
 	| "provider-writes"
 	| "git-write"
+	| "git-log"
+	| "git-commit"
 	| "tags"
 	| "tag-add"
 	| "stashes"
@@ -1317,6 +1359,17 @@ export function parseKubernetesResources(
 	};
 }
 
+export function parseKubernetesNamespaces(
+	raw: Record<string, unknown>,
+): KubernetesNamespaces {
+	return {
+		cluster: text(raw.cluster) ?? "",
+		namespaces: values(raw.namespaces).flatMap((entry) =>
+			typeof entry === "string" ? [entry] : [],
+		),
+	};
+}
+
 export function parseKubernetesEvents(
 	raw: Record<string, unknown>,
 ): KubernetesEvents {
@@ -1368,6 +1421,7 @@ export function parseKubernetesPodLogs(
 		namespace: text(raw.namespace) ?? "",
 		pod: text(raw.pod) ?? "",
 		...(text(raw.container) ? { container: text(raw.container) } : {}),
+		...(raw.previous === true ? { previous: true } : {}),
 		output: text(raw.output) ?? "",
 		truncated: raw.truncated === true,
 	};
@@ -1460,6 +1514,73 @@ export function parseGitRemotes(raw: Record<string, unknown>): GitRemotes {
 				},
 			];
 		}),
+		...(text(raw.note) ? { note: text(raw.note) } : {}),
+	};
+}
+
+export function parseGitLog(raw: Record<string, unknown>): GitLog {
+	return {
+		repository: text(raw.repository) ?? "",
+		...(text(raw.note) ? { note: text(raw.note) } : {}),
+		commits: values(raw.commits).flatMap((entry) => {
+			const value = record(entry);
+			const sha = value ? text(value.sha) : undefined;
+			const shortSha = value ? text(value.shortSha) : undefined;
+			if (!value || !sha || !shortSha) return [];
+			return [
+				{
+					sha,
+					shortSha,
+					subject: text(value.subject) ?? "",
+					author: text(value.author) ?? "",
+					...(text(value.date) ? { date: text(value.date) } : {}),
+					...(values(value.refs).some((ref) => typeof ref === "string")
+						? {
+								refs: values(value.refs).flatMap((ref) =>
+									typeof ref === "string" ? [ref] : [],
+								),
+							}
+						: {}),
+				},
+			];
+		}),
+	};
+}
+
+export function parseGitCommitDetail(
+	raw: Record<string, unknown>,
+): GitCommitDetail {
+	const sha = text(raw.sha) ?? "";
+	return {
+		sha,
+		shortSha: text(raw.shortSha) ?? sha.slice(0, 8),
+		subject: text(raw.subject) ?? "",
+		author: text(raw.author) ?? "",
+		...(text(raw.email) ? { email: text(raw.email) } : {}),
+		...(text(raw.date) ? { date: text(raw.date) } : {}),
+		parents: values(raw.parents).flatMap((parent) =>
+			typeof parent === "string" ? [parent] : [],
+		),
+		body: text(raw.body) ?? "",
+		files: values(raw.files).flatMap((entry) => {
+			const value = record(entry);
+			const path = value ? text(value.path) : undefined;
+			if (!value || !path) return [];
+			return [
+				{
+					path,
+					...(number(value.additions) !== undefined
+						? { additions: number(value.additions) }
+						: {}),
+					...(number(value.deletions) !== undefined
+						? { deletions: number(value.deletions) }
+						: {}),
+					...(value.binary === true ? { binary: true } : {}),
+				},
+			];
+		}),
+		diff: text(raw.diff) ?? "",
+		truncated: raw.truncated === true,
 		...(text(raw.note) ? { note: text(raw.note) } : {}),
 	};
 }

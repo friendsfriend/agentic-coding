@@ -30,12 +30,15 @@ import {
 	ClusterDescribeView,
 	ClusterEventsView,
 	ClusterNamespaceView,
+	ClusterPodContainersView,
 	ClusterPodLogsView,
 	ClusterResourcesView,
 	ClustersView,
 	ConfigWriteView,
 	ContainerStatsView,
 	DiffView,
+	GitCommitView,
+	GitLogView,
 	GitView,
 	GitWriteView,
 	HelpDialog,
@@ -51,6 +54,7 @@ import {
 	ProviderIssueView,
 	ProviderJobLogsView,
 	ProviderJobsView,
+	ProviderMergeView,
 	ProviderPipelinesView,
 	ProviderReposView,
 	ProvidersView,
@@ -268,6 +272,7 @@ export function EnvironmentPage(props: {
 			store.providerFilterFocused()) ||
 		(store.view() === "provider-repos" && store.providerRepoSearchFocused()) ||
 		(store.view() === "cluster-namespace" && store.clusterNamespaceFocused()) ||
+		(store.view() === "cluster-events" && store.clusterEventFilterFocused()) ||
 		(store.view() === "provider-write" &&
 			store.providerWriteStage() === "edit") ||
 		(store.view() === "git-write" && store.gitWriteStage() === "edit") ||
@@ -308,10 +313,16 @@ export function EnvironmentPage(props: {
 			store.stopLiveRefresh();
 		}
 	});
+	createEffect(() => {
+		if (store.view() !== "container-stats") return;
+		const timer = setInterval(() => void store.refreshContainerStats(), 2000);
+		onCleanup(() => clearInterval(timer));
+	});
 	let searchInput: InputRenderable | undefined;
 	let branchSearchInput: InputRenderable | undefined;
 	let providerSearchInput: InputRenderable | undefined;
 	let providerRepoInput: InputRenderable | undefined;
+	let clusterEventInput: InputRenderable | undefined;
 
 	const focusSearch = () => {
 		if (store.view() !== "table") return;
@@ -359,6 +370,18 @@ export function EnvironmentPage(props: {
 	const blurProviderRepoSearch = () => {
 		store.setProviderRepoSearchFocused(false);
 		providerRepoInput?.blur();
+	};
+	const focusClusterEventFilter = () => {
+		store.setClusterEventFilterFocused(true);
+		queueMicrotask(() => clusterEventInput?.focus());
+	};
+	const blurClusterEventFilter = () => {
+		store.setClusterEventFilterFocused(false);
+		clusterEventInput?.blur();
+	};
+	const clearClusterEventFilter = () => {
+		store.setClusterEventQuery("");
+		blurClusterEventFilter();
 	};
 	const clearSearch = () => {
 		blurSearch();
@@ -422,15 +445,17 @@ export function EnvironmentPage(props: {
 		if (store.view() === "clusters")
 			return `${store.clusters().length} clusters`;
 		if (store.view() === "cluster-namespace")
-			return store.selectedCluster()?.id ?? "";
+			return `${store.clusterNamespace()} · ${store.clusterNamespaces()?.namespaces.length ?? 0} namespaces`;
 		if (store.view() === "cluster-resources")
 			return `${store.clusterResources()?.items.length ?? 0} resources · ${store.clusterResources()?.namespace ?? ""}`;
 		if (store.view() === "cluster-events")
 			return `${store.clusterEvents()?.events.length ?? 0} events · ${store.clusterEvents()?.namespace ?? ""}`;
 		if (store.view() === "cluster-describe")
 			return `${store.clusterDescribe()?.cluster ?? ""} · ${store.clusterDescribe()?.namespace ?? ""}`;
+		if (store.view() === "cluster-pod-containers")
+			return `${store.selectedClusterResource()?.name ?? ""} · ${store.selectedClusterResource()?.containers?.length ?? 0} containers`;
 		if (store.view() === "cluster-pod-logs")
-			return `${store.clusterPodLogs()?.pod ?? ""} · ${store.clusterPodLogs()?.namespace ?? ""}`;
+			return `${store.clusterPodLogs()?.pod ?? ""} · ${store.clusterPodLogs()?.namespace ?? ""}${store.clusterPodLogs()?.previous ? " · previous" : ""}`;
 		if (store.view() === "providers")
 			return `${store.visibleProviders().length} of ${store.providers().length} providers`;
 		if (store.view() === "provider-repos")
@@ -459,10 +484,16 @@ export function EnvironmentPage(props: {
 			return `issue #${store.providerIssueDetail()?.number}`;
 		if (store.view() === "provider-job-logs")
 			return `job #${store.providerLogJob() ?? 0} log`;
+		if (store.view() === "provider-merge")
+			return `merge #${store.providerChangeDetail()?.number ?? 0}`;
 		if (store.view() === "provider-write")
 			return `${store.providerWriteAction() ?? "write"} · ${store.providerWriteStage()}`;
 		if (store.view() === "git-write")
 			return `${store.gitWriteRequest()?.action ?? "git"} · ${store.gitWriteStage()}`;
+		if (store.view() === "git-log")
+			return `${store.gitLog()?.commits.length ?? 0} commits`;
+		if (store.view() === "git-commit")
+			return `commit ${store.gitCommitDetail()?.shortSha ?? ""}`;
 		if (store.view() === "tags")
 			return `${store.tags()?.tags.length ?? 0} tags`;
 		if (store.view() === "stashes")
@@ -490,6 +521,8 @@ export function EnvironmentPage(props: {
 		if (
 			(store.view() === "git" ||
 				store.view() === "git-write" ||
+				store.view() === "git-log" ||
+				store.view() === "git-commit" ||
 				store.view() === "tags" ||
 				store.view() === "tag-add" ||
 				store.view() === "stashes" ||
@@ -514,7 +547,8 @@ export function EnvironmentPage(props: {
 			store.view() === "cluster-resources" ||
 			store.view() === "cluster-events" ||
 			store.view() === "cluster-describe" ||
-			store.view() === "cluster-pod-logs"
+			store.view() === "cluster-pod-logs" ||
+			store.view() === "cluster-pod-containers"
 		)
 			return store.clusterResources()?.cluster ?? store.selectedCluster()?.id;
 		if (store.view() === "providers") return store.selectedProvider()?.name;
@@ -532,6 +566,7 @@ export function EnvironmentPage(props: {
 			store.view() === "provider-issue" ||
 			store.view() === "provider-issue-comments" ||
 			store.view() === "provider-job-logs" ||
+			store.view() === "provider-merge" ||
 			store.view() === "provider-write" ||
 			store.view() === "provider-writes"
 		)
@@ -1035,8 +1070,7 @@ export function EnvironmentPage(props: {
 				bind: "shift+m",
 				title: "Merge change",
 				group: "Environments",
-				run: () =>
-					void store.beginProviderWrite("merge-change", "provider-change"),
+				run: () => store.beginProviderMerge(),
 			},
 			{
 				bind: "shift+b",
@@ -1245,11 +1279,43 @@ export function EnvironmentPage(props: {
 		enabled: () => active() && store.view() === "cluster-namespace",
 		commands: [
 			{
+				bind: "/",
+				title: "Type namespace",
+				group: "Environments",
+				enabled: () => !store.clusterNamespaceFocused(),
+				run: () => store.setClusterNamespaceFocused(true),
+			},
+			{
+				bind: "up,k",
+				title: "Previous namespace",
+				group: "Environments",
+				enabled: () => !store.clusterNamespaceFocused(),
+				run: () => store.moveClusterNamespace(-1),
+			},
+			{
+				bind: "down,j",
+				title: "Next namespace",
+				group: "Environments",
+				enabled: () => !store.clusterNamespaceFocused(),
+				run: () => store.moveClusterNamespace(1),
+			},
+			{
+				bind: "return",
+				title: "Inspect namespace",
+				group: "Environments",
+				enabled: () => !store.clusterNamespaceFocused(),
+				run: () => void store.loadClusterResources(),
+			},
+			{
 				bind: "escape",
-				title: "Back to clusters",
+				title: store.clusterNamespaceFocused()
+					? "Leave namespace input"
+					: "Back to clusters",
 				group: "Environments",
 				run: () => {
-					store.back();
+					if (store.clusterNamespaceFocused())
+						store.setClusterNamespaceFocused(false);
+					else store.back();
 				},
 			},
 		],
@@ -1300,12 +1366,51 @@ export function EnvironmentPage(props: {
 	}));
 	props.context.keymap.layer(() => ({
 		priority: 1000,
+		enabled: () => active() && store.view() === "cluster-events",
+		commands: [
+			{
+				bind: "/",
+				title: "Filter events",
+				group: "Environments",
+				enabled: () => !store.clusterEventFilterFocused(),
+				run: focusClusterEventFilter,
+			},
+			{
+				bind: "r",
+				title: "Refresh events",
+				group: "Environments",
+				run: () => void store.refresh(),
+			},
+			{
+				bind: "escape",
+				title: store.clusterEventFilterFocused()
+					? "Clear event filter"
+					: "Back to resources",
+				group: "Environments",
+				run: () => {
+					if (store.clusterEventFilterFocused()) clearClusterEventFilter();
+					else store.back();
+				},
+			},
+		],
+	}));
+	props.context.keymap.layer(() => ({
+		priority: 1000,
 		enabled: () =>
 			active() &&
-			(store.view() === "cluster-events" ||
-				store.view() === "cluster-describe" ||
+			(store.view() === "cluster-describe" ||
 				store.view() === "cluster-pod-logs"),
 		commands: [
+			...(store.view() === "cluster-pod-logs"
+				? [
+						{
+							bind: "p",
+							title: "Toggle previous container logs",
+							group: "Environments",
+							run: () => void store.togglePodLogPrevious(),
+						},
+					]
+				: []),
 			{
 				bind: "r",
 				title: "Refresh cluster view",
@@ -1314,7 +1419,75 @@ export function EnvironmentPage(props: {
 			},
 			{
 				bind: "escape",
+				title: "Back",
+				group: "Environments",
+				run: () => {
+					store.back();
+				},
+			},
+		],
+	}));
+	props.context.keymap.layer(() => ({
+		priority: 1000,
+		enabled: () => active() && store.view() === "cluster-pod-containers",
+		commands: [
+			{
+				bind: "up,k",
+				title: "Previous container",
+				group: "Environments",
+				run: () =>
+					store.setClusterContainerIndex(
+						Math.max(0, store.clusterContainerIndex() - 1),
+					),
+			},
+			{
+				bind: "down,j",
+				title: "Next container",
+				group: "Environments",
+				run: () =>
+					store.setClusterContainerIndex(store.clusterContainerIndex() + 1),
+			},
+			{
+				bind: "return",
+				title: "Open container logs",
+				group: "Environments",
+				run: () => void store.openSelectedPodContainerLogs(),
+			},
+			{
+				bind: "escape",
 				title: "Back to resources",
+				group: "Environments",
+				run: () => {
+					store.back();
+				},
+			},
+		],
+	}));
+	props.context.keymap.layer(() => ({
+		priority: 1000,
+		enabled: () => active() && store.view() === "provider-merge",
+		commands: [
+			{
+				bind: "up,k",
+				title: "Previous merge method",
+				group: "Environments",
+				run: () => store.moveProviderMerge(-1),
+			},
+			{
+				bind: "down,j",
+				title: "Next merge method",
+				group: "Environments",
+				run: () => store.moveProviderMerge(1),
+			},
+			{
+				bind: "return",
+				title: "Choose merge method",
+				group: "Environments",
+				run: () => void store.chooseProviderMerge(),
+			},
+			{
+				bind: "escape",
+				title: "Back to change",
 				group: "Environments",
 				run: () => {
 					store.back();
@@ -1632,6 +1805,12 @@ export function EnvironmentPage(props: {
 				run: () => void store.loadTags(),
 			},
 			{
+				bind: "shift+l",
+				title: "Commit history",
+				group: "Environments",
+				run: () => void store.loadGitLog(),
+			},
+			{
 				bind: "shift+s",
 				title: "Stashes",
 				group: "Environments",
@@ -1844,6 +2023,64 @@ export function EnvironmentPage(props: {
 			{
 				bind: "escape",
 				title: "Cancel write",
+				group: "Environments",
+				run: () => {
+					store.back();
+				},
+			},
+		],
+	}));
+	props.context.keymap.layer(() => ({
+		priority: 1000,
+		enabled: () => active() && store.view() === "git-commit",
+		commands: [
+			{
+				bind: "r",
+				title: "Refresh commit",
+				group: "Environments",
+				run: () => void store.openGitCommit(),
+			},
+			{
+				bind: "escape",
+				title: "Back to history",
+				group: "Environments",
+				run: () => {
+					store.back();
+				},
+			},
+		],
+	}));
+	props.context.keymap.layer(() => ({
+		priority: 1000,
+		enabled: () => active() && store.view() === "git-log",
+		commands: [
+			{
+				bind: "up,k",
+				title: "Previous commit",
+				group: "Environments",
+				run: () => store.moveGitLog(-1),
+			},
+			{
+				bind: "down,j",
+				title: "Next commit",
+				group: "Environments",
+				run: () => store.moveGitLog(1),
+			},
+			{
+				bind: "return",
+				title: "Open commit",
+				group: "Environments",
+				run: () => void store.openGitCommit(),
+			},
+			{
+				bind: "r",
+				title: "Refresh history",
+				group: "Environments",
+				run: () => void store.loadGitLog(),
+			},
+			{
+				bind: "escape",
+				title: "Back to git",
 				group: "Environments",
 				run: () => {
 					store.back();
@@ -2401,7 +2638,13 @@ export function EnvironmentPage(props: {
 					</Match>
 					<Match when={store.view() === "container-stats"}>
 						<Show when={store.containerStats()}>
-							{(stats) => <ContainerStatsView theme={theme} stats={stats()} />}
+							{(stats) => (
+								<ContainerStatsView
+									theme={theme}
+									stats={stats()}
+									history={store.containerHistory()}
+								/>
+							)}
 						</Show>
 					</Match>
 					<Match when={store.view() === "clusters"}>
@@ -2420,7 +2663,11 @@ export function EnvironmentPage(props: {
 									theme={theme}
 									cluster={cluster()}
 									namespace={store.clusterNamespace()}
+									namespaces={store.clusterNamespaces()?.namespaces ?? []}
+									selected={store.clusterNamespaceIndex()}
+									focused={store.clusterNamespaceFocused()}
 									onNamespace={store.setClusterNamespace}
+									onSelect={store.selectClusterNamespace}
 									onSubmit={() => void store.loadClusterResources()}
 								/>
 							)}
@@ -2441,7 +2688,18 @@ export function EnvironmentPage(props: {
 					<Match when={store.view() === "cluster-events"}>
 						<Show when={store.clusterEvents()}>
 							{(events) => (
-								<ClusterEventsView theme={theme} events={events()} />
+								<ClusterEventsView
+									theme={theme}
+									events={events()}
+									visible={store.visibleClusterEvents()}
+									query={store.clusterEventQuery()}
+									focused={store.clusterEventFilterFocused()}
+									onQuery={store.setClusterEventQuery}
+									onRef={(input) => {
+										clusterEventInput = input;
+									}}
+									onSubmit={blurClusterEventFilter}
+								/>
 							)}
 						</Show>
 					</Match>
@@ -2452,10 +2710,33 @@ export function EnvironmentPage(props: {
 							)}
 						</Show>
 					</Match>
+					<Match when={store.view() === "cluster-pod-containers"}>
+						<Show when={store.selectedClusterResource()}>
+							{(resource) => (
+								<ClusterPodContainersView
+									theme={theme}
+									resource={resource()}
+									containers={resource().containers ?? []}
+									selected={store.clusterContainerIndex()}
+									onSelect={store.setClusterContainerIndex}
+								/>
+							)}
+						</Show>
+					</Match>
 					<Match when={store.view() === "cluster-pod-logs"}>
 						<Show when={store.clusterPodLogs()}>
 							{(logs) => <ClusterPodLogsView theme={theme} logs={logs()} />}
 						</Show>
+					</Match>
+					<Match when={store.view() === "provider-merge"}>
+						<ProviderMergeView
+							theme={theme}
+							provider={store.selectedProvider()?.name ?? ""}
+							repository={store.providerRepo()?.reference ?? ""}
+							number={store.providerChangeDetail()?.number ?? 0}
+							selected={store.providerMergeIndex()}
+							onSelect={store.selectProviderMerge}
+						/>
 					</Match>
 					<Match when={store.view() === "provider-write"}>
 						<ProviderWriteView
@@ -2464,6 +2745,7 @@ export function EnvironmentPage(props: {
 							stage={store.providerWriteStage()}
 							body={store.providerWriteBody()}
 							digest={store.providerWriteDigest()}
+							target={store.providerWriteTarget()}
 							receipt={store.providerWriteReceipt()}
 							onBody={store.setProviderWriteBody}
 							onPreview={() => void store.previewProviderWrite()}
@@ -2485,6 +2767,15 @@ export function EnvironmentPage(props: {
 							targetAction={store.configTargetAction()}
 							command={store.configCommand()}
 							timeout={store.configTimeout()}
+							defaultsBuild={store.configDefaultsBuild()}
+							defaultsTest={store.configDefaultsTest()}
+							defaultsRun={store.configDefaultsRun()}
+							environment={store.configEnvironment()}
+							secretRefs={store.configSecretRefs()}
+							readyText={store.configReadyText()}
+							endpoints={store.configEndpoints()}
+							endpointServices={store.configEndpointServices()}
+							prerequisites={store.configPrerequisites()}
 							deleteTargets={store.configDeleteTargets()}
 							source={store.configSource()}
 							preview={store.configPreview()}
@@ -2496,6 +2787,15 @@ export function EnvironmentPage(props: {
 							onTargetAction={store.setConfigTargetAction}
 							onCommand={store.setConfigCommand}
 							onTimeout={store.setConfigTimeout}
+							onDefaultsBuild={store.setConfigDefaultsBuild}
+							onDefaultsTest={store.setConfigDefaultsTest}
+							onDefaultsRun={store.setConfigDefaultsRun}
+							onEnvironment={store.setConfigEnvironment}
+							onSecretRefs={store.setConfigSecretRefs}
+							onReadyText={store.setConfigReadyText}
+							onEndpoints={store.setConfigEndpoints}
+							onEndpointServices={store.setConfigEndpointServices}
+							onPrerequisites={store.setConfigPrerequisites}
 							onPreview={() => void store.previewConfigWrite()}
 						/>
 					</Match>
@@ -2649,6 +2949,23 @@ export function EnvironmentPage(props: {
 							onBody={store.setGitWriteBody}
 							onPreview={() => void store.previewGitWrite()}
 						/>
+					</Match>
+					<Match when={store.view() === "git-commit"}>
+						<Show when={store.gitCommitDetail()}>
+							{(detail) => <GitCommitView theme={theme} detail={detail()} />}
+						</Show>
+					</Match>
+					<Match when={store.view() === "git-log"}>
+						<Show when={store.gitLog()}>
+							{(log) => (
+								<GitLogView
+									theme={theme}
+									log={log()}
+									selected={store.gitLogIndex()}
+									onSelect={store.moveGitLog}
+								/>
+							)}
+						</Show>
 					</Match>
 					<Match when={store.view() === "tags"}>
 						<Show when={store.tags()}>

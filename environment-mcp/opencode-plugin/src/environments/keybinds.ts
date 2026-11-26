@@ -107,6 +107,9 @@ const CLUSTERS: readonly Keybind[] = [
 ];
 
 const CLUSTER_NAMESPACE: readonly Keybind[] = [
+	{ key: "↑/↓", action: "move namespace", standard: true },
+	{ key: "j/k", action: "move namespace", standard: true },
+	{ key: "/", action: "type namespace", short: "type" },
 	{ key: "Enter", action: "inspect namespace", short: "inspect" },
 	{ key: "Esc", action: "back to clusters", short: "back" },
 ];
@@ -122,6 +125,7 @@ const CLUSTER_RESOURCES: readonly Keybind[] = [
 ];
 
 const CLUSTER_EVENTS: readonly Keybind[] = [
+	{ key: "/", action: "filter events", short: "filter" },
 	{ key: "r", action: "refresh events", short: "refresh" },
 	{ key: "Esc", action: "back to resources", short: "back" },
 ];
@@ -132,7 +136,15 @@ const CLUSTER_DESCRIBE: readonly Keybind[] = [
 ];
 
 const CLUSTER_POD_LOGS: readonly Keybind[] = [
+	{ key: "p", action: "toggle previous logs", short: "previous" },
 	{ key: "r", action: "reload pod logs", short: "reload" },
+	{ key: "Esc", action: "back", short: "back" },
+];
+
+const CLUSTER_POD_CONTAINERS: readonly Keybind[] = [
+	{ key: "↑/↓", action: "move container", standard: true },
+	{ key: "j/k", action: "move container", standard: true },
+	{ key: "Enter", action: "open container logs", short: "logs" },
 	{ key: "Esc", action: "back to resources", short: "back" },
 ];
 
@@ -179,6 +191,7 @@ const GIT: readonly Keybind[] = [
 	{ key: "X", action: "abort rebase", short: "abort rebase" },
 	{ key: "t", action: "create tag", short: "tag" },
 	{ key: "T", action: "list tags", short: "tags" },
+	{ key: "L", action: "commit history", short: "log" },
 	{ key: "R", action: "rename branch", short: "rename" },
 	{ key: "C", action: "commit staged changes", short: "commit" },
 	{ key: "A", action: "commit all changes", short: "commit all" },
@@ -192,6 +205,20 @@ const GIT: readonly Keybind[] = [
 	{ key: "c", action: "changes", short: "changes" },
 	{ key: "r", action: "refresh git", short: "refresh" },
 	{ key: "Esc", action: "back to application", short: "back" },
+];
+
+const GIT_LOG: readonly Keybind[] = [
+	{ key: "↑/↓", action: "move commit", standard: true },
+	{ key: "j/k", action: "move commit", standard: true },
+	{ key: "Enter", action: "open commit", short: "open" },
+	{ key: "r", action: "refresh log", short: "refresh" },
+	{ key: "Esc", action: "back to git", short: "back" },
+];
+
+const GIT_COMMIT: readonly Keybind[] = [
+	{ key: "↑/↓", action: "scroll commit", standard: true },
+	{ key: "r", action: "refresh commit", short: "refresh" },
+	{ key: "Esc", action: "back to history", short: "back" },
 ];
 
 const TAGS: readonly Keybind[] = [
@@ -346,6 +373,13 @@ const PROVIDER_VERSIONS: readonly Keybind[] = [
 	{ key: "Esc", action: "back to change", short: "back" },
 ];
 
+const PROVIDER_MERGE: readonly Keybind[] = [
+	{ key: "↑/↓", action: "move merge method", standard: true },
+	{ key: "j/k", action: "move merge method", standard: true },
+	{ key: "Enter", action: "choose merge method", short: "choose" },
+	{ key: "Esc", action: "back to change", short: "back" },
+];
+
 const PROVIDER_WRITE: readonly Keybind[] = [
 	{ key: "Enter", action: "preview write", short: "preview" },
 	{ key: "y", action: "confirm write", short: "confirm" },
@@ -433,6 +467,8 @@ export function viewKeybinds(view: EnvironmentView): readonly Keybind[] {
 			return CLUSTER_DESCRIBE;
 		case "cluster-pod-logs":
 			return CLUSTER_POD_LOGS;
+		case "cluster-pod-containers":
+			return CLUSTER_POD_CONTAINERS;
 		case "changes":
 			return CHANGES;
 		case "diff":
@@ -441,6 +477,10 @@ export function viewKeybinds(view: EnvironmentView): readonly Keybind[] {
 			return GIT;
 		case "git-write":
 			return GIT_WRITE;
+		case "git-log":
+			return GIT_LOG;
+		case "git-commit":
+			return GIT_COMMIT;
 		case "tags":
 			return TAGS;
 		case "tag-add":
@@ -482,6 +522,8 @@ export function viewKeybinds(view: EnvironmentView): readonly Keybind[] {
 			return PROVIDER_ISSUE_COMMENTS;
 		case "provider-versions":
 			return PROVIDER_VERSIONS;
+		case "provider-merge":
+			return PROVIDER_MERGE;
 		case "provider-write":
 			return PROVIDER_WRITE;
 		case "provider-writes":

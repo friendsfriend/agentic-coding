@@ -241,13 +241,6 @@ test("direct command/compose execution is one-use, fails closed and stops only o
 				signal,
 			),
 		).rejects.toMatchObject({ code: "secret-reference-unavailable" });
-		await expect(
-			agent.admit(
-				"worktree-compose",
-				{ app: "api", target: "mocked", worktree: linked },
-				signal,
-			),
-		).rejects.toMatchObject({ code: "worktree-unsupported" });
 		const build = await agent.admit(
 			"build",
 			{ app: "api", target: "build" },

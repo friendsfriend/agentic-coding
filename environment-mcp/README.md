@@ -8,11 +8,11 @@ engine, model, UI source, native agent state or runtime source import from
 **Status: catalog, direct command/Compose/container/shell-process/Helm execution, Docker and Podman providers (Podman build, Compose, network and container run live-verified), multi-repository client authority, network-only Compose bridges with automatic network-only prerequisite start and `networkFrom` membership, controller-wide shared-service leases with automatic last-release cleanup, native shell, Compose collector and container-run OTLP telemetry, telemetry trace browser, endpoint/health readiness, borrowed-service safety, capability-parity agent OpenTUI, bounded operation/log history, safe scope retention, opt-in owned-app idle cleanup with clean scope closure and lazy rebinding, crash-safe process supervision, durable controller diagnostics and an OpenCode stdio bridge are implemented; saved-PID adoption is intentionally unsupported; external secret values and real-chart cluster images remain externally supplied. Kubernetes Helm and Podman paths were exercised against disposable live environments; the real customer chart was installed/readied/uninstalled with a local substitute image and minimal CRDs, not its private application image.**
 Read-only stdio advertises `env_list`, `env_git`, `env_git_changes`,
 `env_git_diff`, `env_git_branches`, `env_git_worktrees`, `env_git_remotes`,
-`env_git_tags` and `env_git_stashes`. Shared HTTP mode additionally advertises `env_git_action`,
+`env_git_log`, `env_git_commit`, `env_git_tags` and `env_git_stashes`. Shared HTTP mode additionally advertises `env_git_action`,
 `env_git_write`, `env_execute`, `env_operation`, `env_status`, `env_stop`, `env_wait`,
 `env_refresh`, `env_telemetry`, `env_logs`, `env_container_stats`, `env_clusters`,
-`env_cluster_resources`, `env_cluster_events`, `env_cluster_describe` and
-`env_pod_logs`, backed by private state, plus the read-only
+`env_cluster_resources`, `env_cluster_namespaces`, `env_cluster_events`,
+`env_cluster_describe` and `env_pod_logs`, backed by private state, plus the read-only
 provider surface: `env_providers`, `env_provider_repos`,
 `env_provider_changes`, `env_provider_change`, `env_provider_change_files`,
 `env_provider_change_versions`, `env_provider_issues`, `env_provider_issue`,
@@ -347,10 +347,15 @@ references absent from the config `.env`/process fallback without printing
 values. `env_execute` also refuses admission for a target with missing declared
 references. It does not print commands, plans, credentials or repository
 paths. `env_execute` accepts an optional `worktree` for a linked worktree of the
-app repository: shell/process commands and Docker builds run there, with
-repository-local program/argument and Dockerfile paths rewritten to the
-worktree. Compose, container and Helm targets refuse because their resource
-names are repository-scoped. The real v2 configuration currently
+app repository. Shell/process commands, Docker builds, Compose, container-run
+and Helm targets run there. Repository-local program/argument, Dockerfile,
+Compose-file, Helm chart and chart-digest values are rewritten to the worktree.
+Compose projects, container names and Helm releases receive a deterministic
+`-wt-<hash>` suffix to avoid collisions; Compose files and Helm charts must be
+repository-local. Docker-build image tags and container-run images that reference
+a build target's image also receive the worktree suffix; external images and
+explicit Compose image names are not rewritten. Network-only targets refuse because they represent a shared
+bridge, not a worktree-local resource. The real v2 configuration currently
 reports **117 executable targets and no unavailable targets**; the Compose
 container-name migration, collector-telemetry normalization, Helm targets and
 network-only bridge topology are complete. `secretGaps` now lists three remaining targets: Eon installer's EIV Jasypt
@@ -374,15 +379,18 @@ previous file. Backups use `environments.json.mcp-bak-*` and are capped at ten;
 user-created backups are never pruned.
 
 - Applications: create, update kind/repository/defaults, delete with explicit
-  target cascade. Repository changes refuse while targets exist.
+  target cascade. The panel edits build/test/run defaults; repository changes
+  refuse while targets exist.
 - Targets: duplicate an existing target (the profile-variant path), create a
-  shell build/test/run target, update profile/action/shell command/timeout/
-  dependencies/prerequisites/endpoints, or delete one. Defaults and external
-  prerequisite references guard deletion.
+  shell build/test/run target with command, timeout, environment, secret
+  references and ready text, update profile/action/command/timeout/environment/
+  secret references/ready text/prerequisites/endpoints, or delete one. Defaults
+  and external prerequisite references guard deletion.
 - `profile` remains a free-form target label. There is no profile entity or
   profile CRUD; creating a profile means assigning its label to a target.
 - Runtime-specific executable descriptors beyond the supported forms remain
-  file/skill edits.
+  file/skill edits. The `environment-config-editing` skill documents full
+  shell, Compose, container and Helm descriptors, profiles and bulk edits.
 
 ## Container stats and Kubernetes inspection
 
@@ -390,16 +398,19 @@ user-created backups are never pruned.
 containers owned by the current scopes or registered shared services. It never
 enumerates other host containers. Each container is sampled over the configured
 Docker/Podman socket; engine failures are counted as unavailable rather than
-returned as host details.
+returned as host details. The panel accumulates a bounded 60-sample history while
+the stats view is open, refreshes every two seconds and renders CPU/memory
+sparklines plus CPU, memory and network deltas.
 
 `env_clusters` lists Kubernetes clusters explicitly authorized for the client's
-repositories. `env_cluster_resources({cluster, namespace})` runs one fixed
+repositories. `env_cluster_namespaces({cluster})` returns at most 200 non-system
+namespace names. `env_cluster_resources({cluster, namespace})` runs one fixed
 read-only `kubectl get deployments,statefulsets,pods,services --output json` in a
 non-system namespace, returns at most 200 structured resources plus a bounded
 table, and never exposes raw objects. `env_cluster_events` returns at most 100
 namespace events. `env_cluster_describe` reads one named resource from a fixed
-kind set. `env_pod_logs` reads at most 1000 tail lines for one pod and optional
-container. All output is bounded at 128 KiB. Kubeconfig paths and cluster
+kind set. `env_pod_logs` reads at most 1000 tail lines for one pod, optional container and
+optional previous container instance. All output is bounded at 128 KiB. Kubeconfig paths and cluster
 environment values are never returned. No apply, edit, delete, exec, attach or
 arbitrary kubectl arguments are exposed.
 
@@ -436,8 +447,9 @@ the enterprise root chain. It exposes six bounded, read-only capabilities:
   most 100 commits/versions.
 - `env_provider_issue(...)` returns one issue with body and timestamps;
   `env_provider_issue_comments(...)` returns at most 50 issue comments/notes;
-  `env_provider_discussions(...)` returns at most 50 review comments or
-  discussion notes.
+  `env_provider_discussions(...)` returns at most 50 GitHub review-thread
+  comments (GraphQL, with thread id and resolved state) or GitLab discussion
+  notes.
 - `env_provider_job_logs(...)` returns at most 64 KiB of redacted job log text.
 
 Outbound calls require HTTPS except loopback HTTP, refuse redirects (GitHub job
@@ -452,11 +464,12 @@ replays the recorded receipt, a different digest is a conflict, and interrupted
 attempts fail closed rather than resending. Receipts live in the private state
 directory (bounded to 512, 50 returned) and are readable through
 `env_provider_writes`. The write surface covers change/issue comments,
-exact-head approval and unapproval, merge, issue open/close, GitLab rebase,
-discussion replies, GitLab discussion resolution, labels, assignees, pipeline
-retry/cancel and individual job retry. GitHub discussion resolution is not
-offered because its REST API has no thread-resolution endpoint and this
-implementation does not use GraphQL. GitHub unapproval dismisses the configured
+exact-head approval and unapproval, merge (GitHub merge/squash/rebase), issue
+open/close, GitLab rebase,
+discussion replies, discussion resolution, labels, assignees, pipeline
+retry/cancel and individual job retry. GitLab resolution toggles the discussion;
+GitHub finds the review thread containing the selected comment through GraphQL
+and resolves or unresolves it. GitHub unapproval dismisses the configured
 account's latest approval after re-reading the head.
 
 ## OpenCode cutover via the stdio bridge
@@ -668,6 +681,9 @@ as a shared-controller manifest. No application starts automatically.
 - `env_git_branches({repository, session?})`, `env_git_worktrees(...)` and
   `env_git_remotes(...)` list local branches, linked worktrees and remotes with
   current/upstream/ahead/behind, locked/prunable state and sanitized URLs.
+  `env_git_log(...)` lists at most 50 current-branch commits with author, date
+  and ref names; `env_git_commit(...)` returns one commit's full message,
+  parents, file stats and a bounded unified diff.
   `session: true` resolves the supplied working directory as a git repository
   and bypasses the configured allowlist; this is the any-cwd surface.
 - `env_git_action({repository, session?, action, ...})` runs one direct guarded
@@ -682,7 +698,8 @@ as a shared-controller manifest. No application starts automatically.
   surface is exposed, never environment execution.
 - `env_git_write({repository, session?, action, ..., requestId, confirm?})`
   previews and confirms higher-risk git writes: `push`, `push-force` with an
-  exact `--force-with-lease` from the local remote-tracking ref, lightweight or
+  exact `--force-with-lease` bound into the intent digest from the local
+  remote-tracking ref (a moved ref forces a new confirmation), lightweight or
   annotated `tag`, `tag-delete`, `branch-rename`, `remote-set-url`, staged
   `commit`, `commit-all`, `stash`, `stash-pop`/`stash-apply`/`stash-drop`,
   `merge`, `rebase` and `rebase-abort`. The first call returns the exact intent digest without

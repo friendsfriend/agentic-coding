@@ -2124,3 +2124,195 @@ Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
 Environment-mcp suite: **110 pass, 0 fail** (1028 assertions, 40 files, 14.32s).
 Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
 `bun run type-check` are clean.
+
+## Configuration polish and editing skill (tasks 3.89-3.90)
+
+- App create/edit now exposes build/test/run defaults. App update sends the full
+  defaults object, so clearing a field clears that default.
+- Shell target create/edit exposes environment, secret references and ready
+  text. `env_target_update` now accepts and clears shell `environment` and
+  `secretRefs`; non-shell targets refuse those fields.
+- Target edit exposes profile, action, command, timeout, ready text, endpoints,
+  endpoint services and prerequisites. Endpoints and endpoint services are only
+  sent when they were visible in `env_list` or edited, so hidden values are not
+  cleared accidentally. Prerequisites are always exposed and replaced from the
+  form.
+- Added `environment-config-editing` as a skill under the plugin package and
+  linked it into `~/.config/opencode/skills`; it covers profiles, bulk edits,
+  secret handling and full shell/Compose/container/Helm descriptors.
+- PTY verification against a disposable configuration set app test/run defaults,
+  edited a shell run target's environment and secret references, set endpoints,
+  and preserved prerequisites. The resulting `environments.json` was checked
+  directly. No real configuration was written.
+
+Environment-mcp suite: **110 pass, 0 fail** (1035 assertions, 40 files, 14.58s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Kubernetes log and event polish (task 3.91)
+
+- `env_pod_logs` accepts `previous` and passes `--previous` to kubectl; the
+  returned log record carries the previous flag.
+- Multi-container pods open a container picker before fetching logs. Selecting a
+  container always starts with current logs; `p` in the log view toggles the
+  previous container instance and reloads.
+- Namespace events gain a `/` filter over type, reason, object and message, with
+  Esc clearing the filter before leaving the view.
+- Adapter test covers `--previous` argv and the returned flag. PTY verification
+  covered the two-container picker, current/sidecar logs, previous-container
+  logs and event filtering against a fake kubectl fixture.
+
+Environment-mcp suite: **110 pass, 0 fail** (1037 assertions, 40 files, 14.62s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Worktree execution for Compose, container and Helm (task 3.92)
+
+- `env_execute` now accepts `worktree` for Compose, container-run and
+  helm-release targets as well as command/process and Docker builds.
+  Network-only targets remain refused because they represent a shared bridge.
+- Compose projects, container names and Helm releases receive a deterministic
+  `-wt-<8-hex>` suffix derived from the canonical worktree path, preventing
+  collisions with the main checkout and other worktrees.
+- Repository-local Compose files are resolved through the worktree; a Compose
+  file outside the repository refuses worktree execution. Helm charts are
+  recaptured from the worktree, including a fresh chart digest, before admission
+  verifies them; values remain chart-relative. Container-run has no repository
+  paths, so only its name changes.
+- Unit test covers Compose file/project rewriting, outside-file refusal,
+  container-name suffixing, Helm chart/digest/release rewriting and command
+  path behavior. Integration test admits, executes and observes Compose and
+  container-run targets from a real linked worktree with a mock executor,
+  asserting worktree cwd, rewritten Compose file/project and suffixed container
+  name.
+- Docker-build image tags and container-run images that match a build target's
+  configured image receive the same per-worktree suffix, so a worktree build
+  feeds the matching worktree container. External images and explicit Compose
+  image names are not rewritten.
+- Helm worktree execution is covered by the rewrite/digest unit test only; no
+  live Helm worktree run was available.
+
+Environment-mcp suite: **112 pass, 0 fail** (1050 assertions, 42 files, 13.50s).
+Plugin focused suite: **29 pass, 0 fail** (105 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Container stats trends (task 3.93)
+
+- The panel records a bounded 60-sample history per container while the stats
+  view is open, sampling every two seconds without flipping the busy state or
+  changing the view. History is pruned to currently reported containers.
+- Each row now shows CPU and memory sparklines, CPU and memory deltas, network
+  receive/transmit deltas and the sample count; a single sample shows a
+  collecting state.
+- Pure helper tests cover sample appending/pruning, sparkline scaling, deltas
+  and missing values.
+- History is UI-local and resets when the panel closes. No live running
+  container was sampled in tests; live container verification remains pending.
+
+Environment-mcp suite: **114 pass, 0 fail** (1059 assertions, 43 files, 13.49s).
+Plugin focused suite: **31 pass, 0 fail** (114 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Force-with-lease digest binding (task 3.94)
+
+- `push-force` now resolves the local remote-tracking ref before computing the
+  intent digest and includes that SHA in the canonical request. The preview
+  target shows `branch → remote (force-with-lease @<sha8>)`.
+- If the tracking ref moves between preview and confirmation, the digest no
+  longer matches and the service returns a new confirmation with the new lease.
+  The panel updates the digest/target and asks again instead of silently using a
+  newer lease.
+- The adapter no longer re-resolves the lease at execution; it uses the
+  digest-bound value.
+- Backend test asserts the preview target contains the lease, that a moved
+  remote-tracking ref produces a new confirmation, and that missing upstream/ref
+  refuses.
+
+Environment-mcp suite: **114 pass, 0 fail** (1061 assertions, 43 files, 14.42s).
+Plugin focused suite: **31 pass, 0 fail** (114 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+Environment-mcp suite: **114 pass, 0 fail** (1062 assertions, 43 files, 14.56s).
+Plugin focused suite: **31 pass, 0 fail** (114 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Kubernetes namespace listing (task 3.96)
+
+- New read capability `env_cluster_namespaces` returns at most 200 non-system
+  namespace names from a fixed `kubectl get namespaces -o json`.
+- The cluster namespace view now loads the list, selects `default` when present,
+  supports ↑/↓ selection, click selection and `/` for a typed custom namespace.
+  Enter inspects the selected/typed namespace.
+- Adapter test covers the JSON parse, `kube-*` filtering, sorting and fixed argv.
+  PTY verification selected a listed namespace and inspected a typed custom
+  namespace against a fake kubectl fixture.
+
+Environment-mcp suite: **114 pass, 0 fail** (1069 assertions, 43 files, 13.78s).
+Plugin focused suite: **31 pass, 0 fail** (114 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## GitHub review-thread resolution (task 3.97)
+
+- `set-discussion-resolved` now supports GitHub. It queries review threads
+  through the provider GraphQL endpoint, finds the thread containing the
+  selected review-comment database id and calls `resolveReviewThread` or
+  `unresolveReviewThread`. Already-matching state is a no-op.
+- GraphQL URLs derive from the configured base URL: `api.github.com/graphql`
+  for github.com, otherwise the host plus `/api/graphql` after stripping
+  `/api/v3`. Tokens are redacted from responses and errors.
+- GitHub change discussions now read GraphQL review threads, so each comment
+  carries its thread id and existing resolved state before any write. Issue
+  comments remain REST. The panel also updates the selected discussion badge
+  locally after a successful write.
+- Provider-write test covers thread lookup, resolve, unresolve and the exact
+  thread id passed to GraphQL. Provider-read test covers GraphQL thread
+  mapping, token redaction and the resolved flag.
+
+Environment-mcp suite: **115 pass, 0 fail** (1073 assertions, 43 files, 14.34s).
+Plugin focused suite: **31 pass, 0 fail** (114 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+Environment-mcp suite: **115 pass, 0 fail** (1073 assertions, 43 files, 14.53s).
+Plugin focused suite: **31 pass, 0 fail** (114 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Provider merge method and target display (task 3.99)
+
+- Change `M` on GitHub opens a merge-method picker: merge commit, squash or
+  rebase. GitLab continues to merge directly using the project's configured
+  method.
+- The chosen method is bound into the existing exact-head merge digest, and the
+  confirmation/completed view shows the exact target, for example
+  `org/repo:2 (squash)`.
+- Provider write confirmations now show `intent.target` for all actions, not
+  just merge.
+- PTY verification selected squash, confirmed the digest and observed
+  `PUT /pulls/2/merge` with `merge_method: "squash"` against a disposable fake
+  provider.
+
+## Git commit history (task 3.100)
+
+- New read capability `env_git_log` lists at most 50 commits from the current
+  HEAD history with full/short SHA, subject, author, ISO date and ref names.
+- Git view `L` opens commit history with selectable two-line rows and HEAD/tag/
+  remote ref badges.
+- Backend test covers ordering, short SHA, subject, author and tag refs. PTY
+  verification showed the two-commit history with `HEAD -> main` and `tag: v1`
+  badges.
+- The capability action-list bound was raised from 64 to 128; the live surface
+  now exposes 65 capabilities.
+
+Environment-mcp suite: **116 pass, 0 fail** (1083 assertions, 43 files, 13.87s).
+Plugin focused suite: **31 pass, 0 fail** (114 assertions). `bun run lint` and
+`bun run type-check` are clean.
+
+## Git commit detail (task 3.101)
+
+- New read capability `env_git_commit` returns one commit's full message,
+  author/email/date, parents, up to 200 changed-file stats and a bounded 48 KiB
+  unified diff.
+- Git history `Enter` opens the detail: full message line-by-line, parents, file
+  and line totals, per-file stats and native diff blocks split per file.
+- Backend test covers message body, email, parents, file stats and diff content.
+  PTY verification showed a two-file commit with its multi-line body and both
+  per-file diffs.

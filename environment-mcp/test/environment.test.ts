@@ -143,6 +143,8 @@ test("copied build speaks real stdio MCP outside the checkout with no sibling pa
 			"env_git_branches",
 			"env_git_worktrees",
 			"env_git_remotes",
+			"env_git_log",
+			"env_git_commit",
 			"env_git_tags",
 			"env_git_stashes",
 		]);

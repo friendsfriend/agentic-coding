@@ -3,6 +3,10 @@ import type {
 	GitActionRequest,
 	GitBranch,
 	GitBranches,
+	GitCommit,
+	GitCommitDetail,
+	GitCommitFile,
+	GitLog,
 	GitRemote,
 	GitRemotes,
 	GitStash,
@@ -133,6 +137,158 @@ export async function readGitBranches(
 		};
 	} catch {
 		return { repository, branches: [], note: "unavailable" };
+	}
+}
+
+export async function readGitLog(
+	repository: string,
+	signal: AbortSignal,
+): Promise<GitLog> {
+	try {
+		const listed = await capture(
+			repository,
+			[
+				"log",
+				"-n",
+				"50",
+				"--date=iso-strict",
+				"--format=%H%x00%h%x00%an%x00%aI%x00%s%x00%D",
+			],
+			signal,
+			5000,
+		);
+		if (listed.timedOut)
+			return { repository, commits: [], note: "unavailable" };
+		if (listed.code !== 0 && !listed.stdout)
+			return { repository, commits: [], note: "unavailable" };
+		const commits: GitCommit[] = [];
+		for (const line of listed.stdout.split("\n")) {
+			if (!line) continue;
+			const [
+				sha = "",
+				shortSha = "",
+				author = "",
+				date = "",
+				subject = "",
+				refs = "",
+			] = line.split("\0");
+			if (!sha || !shortSha) continue;
+			const names = refs
+				.split(",")
+				.map((ref) => ref.trim())
+				.filter(Boolean);
+			commits.push({
+				sha,
+				shortSha,
+				author,
+				subject,
+				...(date ? { date } : {}),
+				...(names.length ? { refs: names } : {}),
+			});
+			if (commits.length >= 50) break;
+		}
+		return { repository, commits };
+	} catch {
+		return { repository, commits: [], note: "unavailable" };
+	}
+}
+
+export async function readGitCommit(
+	repository: string,
+	sha: string,
+	signal: AbortSignal,
+): Promise<GitCommitDetail> {
+	const unavailable = (): GitCommitDetail => ({
+		sha,
+		shortSha: sha.slice(0, 8),
+		subject: "",
+		author: "",
+		parents: [],
+		body: "",
+		files: [],
+		diff: "",
+		truncated: false,
+		note: "unavailable",
+	});
+	try {
+		const metadata = await capture(
+			repository,
+			[
+				"show",
+				"-s",
+				"--date=iso-strict",
+				"--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%P%x00%B",
+				sha,
+			],
+			signal,
+			32_768,
+		);
+		if (metadata.timedOut || metadata.code !== 0 || !metadata.stdout)
+			return unavailable();
+		const [
+			full = "",
+			shortSha = "",
+			author = "",
+			email = "",
+			date = "",
+			parents = "",
+			body = "",
+		] = metadata.stdout.split("\0");
+		if (!full) return unavailable();
+		const [filesResult, diffResult] = await Promise.all([
+			capture(
+				repository,
+				["show", "--numstat", "--format=", sha],
+				signal,
+				64 * 1024,
+			),
+			capture(
+				repository,
+				[
+					"show",
+					"--no-ext-diff",
+					"--no-textconv",
+					"--unified=3",
+					"--format=",
+					sha,
+				],
+				signal,
+				48 * 1024,
+			),
+		]);
+		const files: GitCommitFile[] = [];
+		for (const line of filesResult.stdout.split("\n")) {
+			if (!line) continue;
+			const [additions = "", deletions = "", ...rest] = line.split("\t");
+			const path = rest.join("\t").trim();
+			if (!path) continue;
+			const added = Number(additions);
+			const removed = Number(deletions);
+			files.push({
+				path,
+				...(Number.isSafeInteger(added) ? { additions: added } : {}),
+				...(Number.isSafeInteger(removed) ? { deletions: removed } : {}),
+				...(additions === "-" && deletions === "-" ? { binary: true } : {}),
+			});
+			if (files.length >= 200) break;
+		}
+		const message = body.trim();
+		return {
+			sha: full,
+			shortSha,
+			subject: message.split("\n")[0] ?? "",
+			author,
+			email,
+			date,
+			parents: parents.split(" ").filter(Boolean),
+			body: message,
+			files,
+			diff: diffResult.stdout,
+			truncated:
+				metadata.truncated || filesResult.truncated || diffResult.truncated,
+		};
+	} catch {
+		return unavailable();
 	}
 }
 
@@ -597,30 +753,16 @@ export async function runGitWrite(
 				};
 			}
 		}
-		let lease: string | undefined;
-		if (request.action === "push-force") {
-			const resolved = await capture(
+		const lease = request.action === "push-force" ? request.lease : undefined;
+		if (request.action === "push-force" && !lease)
+			return {
 				repository,
-				[
-					"rev-parse",
-					"--verify",
-					`refs/remotes/${request.remote}/${request.branch}`,
-				],
-				signal,
-				3000,
-			);
-			if (resolved.code !== 0 || !resolved.stdout.trim()) {
-				return {
-					repository,
-					action: request.action,
-					status: "failed",
-					output: "",
-					truncated: false,
-					reason: "force-lease-missing",
-				};
-			}
-			lease = resolved.stdout.trim();
-		}
+				action: request.action,
+				status: "failed",
+				output: "",
+				truncated: false,
+				reason: "force-lease-missing",
+			};
 		const { args, timeoutMs } = writeArgs(request, lease);
 		const result = await capture(repository, args, signal, timeoutMs);
 		const output = redactRemoteCredentials(

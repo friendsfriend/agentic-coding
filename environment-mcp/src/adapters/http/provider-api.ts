@@ -62,6 +62,15 @@ function redactValue(value: unknown, token: string): unknown {
 	return value;
 }
 
+function githubGraphqlUrl(baseUrl: string) {
+	const url = new URL(baseUrl);
+	if (url.hostname === "api.github.com" && url.pathname === "/")
+		return "https://api.github.com/graphql";
+	const base = url.pathname.replace(/\/api\/v3\/?$/, "").replace(/\/$/, "");
+	url.pathname = `${base}/api/graphql`;
+	return url.toString();
+}
+
 function refusalForStatus(status: number) {
 	if (status === 401) return new OperationRefusal("provider-unauthorized");
 	if (status === 403) return new OperationRefusal("provider-forbidden");
@@ -421,6 +430,37 @@ function githubDiscussions(raw: readonly Record<string, unknown>[]) {
 	});
 }
 
+function githubReviewDiscussions(threads: readonly Record<string, unknown>[]) {
+	const discussions: ProviderDiscussion[] = [];
+	for (const thread of threads) {
+		const threadId = text(thread.id);
+		const resolved = thread.isResolved === true;
+		const comments = (thread.comments as Record<string, unknown> | undefined)
+			?.nodes;
+		for (const comment of Array.isArray(comments) ? comments : []) {
+			if (!comment || typeof comment !== "object") continue;
+			const entry = comment as Record<string, unknown>;
+			const id = String(
+				optionalNumber(entry.databaseId) ?? text(entry.databaseId),
+			);
+			if (!id) continue;
+			discussions.push({
+				id,
+				...(threadId ? { threadId } : {}),
+				author: text(
+					(entry.author as Record<string, unknown> | undefined)?.login,
+				),
+				body: text(entry.body),
+				...(text(entry.url) ? { url: text(entry.url) } : {}),
+				...(text(entry.createdAt) ? { createdAt: text(entry.createdAt) } : {}),
+				resolved,
+			});
+			if (discussions.length >= 50) return discussions;
+		}
+	}
+	return discussions;
+}
+
 function gitlabNotes(raw: readonly Record<string, unknown>[]) {
 	return raw.slice(0, 50).map(
 		(entry): ProviderDiscussion => ({
@@ -491,6 +531,8 @@ function writeCanonical(intent: ProviderWriteIntent) {
 }
 
 function writeTarget(intent: ProviderWriteIntent) {
+	if (intent.action === "merge-change")
+		return `${intent.repository}:${intent.number} (${intent.mergeMethod})`;
 	if (intent.action === "retry-pipeline" || intent.action === "cancel-pipeline")
 		return `${intent.repository}:${intent.pipeline}`;
 	if (intent.action === "retry-job")
@@ -678,6 +720,76 @@ export function createProviderApi(
 			throw new OperationRefusal("provider-invalid");
 		return value as Record<string, unknown>;
 	};
+	const graphql = async (
+		provider: ProviderConfig,
+		query: string,
+		variables: Record<string, unknown>,
+		signal: AbortSignal,
+	) => {
+		if (provider.type !== "github")
+			throw new OperationRefusal("provider-invalid");
+		const token = tokenFor(provider);
+		return await withTimeout(signal, async (timeoutSignal) => {
+			const response = await fetchImpl(githubGraphqlUrl(provider.baseUrl), {
+				method: "POST",
+				headers: {
+					...authHeaders(provider, token, "application/json"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ query, variables }),
+				redirect: "error",
+				signal: timeoutSignal,
+			});
+			if (!response.ok) throw refusalForStatus(response.status);
+			const body = await readBounded(response);
+			if (body.truncated)
+				throw new OperationRefusal("provider-response-too-large");
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(body.body);
+			} catch {
+				throw new OperationRefusal("provider-invalid");
+			}
+			const raw = single(parsed);
+			if (Array.isArray(raw.errors) && raw.errors.length)
+				throw new OperationRefusal("provider-invalid");
+			return single(redactValue(raw, token));
+		});
+	};
+	const githubReviewThreads = async (
+		provider: ProviderConfig,
+		repository: string,
+		number: number,
+		signal: AbortSignal,
+	) => {
+		const [owner, name, extra] = repository.split("/");
+		if (!owner || !name || extra)
+			throw new OperationRefusal("provider-invalid");
+		const data = await graphql(
+			provider,
+			`query ReviewThreads($owner: String!, $name: String!, $number: Int!) {
+				repository(owner: $owner, name: $name) {
+					pullRequest(number: $number) {
+						reviewThreads(first: 100) {
+							nodes {
+								id
+								isResolved
+								comments(first: 100) {
+									nodes { databaseId body author { login } createdAt url }
+								}
+							}
+						}
+					}
+				}
+			}`,
+			{ owner, name, number },
+			signal,
+		);
+		const root = single(data.data);
+		const repo = single(root.repository);
+		const pull = single(repo.pullRequest);
+		return records(single(pull.reviewThreads).nodes);
+	};
 
 	return {
 		list() {
@@ -855,17 +967,16 @@ export function createProviderApi(
 			const reference = repositoryReference(provider, repository);
 			if (!Number.isSafeInteger(number) || number < 1)
 				throw new OperationRefusal("provider-invalid");
+			if (provider.type === "github")
+				return githubReviewDiscussions(
+					await githubReviewThreads(provider, reference, number, signal),
+				);
 			const raw = await get(
 				provider,
-				provider.type === "github"
-					? `/repos/${reference}/pulls/${number}/comments?per_page=50`
-					: `/api/v4/projects/${reference}/merge_requests/${number}/discussions?per_page=50`,
+				`/api/v4/projects/${reference}/merge_requests/${number}/discussions?per_page=50`,
 				signal,
 			);
-			const items = records(raw);
-			return provider.type === "github"
-				? githubDiscussions(items)
-				: gitlabDiscussions(items);
+			return gitlabDiscussions(records(raw));
 		},
 		async issueComments(providerName, repository, number, signal) {
 			const provider = resolve(providerName);
@@ -1189,17 +1300,66 @@ export function createProviderApi(
 						["id", "html_url", "web_url"],
 					);
 				} else if (intent.action === "set-discussion-resolved") {
-					if (provider.type !== "gitlab")
-						throw new OperationRefusal("provider-invalid");
-					result = pickResult(
-						await put(
+					if (provider.type === "gitlab") {
+						result = pickResult(
+							await put(
+								provider,
+								`/api/v4/projects/${repository}/merge_requests/${number}/discussions/${intent.discussionId}?resolved=${intent.resolved}`,
+								{},
+								signal,
+							),
+							["id", "resolved"],
+						);
+					} else {
+						const threads = await githubReviewThreads(
 							provider,
-							`/api/v4/projects/${repository}/merge_requests/${number}/discussions/${intent.discussionId}?resolved=${intent.resolved}`,
-							{},
+							repository,
+							number,
 							signal,
-						),
-						["id", "resolved"],
-					);
+						);
+						const thread = threads.find((entry) =>
+							records(
+								(entry.comments as Record<string, unknown> | undefined)?.nodes,
+							).some(
+								(comment) =>
+									String(comment.databaseId ?? "") === intent.discussionId,
+							),
+						);
+						const threadId = text(thread?.id);
+						if (!threadId) throw new OperationRefusal("provider-invalid");
+						const current = thread?.isResolved === true;
+						if (current === intent.resolved) {
+							result = { id: threadId, isResolved: current };
+						} else {
+							const data = await graphql(
+								provider,
+								intent.resolved
+									? `mutation ResolveThread($threadId: ID!) {
+											resolveReviewThread(input: { threadId: $threadId }) {
+												thread { id isResolved }
+											}
+										}`
+									: `mutation UnresolveThread($threadId: ID!) {
+											unresolveReviewThread(input: { threadId: $threadId }) {
+												thread { id isResolved }
+											}
+										}`,
+								{ threadId },
+								signal,
+							);
+							const root = single(data.data);
+							const payload = single(
+								root[
+									intent.resolved
+										? "resolveReviewThread"
+										: "unresolveReviewThread"
+								],
+							);
+							result = pickResult(single(payload.thread), ["id", "isResolved"]);
+							if (Object.keys(result).length === 0)
+								result = { id: threadId, isResolved: intent.resolved };
+						}
+					}
 				} else if (intent.action === "add-labels") {
 					const labels = intent.labels.map((label) => label.trim());
 					if (provider.type === "github") {

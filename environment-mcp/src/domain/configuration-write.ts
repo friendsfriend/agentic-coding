@@ -52,6 +52,8 @@ export type ConfigurationMutation =
 			action?: "build" | "test" | "run";
 			command?: string;
 			timeoutSec?: number;
+			environment?: Record<string, string>;
+			secretRefs?: Record<string, string>;
 			readyText?: string | null;
 			dependsOn?: readonly Record<string, unknown>[];
 			prerequisites?: readonly { app: string; target: string }[];

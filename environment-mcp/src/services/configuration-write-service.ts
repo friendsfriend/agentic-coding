@@ -311,6 +311,22 @@ function applyMutation(
 		}
 		if (mutation.timeoutSec !== undefined)
 			target.timeoutMs = mutation.timeoutSec * 1000;
+		if (mutation.environment !== undefined) {
+			if (target.runtime !== "shell" && target.runtime !== "systemshell")
+				throw invalid();
+			validateStringRecord(mutation.environment);
+			if (Object.keys(mutation.environment).length)
+				target.environment = { ...mutation.environment };
+			else delete target.environment;
+		}
+		if (mutation.secretRefs !== undefined) {
+			if (target.runtime !== "shell" && target.runtime !== "systemshell")
+				throw invalid();
+			validateStringRecord(mutation.secretRefs);
+			if (Object.keys(mutation.secretRefs).length)
+				target.secretRefs = { ...mutation.secretRefs };
+			else delete target.secretRefs;
+		}
 		if (mutation.readyText !== undefined) {
 			if (mutation.readyText === null) delete target.readyText;
 			else {

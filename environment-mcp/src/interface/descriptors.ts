@@ -28,7 +28,7 @@ export const actionDescriptorSchema = z.strictObject({
 	inputSchema: z.record(z.string(), z.unknown()),
 });
 export const actionListSchema = z.strictObject({
-	actions: z.array(actionDescriptorSchema).max(64),
+	actions: z.array(actionDescriptorSchema).max(128),
 });
 
 export function describeAction(capability: Capability): ActionDescriptor {

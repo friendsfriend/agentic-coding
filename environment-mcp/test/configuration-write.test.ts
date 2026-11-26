@@ -164,7 +164,24 @@ test("app and target CRUD enforce defaults and references", async () => {
 			app: "app-a",
 			id: "run",
 			prerequisites: [{ app: "app-a", target: "build" }],
+			environment: { MODE: "test" },
+			secretRefs: { TOKEN: "FIXTURE_TOKEN" },
+			readyText: "ready",
 		});
+		const updated = fs.readFileSync(environments, "utf8");
+		expect(updated).toContain('"MODE": "test"');
+		expect(updated).toContain('"TOKEN": "FIXTURE_TOKEN"');
+		expect(updated).toContain('"readyText": "ready"');
+		await apply(service, {
+			operation: "target-update",
+			app: "app-a",
+			id: "run",
+			environment: {},
+			secretRefs: {},
+		});
+		expect(fs.readFileSync(environments, "utf8")).not.toContain(
+			'"MODE": "test"',
+		);
 
 		await expect(
 			apply(service, {
@@ -174,6 +191,12 @@ test("app and target CRUD enforce defaults and references", async () => {
 			}),
 		).rejects.toMatchObject({ code: "target-is-default" });
 
+		await apply(service, {
+			operation: "app-update",
+			id: "app-a",
+			defaults: { build: "build", run: "run" },
+		});
+		expect(fs.readFileSync(environments, "utf8")).toContain('"run": "run"');
 		await apply(service, {
 			operation: "app-update",
 			id: "app-a",

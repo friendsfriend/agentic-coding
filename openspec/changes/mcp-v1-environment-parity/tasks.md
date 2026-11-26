@@ -108,3 +108,16 @@
 - [x] 3.86 Add tag and stash listing, annotated tag creation, tag deletion, and stash pop/apply/drop through preview-confirm writes.
 - [x] 3.87 Add path staging and unstage-all/stage-all actions, and split commit into staged-only `commit` plus `commit-all`, with panel staging keys.
 - [x] 3.88 Add force-with-lease push and rebase abort to guarded Git writes, with upstream/lease validation and panel keys.
+- [x] 3.89 Expose app build/test/run defaults, shell target environment/secret references/ready text, and target endpoints/prerequisites in the configuration forms; extend target-update to edit shell environment and secret references.
+- [x] 3.90 Add an `environment-config-editing` skill documenting profiles, bulk edits and full shell/Compose/container/Helm descriptors, and link it into the OpenCode skills directory.
+- [x] 3.91 Add multi-container log selection, previous-container logs and namespace-event filtering to the Kubernetes views.
+- [x] 3.92 Support Compose, container-run and Helm targets from linked worktrees with deterministic per-worktree project/container/release names, repository-local compose/chart rewriting and Helm chart digest recapture; keep network-only targets refused.
+- [x] 3.93 Add bounded container-stats history with two-second sampling while the view is open, CPU/memory sparklines and CPU/memory/network deltas.
+- [x] 3.94 Bind the exact local remote-tracking SHA into the force-with-lease preview digest/target and require re-confirmation if it moves before execution.
+- [x] 3.95 Give worktree Docker builds and matching container-run images deterministic per-worktree tags, leaving external and explicit Compose images unchanged.
+- [x] 3.96 Add `env_cluster_namespaces` and a selectable namespace list with custom namespace entry to the cluster inspection flow.
+- [x] 3.97 Implement GitHub review-thread resolution/unresolution through GraphQL and update the discussion badge locally after the write.
+- [x] 3.98 Read GitHub change discussions through GraphQL review threads so thread ids and existing resolution state render before any write.
+- [x] 3.99 Add a GitHub merge-method picker (merge/squash/rebase) and show the exact provider write target on confirmation.
+- [x] 3.100 Add `env_git_log` and a commit-history view with short SHA, subject, author, date and ref badges.
+- [x] 3.101 Add `env_git_commit` and a commit detail view with full message, parents, file stats and per-file native diff.

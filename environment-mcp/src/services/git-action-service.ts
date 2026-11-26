@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import {
 	readGitBranches,
+	readGitCommit,
+	readGitLog,
 	readGitRemotes,
 	readGitStashes,
 	readGitTags,
@@ -132,6 +134,23 @@ function refExists(repository: string, ref: string) {
 	return check.exitCode === 0;
 }
 
+function resolveForceLease(repository: string, remote: string, branch: string) {
+	const result = Bun.spawnSync(
+		[
+			"git",
+			"-C",
+			repository,
+			"rev-parse",
+			"--verify",
+			`refs/remotes/${remote}/${branch}`,
+		],
+		{ stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+	);
+	if (result.exitCode !== 0) return undefined;
+	const value = result.stdout.toString().trim();
+	return /^[a-f0-9]{40,64}$/.test(value) ? value : undefined;
+}
+
 function writeDigest(repository: string, request: GitWriteRequest) {
 	return createHash("sha256")
 		.update(JSON.stringify([repository, request]))
@@ -142,7 +161,7 @@ function writeTarget(request: GitWriteRequest) {
 	if (request.action === "push")
 		return `${request.branch} → ${request.remote}${request.setUpstream ? " (set upstream)" : ""}`;
 	if (request.action === "push-force")
-		return `${request.branch} → ${request.remote} (force-with-lease)`;
+		return `${request.branch} → ${request.remote} (force-with-lease @${request.lease?.slice(0, 8) ?? "missing"})`;
 	if (request.action === "tag") return request.name;
 	if (request.action === "tag-delete") return request.name;
 	if (
@@ -175,6 +194,12 @@ export function createGitActionService(): GitActionPort {
 		},
 		remotes(repository, signal) {
 			return readGitRemotes(repository, signal);
+		},
+		log(repository, signal) {
+			return readGitLog(repository, signal);
+		},
+		commit(repository, sha, signal) {
+			return readGitCommit(repository, sha, signal);
 		},
 		tags(repository, signal) {
 			return readGitTags(repository, signal);
@@ -345,15 +370,25 @@ export function createGitActionService(): GitActionPort {
 				throw new OperationRefusal("provider-invalid");
 			const context = gitPathContext(repository);
 			const key = `${context.root}\0${requestId}`;
-			const digest = writeDigest(context.root, request);
+			let resolved = request;
+			if (request.action === "push-force") {
+				const lease = resolveForceLease(
+					context.root,
+					request.remote,
+					request.branch,
+				);
+				if (!lease) throw new OperationRefusal("force-lease-missing");
+				resolved = { ...request, lease };
+			}
+			const digest = writeDigest(context.root, resolved);
 			if (confirm !== digest)
 				return {
 					status: "confirmation-required",
 					digest,
 					intent: {
 						repository,
-						action: request.action,
-						target: writeTarget(request),
+						action: resolved.action,
+						target: writeTarget(resolved),
 					},
 				};
 			const existing = writes.get(key);
@@ -377,14 +412,14 @@ export function createGitActionService(): GitActionPort {
 				const refusal = await validateWrite(
 					repository,
 					context.root,
-					request,
+					resolved,
 					signal,
 				);
 				let outcome: GitActionOutcome;
 				if (refusal) {
 					outcome = refused(repository, request.action, refusal);
 				} else {
-					outcome = await runGitWrite(repository, request, signal);
+					outcome = await runGitWrite(repository, resolved, signal);
 					if (
 						outcome.status === "completed" &&
 						(request.action === "branch-rename" ||
@@ -428,17 +463,11 @@ async function validateWrite(
 		if (remotes.note) return "unavailable";
 		if (!remotes.remotes.some((remote) => remote.name === request.remote))
 			return "remote-not-found";
-		if (request.action === "push-force") {
-			if (branch.upstream !== `${request.remote}/${request.branch}`)
-				return "force-lease-missing";
-			if (
-				!refExists(
-					repository,
-					`refs/remotes/${request.remote}/${request.branch}`,
-				)
-			)
-				return "force-lease-missing";
-		}
+		if (
+			request.action === "push-force" &&
+			branch.upstream !== `${request.remote}/${request.branch}`
+		)
+			return "force-lease-missing";
 		return undefined;
 	}
 	if (request.action === "tag") {

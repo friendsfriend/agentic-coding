@@ -32,6 +32,11 @@ export type KubernetesEvent = {
 	lastTimestamp?: string;
 };
 
+export type KubernetesNamespaces = {
+	cluster: string;
+	namespaces: readonly string[];
+};
+
 export type KubernetesEvents = {
 	cluster: string;
 	namespace: string;
@@ -54,6 +59,7 @@ export type KubernetesPodLogs = {
 	namespace: string;
 	pod: string;
 	container?: string;
+	previous?: boolean;
 	output: string;
 	truncated: boolean;
 };
@@ -66,6 +72,11 @@ export interface KubernetesPort {
 		namespace: string,
 		signal: AbortSignal,
 	): Promise<KubernetesResources>;
+	namespaces(
+		repositories: readonly string[],
+		cluster: string,
+		signal: AbortSignal,
+	): Promise<KubernetesNamespaces>;
 	events(
 		repositories: readonly string[],
 		cluster: string,
@@ -87,6 +98,7 @@ export interface KubernetesPort {
 		pod: string,
 		container: string | undefined,
 		tail: number,
+		previous: boolean,
 		signal: AbortSignal,
 	): Promise<KubernetesPodLogs>;
 }

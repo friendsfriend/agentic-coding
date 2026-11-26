@@ -20,6 +20,9 @@ case "$*" in
   *"get deployments,statefulsets,pods,services"*)
     printf '%s' '{"items":[{"kind":"Pod","metadata":{"name":"pod-a","namespace":"default","creationTimestamp":"2026-01-01T00:00:00Z"},"status":{"phase":"Running","containerStatuses":[{"name":"app","ready":true,"restartCount":1}]}}]}'
     ;;
+  *"get namespaces"*)
+    printf '%s' '{"items":[{"metadata":{"name":"default"}},{"metadata":{"name":"app"}},{"metadata":{"name":"kube-system"}}]}'
+    ;;
   *"get events"*)
     printf '%s' '{"items":[{"type":"Warning","reason":"BackOff","involvedObject":{"kind":"Pod","name":"pod-a"},"message":"restarting","count":3,"lastTimestamp":"2026-01-01T00:00:00Z"}]}'
     ;;
@@ -66,6 +69,8 @@ esac
 		]);
 		expect(resources.output).toContain("Pod\tpod-a\t1/1\tRunning\t1");
 		expect(resources.truncated).toBe(false);
+		const namespaces = await adapter.namespaces([repository], "devenv", signal);
+		expect(namespaces.namespaces).toEqual(["app", "default"]);
 		const events = await adapter.events(
 			[repository],
 			"devenv",
@@ -96,14 +101,29 @@ esac
 			"devenv",
 			"default",
 			"pod-a",
-			undefined,
+			"app",
 			100,
+			false,
 			signal,
 		);
 		expect(logs.output).toContain("line one");
+		const previous = await adapter.podLogs(
+			[repository],
+			"devenv",
+			"default",
+			"pod-a",
+			"app",
+			100,
+			true,
+			signal,
+		);
+		expect(previous.previous).toBe(true);
 		const calls = fs.readFileSync(argsFile, "utf8");
 		expect(calls).toContain(
 			"--context kind-devenv --request-timeout=10s get deployments,statefulsets,pods,services --namespace default --output json",
+		);
+		expect(calls).toContain(
+			"--context kind-devenv --request-timeout=10s get namespaces --output json",
 		);
 		expect(calls).toContain(
 			"--context kind-devenv --request-timeout=10s get events --namespace default --sort-by=.lastTimestamp --output json",
@@ -112,7 +132,10 @@ esac
 			"--context kind-devenv --request-timeout=10s describe pod pod-a --namespace default",
 		);
 		expect(calls).toContain(
-			"--context kind-devenv --request-timeout=10s logs pod-a --namespace default --tail 100",
+			"--context kind-devenv --request-timeout=10s logs pod-a --namespace default --tail 100 --container app",
+		);
+		expect(calls).toContain(
+			"--context kind-devenv --request-timeout=10s logs pod-a --namespace default --tail 100 --container app --previous",
 		);
 		await expect(
 			adapter.resources([repository], "devenv", "kube-system", signal),
@@ -151,6 +174,7 @@ esac
 				"pod-a",
 				undefined,
 				0,
+				false,
 				signal,
 			),
 		).rejects.toMatchObject({ code: "kubernetes-cluster-unavailable" });

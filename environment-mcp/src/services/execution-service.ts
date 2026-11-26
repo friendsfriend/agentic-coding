@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
 	buildSecretRedactionValues,
 	resolveBuildSecrets,
 } from "../configuration/build-secrets.ts";
-import { verifyHelmChart } from "../configuration/helm-chart.ts";
+import {
+	captureHelmChart,
+	verifyHelmChart,
+} from "../configuration/helm-chart.ts";
 import { clusterConnection } from "../configuration/kubernetes-cluster.ts";
 import {
 	resolveReferences,
@@ -117,10 +121,43 @@ export function resolveWorktreeContext(repository: string, worktree: string) {
 	return { root, directory };
 }
 
+function worktreeSuffix(worktreeDirectory: string) {
+	return createHash("sha256")
+		.update(fs.realpathSync(worktreeDirectory))
+		.digest("hex")
+		.slice(0, 8);
+}
+
+function suffixedName(name: string, suffix: string, limit: number) {
+	const tail = `-wt-${suffix}`;
+	return `${name.slice(0, Math.max(1, limit - tail.length))}${tail}`;
+}
+
+function worktreeImage(image: string, suffix: string) {
+	if (image.includes("@")) return image;
+	const tail = `-wt-${suffix}`;
+	const lastSlash = image.lastIndexOf("/");
+	const lastColon = image.lastIndexOf(":");
+	if (lastColon > lastSlash) {
+		const tag = image.slice(lastColon + 1);
+		return `${image.slice(0, lastColon + 1)}${tag.slice(0, Math.max(1, 128 - tail.length))}${tail}`;
+	}
+	return `${image}:wt-${suffix}`;
+}
+
+function insideRepository(repository: string, value: string) {
+	const root = fs.realpathSync(repository);
+	const resolved = fs.realpathSync(value);
+	return resolved.startsWith(`${root}${path.sep}`)
+		? { root, resolved, relative: path.relative(root, resolved) }
+		: undefined;
+}
+
 export function rewriteWorktreeExecutable(
 	executable: Executable,
 	repository: string,
 	worktreeDirectory: string,
+	buildImages: readonly string[] = [],
 ) {
 	const map = (value: string) => {
 		if (value === repository) return worktreeDirectory;
@@ -128,6 +165,7 @@ export function rewriteWorktreeExecutable(
 			return `${worktreeDirectory}${value.slice(repository.length)}`;
 		return value;
 	};
+	const suffix = worktreeSuffix(worktreeDirectory);
 	if (executable.kind === "command" || executable.kind === "process") {
 		executable.program = map(executable.program);
 		executable.args = executable.args.map(map);
@@ -135,6 +173,55 @@ export function rewriteWorktreeExecutable(
 		executable.context = map(executable.context);
 		if (executable.dockerfile)
 			executable.dockerfile = map(executable.dockerfile);
+		executable.image = worktreeImage(executable.image, suffix);
+	} else if (executable.kind === "compose") {
+		executable.project = suffixedName(executable.project, suffix, 63);
+		if (executable.file) {
+			const inside = (() => {
+				try {
+					return insideRepository(repository, executable.file as string);
+				} catch {
+					return undefined;
+				}
+			})();
+			if (!inside) throw new OperationRefusal("worktree-unsupported");
+			const mapped = path.resolve(worktreeDirectory, inside.relative);
+			let resolved: string;
+			try {
+				resolved = fs.realpathSync(mapped);
+				if (!fs.lstatSync(resolved).isFile())
+					throw new OperationRefusal("worktree-unsupported");
+			} catch {
+				throw new OperationRefusal("worktree-unsupported");
+			}
+			executable.file = resolved;
+		}
+	} else if (executable.kind === "container-run") {
+		executable.name = suffixedName(executable.name, suffix, 120);
+		if (buildImages.includes(executable.image))
+			executable.image = worktreeImage(executable.image, suffix);
+	} else if (executable.kind === "helm-release") {
+		let inside: ReturnType<typeof insideRepository>;
+		try {
+			inside = insideRepository(repository, executable.chart);
+		} catch {
+			throw new OperationRefusal("worktree-unsupported");
+		}
+		if (!inside) throw new OperationRefusal("worktree-unsupported");
+		try {
+			const capture = captureHelmChart(worktreeDirectory, {
+				chart: inside.relative,
+				release: executable.release,
+				values: executable.values,
+				setString: executable.setString,
+			});
+			executable.chart = capture.root;
+			executable.chartDigest = capture.digest;
+			executable.values = capture.values;
+		} catch {
+			throw new OperationRefusal("worktree-unsupported");
+		}
+		executable.release = suffixedName(executable.release, suffix, 53);
 	}
 }
 
@@ -1154,16 +1241,18 @@ export function createExecutionService(
 						? resolveWorktreeContext(app.repository, intent.worktree)
 						: undefined;
 					if (worktree) {
-						if (
-							descriptor.executable.kind !== "command" &&
-							descriptor.executable.kind !== "process" &&
-							descriptor.executable.kind !== "docker-build"
-						)
+						if (descriptor.executable.kind === "network-only")
 							throw new OperationRefusal("worktree-unsupported");
+						const buildImages = app.targets.flatMap((target) =>
+							target.executable?.kind === "docker-build"
+								? [target.executable.image]
+								: [],
+						);
 						rewriteWorktreeExecutable(
 							descriptor.executable,
 							app.repository,
 							worktree.directory,
+							buildImages,
 						);
 					}
 					if (

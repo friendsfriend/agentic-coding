@@ -365,6 +365,36 @@ export function createKubernetesAdapter(
 				items,
 			};
 		},
+		async namespaces(repositories, clusterId, signal) {
+			const cluster = clusterFor(repositories, clusterId);
+			const result = await run(
+				cluster,
+				["get", "namespaces", "--output", "json"],
+				signal,
+				jsonLimit,
+			);
+			let namespaces: string[] = [];
+			try {
+				const parsed = record(JSON.parse(result.stdout));
+				namespaces = [
+					...new Set(
+						list(parsed.items).flatMap((item) => {
+							const name = text(record(record(item).metadata).name);
+							return name &&
+								namespacePattern.test(name) &&
+								!name.startsWith("kube-")
+								? [name]
+								: [];
+						}),
+					),
+				]
+					.sort((left, right) => left.localeCompare(right))
+					.slice(0, 200);
+			} catch {
+				throw new OperationRefusal("kubernetes-cluster-unavailable");
+			}
+			return { cluster: cluster.id, namespaces };
+		},
 		async events(repositories, clusterId, namespace, signal) {
 			safeNamespace(namespace);
 			const cluster = clusterFor(repositories, clusterId);
@@ -433,6 +463,7 @@ export function createKubernetesAdapter(
 			pod,
 			container,
 			tail,
+			previous,
 			signal,
 		) {
 			safeNamespace(namespace);
@@ -457,6 +488,7 @@ export function createKubernetesAdapter(
 					"--tail",
 					String(tail),
 					...(container ? ["--container", container] : []),
+					...(previous ? ["--previous"] : []),
 				],
 				signal,
 				outputLimit,
@@ -467,6 +499,7 @@ export function createKubernetesAdapter(
 				namespace,
 				pod,
 				...(container ? { container } : {}),
+				...(previous ? { previous } : {}),
 				output: result.output,
 				truncated: result.truncated,
 			};

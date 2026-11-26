@@ -64,6 +64,7 @@ export class OperationRefusal extends Error {
 			| "network-prerequisite-unavailable"
 			| "secret-reference-unavailable"
 			| "worktree-unsupported"
+			| "force-lease-missing"
 			| "provider-not-configured"
 			| "provider-token-unavailable"
 			| "provider-unauthorized"
